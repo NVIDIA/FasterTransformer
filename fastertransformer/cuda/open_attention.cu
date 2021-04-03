@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -156,8 +156,8 @@ void add_QKV_bias(T* Q, const T* bias_Q, T* K, const T* bias_K, T* V, const T* b
 
 template <>
 __global__
-void add_QKV_bias(__half* Q, const __half* bias_Q, __half* K, const __half* bias_K, __half* V, const __half* bias_V, 
-  __half* q_buf_, __half* k_buf_, __half* v_buf_, 
+void add_QKV_bias(half* Q, const half* bias_Q, half* K, const half* bias_K, half* V, const half* bias_V, 
+  half* q_buf_, half* k_buf_, half* v_buf_, 
   const int batch_size, const int seq_len, const int head_num, const int size_per_head, const int word_per_block)
 {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -189,7 +189,7 @@ void add_QKV_bias(__half* Q, const __half* bias_Q, __half* K, const __half* bias
 template <typename T>
 __global__
 void softmax_kernel(T* qk_buf_, const T* attr_mask, const int batch_size, const int head_num, const int seq_len, 
-  const T scaler)
+  const T scalar)
 {
     int batch_id = blockIdx.x / head_num;
     int qk_offset = blockIdx.x * seq_len * seq_len;
@@ -204,7 +204,7 @@ void softmax_kernel(T* qk_buf_, const T* attr_mask, const int batch_size, const 
       
       mask_val = (1.0f - mask_val) * -10000.0f;
 
-      float tmp = threadIdx.x < seq_len ? (float)(qk * (float)scaler + mask_val): -1e20f;
+      float tmp = threadIdx.x < seq_len ? (float)(qk * (float)scalar + mask_val): -1e20f;
 
       float max_val = blockReduceMax<float>(tmp);
 
@@ -234,7 +234,7 @@ void softmax_kernel(T* qk_buf_, const T* attr_mask, const int batch_size, const 
 template <typename T>
 __global__
 void softmax_kernel_v2(T* qk_buf_, const T* attr_mask, const int batch_size, const int head_num, 
-  const int seq_len, const float scaler)
+  const int seq_len, const float scalar)
 {
     int batch_id = blockIdx.x / head_num / seq_len;
     int seq_id = blockIdx.x % seq_len;
@@ -248,7 +248,7 @@ void softmax_kernel_v2(T* qk_buf_, const T* attr_mask, const int batch_size, con
       
     mask_val = (1.0f - mask_val) * -10000.0f;
 
-    float tmp = threadIdx.x < seq_len ? (float)(qk * (float)scaler + mask_val) : -1e20f;
+    float tmp = threadIdx.x < seq_len ? (float)(qk * (float)scalar + mask_val) : -1e20f;
     float max_val = blockReduceMax<float>(tmp);
     if(threadIdx.x == 0)
       s_max = max_val;
@@ -280,7 +280,7 @@ void transpose(T* src, T* dst, const int batch_size, const int seq_len, const in
 
 template<>
   __global__
-void transpose(__half* src, __half* dst,
+void transpose(half* src, half* dst,
     const int batch_size, const int seq_len, const int head_num, const int size_per_head)
 {
   int tid = blockIdx.x * blockDim.x + threadIdx.x;
@@ -313,7 +313,7 @@ void OpenMultiHeadAttention<OpType_>::multiHeadAttr_nofuse_kernelLauncher(
       const int seq_len,
       const int head_num,
       const int size_per_head,
-      const DataType_ scaler)
+      const DataType_ scalar)
 {
 
     int m = batch_size * seq_len;
@@ -338,6 +338,8 @@ void OpenMultiHeadAttention<OpType_>::multiHeadAttr_nofuse_kernelLauncher(
       const int word_per_block = 1;
       grid.x = batch_size * seq_len / word_per_block;
       block.x = head_num * size_per_head * word_per_block / 2;
+
+      assert(block.x <= 1024);
 
       add_QKV_bias<DataType_><<<grid, block, 0, stream>>>(Q, bias_Q, K, bias_K, V, bias_V, q_buf_, k_buf_, 
       v_buf_, batch_size, seq_len, head_num, size_per_head / 2, word_per_block);
@@ -373,12 +375,12 @@ void OpenMultiHeadAttention<OpType_>::multiHeadAttr_nofuse_kernelLauncher(
     if(batch_size * head_num <= 120)
     {
       grid.x = batch_size * head_num * seq_len;
-      softmax_kernel_v2<DataType_><<<grid, block, 0, stream>>>(qk_buf_, attr_mask, batch_size, head_num, seq_len, scaler); 
+      softmax_kernel_v2<DataType_><<<grid, block, 0, stream>>>(qk_buf_, attr_mask, batch_size, head_num, seq_len, scalar); 
     }
     else
     {
       grid.x = batch_size * head_num;
-      softmax_kernel<DataType_><<<grid, block, 0, stream>>>(qk_buf_, attr_mask, batch_size, head_num, seq_len, scaler); 
+      softmax_kernel<DataType_><<<grid, block, 0, stream>>>(qk_buf_, attr_mask, batch_size, head_num, seq_len, scalar); 
     }
 
     check_cuda_error(cublasGemmStridedBatchedEx(cublas_handle,
@@ -394,9 +396,10 @@ void OpenMultiHeadAttention<OpType_>::multiHeadAttr_nofuse_kernelLauncher(
       static_cast<cublasGemmAlgo_t>(cublasAlgo_[2])));
 
 /* for half2 only */
-    if(OpType_ == OperationType::HALF)
+    if(OpType_ == OperationType::FP16)
     {
       const int seq_per_block = 4;
+  //    const int seq_per_block = 1;
       grid.x = batch_size * head_num * seq_len / seq_per_block;
       block.x = seq_per_block * size_per_head / 2;
 
@@ -413,6 +416,7 @@ void OpenMultiHeadAttention<OpType_>::multiHeadAttr_nofuse_kernelLauncher(
       transpose<DataType_><<<grid, block, 0, stream>>>(transpose_dst_, dst, 
           batch_size, seq_len, head_num, size_per_head);
     }
+
 }
 
 template void OpenMultiHeadAttention<OperationType::FP32>::multiHeadAttr_nofuse_kernelLauncher(
@@ -430,23 +434,23 @@ template void OpenMultiHeadAttention<OperationType::FP32>::multiHeadAttr_nofuse_
       const int seq_len,
       const int head_num,
       const int size_per_head,
-      const float scaler);
+      const float scalar);
 
-template void OpenMultiHeadAttention<OperationType::HALF>::multiHeadAttr_nofuse_kernelLauncher(
+template void OpenMultiHeadAttention<OperationType::FP16>::multiHeadAttr_nofuse_kernelLauncher(
       cudaStream_t stream,
       cublasHandle_t handle,
-      __half* Q,
-      const __half* bias_Q,
-      __half* K,
-      const __half* bias_K,
-      __half* V,
-      const __half* bias_V,
-      const __half* attr_mask,
-      __half* dst,
+      half* Q,
+      const half* bias_Q,
+      half* K,
+      const half* bias_K,
+      half* V,
+      const half* bias_V,
+      const half* attr_mask,
+      half* dst,
       const int batch_size,
       const int seq_len,
       const int head_num,
       const int size_per_head,
-      const __half scaler);
+      const half scalar);
 }//namespace cuda
 }//namespace fastertransformer

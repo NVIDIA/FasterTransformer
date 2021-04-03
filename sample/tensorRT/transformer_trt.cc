@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -130,7 +130,6 @@ void run_bert_transformer(int batch_size, int seq_len, int layers, int head_num,
 
   TRT_Transformer<T>* trt_transformer = new TRT_Transformer<T>(batch_size, seq_len, head_num, hidden_dim, layers);
   trt_transformer->build_engine(params);
-
   trt_transformer->do_inference(batch_size, h_from_tensor, h_attr_mask, h_transformer_out, stream);
 
   delete trt_transformer;
@@ -153,7 +152,7 @@ int main(int argc, char* argv[])
   int head_num = atoi(argv[4]);
   int size_per_head = atoi(argv[5]);
   if(strcmp(argv[6], "fp16") == 0)
-    run_bert_transformer<__half>(batch_size, seq_len, num_layers, head_num, size_per_head);
+    run_bert_transformer<half>(batch_size, seq_len, num_layers, head_num, size_per_head);
   else if(strcmp(argv[6], "fp32") == 0)
     run_bert_transformer<float>(batch_size, seq_len, num_layers, head_num, size_per_head);
   else

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 
 #include "fastertransformer/common.h"
 #include "fastertransformer/faster_transformer.h"
+#include "fastertransformer/tf_op/tf_traits.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/framework/tensor_types.h"
@@ -29,33 +30,15 @@
 using namespace fastertransformer;
 namespace tensorflow
 {
-  template <typename T> class TransformerTFTraits;
-  
-  template <>
-  class TransformerTFTraits<float>
-  {
-    public:
-      typedef float DataType;
-      static const OperationType OpType = OperationType::FP32;
-  };
-
-  template <>
-  class TransformerTFTraits<Eigen::half>
-  {
-    public:
-      typedef __half DataType;
-      static const OperationType OpType = OperationType::HALF;
-  };
-
   namespace functor
   {
     template <typename Device, typename T>
     struct BertTransformerOpFunctor
     {
-      typedef typename TransformerTFTraits<T>::DataType DataType_;
+      typedef typename TFTraits<T>::DataType DataType_;
       static Status Compute(OpKernelContext *context,
         EncoderInitParam<DataType_ > param,
-        BertEncoderTransformer<BertEncoderTransformerTraits< TransformerTFTraits<T>::OpType, 
+        BertEncoderTransformer<BertEncoderTransformerTraits< TFTraits<T>::OpType, 
           cuda::OpenMultiHeadAttention > > *encoder_transformer);
     };
   } //namespace functor

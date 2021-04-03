@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 #pragma once
 
 #include "fastertransformer/common.h"
+#include "fastertransformer/common_structure.h"
 
 namespace fastertransformer{
 namespace cuda{
@@ -29,12 +30,7 @@ class MultiHeadInitParam{
  public:
    const T* from_tensor;
    const T* to_tensor;
-   const T* attr_kernel_Q;
-   const T* attr_kernel_K;
-   const T* attr_kernel_V;
-   const T* attr_bias_Q;
-   const T* attr_bias_K;
-   const T* attr_bias_V;
+   AttentionWeight<T> self_attention;
    const T* attr_mask;
    T* attr_out;
    cublasHandle_t cublas_handle;
@@ -42,12 +38,6 @@ class MultiHeadInitParam{
    MultiHeadInitParam(){
      from_tensor = nullptr;
      to_tensor = nullptr;
-     attr_kernel_Q = nullptr;
-     attr_kernel_K = nullptr;
-     attr_kernel_V = nullptr;
-     attr_bias_Q = nullptr;
-     attr_bias_K = nullptr;
-     attr_bias_V = nullptr;
      attr_mask = nullptr;
      attr_out = nullptr;
      cublas_handle = nullptr;

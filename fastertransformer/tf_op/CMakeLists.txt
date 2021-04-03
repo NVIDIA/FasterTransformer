@@ -1,4 +1,4 @@
-# Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,10 +20,28 @@ set(tf_bert_transformer_files
   ../cuda/cuda_kernels.cu
 )
 
+set(tf_decoder_files
+  decoder_op.cc
+  decoder_op.cu.cc
+  ../cuda/open_decoder.cu
+  ../cuda/cuda_kernels.cu
+)
+
+set(tf_decoding_files
+  decoding_op.cc
+  decoding_op.cu.cc
+  ../cuda/open_decoder.cu
+  ../cuda/cuda_kernels.cu
+  ../cuda/open_attention.cu
+  ../cuda/decoding_kernel_check.cpp
+)
+
 add_definitions(-D_GLIBCXX_USE_CXX11_ABI=0)
 add_definitions(-DGOOGLE_CUDA=1)
-add_definitions(-DNDEBUG)
 
 add_library(tf_fastertransformer SHARED ${tf_bert_transformer_files})
-set_target_properties(tf_fastertransformer PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-target_link_libraries(tf_fastertransformer PRIVATE -lcublas -lcudart -ltensorflow_framework ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(tf_fastertransformer PRIVATE -lcublas -lcudart -ltensorflow_framework)
+add_library(tf_decoder SHARED ${tf_decoder_files})
+target_link_libraries(tf_decoder PRIVATE -lcublas -lcudart -ltensorflow_framework)
+add_library(tf_decoding SHARED ${tf_decoding_files})
+target_link_libraries(tf_decoding PRIVATE -lcublas -lcudart -ltensorflow_framework)

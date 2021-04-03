@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,6 +22,7 @@
 #include <cublas_v2.h>
 #include <cstring>
 #include <sstream>
+
 static const char *_cudaGetErrorEnum(cudaError_t error) {
   return cudaGetErrorString(error);
 }
@@ -61,7 +62,6 @@ static const char *_cudaGetErrorEnum(cublasStatus_t error) {
   return "<unknown>";
 }
 
-
 template <typename T>
 void check(T result, char const *const func, const char *const file, int const line) {
   if (result) {
@@ -71,3 +71,8 @@ void check(T result, char const *const func, const char *const file, int const l
   }
 }
 #define check_cuda_error(val) check((val), #val, __FILE__, __LINE__)
+
+double diffTime(timeval start, timeval end)
+{
+  return (end.tv_sec - start.tv_sec) * 1000 + (end.tv_usec - start.tv_usec) * 0.001;
+}

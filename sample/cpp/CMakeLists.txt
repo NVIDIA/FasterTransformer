@@ -1,4 +1,4 @@
-# Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,16 +13,16 @@
 # limitations under the License.
 cmake_minimum_required(VERSION 3.8)
 
-set(transformer_fp32_files
-  transformer_fp32.cc
+set(encoder_sample_files
+  encoder_sample.cc
 )
 
-set(transformer_fp16_files
-  transformer_fp16.cc
+set(decoding_sample_files
+  decoding_sample.cc
 )
 
-add_executable(transformer_fp32 ${transformer_fp32_files})
-target_link_libraries(transformer_fp32 PUBLIC -lcublas -lcudart fastertransformer ${CMAKE_THREAD_LIBS_INIT})
+add_executable(encoder_sample ${encoder_sample_files})
+target_link_libraries(encoder_sample PUBLIC -lcublas -lcudart fastertransformer)
 
-add_executable(transformer_fp16 ${transformer_fp16_files})
-target_link_libraries(transformer_fp16 PUBLIC -lcublas -lcudart fastertransformer ${CMAKE_THREAD_LIBS_INIT})
+add_executable(decoding_sample ${decoding_sample_files})
+target_link_libraries(decoding_sample PUBLIC -lcublas -lcudart fastertransformer)
