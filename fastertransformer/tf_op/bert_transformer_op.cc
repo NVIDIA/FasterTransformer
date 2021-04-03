@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,12 +15,14 @@
  */
 #include "fastertransformer/faster_transformer.h"
 #include "fastertransformer/tf_op/bert_transformer_op.h"
+#include "fastertransformer/tf_op/common_op.h"
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/framework/register_types.h"
+#include "tensorflow/core/platform/logging.h"
 #include <cuda_fp16.h>
-namespace tensorflow 
+namespace tensorflow
 {
 namespace
 {
@@ -28,154 +30,180 @@ using CPUDevice = Eigen::ThreadPoolDevice;
 using GPUDevice = Eigen::GpuDevice;
 
 REGISTER_OP("BertTransformer")
-  .Input("from_tensor: T")
-  .Input("to_tensor: T")
-  .Input("attr_kernel_q: T")
-  .Input("attr_kernel_k: T")
-  .Input("attr_kernel_v: T")
-  .Input("attr_bias_q: T")
-  .Input("attr_bias_k: T")
-  .Input("attr_bias_v: T")
-  .Input("attr_mask: T")
-  .Input("attr_output_kernel: T")
-  .Input("attr_output_bias: T")
-  .Input("attr_output_layernorm_beta: T")
-  .Input("attr_output_layernorm_gamma: T")
-  .Input("inter_kernel: T")
-  .Input("inter_bias: T")
-  .Input("output_kernel: T")
-  .Input("output_bias: T")
-  .Input("output_layernorm_beta: T")
-  .Input("output_layernorm_gamma: T")
-  .Output("output: T")
-  .Attr("T: {float, half}")
-  .Attr("batch_size: int >= 1")
-  .Attr("from_seq_len: int >= 1")
-  .Attr("to_seq_len: int >= 1")
-  .Attr("head_num: int >= 1")
-  .Attr("size_per_head: int >= 1")
-  .SetShapeFn([](shape_inference::InferenceContext *c) {
-      int batch_size, from_seq_len, to_seq_len, head_num, size_per_head;
-      c->GetAttr("batch_size", &batch_size);
+    .Input("from_tensor: T")
+    .Input("to_tensor: T")
+    .Input("attr_kernel_q: T")
+    .Input("attr_kernel_k: T")
+    .Input("attr_kernel_v: T")
+    .Input("attr_bias_q: T")
+    .Input("attr_bias_k: T")
+    .Input("attr_bias_v: T")
+    .Input("attr_mask: T")
+    .Input("attr_output_kernel: T")
+    .Input("attr_output_bias: T")
+    .Input("attr_output_layernorm_beta: T")
+    .Input("attr_output_layernorm_gamma: T")
+    .Input("inter_kernel: T")
+    .Input("inter_bias: T")
+    .Input("output_kernel: T")
+    .Input("output_bias: T")
+    .Input("output_layernorm_beta: T")
+    .Input("output_layernorm_gamma: T")
+    .Output("output: T")
+    .Attr("T: {float, half}")
+    .Attr("from_seq_len: int >= 1")
+    .Attr("to_seq_len: int >= 1")
+    .Attr("head_num: int >= 1")
+    .Attr("size_per_head: int >= 1")
+    .SetShapeFn([](shape_inference::InferenceContext *c) {
+      int from_seq_len, to_seq_len, head_num, size_per_head;
       c->GetAttr("from_seq_len", &from_seq_len);
       c->GetAttr("to_seq_len", &to_seq_len);
       c->GetAttr("head_num", &head_num);
       c->GetAttr("size_per_head", &size_per_head);
-      c->set_output(0, c->MakeShape({batch_size * from_seq_len, head_num * size_per_head}));
+      int rank = c->Rank(c->input(0));
+      if (rank != 2 && rank != 3)
+      {
+        return errors::InvalidArgument("[@BertTransformer::ShapeInference] "
+                                       "invalid rank (from_tensor@input[0]): ",
+                                       rank,
+                                       ", should be 2 or 3");
+      }
+      // calculate batch size
+      shape_inference::DimensionOrConstant from_len_dim((int64)from_seq_len);
+      shape_inference::DimensionHandle output_dim1;
+      shape_inference::DimensionHandle batch_dim;
+      shape_inference::ShapeHandle input0;
+
+      TF_RETURN_IF_ERROR(c->WithRank(c->input(0), rank, &input0));
+      if (rank == 3)
+      { // embedding_output, [batch_size, seq_len, hidden_size]
+        batch_dim = c->Dim(c->input(0), 0);
+      }
+      else
+      { // should be 2, transformer's output, [batch_size*seq_len, hidden_size]
+        shape_inference::DimensionHandle tmp;
+        TF_RETURN_IF_ERROR(c->Divide(c->Dim(c->input(0), 0), from_len_dim,
+                                     true, &tmp));
+        batch_dim = tmp;
+      }
+
+      TF_RETURN_IF_ERROR(c->Multiply(batch_dim, from_len_dim, &output_dim1));
+
+      VLOG(2) << "[@BertTransformer::ShapeInference] batch_size: "
+              << c->Value(shape_inference::DimensionOrConstant(batch_dim))
+              << ", output shape: [" << c->Value(shape_inference::DimensionOrConstant(output_dim1))
+              << "," << head_num * size_per_head << "]\n";
+
+      c->set_output(0, c->MakeShape({output_dim1, head_num * size_per_head}));
       return Status::OK();
-      });
+    });
 template <typename Device, typename T>
-class BertTransformerOp : public OpKernel
+class BertTransformerOp : public CommonOp<T>
 {
-  public:
-    explicit BertTransformerOp(OpKernelConstruction *context) : OpKernel(context)
+public:
+  explicit BertTransformerOp(OpKernelConstruction *context) : CommonOp<T>(context)
+  {
+    OP_REQUIRES_OK(context, context->GetAttr("from_seq_len", &from_seq_len_));
+    OP_REQUIRES_OK(context, context->GetAttr("to_seq_len", &to_seq_len_));
+    OP_REQUIRES_OK(context, context->GetAttr("head_num", &head_num_));
+    OP_REQUIRES_OK(context, context->GetAttr("size_per_head", &size_per_head_));
+    OP_REQUIRES(context, (from_seq_len_ == to_seq_len_),
+                errors::InvalidArgument("Only support from_seq_len == to_seq_len"));
+  }
+
+  void Compute(OpKernelContext *context) override
+  {
+    int rank = (int)context->input(0).dims();
+    if (rank != 2 && rank != 3)
     {
-      OP_REQUIRES_OK(context, context->GetAttr("batch_size", &batch_size_));
-      OP_REQUIRES_OK(context, context->GetAttr("from_seq_len", &from_seq_len_));
-      OP_REQUIRES_OK(context, context->GetAttr("to_seq_len", &to_seq_len_));
-      OP_REQUIRES_OK(context, context->GetAttr("head_num", &head_num_));
-      OP_REQUIRES_OK(context, context->GetAttr("size_per_head", &size_per_head_));
-
-      OP_REQUIRES(context, (from_seq_len_ == to_seq_len_),
-          errors::InvalidArgument("Only support from_seq_len == to_seq_len"));
-
-      try
-      {
-        check_cuda_error(cublasCreate(&cublas_handle_));
-      }
-      catch(std::runtime_error& error)
-      {
-        OP_REQUIRES(context, false, errors::Internal(error.what()));
-      }
+      OP_REQUIRES(context, false,
+                  errors::InvalidArgument("[@BertTransformer::Compute] "
+                                          "invalid rank (from_tensor@input[0]): ",
+                                          rank,
+                                          ", should be 2 or 3"));
+    }
+    else if (rank == 3)
+    { // [batch_size, from_seq_len, hidden_size]
+      batch_size_ = (int)context->input(0).dim_size(0);
+    }
+    else
+    { // [batch_size * from_seq_len, hidden_size]
+      batch_size_ = (int)context->input(0).dim_size(0) / from_seq_len_;
     }
 
-    void Compute(OpKernelContext *context) override
+    VLOG(2) << "[@BertTransformer::Compute] getting batch size: "
+            << batch_size_ << "\n";
+
+    typedef BertEncoderTransformerTraits<traits_::OpType, cuda::OpenMultiHeadAttention> EncoderTraits_;
+    BertEncoderTransformer<EncoderTraits_> *encoder_transformer_;
+    fastertransformer::Allocator<AllocatorType::TF> allocator_(context);
+    try
     {
-      typedef BertEncoderTransformerTraits<traits_::OpType, cuda::OpenMultiHeadAttention> EncoderTraits_;
-      BertEncoderTransformer<EncoderTraits_> *encoder_transformer_;
-      try
-      {
-        fastertransformer::Allocator<AllocatorType::TF> allocator_(context);
-        encoder_transformer_ = new BertEncoderTransformer<EncoderTraits_>(allocator_, 
-          batch_size_, from_seq_len_, to_seq_len_, head_num_, size_per_head_);
-      }
-      catch(std::runtime_error& error)
-      {
-        OP_REQUIRES(context, false, errors::Internal(error.what()));
-      }
-      
-      OP_REQUIRES(context, context->num_inputs() == 19, errors::InvalidArgument("Less input arguments"));
+      encoder_transformer_ = new BertEncoderTransformer<EncoderTraits_>(allocator_,
+                                                                        batch_size_,
+                                                                        from_seq_len_, 
+                                                                        to_seq_len_, 
+                                                                        head_num_, 
+                                                                        size_per_head_);
+    }
+    catch (std::runtime_error &error)
+    {
+      OP_REQUIRES(context, false, errors::Internal(error.what()));
+    }
 
-      EncoderInitParam<DataType_> param; //init param here
-      param.cublas_handle = cublas_handle_;
-      param.from_tensor = reinterpret_cast<const DataType_ *>(context->input(0).flat<T>().data());
-      param.to_tensor = reinterpret_cast<const DataType_ *>(context->input(1).flat<T>().data());
-      param.attr_kernel_Q = reinterpret_cast<const DataType_ *>(context->input(2).flat<T>().data());
-      param.attr_kernel_K = reinterpret_cast<const DataType_ *>(context->input(3).flat<T>().data());
-      param.attr_kernel_V = reinterpret_cast<const DataType_ *>(context->input(4).flat<T>().data());
-      param.attr_bias_Q = reinterpret_cast<const DataType_ *>(context->input(5).flat<T>().data());
-      param.attr_bias_K = reinterpret_cast<const DataType_ *>(context->input(6).flat<T>().data());
-      param.attr_bias_V = reinterpret_cast<const DataType_ *>(context->input(7).flat<T>().data());
-      param.attr_mask = reinterpret_cast<const DataType_ *>(context->input(8).flat<T>().data());
-      param.attr_output_kernel = reinterpret_cast<const DataType_ *>(context->input(9).flat<T>().data());
-      param.attr_output_bias = reinterpret_cast<const DataType_ *>(context->input(10).flat<T>().data());
-      param.attr_output_layernorm_beta = reinterpret_cast<const DataType_ *>(context->input(11).flat<T>().data());
-      param.attr_output_layernorm_gamma = reinterpret_cast<const DataType_ *>(context->input(12).flat<T>().data());
-      param.inter_kernel = reinterpret_cast<const DataType_ *>(context->input(13).flat<T>().data());
-      param.inter_bias = reinterpret_cast<const DataType_ *>(context->input(14).flat<T>().data());
-      param.output_kernel = reinterpret_cast<const DataType_ *>(context->input(15).flat<T>().data());
-      param.output_bias = reinterpret_cast<const DataType_ *>(context->input(16).flat<T>().data());
-      param.output_layernorm_beta = reinterpret_cast<const DataType_ *>(context->input(17).flat<T>().data());
-      param.output_layernorm_gamma = reinterpret_cast<const DataType_ *>(context->input(18).flat<T>().data());
+    OP_REQUIRES(context, context->num_inputs() == 19, errors::InvalidArgument("Less input arguments"));
 
-      OP_REQUIRES(context, param.from_tensor != nullptr, errors::InvalidArgument("from tensor is null"));
-      OP_REQUIRES(context, param.to_tensor != nullptr, errors::InvalidArgument("to tensor is null"));
-      OP_REQUIRES(context, param.attr_kernel_Q != nullptr, errors::InvalidArgument("attr_kernel_Q is null"));
-      OP_REQUIRES(context, param.attr_kernel_K != nullptr, errors::InvalidArgument("attr_kernel_K is null"));
-      OP_REQUIRES(context, param.attr_kernel_V != nullptr, errors::InvalidArgument("attr_kernel_V is null"));
-      OP_REQUIRES(context, param.attr_bias_Q != nullptr, errors::InvalidArgument("attr_bias_Q is null"));
-      OP_REQUIRES(context, param.attr_bias_K != nullptr, errors::InvalidArgument("attr_bias_K is null"));
-      OP_REQUIRES(context, param.attr_bias_V != nullptr, errors::InvalidArgument("attr_bias_V is null"));
-      OP_REQUIRES(context, param.attr_mask != nullptr, errors::InvalidArgument("attr_mask is null"));
-      OP_REQUIRES(context, param.attr_output_kernel != nullptr, errors::InvalidArgument("attr_output_kernel is null"));
-      OP_REQUIRES(context, param.attr_output_bias != nullptr, errors::InvalidArgument("attr_output_bias is null"));
-      OP_REQUIRES(context, param.attr_output_layernorm_beta != nullptr, errors::InvalidArgument("attr_output_layernorm_beta is null"));
-      OP_REQUIRES(context, param.attr_output_layernorm_gamma != nullptr, errors::InvalidArgument("attr_output_layernorm_gamma is null"));
-      OP_REQUIRES(context, param.inter_kernel != nullptr, errors::InvalidArgument("inter_kernel is null"));
-      OP_REQUIRES(context, param.inter_bias != nullptr, errors::InvalidArgument("inter_bias is null"));
-      OP_REQUIRES(context, param.output_kernel != nullptr, errors::InvalidArgument("output_kernel is null"));
-      OP_REQUIRES(context, param.output_bias != nullptr, errors::InvalidArgument("output_bias is null"));
-      OP_REQUIRES(context, param.output_layernorm_beta != nullptr, errors::InvalidArgument("output_layernorm_beta is null"));
-      OP_REQUIRES(context, param.output_layernorm_gamma != nullptr, errors::InvalidArgument("output_layernorm_gamma is null"));
+    EncoderInitParam<DataType_> param; //init param here
+    param.cublas_handle = this->get_cublas_handler();
+    this->get_tensor(context, 0, &param.from_tensor);
+    this->get_tensor(context, 1, &param.to_tensor);
+    this->get_tensor(context, 2, &param.self_attention.query_weight.kernel);
+    this->get_tensor(context, 3, &param.self_attention.key_weight.kernel);
+    this->get_tensor(context, 4, &param.self_attention.value_weight.kernel);
+    this->get_tensor(context, 5, &param.self_attention.query_weight.bias);
+    this->get_tensor(context, 6, &param.self_attention.key_weight.bias);
+    this->get_tensor(context, 7, &param.self_attention.value_weight.bias);
+    this->get_tensor(context, 8, &param.attr_mask);
+    this->get_tensor(context, 9, &param.self_attention.attention_output_weight.kernel);
+    this->get_tensor(context, 10, &param.self_attention.attention_output_weight.bias);
+    this->get_tensor(context, 11, &param.self_layernorm.beta);
+    this->get_tensor(context, 12, &param.self_layernorm.gamma);
+    this->get_tensor(context, 13, &param.ffn.intermediate_weight.kernel);
+    this->get_tensor(context, 14, &param.ffn.intermediate_weight.bias);
+    this->get_tensor(context, 15, &param.ffn.output_weight.kernel);
+    this->get_tensor(context, 16, &param.ffn.output_weight.bias);
+    this->get_tensor(context, 17, &param.ffn_layernorm.beta);
+    this->get_tensor(context, 18, &param.ffn_layernorm.gamma);
 
-      Tensor *output = nullptr;
+    Tensor *output = nullptr;
+    OP_REQUIRES_OK(
+        context,
+        context->allocate_output(0, {batch_size_ * from_seq_len_, head_num_ * size_per_head_}, &output));
 
-      OP_REQUIRES_OK(
-          context,
-          context->allocate_output(0, {batch_size_ * from_seq_len_, head_num_ * size_per_head_}, &output));
+    param.transformer_out = reinterpret_cast<DataType_ *>(output->flat<T>().data());
 
-      param.transformer_out = reinterpret_cast<DataType_ *>(output->flat<T>().data());
-
-      OP_REQUIRES_OK(
-          context,
-          functor::BertTransformerOpFunctor<Device, T>::Compute(
+    OP_REQUIRES_OK(
+        context,
+        functor::BertTransformerOpFunctor<Device, T>::Compute(
             context,
             param,
             encoder_transformer_));
-    }
-    private:
-    int batch_size_, from_seq_len_, to_seq_len_, head_num_, size_per_head_;
-    typedef TransformerTFTraits<T> traits_;
-    typedef typename traits_::DataType DataType_;
-    cublasHandle_t cublas_handle_;
+    delete encoder_transformer_;
+  }
+
+private:
+  int batch_size_, from_seq_len_, to_seq_len_, head_num_, size_per_head_;
+  typedef TFTraits<T> traits_;
+  typedef typename traits_::DataType DataType_;
 };
 
 #ifdef GOOGLE_CUDA
 
-#define REGISTER_GPU(T)                                                                       \
-    REGISTER_KERNEL_BUILDER(                                                                  \
-        Name("BertTransformer").Device(DEVICE_GPU).TypeConstraint<T>("T"), \
-        BertTransformerOp<GPUDevice, T>)
+#define REGISTER_GPU(T)                                                  \
+  REGISTER_KERNEL_BUILDER(                                               \
+      Name("BertTransformer").Device(DEVICE_GPU).TypeConstraint<T>("T"), \
+      BertTransformerOp<GPUDevice, T>)
 REGISTER_GPU(float);
 REGISTER_GPU(Eigen::half);
 #undef REGISTER_GPU

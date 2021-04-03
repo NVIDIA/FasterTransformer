@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -31,10 +31,10 @@ namespace functor
 template <typename T>
 struct BertTransformerOpFunctor<GPUDevice, T>
 {
-  typedef typename TransformerTFTraits<T>::DataType DataType_;
+  typedef typename TFTraits<T>::DataType DataType_;
   static Status Compute(OpKernelContext *context,
       EncoderInitParam<DataType_ > param,
-      BertEncoderTransformer<BertEncoderTransformerTraits< TransformerTFTraits<T>::OpType,
+      BertEncoderTransformer<BertEncoderTransformerTraits< TFTraits<T>::OpType,
       cuda::OpenMultiHeadAttention > > *encoder_transformer)
   {
     const cudaStream_t &stream = context->eigen_device<GPUDevice>().stream();

@@ -1,4 +1,4 @@
-# Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,18 +13,16 @@
 # limitations under the License.
 cmake_minimum_required(VERSION 3.8)
 
-set(gemm_fp16_files
-  gemm_fp16.cu
+set(encoder_gemm_files
+  encoder_gemm.cc
 )
 
-set(gemm_fp32_files
-  gemm_fp32.cu
+set(decoding_gemm_files
+  decoding_gemm.cc
 )
 
-add_executable(gemm_fp32 ${gemm_fp32_files})
-set_target_properties(gemm_fp32 PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-target_link_libraries(gemm_fp32 PUBLIC -lcublas -lcudart ${CMAKE_THREAD_LIBS_INIT})
+add_executable(encoder_gemm ${encoder_gemm_files})
+target_link_libraries(encoder_gemm PUBLIC -lcublas -lcudart)
 
-add_executable(gemm_fp16 ${gemm_fp16_files})
-set_target_properties(gemm_fp16 PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-target_link_libraries(gemm_fp16 PUBLIC -lcublas -lcudart ${CMAKE_THREAD_LIBS_INIT})
+add_executable(decoding_gemm ${decoding_gemm_files})
+target_link_libraries(decoding_gemm PUBLIC -lcublas -lcudart)

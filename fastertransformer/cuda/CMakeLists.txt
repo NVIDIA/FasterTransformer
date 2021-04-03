@@ -1,4 +1,4 @@
-# Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,9 +16,10 @@ cmake_minimum_required(VERSION 3.8)
 set(cuda_kernel_files
   cuda_kernels.cu
   open_attention.cu
+  open_decoder.cu
+  decoding_kernel_check.cpp
 )
 
 add_library(fastertransformer STATIC ${cuda_kernel_files})
-set_target_properties(fastertransformer PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-target_link_libraries(fastertransformer PUBLIC -lcublas -lcudart ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(fastertransformer PUBLIC -lcublas -lcudart)
 

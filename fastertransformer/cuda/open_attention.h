@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,10 +44,10 @@ class OpenMultiHeadAttentionTraits<OperationType::FP32>
 };
 
 template<>
-class OpenMultiHeadAttentionTraits<OperationType::HALF>
+class OpenMultiHeadAttentionTraits<OperationType::FP16>
 {
  public:
-  typedef __half DataType;
+  typedef half DataType;
   static cudaDataType_t const computeType = CUDA_R_16F;
   static cudaDataType_t const AType = CUDA_R_16F;
   static cudaDataType_t const BType = CUDA_R_16F;
@@ -156,59 +156,74 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
     int n = k;
 
     DataType_ alpha = (DataType_)1.0f, beta = (DataType_)0.0f;
-
+    
     try
     {
       check_cuda_error(cublasGemmEx(param_.cublas_handle, 
         CUBLAS_OP_N, CUBLAS_OP_N, 
         n, m, k, 
         &alpha, 
-        param_.attr_kernel_Q, AType_, n, 
+        param_.self_attention.query_weight.kernel, AType_, n, 
         param_.from_tensor, BType_, k, 
         &beta, 
         query_buf_, CType_, n, 
         computeType_, 
         static_cast<cublasGemmAlgo_t>(cublasAlgo_[0])));
 
+#ifndef NDEBUG
+      cudaDeviceSynchronize();
+      check_cuda_error(cudaGetLastError());
+#endif
+
       check_cuda_error(cublasGemmEx(param_.cublas_handle, 
         CUBLAS_OP_N, CUBLAS_OP_N,
         n, m, k, 
         &alpha, 
-        param_.attr_kernel_K, AType_, n, 
+        param_.self_attention.key_weight.kernel, AType_, n, 
         param_.to_tensor, BType_, k, 
         &beta, 
         key_buf_, CType_, n, 
         computeType_, 
         static_cast<cublasGemmAlgo_t>(cublasAlgo_[0])));
 
+#ifndef NDEBUG
+      cudaDeviceSynchronize();
+      check_cuda_error(cudaGetLastError());
+#endif
+
       check_cuda_error(cublasGemmEx(param_.cublas_handle, 
         CUBLAS_OP_N, CUBLAS_OP_N, 
         n, m, k,
         &alpha,
-        param_.attr_kernel_V, AType_, n, 
+        param_.self_attention.value_weight.kernel, AType_, n, 
         param_.to_tensor, BType_, k, 
         &beta, 
         value_buf_, CType_, n, 
         computeType_, 
         static_cast<cublasGemmAlgo_t>(cublasAlgo_[0])));
 
-      DataType_ scaler = 1 / sqrtf(size_per_head_ * 1.0f);
+#ifndef NDEBUG
+      cudaDeviceSynchronize();
+      check_cuda_error(cudaGetLastError());
+#endif
+
+      DataType_ scalar = 1 / sqrtf(size_per_head_ * 1.0f);
       multiHeadAttr_nofuse_kernelLauncher(
         param_.stream,
         param_.cublas_handle,
         query_buf_,
-        param_.attr_bias_Q,
+        param_.self_attention.query_weight.bias,
         key_buf_,
-        param_.attr_bias_K,
+        param_.self_attention.key_weight.bias,
         value_buf_,
-        param_.attr_bias_V,
+        param_.self_attention.value_weight.bias,
         param_.attr_mask,
         param_.attr_out,
         batch_size_,
         from_seq_len_,
         head_num_,
         size_per_head_,
-        scaler);
+        scalar);
     }
     catch(std::runtime_error& error)
     {
@@ -230,7 +245,7 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
       const int seq_len,
       const int head_num,
       const int size_per_head,
-      const DataType_ scaler);
+      const DataType_ scalar);
 
   void multiHeadAttr_nofuse_kernelLauncher(
       cudaStream_t stream,
@@ -247,7 +262,7 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
       const int seq_len,
       const int head_num,
       const int size_per_head,
-      const DataType_ scaler);
+      const DataType_ scalar);
 
   void initialize(MultiHeadInitParam<DataType_> param)
   {

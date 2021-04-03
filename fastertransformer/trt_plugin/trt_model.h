@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,8 +44,8 @@ class TRT_Transformer
       check_cuda_error(cudaFree(buffers[input_index_]));
       check_cuda_error(cudaFree(buffers[mask_index_]));
       check_cuda_error(cudaFree(buffers[output_index_]));
-      engine_->destroy();
       context_->destroy();
+      engine_->destroy();
     }
 
     nvinfer1::Weights point2weight(T* ptr, int size)
