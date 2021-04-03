@@ -128,7 +128,8 @@ void add_QK_bias_transform(int8_t *q_buf_, int8_t *k_buf_, const int32_t* Q, con
                            const int32_t* K, const T* bias_K, const int m, const int batch_size, 
                            const int seq_len, const int head_num, const int size_per_head, int stride, 
                            const float * q_weight_amax, const float *q_input_deQFactor_div127_ptr, const float * k_weight_amax, 
-                           const float *k_input_deQFactor_div127_ptr, const float *q_output_scale_ptr, const float *k_output_scale_ptr)
+                           const float *k_input_deQFactor_div127_ptr, const float *q_output_scale_ptr, const float *k_output_scale_ptr,
+                           bool use_ORDER_COL32_2R_4R4)
 {
   const int32_t* data_ptr;
   char4* buf_ptr4;
@@ -183,23 +184,152 @@ void add_QK_bias_transform(int8_t *q_buf_, int8_t *k_buf_, const int32_t* Q, con
   int col_id = id_in_head;
   //new (row, rol) of LtTrans COL32/COL4 sub-matrix, leading dim = (COL32_ * seq_len)
   int new_col = col_id >> 5;
-  int new_row = (qk_id != 1) ?
-                  //COL32
-                  ((row_id << 5) + (col_id&31))
-               :
-                  //COL4
-                  ////row_id/8 is the number of tile of (8 rows 32 columns) -- column-major
-                  ////row_id%2 is even row, otherwise odd row
-                  ////col_id%COL32_/8 is the number tile of (8 rows 8 columns)
-                  (
-                  ((((row_id >> 3) << 3) + ((row_id&1) << 2) + ((col_id&31) >> 3)) << 5) +
-                  ////col_id%8 >= 4 is the right half of (8 rows 8 columns) tile
-                  ////(row_id%8/2) is (the row id of alternating 4 rows) - 1
-                  (((((col_id&7) >= 4)?4:0) + ((row_id&7) >> 1)) << 2) +
-                  ////col_id%4 is the id of 4 cols
-                  (col_id&3)
-                  )
-                  ;
+  int new_row;  
+  if (use_ORDER_COL32_2R_4R4)
+  {
+    int row_in_tile = row_id & 31;
+    int col_in_tile = col_id & 31; 
+    new_row = (qk_id != 1) ?
+              //COL32
+              ((row_id << 5) + (col_id&31))
+            :
+               //COL32_2R_4R4
+               (
+               ((row_id >> 5) << 10) +
+               //(((row%8)/2*4+row/8)*2+row%2)*32+col
+               (((((((row_in_tile&7)>>1)<<2)+(row_in_tile>>3))<<1)+(row_in_tile&1))<<5)+col_in_tile
+               )
+               ;
+  }
+  else
+  {
+    new_row = (qk_id != 1) ?
+              //COL32
+              ((row_id << 5) + (col_id&31))
+            :
+              //COL4
+              ////row_id/8 is the number of tile of (8 rows 32 columns) -- column-major
+              ////row_id%2 is even row, otherwise odd row
+              ////col_id%COL32_/8 is the number tile of (8 rows 8 columns)
+              (
+              ((((row_id >> 3) << 3) + ((row_id&1) << 2) + ((col_id&31) >> 3)) << 5) +
+              ////col_id%8 >= 4 is the right half of (8 rows 8 columns) tile
+              ////(row_id%8/2) is (the row id of alternating 4 rows) - 1
+              (((((col_id&7) >= 4)?4:0) + ((row_id&7) >> 1)) << 2) +
+              ////col_id%4 is the id of 4 cols
+              (col_id&3)
+              )
+              ;
+  }
+
+  buf_ptr4[(((batch_id*head_num + head_id) * stride + (new_col << 5)*seq_len + new_row) >> 2)] = tmp4;
+}
+
+//add_QK_bias_transform for batch int8 cublasLtMatmul & per axis quantization for weight
+//1.add QK bias
+//2.transform each Q K CUBLASLT_ORDER_COL32 matrixes into a series of sub-matrix (with CUBLASLT_ORDER_COL32/CUBLASLT_ORDER_COL4_4R2_8C layout)
+//  Q, K are CUBLASLT_ORDER_COL32 matrixes of m = batch_size * seq_len, n = head_num * size_per_head
+//  q_buf_ is of batchCount = batch_size * head_num, m = seq_len, n = size_per_head, CUBLASLT_ORDER_COL32
+//  k_buf_ is of batchCount = batch_size * head_num, m = seq_len, n = size_per_head, CUBLASLT_ORDER_COL4_4R2_8C
+//only for int8 IO
+//seq_len, size_per_head must be a multiple of 32
+//grid.x = batch_size * seq_len * 2;
+//block.x = head_num * size_per_head / 4;
+//using char4
+template <typename T>
+__global__
+void add_QK_bias_transform(int8_t *q_buf_, int8_t *k_buf_, const int8_t* Q, const T* bias_Q, 
+                           const int8_t* K, const T* bias_K, const int m, const int batch_size, 
+                           const int seq_len, const int head_num, const int size_per_head, int stride, 
+                           const float *q_input_deQFactor_ptr, const float *k_input_deQFactor_ptr, const float *q_output_scale_ptr, const float *k_output_scale_ptr,
+                           bool use_ORDER_COL32_2R_4R4)
+{
+  const char4* data_ptr;
+  char4* buf_ptr4;
+  const T* bias_ptr;
+  int qk_id = blockIdx.x / m;
+
+  data_ptr = qk_id == 0 ? (const char4*)Q : (const char4*)K;
+  buf_ptr4 = qk_id == 0 ? (char4*)q_buf_ : (char4*)k_buf_;
+  bias_ptr = qk_id == 0 ? bias_Q : bias_K;
+  const float input_deQFactor = qk_id == 0 ? __ldg(q_input_deQFactor_ptr) : __ldg(k_input_deQFactor_ptr);
+  const float output_scale = qk_id == 0 ? __ldg(q_output_scale_ptr) : __ldg(k_output_scale_ptr);
+
+  int threadIdx4 = threadIdx.x << 2;
+  int batch_id = (blockIdx.x % m) / seq_len;
+  int head_id = threadIdx4 / size_per_head;
+  int id_in_head = threadIdx4 % size_per_head;
+  int word_id = blockIdx.x % seq_len;
+
+  int data_id = (((threadIdx4 >> 5) << 5)*m + ((blockIdx.x%m) << 5) + (threadIdx4&31)) >> 2;
+
+  float scale;
+  float tmp;
+  char4 tmp4 = __ldg(data_ptr+data_id);
+  scale = static_cast<float>(tmp4.x) * input_deQFactor;
+  tmp = static_cast<float>(__ldg(bias_ptr+threadIdx4)) + scale;
+  tmp4.x = float_to_int8_rn(tmp*output_scale);
+
+  threadIdx4 = threadIdx4+1;
+  scale = static_cast<float>(tmp4.y) * input_deQFactor;
+  tmp = static_cast<float>(__ldg(bias_ptr+threadIdx4)) + scale;
+  tmp4.y = float_to_int8_rn(tmp*output_scale);
+
+  threadIdx4 = threadIdx4+1;
+  scale = static_cast<float>(tmp4.z) * input_deQFactor;
+  tmp = static_cast<float>(__ldg(bias_ptr+threadIdx4)) + scale;
+  tmp4.z = float_to_int8_rn(tmp*output_scale);
+
+  threadIdx4 = threadIdx4+1;
+  scale = static_cast<float>(tmp4.w) * input_deQFactor;;
+  tmp = static_cast<float>(__ldg(bias_ptr+threadIdx4)) + scale;
+  tmp4.w = float_to_int8_rn(tmp*output_scale);
+
+
+  //row_id, col_id of sub-matrix (m = seq_len, n = size_per_head), column-major
+
+  int row_id = word_id;
+  int col_id = id_in_head;
+  //new (row, rol) of LtTrans COL32/COL4 sub-matrix, leading dim = (COL32_ * seq_len)
+  int new_col = col_id >> 5;
+  int new_row;  
+  if (use_ORDER_COL32_2R_4R4)
+  {
+    int row_in_tile = row_id & 31;
+    int col_in_tile = col_id & 31; 
+    new_row = (qk_id != 1) ?
+              //COL32
+              ((row_id << 5) + (col_id&31))
+            :
+               //COL32_2R_4R4
+               (
+               ((row_id >> 5) << 10) +
+               //(((row%8)/2*4+row/8)*2+row%2)*32+col
+               (((((((row_in_tile&7)>>1)<<2)+(row_in_tile>>3))<<1)+(row_in_tile&1))<<5)+col_in_tile
+               )
+               ;
+  }
+  else
+  {
+    new_row = (qk_id != 1) ?
+              //COL32
+              ((row_id << 5) + (col_id&31))
+            :
+              //COL4
+              ////row_id/8 is the number of tile of (8 rows 32 columns) -- column-major
+              ////row_id%2 is even row, otherwise odd row
+              ////col_id%COL32_/8 is the number tile of (8 rows 8 columns)
+              (
+              ((((row_id >> 3) << 3) + ((row_id&1) << 2) + ((col_id&31) >> 3)) << 5) +
+              ////col_id%8 >= 4 is the right half of (8 rows 8 columns) tile
+              ////(row_id%8/2) is (the row id of alternating 4 rows) - 1
+              (((((col_id&7) >= 4)?4:0) + ((row_id&7) >> 1)) << 2) +
+              ////col_id%4 is the id of 4 cols
+              (col_id&3)
+              )
+              ;
+  }
+
   buf_ptr4[(((batch_id*head_num + head_id) * stride + (new_col << 5)*seq_len + new_row) >> 2)] = tmp4;
 }
 
@@ -208,7 +338,7 @@ void add_QK_bias_transform(int8_t *q_buf_, int8_t *k_buf_, const int32_t* Q, con
 //2.transform each Q K CUBLASLT_ORDER_COL32 matrixes into a series of sub-matrix (with CUBLASLT_ORDER_COL32/CUBLASLT_ORDER_COL4_4R2_8C layout)
 //  Q, K are CUBLASLT_ORDER_COL32 matrixes of m = valid_word_num, n = head_num * size_per_head
 //  q_buf_ is of batchCount = batch_size * head_num, m = seq_len, n = size_per_head, CUBLASLT_ORDER_COL32
-//  k_buf_ is of batchCount = batch_size * head_num, m = seq_len, n = size_per_head, CUBLASLT_ORDER_COL4_4R2_8C
+//  k_buf_ is of batchCount = batch_size * head_num, m = seq_len, n = size_per_head, CUBLASLT_ORDER_COL4_4R2_8C or CUBLASLT_ORDER_COL32_2R_4R4
 //only for int32 input & int8 output
 //seq_len, size_per_head must be a multiple of 32
 //grid.x = valid_word_num * 2;
@@ -221,7 +351,8 @@ void add_QK_bias_transform_rebuild_padding(int8_t *q_buf_, int8_t *k_buf_, const
                                            const int valid_word_num, const int m, const int batch_size, const int seq_len, 
                                            const int head_num, const int size_per_head, int stride, const float * q_weight_amax, 
                                            const float *q_input_deQFactor_div127_ptr, const float * k_weight_amax, 
-                                           const float *k_input_deQFactor_div127_ptr, const float *q_output_scale_ptr, const float *k_output_scale_ptr)
+                                           const float *k_input_deQFactor_div127_ptr, const float *q_output_scale_ptr, const float *k_output_scale_ptr,
+                                           bool use_ORDER_COL32_2R_4R4)
 {
   const int32_t* data_ptr;
   char4* buf_ptr4;
@@ -277,28 +408,163 @@ void add_QK_bias_transform_rebuild_padding(int8_t *q_buf_, int8_t *k_buf_, const
   int col_id = id_in_head;
   //new (row, rol) of LtTrans COL32/COL4 sub-matrix, leading dim = (COL32_ * seq_len)
   int new_col = col_id >> 5;
-  int new_row = (qk_id != 1) ?
-                  //COL32
-                  ((row_id << 5) + (col_id&31))
-               :
-                  //COL4
-                  ////row_id/8 is the number of tile of (8 rows 32 columns) -- column-major
-                  ////row_id%2 is even row, otherwise odd row
-                  ////col_id%COL32_/8 is the number tile of (8 rows 8 columns)
-                  (
-                  ((((row_id >> 3) << 3) + ((row_id&1) << 2) + ((col_id&31) >> 3)) << 5) +
-                  ////col_id%8 >= 4 is the right half of (8 rows 8 columns) tile
-                  ////(row_id%8/2) is (the row id of alternating 4 rows) - 1
-                  (((((col_id&7) >= 4)?4:0) + ((row_id&7) >> 1)) << 2) +
-                  ////col_id%4 is the id of 4 cols
-                  (col_id&3)
-                  )
-                  ;
+  int new_row; 
+  if (use_ORDER_COL32_2R_4R4)
+  {
+    int row_in_tile = row_id & 31;
+    int col_in_tile = col_id & 31; 
+    new_row = (qk_id != 1) ?
+              //COL32
+              ((row_id << 5) + (col_id&31))
+            :
+              //COL32_2R_4R4
+              (
+              ((row_id >> 5) << 10) +
+              //(((row%8)/2*4+row/8)*2+row%2)*32+col
+              (((((((row_in_tile&7)>>1)<<2)+(row_in_tile>>3))<<1)+(row_in_tile&1))<<5)+col_in_tile
+              )
+              ;
+  }
+  else
+  {
+    new_row = (qk_id != 1) ?
+              //COL32
+              ((row_id << 5) + (col_id&31))
+            :
+              //COL4
+              ////row_id/8 is the number of tile of (8 rows 32 columns) -- column-major
+              ////row_id%2 is even row, otherwise odd row
+              ////col_id%COL32_/8 is the number tile of (8 rows 8 columns)
+              (
+              ((((row_id >> 3) << 3) + ((row_id&1) << 2) + ((col_id&31) >> 3)) << 5) +
+              ////col_id%8 >= 4 is the right half of (8 rows 8 columns) tile
+              ////(row_id%8/2) is (the row id of alternating 4 rows) - 1
+              (((((col_id&7) >= 4)?4:0) + ((row_id&7) >> 1)) << 2) +
+              ////col_id%4 is the id of 4 cols
+              (col_id&3)
+              )
+              ;
+  }
+
+  buf_ptr4[(((batch_id*head_num + head_id) * stride + (new_col << 5)*seq_len + new_row) >> 2)] = tmp4;
+}
+
+//add_QK_bias_transform & rebuild padding for batch int8 cublasLtMatmul & per tensor quantization for weight
+//1.add QK bias
+//2.transform each Q K CUBLASLT_ORDER_COL32 matrixes into a series of sub-matrix (with CUBLASLT_ORDER_COL32/CUBLASLT_ORDER_COL4_4R2_8C layout)
+//  Q, K are CUBLASLT_ORDER_COL32 matrixes of m = valid_word_num, n = head_num * size_per_head
+//  q_buf_ is of batchCount = batch_size * head_num, m = seq_len, n = size_per_head, CUBLASLT_ORDER_COL32
+//  k_buf_ is of batchCount = batch_size * head_num, m = seq_len, n = size_per_head, CUBLASLT_ORDER_COL4_4R2_8C or CUBLASLT_ORDER_COL32_2R_4R4
+//only for int8 IO
+//seq_len, size_per_head must be a multiple of 32
+//grid.x = valid_word_num * 2;
+//block.x = head_num * size_per_head / 4;
+//using char4
+template <typename T>
+__global__
+void add_QK_bias_transform_rebuild_padding(int8_t *q_buf_, int8_t *k_buf_, const int8_t* Q, const T* bias_Q, 
+                                           const int8_t* K, const T* bias_K, const int* sequence_id_offset, 
+                                           const int valid_word_num, const int m, const int batch_size, const int seq_len, 
+                                           const int head_num, const int size_per_head, int stride,  
+                                           const float *q_deQFactor_ptr,  const float *k_deQFactor_ptr, 
+                                           const float *q_output_scale_ptr, const float *k_output_scale_ptr,
+                                           bool use_ORDER_COL32_2R_4R4)
+{
+  const char4* data_ptr;
+  char4* buf_ptr4;
+  const T* bias_ptr;
+  int qk_id = blockIdx.x / valid_word_num;
+
+  data_ptr = qk_id == 0 ? (const char4*)Q : (const char4*)K;
+  buf_ptr4 = qk_id == 0 ? (char4*)q_buf_ : (char4*)k_buf_;
+  bias_ptr = qk_id == 0 ? bias_Q : bias_K;
+  
+  int threadIdx4 = threadIdx.x << 2;
+  int m_full_idx = blockIdx.x % valid_word_num;
+  m_full_idx = (valid_word_num != m) ? (m_full_idx + __ldg(sequence_id_offset+m_full_idx)) : m_full_idx;
+  int batch_id = m_full_idx / seq_len;
+  int head_id = threadIdx4 / size_per_head;
+  int id_in_head = threadIdx4 % size_per_head;
+  int word_id = m_full_idx % seq_len;
+  
+  const float deQFactor = qk_id == 0 ? __ldg(q_deQFactor_ptr) : __ldg(k_deQFactor_ptr);
+  const float output_scale = qk_id == 0 ? __ldg(q_output_scale_ptr) : __ldg(k_output_scale_ptr);
+
+  int data_id = (((threadIdx4 >> 5) << 5)*valid_word_num + ((blockIdx.x%valid_word_num) << 5) + (threadIdx4&31)) >> 2;
+    
+  float scale;
+  float tmp;
+  char4 tmp4;
+  
+  tmp4 = __ldg(data_ptr+data_id);
+  
+  scale = static_cast<float>(tmp4.x) * deQFactor;
+  tmp = static_cast<float>(__ldg(bias_ptr+threadIdx4)) + scale;
+  tmp4.x = float_to_int8_rn(tmp*output_scale);
+
+  threadIdx4 = threadIdx4+1;
+  scale = static_cast<float>(tmp4.y) * deQFactor;
+  tmp = static_cast<float>(__ldg(bias_ptr+threadIdx4)) + scale;
+  tmp4.y = float_to_int8_rn(tmp*output_scale);
+
+  threadIdx4 = threadIdx4+1;
+  scale = static_cast<float>(tmp4.z) * deQFactor;
+  tmp = static_cast<float>(__ldg(bias_ptr+threadIdx4)) + scale;
+  tmp4.z = float_to_int8_rn(tmp*output_scale);
+
+  threadIdx4 = threadIdx4+1;
+  scale = static_cast<float>(tmp4.w) * deQFactor;
+  tmp = static_cast<float>(__ldg(bias_ptr+threadIdx4)) + scale;
+  tmp4.w = float_to_int8_rn(tmp*output_scale);
+
+  //row_id, col_id of sub-matrix (m = seq_len, n = size_per_head), column-major
+  int row_id = word_id;
+  int col_id = id_in_head;
+  //new (row, rol) of LtTrans COL32/COL4 sub-matrix, leading dim = (COL32_ * seq_len)
+  int new_col = col_id >> 5;
+  int new_row; 
+  if (use_ORDER_COL32_2R_4R4)
+  {
+    int row_in_tile = row_id & 31;
+    int col_in_tile = col_id & 31; 
+    new_row = (qk_id != 1) ?
+              //COL32
+              ((row_id << 5) + (col_id&31))
+            :
+              //COL32_2R_4R4
+              (
+              ((row_id >> 5) << 10) +
+              //(((row%8)/2*4+row/8)*2+row%2)*32+col
+              (((((((row_in_tile&7)>>1)<<2)+(row_in_tile>>3))<<1)+(row_in_tile&1))<<5)+col_in_tile
+              )
+              ;
+  }
+  else
+  {
+    new_row = (qk_id != 1) ?
+              //COL32
+              ((row_id << 5) + (col_id&31))
+            :
+              //COL4
+              ////row_id/8 is the number of tile of (8 rows 32 columns) -- column-major
+              ////row_id%2 is even row, otherwise odd row
+              ////col_id%COL32_/8 is the number tile of (8 rows 8 columns)
+              (
+              ((((row_id >> 3) << 3) + ((row_id&1) << 2) + ((col_id&31) >> 3)) << 5) +
+              ////col_id%8 >= 4 is the right half of (8 rows 8 columns) tile
+              ////(row_id%8/2) is (the row id of alternating 4 rows) - 1
+              (((((col_id&7) >= 4)?4:0) + ((row_id&7) >> 1)) << 2) +
+              ////col_id%4 is the id of 4 cols
+              (col_id&3)
+              )
+              ;
+  }
+
   buf_ptr4[(((batch_id*head_num + head_id) * stride + (new_col << 5)*seq_len + new_row) >> 2)] = tmp4;
 }
 
 //input matrix a matrix of m = batch_size*seq_len , n = head_num*size_per_head, CUBLASLT_ORDER_COL32
-//output matrixes are a series of sub-matrixes with size of m = size_per_head, n = seq_len , CUBLASLT_ORDER_COL4_4R2_8C
+//output matrixes are a series of sub-matrixes with size of m = size_per_head, n = seq_len , CUBLASLT_ORDER_COL4_4R2_8C or CUBLASLT_ORDER_COL32_2R_4R4
 //only for int32_t Input int8_t Output
 //seq_len, size_per_head must be a multiple of 32
 //grid = (size_per_head/32, seq_len/32, batch_size*head_num)
@@ -309,7 +575,7 @@ template <typename T>
 __global__
 void add_V_bias_transform(int8_t *v_buf_, const int32_t *V, const T *V_bias, const int batch_size, const int seq_len, 
                           const int head_num, const int size_per_head, int stride, const float* weight_amax, 
-                          const float *input_deQFactor_div127_ptr, const float *out_scale_ptr)
+                          const float *input_deQFactor_div127_ptr, const float *out_scale_ptr, bool use_ORDER_COL32_2R_4R4)
 {
   const float input_deQFactor_div127 = __ldg(input_deQFactor_div127_ptr);
   const float out_scale = __ldg(out_scale_ptr);
@@ -366,20 +632,144 @@ void add_V_bias_transform(int8_t *v_buf_, const int32_t *V, const T *V_bias, con
   word_id = (blockIdx.y << 5) + threadIdx4;
   id_in_size = (blockIdx.x << 5) + threadIdx.y;
   col = (word_id >> 5);
-  row = (
-        //COL4
-        ////id_in_size/8 is the number of tile of (8 rows 32 columns) -- column-major
-        ////id_in_size%2 is even row, otherwise odd row
-        ////word_id%COL32_/8 is the number tile of (8 rows 8 columns)
-        ((((id_in_size >> 3) << 3) + ((id_in_size&1) << 2) + ((word_id&31) >> 3)) << 5) +
-        ////word_id%8 >= 4 is the right half of (8 rows 8 columns) tile
-        ////(id_in_size%8/2) is (the row id of alternating 4 rows) - 1
-        (((((word_id&7) >= 4)?4:0) + ((id_in_size&7) >> 1)) << 2) +
-        ////word_id%4 is the id of 4 cols
-        (word_id&3)
-        );
+
+  if (use_ORDER_COL32_2R_4R4)
+  {
+    int row_in_tile = id_in_size & 31;
+    int col_in_tile = word_id & 31; 
+    row = (
+          //COL32_2R_4R4
+          ((id_in_size >> 5) << 10) +
+          //(((row%8)/2*4+row/8)*2+row%2)*32+col
+          (((((((row_in_tile&7)>>1)<<2)+(row_in_tile>>3))<<1)+(row_in_tile&1))<<5)+col_in_tile
+          );
+  }
+  else
+  { 
+    row = (
+          //COL4
+          ////id_in_size/8 is the number of tile of (8 rows 32 columns) -- column-major
+          ////id_in_size%2 is even row, otherwise odd row
+          ////word_id%COL32_/8 is the number tile of (8 rows 8 columns)
+          ((((id_in_size >> 3) << 3) + ((id_in_size&1) << 2) + ((word_id&31) >> 3)) << 5) +
+          ////word_id%8 >= 4 is the right half of (8 rows 8 columns) tile
+          ////(id_in_size%8/2) is (the row id of alternating 4 rows) - 1
+          (((((word_id&7) >= 4)?4:0) + ((id_in_size&7) >> 1)) << 2) +
+          ////word_id%4 is the id of 4 cols
+          (word_id&3)
+          );
+  }
+
         
   char4 dataTmp;
+  dataTmp.x = shm[sh_col][sh_row];
+  dataTmp.y = shm[sh_col+1][sh_row];
+  dataTmp.z = shm[sh_col+2][sh_row];
+  dataTmp.w = shm[sh_col+3][sh_row];
+  buf_ptr4[(blockIdx.z*stride + (col << 5)*size_per_head + row) >> 2] = dataTmp;
+}
+
+
+
+//input matrix a matrix of m = batch_size*seq_len , n = head_num*size_per_head, CUBLASLT_ORDER_COL32
+//output matrixes are a series of sub-matrixes with size of m = size_per_head, n = seq_len , CUBLASLT_ORDER_COL4_4R2_8C or CUBLASLT_ORDER_COL32_2R_4R4
+//only for int8_t IO
+//seq_len, size_per_head must be a multiple of 32
+//grid = (size_per_head/32, seq_len/32, batch_size*head_num)
+//block = (8, 32);
+//using char4
+//per tensor quantization for weight
+template <typename T>
+__global__
+void add_V_bias_transform(int8_t *v_buf_, const int8_t *V, const T *V_bias, const int batch_size, const int seq_len, 
+                          const int head_num, const int size_per_head, int stride,
+                          const float *input_deQFactor_ptr, const float *out_scale_ptr, bool use_ORDER_COL32_2R_4R4)
+{
+  const float input_deQFactor = __ldg(input_deQFactor_ptr);
+  const float out_scale = __ldg(out_scale_ptr);
+  __shared__ int8_t shm[32][33];
+  const char4* data_ptr = (const char4*)V;
+  char4* buf_ptr4 = (char4*) v_buf_;
+  const T* bias_ptr = V_bias;
+
+  int threadIdx4 = threadIdx.x << 2;
+
+  //for src of (seq_len, size_per_head)
+  int batch_id = blockIdx.z/head_num;
+  int head_id = blockIdx.z%head_num;
+  int word_id = (blockIdx.y << 5) + threadIdx.y;
+  int id_in_size = (blockIdx.x << 5) + threadIdx4;
+
+  //for V layout (batch_size*seq_len, head_num*size_per_head)
+  int col = head_id*size_per_head + id_in_size;
+  int row = batch_id*seq_len + word_id;
+  int inIdx = (((col >> 5) << 5)*batch_size*seq_len + ((row << 5) + (col&31))) >> 2;
+  //for shm row-major
+  int sh_col = threadIdx4;
+  int sh_row = threadIdx.y;
+  
+  float tmp;
+  float scale;
+
+  //const half2* bias_ptr2 = (const half2*)bias_ptr;
+  //half2 tmp2;
+
+  //tmp2 = __ldg(&bias_ptr2[col >> 1]);
+  
+  char4 dataTmp = __ldg(data_ptr + inIdx);
+  
+  scale = dataTmp.x * input_deQFactor;
+  tmp = scale + static_cast<float>(__ldg(bias_ptr + col));//(tmp2.x);
+  shm[sh_row][sh_col] = float_to_int8_rn(tmp*out_scale);
+  
+  scale = dataTmp.y * input_deQFactor;
+  tmp = scale + static_cast<float>(__ldg(bias_ptr+col+1));//(tmp2.y);
+  shm[sh_row][sh_col+1] = float_to_int8_rn(tmp*out_scale);
+  
+  //tmp2 = __ldg(&bias_ptr2[(col >> 1) + 1]);
+
+  scale = dataTmp.z * input_deQFactor;
+  tmp = scale + static_cast<float>(__ldg(bias_ptr+col+2));//(tmp2.x);
+  shm[sh_row][sh_col+2] = float_to_int8_rn(tmp*out_scale);
+  
+  scale = dataTmp.w * input_deQFactor;
+  tmp = scale + static_cast<float>(__ldg(bias_ptr+col+3));//(tmp2.y);
+  shm[sh_row][sh_col+3] = float_to_int8_rn(tmp*out_scale);
+
+  __syncthreads();
+
+  //for dst of (size_per_head, seq_len)
+  word_id = (blockIdx.y << 5) + threadIdx4;
+  id_in_size = (blockIdx.x << 5) + threadIdx.y;
+  col = (word_id >> 5);
+
+  if (use_ORDER_COL32_2R_4R4)
+  {
+    int row_in_tile = id_in_size & 31;
+    int col_in_tile = word_id & 31; 
+    row = (
+          //COL32_2R_4R4
+          ((id_in_size >> 5) << 10) +
+          //(((row%8)/2*4+row/8)*2+row%2)*32+col
+          (((((((row_in_tile&7)>>1)<<2)+(row_in_tile>>3))<<1)+(row_in_tile&1))<<5)+col_in_tile
+          );
+  }
+  else
+  { 
+    row = (
+          //COL4
+          ////id_in_size/8 is the number of tile of (8 rows 32 columns) -- column-major
+          ////id_in_size%2 is even row, otherwise odd row
+          ////word_id%COL32_/8 is the number tile of (8 rows 8 columns)
+          ((((id_in_size >> 3) << 3) + ((id_in_size&1) << 2) + ((word_id&31) >> 3)) << 5) +
+          ////word_id%8 >= 4 is the right half of (8 rows 8 columns) tile
+          ////(id_in_size%8/2) is (the row id of alternating 4 rows) - 1
+          (((((word_id&7) >= 4)?4:0) + ((id_in_size&7) >> 1)) << 2) +
+          ////word_id%4 is the id of 4 cols
+          (word_id&3)
+          );
+  }
+
   dataTmp.x = shm[sh_col][sh_row];
   dataTmp.y = shm[sh_col+1][sh_row];
   dataTmp.z = shm[sh_col+2][sh_row];
@@ -391,7 +781,7 @@ template <>
 __global__
 void add_V_bias_transform(int8_t *v_buf_, const int32_t *V, const half *V_bias, const int batch_size, const int seq_len, 
                           const int head_num, const int size_per_head, int stride, const float* weight_amax, 
-                          const float *input_deQFactor_div127_ptr, const float *out_scale_ptr)
+                          const float *input_deQFactor_div127_ptr, const float *out_scale_ptr, bool use_ORDER_COL32_2R_4R4)
 {
   const float input_deQFactor_div127 = __ldg(input_deQFactor_div127_ptr);
   const float out_scale = __ldg(out_scale_ptr);
@@ -450,18 +840,33 @@ void add_V_bias_transform(int8_t *v_buf_, const int32_t *V, const half *V_bias, 
   word_id = blockIdy32 + threadIdx4;
   id_in_size = blockIdx32 + threadIdx.y;
   col = (word_id >> 5);
-  row = (
-        //COL4
-        ////id_in_size/8 is the number of tile of (8 rows 32 columns) -- column-major
-        ////id_in_size%2 is even row, otherwise odd row
-        ////word_id%COL32_/8 is the number tile of (8 rows 8 columns)
-        (((id_in_size & 0xfffffff8) + ((id_in_size&1) << 2) + ((word_id&31) >> 3)) << 5) +
-        ////word_id%8 >= 4 is the right half of (8 rows 8 columns) tile
-        ////(id_in_size%8/2) is (the row id of alternating 4 rows) - 1
-        (((((word_id&7) >= 4)?4:0) + ((id_in_size&7) >> 1)) << 2) +
-        ////word_id%4 is the id of 4 cols
-        (word_id&3)
-        );
+
+  if (use_ORDER_COL32_2R_4R4)
+  {
+    int row_in_tile = id_in_size & 31;
+    int col_in_tile = word_id & 31; 
+    row = (
+          //COL32_2R_4R4
+          ((id_in_size >> 5) << 10) +
+          //(((row%8)/2*4+row/8)*2+row%2)*32+col
+          (((((((row_in_tile&7)>>1)<<2)+(row_in_tile>>3))<<1)+(row_in_tile&1))<<5)+col_in_tile
+          );
+  }
+  else
+  { 
+    row = (
+          //COL4
+          ////id_in_size/8 is the number of tile of (8 rows 32 columns) -- column-major
+          ////id_in_size%2 is even row, otherwise odd row
+          ////word_id%COL32_/8 is the number tile of (8 rows 8 columns)
+          (((id_in_size & 0xfffffff8) + ((id_in_size&1) << 2) + ((word_id&31) >> 3)) << 5) +
+          ////word_id%8 >= 4 is the right half of (8 rows 8 columns) tile
+          ////(id_in_size%8/2) is (the row id of alternating 4 rows) - 1
+          (((((word_id&7) >= 4)?4:0) + ((id_in_size&7) >> 1)) << 2) +
+          ////word_id%4 is the id of 4 cols
+          (word_id&3)
+          );
+  }
         
   char4 dataTmp;
   dataTmp.x = shm[sh_col][sh_row];
@@ -473,7 +878,7 @@ void add_V_bias_transform(int8_t *v_buf_, const int32_t *V, const half *V_bias, 
 
 //add bias into V & rebuild padding 
 //input matrix a matrix of m = valid_word_num, n = head_num*size_per_head, CUBLASLT_ORDER_COL32
-//output matrixes are a series of sub-matrixes with size of m = size_per_head, n = seq_len , CUBLASLT_ORDER_COL4_4R2_8C
+//output matrixes are a series of sub-matrixes with size of m = size_per_head, n = seq_len , CUBLASLT_ORDER_COL4_4R2_8C or CUBLASLT_ORDER_COL32_2R_4R4
 //only for int32_t Input int8_t Output
 //seq_len, size_per_head must be a multiple of 32
 //grid = (size_per_head/32, seq_len/32, batch_size*head_num)
@@ -484,7 +889,7 @@ template <typename T>
 __global__
 void add_V_bias_transform_rebuild_padding(int8_t *v_buf_, const int32_t *V, const T *V_bias, const int* sequence_id_map, const int valid_word_num, 
                                           const int batch_size, const int seq_len, const int head_num, const int size_per_head, int stride, 
-                                          const float* weight_amax, const float *input_deQFactor_div127_ptr, const float *out_scale_ptr)
+                                          const float* weight_amax, const float *input_deQFactor_div127_ptr, const float *out_scale_ptr, bool use_ORDER_COL32_2R_4R4)
 {
   __shared__ int8_t shm[32][33];
   const int32_t* data_ptr = V;
@@ -548,18 +953,33 @@ void add_V_bias_transform_rebuild_padding(int8_t *v_buf_, const int32_t *V, cons
   word_id = (blockIdx.y << 5) + threadIdx4;
   id_in_size = (blockIdx.x << 5) + threadIdx.y;
   col = (word_id >> 5);
-  row = (
-        //COL4
-        ////id_in_size/8 is the number of tile of (8 rows 32 columns) -- column-major
-        ////id_in_size%2 is even row, otherwise odd row
-        ////word_id%COL32_/8 is the number tile of (8 rows 8 columns)
-        (((id_in_size & 0xfffffff8) + ((id_in_size&1) << 2) + ((word_id&31) >> 3)) << 5) +
-        ////word_id%8 >= 4 is the right half of (8 rows 8 columns) tile
-        ////(id_in_size%8/2) is (the row id of alternating 4 rows) - 1
-        (((((word_id&7) >= 4)?4:0) + ((id_in_size&7) >> 1)) << 2) +
-        ////word_id%4 is the id of 4 cols
-        (word_id&3)
-        );
+  
+  if (use_ORDER_COL32_2R_4R4)
+  {
+    int row_in_tile = id_in_size & 31;
+    int col_in_tile = word_id & 31; 
+    row = (
+          //COL32_2R_4R4
+          ((id_in_size >> 5) << 10) +
+          //(((row%8)/2*4+row/8)*2+row%2)*32+col
+          (((((((row_in_tile&7)>>1)<<2)+(row_in_tile>>3))<<1)+(row_in_tile&1))<<5)+col_in_tile
+          ); 
+  }
+  else
+  {
+    row = (
+          //COL4
+          ////id_in_size/8 is the number of tile of (8 rows 32 columns) -- column-major
+          ////id_in_size%2 is even row, otherwise odd row
+          ////word_id%COL32_/8 is the number tile of (8 rows 8 columns)
+          (((id_in_size & 0xfffffff8) + ((id_in_size&1) << 2) + ((word_id&31) >> 3)) << 5) +
+          ////word_id%8 >= 4 is the right half of (8 rows 8 columns) tile
+          ////(id_in_size%8/2) is (the row id of alternating 4 rows) - 1
+          (((((word_id&7) >= 4)?4:0) + ((id_in_size&7) >> 1)) << 2) +
+          ////word_id%4 is the id of 4 cols
+          (word_id&3)
+          );
+  }
         
   buf_ptr4[(blockIdx.z*stride + (col << 5)*size_per_head + row) >> 2] = dataTmp;
 }
@@ -568,7 +988,7 @@ template <>
 __global__
 void add_V_bias_transform_rebuild_padding(int8_t *v_buf_, const int32_t *V, const half *V_bias, const int* sequence_id_map, const int valid_word_num, 
                                           const int batch_size, const int seq_len, const int head_num, const int size_per_head, int stride, 
-                                          const float* weight_amax, const float *input_deQFactor_div127_ptr, const float *out_scale_ptr)
+                                          const float* weight_amax, const float *input_deQFactor_div127_ptr, const float *out_scale_ptr, bool use_ORDER_COL32_2R_4R4)
 {
   __shared__ int8_t shm[32][33];
   const int32_t* data_ptr = V;
@@ -640,22 +1060,228 @@ void add_V_bias_transform_rebuild_padding(int8_t *v_buf_, const int32_t *V, cons
   word_id = blockIdy32 + threadIdx4;
   id_in_size = blockIdx32 + threadIdx.y;
   col = (word_id >> 5);
-  row = (
-        //COL4
-        ////id_in_size/8 is the number of tile of (8 rows 32 columns) -- column-major
-        ////id_in_size%2 is even row, otherwise odd row
-        ////word_id%COL32_/8 is the number tile of (8 rows 8 columns)
-        (((id_in_size & 0xfffffff8) + ((id_in_size&1) << 2) + ((word_id&31) >> 3)) << 5) +
-        ////word_id%8 >= 4 is the right half of (8 rows 8 columns) tile
-        ////(id_in_size%8/2) is (the row id of alternating 4 rows) - 1
-        (((((word_id&7) >= 4)?4:0) + ((id_in_size&7) >> 1)) << 2) +
-        ////word_id%4 is the id of 4 cols
-        (word_id&3)
-        );
+  
+  if (use_ORDER_COL32_2R_4R4)
+  {
+    int row_in_tile = id_in_size & 31;
+    int col_in_tile = word_id & 31; 
+    row = (
+          //COL32_2R_4R4
+          ((id_in_size >> 5) << 10) +
+          //(((row%8)/2*4+row/8)*2+row%2)*32+col
+          (((((((row_in_tile&7)>>1)<<2)+(row_in_tile>>3))<<1)+(row_in_tile&1))<<5)+col_in_tile
+          ); 
+  }
+  else
+  {
+    row = (
+          //COL4
+          ////id_in_size/8 is the number of tile of (8 rows 32 columns) -- column-major
+          ////id_in_size%2 is even row, otherwise odd row
+          ////word_id%COL32_/8 is the number tile of (8 rows 8 columns)
+          (((id_in_size & 0xfffffff8) + ((id_in_size&1) << 2) + ((word_id&31) >> 3)) << 5) +
+          ////word_id%8 >= 4 is the right half of (8 rows 8 columns) tile
+          ////(id_in_size%8/2) is (the row id of alternating 4 rows) - 1
+          (((((word_id&7) >= 4)?4:0) + ((id_in_size&7) >> 1)) << 2) +
+          ////word_id%4 is the id of 4 cols
+          (word_id&3)
+          );
+  }
         
   buf_ptr4[(blockIdx.z*stride + (col << 5)*size_per_head + row) >> 2] = dataTmp;
 }
 
+//add bias into V & rebuild padding 
+//input matrix a matrix of m = valid_word_num, n = head_num*size_per_head, CUBLASLT_ORDER_COL32
+//output matrixes are a series of sub-matrixes with size of m = size_per_head, n = seq_len , CUBLASLT_ORDER_COL4_4R2_8C or CUBLASLT_ORDER_COL32_2R_4R4
+//only for int8_t IO
+//seq_len, size_per_head must be a multiple of 32
+//grid = (size_per_head/32, seq_len/32, batch_size*head_num)
+//block = (8, 32);
+//using char4
+//per tensor quantization for weight
+template <typename T>
+__global__
+void add_V_bias_transform_rebuild_padding(int8_t *v_buf_, const int8_t *V, const T *V_bias, const int* sequence_id_map, const int valid_word_num, 
+                                          const int batch_size, const int seq_len, const int head_num, const int size_per_head, int stride, 
+                                          const float *deQFactor_ptr, const float *out_scale_ptr, bool use_ORDER_COL32_2R_4R4)
+{
+  __shared__ int8_t shm[32][33];
+  const char4* data_ptr = (const char4*)V;
+  char4* buf_ptr4 = (char4*) v_buf_;
+  const T* bias_ptr = V_bias;
+
+  int threadIdx4 = threadIdx.x << 2;
+
+  //for src of (seq_len, size_per_head)
+  int batch_id = blockIdx.z/head_num;
+  int head_id = blockIdx.z%head_num;
+  int word_id = (blockIdx.y << 5) + threadIdx.y;
+  int id_in_size = (blockIdx.x << 5) + threadIdx4;
+
+  //for shm row-major
+  int sh_col = threadIdx4;
+  int sh_row = threadIdx.y;
+  
+  //for V layout (batch_size*seq_len, head_num*size_per_head)
+  int col;
+  int row = __ldg(sequence_id_map + batch_id*seq_len + word_id);
+  
+  if (row != -1){
+    col = head_id*size_per_head + id_in_size;  
+    int inIdx = ((col & 0xffffffe0)*valid_word_num + ((row << 5) + (col&31))) >> 2;
+  
+    float tmp;
+    float scale;
+  
+    const float deQFactor = __ldg(deQFactor_ptr);
+    const float out_scale = __ldg(out_scale_ptr);
+  
+    char4 dataTmp = __ldg(data_ptr + inIdx);
+  
+    scale = dataTmp.x * deQFactor;
+    tmp = scale + static_cast<float>(__ldg(bias_ptr + col));
+    shm[sh_row][sh_col] = float_to_int8_rn(tmp*out_scale);
+  
+    scale = dataTmp.y * deQFactor;
+    tmp = scale + static_cast<float>(__ldg(bias_ptr+col+1));
+    shm[sh_row][sh_col+1] = float_to_int8_rn(tmp*out_scale);
+
+    scale = dataTmp.z * deQFactor;
+    tmp = scale + static_cast<float>(__ldg(bias_ptr+col+2));
+    shm[sh_row][sh_col+2] = float_to_int8_rn(tmp*out_scale);
+  
+    scale = dataTmp.w * deQFactor;
+    tmp = scale + static_cast<float>(__ldg(bias_ptr+col+3));
+    shm[sh_row][sh_col+3] = float_to_int8_rn(tmp*out_scale);
+  }
+  else{
+    shm[sh_row][sh_col] = shm[sh_row][sh_col + 1] = shm[sh_row][sh_col + 2] = shm[sh_row][sh_col + 3] = 0;
+  }
+  __syncthreads();
+
+  char4 dataTmp;  
+  dataTmp.x = shm[sh_col][sh_row];
+  dataTmp.y = shm[sh_col+1][sh_row];
+  dataTmp.z = shm[sh_col+2][sh_row];
+  dataTmp.w = shm[sh_col+3][sh_row];
+
+  //for dst of (size_per_head, seq_len)
+  word_id = (blockIdx.y << 5) + threadIdx4;
+  id_in_size = (blockIdx.x << 5) + threadIdx.y;
+  col = (word_id >> 5);
+  
+  if (use_ORDER_COL32_2R_4R4)
+  {
+    int row_in_tile = id_in_size & 31;
+    int col_in_tile = word_id & 31; 
+    row = (
+          //COL32_2R_4R4
+          ((id_in_size >> 5) << 10) +
+          //(((row%8)/2*4+row/8)*2+row%2)*32+col
+          (((((((row_in_tile&7)>>1)<<2)+(row_in_tile>>3))<<1)+(row_in_tile&1))<<5)+col_in_tile
+          ); 
+  }
+  else
+  {
+    row = (
+          //COL4
+          ////id_in_size/8 is the number of tile of (8 rows 32 columns) -- column-major
+          ////id_in_size%2 is even row, otherwise odd row
+          ////word_id%COL32_/8 is the number tile of (8 rows 8 columns)
+          (((id_in_size & 0xfffffff8) + ((id_in_size&1) << 2) + ((word_id&31) >> 3)) << 5) +
+          ////word_id%8 >= 4 is the right half of (8 rows 8 columns) tile
+          ////(id_in_size%8/2) is (the row id of alternating 4 rows) - 1
+          (((((word_id&7) >= 4)?4:0) + ((id_in_size&7) >> 1)) << 2) +
+          ////word_id%4 is the id of 4 cols
+          (word_id&3)
+          );
+  }
+        
+  buf_ptr4[(blockIdx.z*stride + (col << 5)*size_per_head + row) >> 2] = dataTmp;
+}
+
+__global__
+void trt_add_QKV_bias(half2* Q, const half2* bias_Q, half2* K, const half2* bias_K, half2* V, const half2* bias_V, 
+  half2* q_buf_, half2* k_buf_, half2* v_buf_, 
+  const int valid_word_num, const int head_num, const int size_per_head)
+{
+  // Add bias, and then transpose from 
+  // [3, valid_word_num, head, size] -> [valid_word_num, head, 3, size]
+  
+  // const int seq_id = blockIdx.x % valid_word_num;
+  // const int qkv_id = (blockIdx.x - seq_id) / valid_word_num;
+  const int seq_id = blockIdx.x;
+  const int size_id = threadIdx.x % size_per_head;
+  const int head_id = (threadIdx.x - size_id) / size_per_head;
+
+  const int target_offset = blockIdx.x * head_num * 3 * size_per_head + head_id * 3 * size_per_head;
+
+  q_buf_[ target_offset + 
+          0 * size_per_head +
+          size_id] = Q[ seq_id * blockDim.x + threadIdx.x] + bias_Q[threadIdx.x];
+
+  q_buf_[ target_offset + 
+          1 * size_per_head +
+          size_id] = K[ seq_id * blockDim.x + threadIdx.x] + bias_K[threadIdx.x];
+
+  q_buf_[ target_offset + 
+          2 * size_per_head +
+          size_id] = V[ seq_id * blockDim.x + threadIdx.x] + bias_V[threadIdx.x];
+}
+
+template<OperationType OpType_>
+void OpenMultiHeadAttention<OpType_>::trt_add_QKV_bias_kernelLauncher(
+  const DataType_* bias_Q,
+  const DataType_* bias_K,
+  const DataType_* bias_V)
+{
+  dim3 grid;
+  dim3 block;
+
+  grid.x = param_.valid_word_num;
+  block.x = head_num_ * size_per_head_ / 2;
+
+  assert(block.x <= 1024);
+
+  trt_add_QKV_bias<<<grid, block, 0, param_.stream>>>((half2*)query_buf_, (const half2*)bias_Q, 
+                                                      (half2*)key_buf_, (const half2*)bias_K, 
+                                                      (half2*)value_buf_, (const half2*)bias_V, 
+                                                      (half2*)q_buf_, (half2*)k_buf_, (half2*)v_buf_,
+                                                      param_.valid_word_num, 
+                                                      head_num_, size_per_head_ / 2);
+}
+
+template<OperationType OpType_>
+void OpenMultiHeadAttention<OpType_>::fused_multiHeadAttr_kernelLauncher()
+{
+  trt_add_QKV_bias_kernelLauncher(param_.self_attention.query_weight.bias,
+                                  param_.self_attention.key_weight.bias,
+                                  param_.self_attention.value_weight.bias);
+
+
+  const int B = param_.trt_seqlen_size - 1;
+  const int maxS = from_seq_len_;
+  int S = 384;
+  if (maxS <= 64)
+  {
+    S = 64;
+  }
+  else if (maxS <= 96)
+  {
+    S = 96;
+  }
+    else if (maxS <= 128)
+  {
+    S = 128;
+  }
+  else if (maxS <= 256)
+  {
+    S = 256;
+  }
+  dispatcher_fp16->setup(S, B);
+  dispatcher_fp16->run(q_buf_, nullptr, param_.trt_seqlen_offset, trt_attn_workspace_, param_.attr_out, param_.stream);
+}
 
 template<typename T>
 __global__
@@ -1012,11 +1638,20 @@ void softmax_COL32(int8_t* qk_buf_, const int32_t* int_buf, const T* attr_mask, 
 
   bool qual = threadIdx4 < seq_len;
   for (int seq_id = blockIdx.x ; seq_id < seq_len ; seq_id += gridDim.x){
-    char4 tmp4;
-    float4 floatTmp4 = {0.0f, 0.0f, 0.0f, 0.0f};
+    char4 tmp4 = {0, 0, 0, 0};
     int inIdx = (blockIdx.y * head_num + blockIdx.z) * (seq_len_x_seq_len) +
                 (threadIdx4 & 0xffffffe0) * seq_len +
                 (seq_id << 5) + (threadIdx4 & 31);
+                
+    //set softmax of padding word to 0
+    float mask_in_seq = static_cast<float>(__ldg(attr_mask+(blockIdx.y*seq_len_x_seq_len + seq_id)));
+    if (mask_in_seq < 0.1f){
+      if (qual)
+        buf4Ptr[inIdx >> 2] = tmp4;
+      continue;
+    }  
+
+    float4 floatTmp4 = {0.0f, 0.0f, 0.0f, 0.0f};    
 
     if (qual){
       floatTmp4.x = static_cast<float>(__ldg(int_buf + inIdx)) * scalar1;
@@ -1095,6 +1730,118 @@ void softmax_COL32(int8_t* qk_buf_, const int32_t* int_buf, const T* attr_mask, 
 
 //int_buf are a series of sub-matrixes of m = seq_len, n = seq_len, CUBLASLT_ORDER_COL32
 //grid = (seq_len, batch_size, head_num)
+//block.x = max(32, (seq_len/4 + 31)/32*32)
+//for int8_t IO;
+template <typename T>
+__global__
+void softmax_COL32(int8_t* qk_buf_, const int8_t* int_buf, const T* attr_mask, const int batch_size, 
+                   const int head_num, const int seq_len, const float scalar1a, const float *scalar1b, 
+                   const float *amax_ptr, const int head_num_x_seq_len, const int seq_len_x_seq_len)
+{
+  const float amax = __ldg(amax_ptr);
+  const float scalar1 = scalar1a * __ldg(scalar1b);
+  int mask_id;
+  int threadIdx4 = threadIdx.x << 2;
+
+  char4* buf4Ptr = (char4 *)qk_buf_;
+  const char4* inBuf4Ptr = (const char4*)int_buf;
+
+  bool qual = threadIdx4 < seq_len;
+  for (int seq_id = blockIdx.x ; seq_id < seq_len ; seq_id += gridDim.x){
+  
+    char4 tmp4 = {0, 0, 0, 0};
+    int inIdx = ((blockIdx.y * head_num + blockIdx.z) * (seq_len_x_seq_len) +
+                (threadIdx4 & 0xffffffe0) * seq_len +
+                (seq_id << 5) + (threadIdx4 & 31)) >> 2;
+  
+    //set softmax of padding word to 0
+    const float mask_in_seq = static_cast<float>(__ldg(attr_mask+(blockIdx.y*seq_len_x_seq_len + seq_id)));
+    if (mask_in_seq < 0.1f){
+      if (qual)
+        buf4Ptr[inIdx] = tmp4;
+      continue;
+    }
+    
+    float4 floatTmp4 = {0.0f, 0.0f, 0.0f, 0.0f};
+
+    if (qual){
+      tmp4 = __ldg(inBuf4Ptr + inIdx);
+      floatTmp4.x = static_cast<float>(tmp4.x) * scalar1;
+      floatTmp4.y = static_cast<float>(tmp4.y) * scalar1;
+      floatTmp4.z = static_cast<float>(tmp4.z) * scalar1;
+      floatTmp4.w = static_cast<float>(tmp4.w) * scalar1;
+    }
+
+    float mask_val, max_val;
+    max_val = -1e20f;
+
+    __shared__ float s_max, s_sum;
+
+    if (qual){
+      mask_id = threadIdx4 + blockIdx.y * seq_len_x_seq_len + seq_id * seq_len;
+      //for x
+      mask_val = (1.0f - static_cast<float>(__ldg(attr_mask+mask_id))) * -10000.0f;
+      floatTmp4.x = floatTmp4.x + mask_val;
+      max_val = fmaxf(max_val, floatTmp4.x);
+
+      //for y
+      mask_val = (1.0f - static_cast<float>(__ldg(attr_mask+mask_id+1))) * -10000.0f;
+      floatTmp4.y = floatTmp4.y + mask_val;
+      max_val = fmaxf(max_val, floatTmp4.y);
+
+      //for z
+      mask_val = (1.0f - static_cast<float>(__ldg(attr_mask+mask_id+2))) * -10000.0f;
+      floatTmp4.z = floatTmp4.z + mask_val;
+      max_val = fmaxf(max_val, floatTmp4.z);
+
+      //for w
+      mask_val = (1.0f - static_cast<float>(__ldg(attr_mask+mask_id+3))) * -10000.0f;
+      floatTmp4.w = floatTmp4.w + mask_val;
+      max_val = fmaxf(max_val, floatTmp4.w);
+    }
+
+    max_val = blockDim.x <= 32 ? warpReduceMax(max_val) : blockReduceMax<float>(max_val);
+
+    if (threadIdx.x == 0){
+      s_max = max_val;
+    }
+    __syncthreads();
+
+    float sum_val = 0.0f;
+
+    if (qual){
+      floatTmp4.x = __expf(floatTmp4.x - s_max);
+      sum_val += floatTmp4.x;
+      floatTmp4.y = __expf(floatTmp4.y - s_max);
+      sum_val += floatTmp4.y;
+      floatTmp4.z = __expf(floatTmp4.z - s_max);
+      sum_val += floatTmp4.z;
+      floatTmp4.w = __expf(floatTmp4.w - s_max);
+      sum_val += floatTmp4.w;
+    }
+    
+    sum_val = blockDim.x <= 32 ? warpReduceSum(sum_val) : blockReduceSum<float>(sum_val);
+
+    if (threadIdx.x == 0){
+      s_sum = __fdividef(127.0f, (sum_val + 1e-6f));
+      s_sum = __fdividef(s_sum, amax);
+    }
+    __syncthreads();
+
+    if (qual){
+
+      tmp4.x = float_to_int8_rn(floatTmp4.x*s_sum);
+      tmp4.y = float_to_int8_rn(floatTmp4.y*s_sum);
+      tmp4.z = float_to_int8_rn(floatTmp4.z*s_sum);
+      tmp4.w = float_to_int8_rn(floatTmp4.w*s_sum);
+
+      buf4Ptr[inIdx] = tmp4;
+    }
+  }
+}
+
+//int_buf are a series of sub-matrixes of m = seq_len, n = seq_len, CUBLASLT_ORDER_COL32
+//grid = (seq_len, batch_size, head_num)
 //block.x = (seq_len + 31)/32
 //for int32_t I; int8 O;
 //for seq_len <= 32
@@ -1113,6 +1860,79 @@ void softmax_COL32_LE32(int8_t* qk_buf_, const int32_t* int_buf, const T* attr_m
     int inIdx = (blockIdx.y * head_num + blockIdx.z) * (seq_len_x_seq_len) +
                 (threadIdxx & 0xffffffe0) * seq_len +
                 (seq_id << 5) + (threadIdxx & 31);
+  
+    //set softmax of padding word to 0
+    float mask_in_seq = static_cast<float>(__ldg(attr_mask+(blockIdx.y*seq_len_x_seq_len + seq_id)));
+    if (mask_in_seq < 0.1f){
+      if (qual)
+        qk_buf_[inIdx] = 0;
+      continue;
+    }
+
+    float floatTmp = qual ? static_cast<float>(__ldg(int_buf + inIdx)) * scalar1 : 0.0f;
+
+    float mask_val, max_val;
+
+    __shared__ float s_max, s_sum;
+
+    mask_id = qual ? threadIdxx + blockIdx.y * seq_len_x_seq_len + seq_id * seq_len : 0;
+    mask_val = qual ? (1.0f - static_cast<float>(__ldg(attr_mask+mask_id))) * -10000.0f : 0.0f;
+    floatTmp = qual ? floatTmp + mask_val : 0.0f;
+    max_val = qual ? floatTmp : -1e20f;
+
+    max_val = blockDim.x <= 32 ? warpReduceMax(max_val) : blockReduceMax<float>(max_val);
+
+    if (threadIdx.x == 0){
+      s_max = max_val;
+    }
+    __syncthreads();
+
+    floatTmp = qual ? __expf(floatTmp - s_max) : 0.0f;
+    
+    float sum_val = blockDim.x <= 32 ? warpReduceSum(floatTmp) : blockReduceSum<float>(floatTmp);
+
+    if (threadIdx.x == 0){
+      s_sum = __fdividef(127.0f, (sum_val + 1e-6f));
+      s_sum = __fdividef(s_sum, amax);
+    }
+    __syncthreads();
+
+    
+    if (qual){
+      qk_buf_[inIdx] = float_to_int8_rn(floatTmp*s_sum);
+    }
+  }
+}
+
+//int_buf are a series of sub-matrixes of m = seq_len, n = seq_len, CUBLASLT_ORDER_COL32
+//grid = (seq_len, batch_size, head_num)
+//block.x = (seq_len + 31)/32
+//for int8_t IO;
+//for seq_len <= 32
+template <typename T>
+__global__
+void softmax_COL32_LE32(int8_t* qk_buf_, const int8_t* int_buf, const T* attr_mask, const int batch_size, 
+                        const int head_num, const int seq_len, const float scalar1a, const float *scalar1b, 
+                        const float *amax_ptr, const int head_num_x_seq_len, const int seq_len_x_seq_len)
+{
+  const float amax = __ldg(amax_ptr);
+  const float scalar1 = scalar1a * __ldg(scalar1b);
+  int mask_id;
+  int threadIdxx = threadIdx.x;
+  bool qual = threadIdxx < seq_len;
+  for (int seq_id = blockIdx.x ; seq_id < seq_len ; seq_id += gridDim.x){
+    int inIdx = (blockIdx.y * head_num + blockIdx.z) * (seq_len_x_seq_len) +
+                (threadIdxx & 0xffffffe0) * seq_len +
+                (seq_id << 5) + (threadIdxx & 31);
+
+    //set softmax of padding word to 0
+    float mask_in_seq = static_cast<float>(__ldg(attr_mask+(blockIdx.y*seq_len_x_seq_len + seq_id)));
+    if (mask_in_seq < 0.1f){
+      if (qual)
+        qk_buf_[inIdx] = 0;
+      continue;
+    }
+
 
     float floatTmp = qual ? static_cast<float>(__ldg(int_buf + inIdx)) * scalar1 : 0.0f;
 
@@ -1169,12 +1989,20 @@ void softmax_COL32_LE64(int8_t* qk_buf_, const int32_t* int_buf, const T* attr_m
 
   bool qual = threadIdx2 < seq_len;
   for (int seq_id = blockIdx.x ; seq_id < seq_len ; seq_id += gridDim.x){
-    char2 tmp2;
-    float2 floatTmp2 = {0.0f, 0.0f};
+    char2 tmp2 = {0, 0};
     int inIdx = (blockIdx.y * head_num + blockIdx.z) * (seq_len_x_seq_len) +
                 (threadIdx2 & 0xffffffe0) * seq_len +
                 (seq_id << 5) + (threadIdx2 & 31);
 
+    //set softmax of padding word to 0
+    float mask_in_seq = static_cast<float>(__ldg(attr_mask+(blockIdx.y*seq_len_x_seq_len + seq_id)));
+    if (mask_in_seq < 0.1f){
+      if (qual)
+        buf2Ptr[inIdx >> 1] = tmp2;
+      continue;
+    }
+
+    float2 floatTmp2 = {0.0f, 0.0f};
     if (qual){
       floatTmp2.x = static_cast<float>(__ldg(int_buf + inIdx)) * scalar1;
       floatTmp2.y = static_cast<float>(__ldg(int_buf + inIdx + 1)) * scalar1;
@@ -1229,6 +2057,98 @@ void softmax_COL32_LE64(int8_t* qk_buf_, const int32_t* int_buf, const T* attr_m
     }
   }
 }
+
+//int_buf are a series of sub-matrixes of m = seq_len, n = seq_len, CUBLASLT_ORDER_COL32
+//grid = (seq_len, batch_size, head_num)
+//block.x = max(32, (seq_len/2 + 31)/32*32)
+//for int8_t IO
+//for seq_len in (32, 64]
+template <typename T>
+__global__
+void softmax_COL32_LE64(int8_t* qk_buf_, const int8_t* int_buf, const T* attr_mask, const int batch_size, 
+                        const int head_num, const int seq_len, const float scalar1a, const float *scalar1b, 
+                        const float *amax_ptr, const int head_num_x_seq_len, const int seq_len_x_seq_len)
+{
+  const float amax = __ldg(amax_ptr);
+  const float scalar1 = scalar1a * __ldg(scalar1b);
+  int mask_id;
+  int threadIdx2 = threadIdx.x << 1;
+
+  char2* buf2Ptr = (char2 *)qk_buf_;
+  const char2* inBuf2Ptr = (const char2 *)int_buf;
+
+  bool qual = threadIdx2 < seq_len;
+  for (int seq_id = blockIdx.x ; seq_id < seq_len ; seq_id += gridDim.x){
+    char2 tmp2 = {0, 0};
+    int inIdx = ((blockIdx.y * head_num + blockIdx.z) * (seq_len_x_seq_len) +
+                (threadIdx2 & 0xffffffe0) * seq_len +
+                (seq_id << 5) + (threadIdx2 & 31)) >> 1;
+
+    //set softmax of padding word to 0
+    float mask_in_seq = static_cast<float>(__ldg(attr_mask+(blockIdx.y*seq_len_x_seq_len + seq_id)));
+    if (mask_in_seq < 0.1f){
+      if (qual)
+        buf2Ptr[inIdx] = tmp2;
+      continue;
+    }
+
+    float2 floatTmp2 = {0.0f, 0.0f};
+    if (qual){
+      tmp2 = __ldg(inBuf2Ptr + inIdx);
+      floatTmp2.x = static_cast<float>(tmp2.x) * scalar1;
+      floatTmp2.y = static_cast<float>(tmp2.y) * scalar1;
+    }
+
+    float mask_val, max_val;
+    max_val = -1e20f;
+
+    __shared__ float s_max, s_sum;
+
+    if (qual){
+      mask_id = threadIdx2 + blockIdx.y * seq_len_x_seq_len + seq_id * seq_len;
+      //for x
+      mask_val = (1.0f - static_cast<float>(__ldg(attr_mask+mask_id))) * -10000.0f;
+      floatTmp2.x = floatTmp2.x + mask_val;
+
+      //for y
+      mask_val = (1.0f - static_cast<float>(__ldg(attr_mask+mask_id+1))) * -10000.0f;
+      floatTmp2.y = floatTmp2.y + mask_val;
+            
+      max_val = fmaxf(floatTmp2.x, floatTmp2.y);
+    }
+
+    max_val = blockDim.x <= 32 ? warpReduceMax(max_val) : blockReduceMax<float>(max_val);
+
+    if (threadIdx.x == 0){
+      s_max = max_val;
+    }
+    __syncthreads();
+
+    float sum_val = 0.0f;
+
+    if (qual){
+      floatTmp2.x = __expf(floatTmp2.x - s_max);
+      sum_val += floatTmp2.x;
+      floatTmp2.y = __expf(floatTmp2.y - s_max);
+      sum_val += floatTmp2.y;
+    }
+    
+    sum_val = blockDim.x <= 32 ? warpReduceSum(sum_val) : blockReduceSum<float>(sum_val);
+
+    if (threadIdx.x == 0){
+      s_sum = __fdividef(127.0f, (sum_val + 1e-6f));
+      s_sum = __fdividef(s_sum, amax);
+    }
+    __syncthreads();
+
+    if (qual){
+      tmp2.x = float_to_int8_rn(floatTmp2.x*s_sum);
+      tmp2.y = float_to_int8_rn(floatTmp2.y*s_sum);
+      buf2Ptr[inIdx] = tmp2;
+    }
+  }
+}
+
 
 
 template<typename T>
@@ -1325,89 +2245,178 @@ void OpenMultiHeadAttention<OpType_>::multiHeadAttr_nofuse_kernelLauncher(
     dim3 block;
 
     
-    if (int8_mode_ != 0){
+    if (int8_mode_ != 0)
+    {
       //var for int8
-      const float*q_buf_addBias_amax_ptr, *k_buf_addBias_amax_ptr, *v_buf_addBias_amax_ptr, *qk_afterSM_amax_ptr, *qkv_amax_ptr, *in_amax_ptr;
-      q_buf_addBias_amax_ptr = param_.amaxList+4;
-      k_buf_addBias_amax_ptr = param_.amaxList + 8;
-      v_buf_addBias_amax_ptr = param_.amaxList + 12;
-      qk_afterSM_amax_ptr = param_.amaxList + 16;
-      qkv_amax_ptr = param_.amaxList + 20;
+      const float*Qbias_amax_ptr, *Kbias_amax_ptr, *Vbias_amax_ptr, *bmm1_amax_ptr, *Softmax_amax_ptr, *bmm2_amax_ptr, *in_amax_ptr, *Q_aftergemm_amax_ptr, *K_aftergemm_amax_ptr, *V_aftergemm_amax_ptr;
+      Qbias_amax_ptr = param_.amaxList + 8;
+      Kbias_amax_ptr = param_.amaxList + 16;
+      Vbias_amax_ptr = param_.amaxList + 24;
+      Softmax_amax_ptr = param_.amaxList + 32;
+      bmm2_amax_ptr = param_.amaxList + 36;
+      Q_aftergemm_amax_ptr = param_.amaxList + 4;
+      K_aftergemm_amax_ptr = param_.amaxList + 12;
+      V_aftergemm_amax_ptr = param_.amaxList + 20;
+      bmm1_amax_ptr = param_.amaxList + 28;
       in_amax_ptr = param_.amaxList;
 
       assert(seq_len % COL32_ == 0 && size_per_head%COL32_ == 0);
 
       if(param_.sequence_id_offset == nullptr || param_.valid_word_num == batch_size * seq_len){
-        add_QK_bias_transform<<<dim3(batch_size*seq_len*2), dim3((head_num * size_per_head)/4), 0, stream>>>((int8_t*)q_buf_, (int8_t*)k_buf_, (const int32_t*) Q, bias_Q, (const int32_t*) K, 
-                       bias_K, batch_size * seq_len, batch_size, seq_len, head_num, size_per_head, 
-                       seq_len*size_per_head, query_weight_amax_list, in_amax_ptr+2, key_weight_amax_list, 
-                       in_amax_ptr+2, q_buf_addBias_amax_ptr+3, k_buf_addBias_amax_ptr+3);
-        add_V_bias_transform<<<dim3(size_per_head/32, seq_len/32, batch_size*head_num), dim3(8, 32), 0, stream>>>((int8_t*)v_buf_, (const int32_t *)V, bias_V, batch_size, seq_len, 
-                            head_num, size_per_head, seq_len*size_per_head, value_weight_amax_list, 
-                            in_amax_ptr+2, v_buf_addBias_amax_ptr+3);
+        if (int8_mode_ == 1)
+        {
+          add_QK_bias_transform<<<dim3(batch_size*seq_len*2), dim3((head_num * size_per_head)/4), 0, stream>>>((int8_t*)q_buf_, (int8_t*)k_buf_, (const int32_t*) Q, bias_Q, (const int32_t*) K, 
+                    bias_K, batch_size * seq_len, batch_size, seq_len, head_num, size_per_head, 
+                    seq_len*size_per_head, query_weight_amax_list, in_amax_ptr+2, key_weight_amax_list, 
+                    in_amax_ptr+2, Qbias_amax_ptr+3, Kbias_amax_ptr+3, use_ORDER_COL32_2R_4R4_);
+          add_V_bias_transform<<<dim3(size_per_head/32, seq_len/32, batch_size*head_num), dim3(8, 32), 0, stream>>>((int8_t*)v_buf_, (const int32_t *)V, bias_V, batch_size, seq_len, 
+                    head_num, size_per_head, seq_len*size_per_head, value_weight_amax_list, 
+                    in_amax_ptr+2, Vbias_amax_ptr+3, use_ORDER_COL32_2R_4R4_);
+        }
+        else
+        {
+          add_QK_bias_transform<<<dim3(batch_size*seq_len*2), dim3((head_num * size_per_head)/4), 0, stream>>>((int8_t*)q_buf_, (int8_t*)k_buf_, (const int8_t*) Q, bias_Q, (const int8_t*) K, 
+                         bias_K, batch_size * seq_len, batch_size, seq_len, head_num, size_per_head, 
+                         seq_len*size_per_head, Q_aftergemm_amax_ptr+1, K_aftergemm_amax_ptr+1, 
+			 Qbias_amax_ptr+3, Kbias_amax_ptr+3, use_ORDER_COL32_2R_4R4_);
+          add_V_bias_transform<<<dim3(size_per_head/32, seq_len/32, batch_size*head_num), dim3(8, 32), 0, stream>>>((int8_t*)v_buf_, (const int8_t *)V, bias_V, batch_size, seq_len, 
+                              head_num, size_per_head, seq_len*size_per_head,
+                              V_aftergemm_amax_ptr+1, Vbias_amax_ptr+3, use_ORDER_COL32_2R_4R4_);
+        }
       }
       else{
         cudaMemset(sequence_id_map_, -1, batch_size * seq_len * sizeof(int));
         mappingRemovePaddingData<<<dim3((param_.valid_word_num + 63)/64), dim3(64)>>>(sequence_id_map_, param_.sequence_id_offset, param_.valid_word_num);
-        add_QK_bias_transform_rebuild_padding<<<dim3(param_.valid_word_num*2), dim3((head_num * size_per_head)/4), 0, stream>>>((int8_t*)q_buf_, (int8_t*)k_buf_, (const int32_t*) Q, bias_Q, 
+        if (int8_mode_ == 1)
+        {
+          add_QK_bias_transform_rebuild_padding<<<dim3(param_.valid_word_num*2), dim3((head_num * size_per_head)/4), 0, stream>>>((int8_t*)q_buf_, (int8_t*)k_buf_, (const int32_t*) Q, bias_Q, 
                                           (const int32_t*) K, bias_K, param_.sequence_id_offset, param_.valid_word_num, 
                                           batch_size * seq_len, batch_size, seq_len, head_num, size_per_head, seq_len*size_per_head, 
                                           query_weight_amax_list, in_amax_ptr+2, key_weight_amax_list, in_amax_ptr+2, 
-                                          q_buf_addBias_amax_ptr+3, k_buf_addBias_amax_ptr+3);
+                                          Qbias_amax_ptr+3, Kbias_amax_ptr+3, use_ORDER_COL32_2R_4R4_);
         
-        add_V_bias_transform_rebuild_padding<<<dim3(size_per_head/32, seq_len/32, batch_size*head_num), dim3(8, 32), 0, stream>>>((int8_t*)v_buf_, (const int32_t *)V, bias_V, sequence_id_map_, 
-                                            param_.valid_word_num, batch_size, seq_len, head_num, 
-                                            size_per_head, seq_len*size_per_head, value_weight_amax_list, 
-                                            in_amax_ptr+2, v_buf_addBias_amax_ptr+3);
+          add_V_bias_transform_rebuild_padding<<<dim3(size_per_head/32, seq_len/32, batch_size*head_num), dim3(8, 32), 0, stream>>>((int8_t*)v_buf_, (const int32_t *)V, bias_V, sequence_id_map_, 
+                                    param_.valid_word_num, batch_size, seq_len, head_num, 
+                                    size_per_head, seq_len*size_per_head, value_weight_amax_list, 
+                                    in_amax_ptr+2, Vbias_amax_ptr+3, use_ORDER_COL32_2R_4R4_);
+        }
+        else
+        {
+          add_QK_bias_transform_rebuild_padding<<<dim3(param_.valid_word_num*2), dim3((head_num * size_per_head)/4), 0, stream>>>((int8_t*)q_buf_, (int8_t*)k_buf_, (const int8_t*) Q, bias_Q, 
+                                          (const int8_t*) K, bias_K, param_.sequence_id_offset, param_.valid_word_num, 
+                                          batch_size * seq_len, batch_size, seq_len, head_num, size_per_head, seq_len*size_per_head, 
+                                          Q_aftergemm_amax_ptr+1, K_aftergemm_amax_ptr+1, 
+                                          Qbias_amax_ptr+3, Kbias_amax_ptr+3, use_ORDER_COL32_2R_4R4_);
+        
+          add_V_bias_transform_rebuild_padding<<<dim3(size_per_head/32, seq_len/32, batch_size*head_num), dim3(8, 32), 0, stream>>>((int8_t*)v_buf_, (const int8_t *)V, bias_V, sequence_id_map_, 
+                                    param_.valid_word_num, batch_size, seq_len, head_num, 
+                                    size_per_head, seq_len*size_per_head, 
+                                    V_aftergemm_amax_ptr+1, Vbias_amax_ptr+3, use_ORDER_COL32_2R_4R4_);
+        }
       }
-      
+     
       int batchCount = batch_size * head_num;
-      cublasLtMM_withAlgo(qk_int_buf_, batchCount, seq_len, seq_len, size_per_head, 
-                          size_per_head*seq_len, size_per_head*seq_len, seq_len*seq_len, 
-                          (int8_t*)q_buf_, (int8_t*)k_buf_, cublaslt_handle, stream, cublasLtAlgoMap);
-
       grid.x = seq_len;
       grid.y = batch_size;
       grid.z = head_num;
+      
+      if (int8_mode_ == 1)
+      {     
+        cublasLtMM_withAlgo(qk_int_buf_, batchCount, seq_len, seq_len, size_per_head, 
+                            size_per_head*seq_len, size_per_head*seq_len, seq_len*seq_len, 
+                            (int8_t*)q_buf_, (int8_t*)k_buf_, cublaslt_handle, stream, cublasLtAlgoMap_, use_ORDER_COL32_2R_4R4_, true);
 
-      if (seq_len <= 32){
-        if (batch_size * head_num > 960)
-          grid.x = ceil(float(seq_len)/32.0f);
-        block.x = (seq_len + 31)/32*32;
-        softmax_COL32_LE32<<<grid, block, 0, stream>>>((int8_t*)qk_buf_, qk_int_buf_, attr_mask, batch_size, head_num, 
-                                                       seq_len, float(scalar), q_buf_addBias_amax_ptr + 1, k_buf_addBias_amax_ptr + 1, 
-                                                       qk_afterSM_amax_ptr, seq_len*head_num, seq_len*seq_len);
-      }
-      else if (seq_len <= 64){
-        assert(seq_len % 2 == 0);
-        block.x = (seq_len/2 + 31)/32*32;
-        if (batch_size * head_num > 960)
-          grid.x = ceil(float(seq_len)/32.0f);
-        softmax_COL32_LE64<<<grid, block, 0, stream>>>((int8_t*)qk_buf_, qk_int_buf_, attr_mask, batch_size, head_num, 
-                                                       seq_len, float(scalar), q_buf_addBias_amax_ptr + 1, k_buf_addBias_amax_ptr + 1, 
-                                                       qk_afterSM_amax_ptr, seq_len*head_num, seq_len*seq_len);
+        if (seq_len <= 32){
+          if (batch_size * head_num > 960)
+            grid.x = ceil(float(seq_len)/32.0f);
+          block.x = (seq_len + 31)/32*32;
+          softmax_COL32_LE32<<<grid, block, 0, stream>>>((int8_t*)qk_buf_, qk_int_buf_, attr_mask, batch_size, head_num, 
+                                                         seq_len, float(scalar), Qbias_amax_ptr + 1, Kbias_amax_ptr + 1, 
+                                                         Softmax_amax_ptr, seq_len*head_num, seq_len*seq_len);
+        }
+        else if (seq_len <= 64){
+          assert(seq_len % 2 == 0);
+          block.x = (seq_len/2 + 31)/32*32;
+          if (batch_size * head_num > 960)
+            grid.x = ceil(float(seq_len)/32.0f);
+          softmax_COL32_LE64<<<grid, block, 0, stream>>>((int8_t*)qk_buf_, qk_int_buf_, attr_mask, batch_size, head_num, 
+                                                         seq_len, float(scalar), Qbias_amax_ptr + 1, Kbias_amax_ptr + 1, 
+                                                         Softmax_amax_ptr, seq_len*head_num, seq_len*seq_len);
+        }
+        else
+        {
+          assert(seq_len % 4 == 0);
+          block.x = (seq_len/4 + 31)/32*32;
+          softmax_COL32<<<grid, block, 0, stream>>>((int8_t*)qk_buf_, qk_int_buf_, attr_mask, batch_size, head_num, 
+                                                    seq_len, float(scalar), Qbias_amax_ptr + 1, Kbias_amax_ptr + 1, 
+                                                    Softmax_amax_ptr, seq_len*head_num, seq_len*seq_len);
+        }
+        
+        cublasLtMM_withAlgo(transpose_dst_int_buf_, batchCount, seq_len, size_per_head, seq_len, 
+                            seq_len*seq_len, size_per_head*seq_len, size_per_head*seq_len, (int8_t*)qk_buf_, 
+                            (int8_t*)v_buf_, cublaslt_handle, stream, cublasLtAlgoMap_, use_ORDER_COL32_2R_4R4_, true);
+    
+        if(param_.sequence_id_offset == nullptr || param_.valid_word_num == batch_size * seq_len)
+        {
+          transpose_COL32_kernelLauncher((int8_t*)dst, (const int*)transpose_dst_int_buf_, batch_size, seq_len, head_num, 
+                                         size_per_head, Vbias_amax_ptr+1, Softmax_amax_ptr+1, bmm2_amax_ptr+3, stream);
+        }
+        else
+        {
+          transpose_COL32_rebuild_padding_kernelLauncher((int8_t*)dst, (const int*)transpose_dst_int_buf_, sequence_id_map_, 
+                                                         param_.valid_word_num, batch_size, seq_len, head_num, size_per_head, 
+                                                         Vbias_amax_ptr+1, Softmax_amax_ptr+1, bmm2_amax_ptr+3, stream);     
+        }
+        
       }
       else
       {
-        assert(seq_len % 4 == 0);
-        block.x = (seq_len/4 + 31)/32*32;
-        softmax_COL32<<<grid, block, 0, stream>>>((int8_t*)qk_buf_, qk_int_buf_, attr_mask, batch_size, head_num, 
-                                                  seq_len, float(scalar), q_buf_addBias_amax_ptr + 1, k_buf_addBias_amax_ptr + 1, 
-                                                  qk_afterSM_amax_ptr, seq_len*head_num, seq_len*seq_len);
-      }
-
-      cublasLtMM_withAlgo(transpose_dst_int_buf_, batchCount, seq_len, size_per_head, seq_len, 
-                          seq_len*seq_len, size_per_head*seq_len, size_per_head*seq_len, (int8_t*)qk_buf_, 
-                          (int8_t*)v_buf_, cublaslt_handle, stream, cublasLtAlgoMap);
-    
-      if(param_.sequence_id_offset == nullptr || param_.valid_word_num == batch_size * seq_len){
-        transpose_COL32_kernelLauncher((int8_t*)dst, (const int*)transpose_dst_int_buf_, batch_size, seq_len, head_num, 
-                                       size_per_head, v_buf_addBias_amax_ptr+1, qk_afterSM_amax_ptr+1, qkv_amax_ptr+3, stream);
-      }
-      else{
-        transpose_COL32_rebuild_padding_kernelLauncher((int8_t*)dst, (const int*)transpose_dst_int_buf_, sequence_id_map_, 
-                                                       param_.valid_word_num, batch_size, seq_len, head_num, size_per_head, 
-                                                       v_buf_addBias_amax_ptr+1, qk_afterSM_amax_ptr+1, qkv_amax_ptr+3, stream);     
+        cublasLtMM_withAlgo_int8IO((int8_t*)qk_int_buf_, batchCount, seq_len, seq_len, size_per_head, 
+                                   size_per_head*seq_len, size_per_head*seq_len, seq_len*seq_len, 
+                                   param_.int8O_gemm_deQ_scale_list[3],
+                                   (int8_t*)q_buf_, (int8_t*)k_buf_, cublaslt_handle, stream, cublasLtAlgoMap_, use_ORDER_COL32_2R_4R4_, true);
+                         
+        if (seq_len <= 32){
+          if (batch_size * head_num > 960)
+            grid.x = ceil(float(seq_len)/32.0f);
+          block.x = (seq_len + 31)/32*32;
+          softmax_COL32_LE32<<<grid, block, 0, stream>>>((int8_t*)qk_buf_, (int8_t*)qk_int_buf_, attr_mask, batch_size, head_num, 
+                                                         seq_len, float(scalar), bmm1_amax_ptr + 1, 
+                                                         Softmax_amax_ptr, seq_len*head_num, seq_len*seq_len);
+        }
+        else if (seq_len <= 64){
+          assert(seq_len % 2 == 0);
+          block.x = (seq_len/2 + 31)/32*32;
+          if (batch_size * head_num > 960)
+            grid.x = ceil(float(seq_len)/32.0f);
+          softmax_COL32_LE64<<<grid, block, 0, stream>>>((int8_t*)qk_buf_, (int8_t*)qk_int_buf_, attr_mask, batch_size, head_num, 
+                                                         seq_len, float(scalar), bmm1_amax_ptr + 1,  
+                                                         Softmax_amax_ptr, seq_len*head_num, seq_len*seq_len);
+        }
+        else
+        {
+          assert(seq_len % 4 == 0);
+          block.x = (seq_len/4 + 31)/32*32;
+          softmax_COL32<<<grid, block, 0, stream>>>((int8_t*)qk_buf_, (int8_t*)qk_int_buf_, attr_mask, batch_size, head_num, 
+                                                    seq_len, float(scalar), bmm1_amax_ptr + 1,  
+                                                    Softmax_amax_ptr, seq_len*head_num, seq_len*seq_len);
+        }
+        
+        cublasLtMM_withAlgo_int8IO((int8_t*)transpose_dst_int_buf_, batchCount, seq_len, size_per_head, seq_len, 
+                                   seq_len*seq_len, size_per_head*seq_len, size_per_head*seq_len, param_.int8O_gemm_deQ_scale_list[4], (int8_t*)qk_buf_, 
+                                   (int8_t*)v_buf_, cublaslt_handle, stream, cublasLtAlgoMap_, use_ORDER_COL32_2R_4R4_, true);
+        if(param_.sequence_id_offset == nullptr || param_.valid_word_num == batch_size * seq_len)
+        {
+          transpose_COL32_kernelLauncher((int8_t*)dst, (const int8_t*)transpose_dst_int_buf_, batch_size, seq_len, head_num, 
+                                         size_per_head, bmm2_amax_ptr+1, bmm2_amax_ptr+3, stream);
+        }
+        else
+        {
+          transpose_COL32_rebuild_padding_kernelLauncher((int8_t*)dst, (const int8_t*)transpose_dst_int_buf_, sequence_id_map_, 
+                                                         param_.valid_word_num, batch_size, seq_len, head_num, size_per_head, 
+                                                         bmm2_amax_ptr+1, 
+                                                         bmm2_amax_ptr+3, stream);
+        }
       }
     }
     //FP32/FP16
@@ -1608,5 +2617,76 @@ template void OpenMultiHeadAttention<OperationType::FP16>::multiHeadAttr_nofuse_
       const int size_per_head,
       const int int8_mode_,
       const half scalar);
+
+template void OpenMultiHeadAttention<OperationType::FP32>::trt_add_QKV_bias_kernelLauncher(
+  const float* bias_Q,
+  const float* bias_K,
+  const float* bias_V);
+
+template void OpenMultiHeadAttention<OperationType::FP16>::trt_add_QKV_bias_kernelLauncher(
+  const half* bias_Q,
+  const half* bias_K,
+  const half* bias_V);
+
+template void OpenMultiHeadAttention<OperationType::FP32>::fused_multiHeadAttr_kernelLauncher();
+template void OpenMultiHeadAttention<OperationType::FP16>::fused_multiHeadAttr_kernelLauncher();
+
+__global__
+void trt_add_QKV_bias_2(const half2* Q, const half2* bias_Q, 
+                        const half2* K, const half2* bias_K, 
+                        const half2* V, const half2* bias_V, 
+                        half2* qkv_buf_,  
+                        const int valid_word_num, 
+                        const int head_num, const int size_per_head)
+{
+  // Add bias, and then transpose from 
+  // [3, valid_word_num, head, size] -> [valid_word_num, head, 3, size]
+
+  const int seq_id = blockIdx.x;
+  const int size_id = threadIdx.x % size_per_head;
+  const int head_id = (threadIdx.x - size_id) / size_per_head;
+
+  const int target_offset = blockIdx.x * head_num * 3 * size_per_head + head_id * 3 * size_per_head;
+
+  qkv_buf_[ target_offset + 
+          0 * size_per_head +
+          size_id] = Q[ seq_id * blockDim.x + threadIdx.x] + bias_Q[threadIdx.x];
+
+  qkv_buf_[ target_offset + 
+          1 * size_per_head +
+          size_id] = K[ seq_id * blockDim.x + threadIdx.x] + bias_K[threadIdx.x];
+
+  qkv_buf_[ target_offset + 
+          2 * size_per_head +
+          size_id] = V[ seq_id * blockDim.x + threadIdx.x] + bias_V[threadIdx.x];
+}
+
+void add_QKV_bias_transpose_kernelLauncher(
+  const half* query_buf, const half* bias_Q,
+  const half* key_buf, const half* bias_K,
+  const half* value_buf, const half* bias_V,
+  half* context_buf, 
+  const int valid_word_num, 
+  const int head_num, const int size_per_head,
+  cudaStream_t stream)
+{
+  dim3 grid;
+  dim3 block;
+  
+  grid.x = 3 * valid_word_num;
+  block.x = head_num * size_per_head / 2;
+  
+  assert(block.x <= 1024);
+
+  trt_add_QKV_bias_2<<<grid, block, 0, stream>>>( (const half2*)query_buf, (const half2*)bias_Q, 
+                                                  (const half2*)key_buf, (const half2*)bias_K, 
+                                                  (const half2*)value_buf, (const half2*)bias_V, 
+                                                  (half2*)context_buf, 
+                                                  valid_word_num, 
+                                                  head_num, size_per_head / 2);
+}
+
+
 }//namespace cuda
 }//namespace fastertransformer
+

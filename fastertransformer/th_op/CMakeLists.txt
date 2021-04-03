@@ -19,6 +19,7 @@ set(th_fastertransformer_ext_files
   decoder_ext.cc
   decoding_ext.cc
   utils.cu
+  weight_quantize_op.cc
 )
 
 set(th_fastertransformer_ths_files
@@ -27,11 +28,7 @@ set(th_fastertransformer_ths_files
   decoder_ths_op.cc
   decoding_ths_op.cc
   utils.cu
-)
-
-set(th_fastertransformer_ths_f_files
-  ft_ths_op_f.cc
-  encoder_ths_op_f.cc
+  weight_quantize_op.cc
 )
 
 add_definitions(-DTORCH_CUDA=1)
@@ -82,12 +79,4 @@ if(BUILD_THS)
   set_target_properties(${LIB_NAME_2} PROPERTIES
                         CUDA_RESOLVE_DEVICE_SYMBOLS ON)
   target_link_libraries(${LIB_NAME_2} "${TORCH_LIBRARIES}" encoder decoder decoding)
-endif()
-
-if(BUILD_THSOP)
-  set(LIB_NAME_3 "ths_fastertransformer_op")
-  add_library(${LIB_NAME_3} SHARED ${th_fastertransformer_ths_f_files})
-  set_target_properties(${LIB_NAME_3} PROPERTIES
-                        CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-  target_link_libraries(${LIB_NAME_3} "${TORCH_LIBRARIES}" encoder)
 endif()

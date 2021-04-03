@@ -27,38 +27,38 @@ using CPUDevice = Eigen::ThreadPoolDevice;
 using GPUDevice = Eigen::GpuDevice;
 
 REGISTER_OP("Decoder")
-    .Input("from_tensor: T") // # 0
-    .Input("memory_tensor: T") // # 1
+    .Input("from_tensor: T")                // # 0
+    .Input("memory_tensor: T")              // # 1
     .Input("memory_sequence_length: int32") // # 2
-    .Input("self_beta: T") // # 3
-    .Input("self_gamma: T") // # 4
-    .Input("self_q_kernel: T") // # 5
-    .Input("self_q_bias: T") // # 6
-    .Input("self_k_kernel: T") // # 7
-    .Input("self_k_bias: T") // # 8
-    .Input("self_v_kernel: T") // # 9
-    .Input("self_v_bias: T") // # 10
-    .Input("self_output_kernel: T") // # 11
-    .Input("self_output_bias: T") // # 12
-    .Input("cross_beta: T") // # 13
-    .Input("cross_gamma: T") // # 14
-    .Input("cross_q_kernel: T") // # 15
-    .Input("cross_q_bias: T") // # 16
-    .Input("cross_k_kernel: T") // # 17
-    .Input("cross_k_bias: T") // # 18
-    .Input("cross_v_kernel: T") // # 19
-    .Input("cross_v_bias: T") // # 20
-    .Input("cross_output_kernel: T") // # 21
-    .Input("cross_output_bias: T") // # 22
-    .Input("ffn_beta: T") // # 23
-    .Input("ffn_gamma: T") // # 24
-    .Input("ffn_kernel1: T") // # 25
-    .Input("ffn_bias1: T") // # 26
-    .Input("ffn_kernel2: T") // # 27
-    .Input("ffn_bias2: T") // # 28
-    .Input("old_self_cache: T") // # 29
-    .Input("old_mem_cache: T") // # 30
-    .Input("pseudo_input: T") // # 31, pseudo input, used to prevent the parallel execution for OP and TF 
+    .Input("self_beta: T")                  // # 3
+    .Input("self_gamma: T")                 // # 4
+    .Input("self_q_kernel: T")              // # 5
+    .Input("self_q_bias: T")                // # 6
+    .Input("self_k_kernel: T")              // # 7
+    .Input("self_k_bias: T")                // # 8
+    .Input("self_v_kernel: T")              // # 9
+    .Input("self_v_bias: T")                // # 10
+    .Input("self_output_kernel: T")         // # 11
+    .Input("self_output_bias: T")           // # 12
+    .Input("cross_beta: T")                 // # 13
+    .Input("cross_gamma: T")                // # 14
+    .Input("cross_q_kernel: T")             // # 15
+    .Input("cross_q_bias: T")               // # 16
+    .Input("cross_k_kernel: T")             // # 17
+    .Input("cross_k_bias: T")               // # 18
+    .Input("cross_v_kernel: T")             // # 19
+    .Input("cross_v_bias: T")               // # 20
+    .Input("cross_output_kernel: T")        // # 21
+    .Input("cross_output_bias: T")          // # 22
+    .Input("ffn_beta: T")                   // # 23
+    .Input("ffn_gamma: T")                  // # 24
+    .Input("ffn_kernel1: T")                // # 25
+    .Input("ffn_bias1: T")                  // # 26
+    .Input("ffn_kernel2: T")                // # 27
+    .Input("ffn_bias2: T")                  // # 28
+    .Input("old_self_cache: T")             // # 29
+    .Input("old_mem_cache: T")              // # 30
+    .Input("pseudo_input: T")               // # 31, pseudo input, used to prevent the parallel execution for OP and TF
     .Output("decoder_output: T")
     .Output("new_self_cache: T")
     .Output("new_mem_cache: T")
@@ -95,8 +95,8 @@ public:
     fastertransformer::Allocator<AllocatorType::TF> allocator_(context, stream);
     try
     {
-      decoder_ = new OpenDecoder<DecoderTraits_::OpType>(batch_size_,max_seq_len_, 
-                                                        head_num_, size_per_head_, memory_hidden_dim_);
+      decoder_ = new OpenDecoder<DecoderTraits_::OpType>(batch_size_, max_seq_len_,
+                                                         head_num_, size_per_head_, memory_hidden_dim_);
     }
     catch (std::runtime_error &error)
     {
@@ -173,18 +173,18 @@ public:
     try
     {
       decoder_->initialize(params, decoder_buffer);
-      decoder_->forward(from_tensor, memory_tensor, 
-                        K_cache, V_cache, 
-                        K_mem_cache, V_mem_cache, 
-                        memory_sequence_length, decoder_output, step);
-
+      decoder_->forward(from_tensor, memory_tensor,
+                        K_cache, V_cache,
+                        K_mem_cache, V_mem_cache,
+                        memory_sequence_length, decoder_output, step,
+                        true);
     }
-    catch(std::runtime_error& error)
+    catch (std::runtime_error &error)
     {
       std::cout << errors::Internal(error.what());
       exit(-1);
     }
-    catch(...)
+    catch (...)
     {
       std::cout << errors::Internal("Runtime error");
       exit(-1);
@@ -198,7 +198,6 @@ private:
   int head_num_, size_per_head_;
   typedef TFTraits<T> traits_;
   typedef typename traits_::DataType DataType_;
-
 };
 
 #ifdef GOOGLE_CUDA

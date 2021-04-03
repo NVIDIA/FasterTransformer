@@ -816,8 +816,8 @@ def op_sampling_decoding(memory_tensor,
         vars_dict_in_differ_layers['transformer/decoder/LayerNorm/beta:0'], # 28
         vars_dict_in_differ_layers['transformer/decoder/LayerNorm/gamma:0'], # 29
         embedding_table, # 30
-        vars_dict_in_differ_layers['transformer/decoder/dense/kernel:0'], # 31
-        vars_dict_in_differ_layers['transformer/decoder/dense/bias:0'], # 32
+        tf.cast(vars_dict_in_differ_layers['transformer/decoder/dense/kernel:0'], decoder_args.dtype), # 31
+        tf.cast(vars_dict_in_differ_layers['transformer/decoder/dense/bias:0'], decoder_args.dtype), # 32
         position_encoding_table, # 33 
         max_seq_len=decoding_args.max_seq_len,
         candidate_num=decoding_args.top_k,

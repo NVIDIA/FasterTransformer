@@ -245,7 +245,11 @@ class FTDecoderLayer(nn.Module):
         self.args = args
         if args.ths:
             torch.classes.load_library(args.ths_path)
-            self.dec_layer = torch.classes.FasterTransformerDecoder(head_num, head_size, *weights)
+            try:
+                self.dec_layer = torch.classes.FasterTransformer.Decoder(head_num, head_size, *weights)
+            except:
+                # legacy ths for 20.03 image
+                self.dec_layer = torch.classes.FasterTransformerDecoder(head_num, head_size, *weights)
         else:
             sys.path.insert(0, os.path.abspath(args.module_path))
             from th_fastertransformer import FasterTransformerDecoder
@@ -292,6 +296,8 @@ class TransformerDecoder(DecoderBase):
         super(TransformerDecoder, self).__init__()
 
         self.args = args
+        if not self.args.model_type:
+            raise ValueError("no model_type is supplied.")
         self.embeddings = embeddings
 
         # Decoder State
@@ -461,7 +467,11 @@ class CustomDecoding(nn.Module):
         self.args = args
         if args.ths:
             torch.classes.load_library(os.path.abspath(args.ths_path))
-            self.decoding = torch.classes.FasterTransformerDecoding(head_num, head_size, hidden_dim, layer_num, vocab_size, start_id, end_id, beam_search_diversity_rate, *weights.w)
+            try:
+                self.decoding = torch.classes.FasterTransformer.Decoding(head_num, head_size, hidden_dim, layer_num, vocab_size, start_id, end_id, beam_search_diversity_rate, *weights.w)
+            except:
+                # legacy ths for 20.03 image
+                self.decoding = torch.classes.FasterTransformerDecoding(head_num, head_size, hidden_dim, layer_num, vocab_size, start_id, end_id, beam_search_diversity_rate, *weights.w)
         else:
             sys.path.insert(0, os.path.abspath(args.module_path))
             from th_fastertransformer import FasterTransformerDecoding

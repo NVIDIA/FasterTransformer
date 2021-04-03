@@ -13,125 +13,205 @@
 # limitations under the License.
 
 from __future__ import print_function
-from typing import List
 
 import sys
 import torch
 
 from transformers import BertConfig
 from transformers.modeling_bert import BertEncoder
+from .ckpt_quantization import checkpoint_quantization
 
 
 class EncoderWeights(object):
     def __init__(self, layer_num, hidden_dim, weights=None):
+        """weights need be a state_dict of bert model"""
         self.layer_num = layer_num
-        self.w = [[] for _ in range(layer_num)]
-        if weights:
-            if isinstance(weights, dict):
-                for i in range(layer_num):
-                    pre = 'bert.encoder.layer.' + str(i) + '.'
-                    self.w[i].append(weights[pre + 'attention.self.query.weight'].transpose(-1, -2).contiguous())
-                    self.w[i].append(weights[pre + 'attention.self.query.bias'])
-                    self.w[i].append(weights[pre + 'attention.self.key.weight'].transpose(-1, -2).contiguous())
-                    self.w[i].append(weights[pre + 'attention.self.key.bias'])
-                    self.w[i].append(weights[pre + 'attention.self.value.weight'].transpose(-1, -2).contiguous())
-                    self.w[i].append(weights[pre + 'attention.self.value.bias'])
-                    self.w[i].append(weights[pre + 'attention.output.dense.weight'].transpose(-1, -2).contiguous())
-                    self.w[i].append(weights[pre + 'attention.output.dense.bias'])
-                    self.w[i].append(weights[pre + 'attention.output.LayerNorm.weight'])
-                    self.w[i].append(weights[pre + 'attention.output.LayerNorm.bias'])
-                    self.w[i].append(weights[pre + 'intermediate.dense.weight'].transpose(-1, -2).contiguous())
-                    self.w[i].append(weights[pre + 'intermediate.dense.bias'])
-                    self.w[i].append(weights[pre + 'output.dense.weight'].transpose(-1, -2).contiguous())
-                    self.w[i].append(weights[pre + 'output.dense.bias'])
-                    self.w[i].append(weights[pre + 'output.LayerNorm.weight'])
-                    self.w[i].append(weights[pre + 'output.LayerNorm.bias'])
-            else:
-                for i in range(layer_num):
-                    self.w[i].append(weights.layer[i].attention.self.query.weight.data.transpose(-1, -2).contiguous())
-                    self.w[i].append(weights.layer[i].attention.self.query.bias.data)
-                    self.w[i].append(weights.layer[i].attention.self.key.weight.data.transpose(-1, -2).contiguous())
-                    self.w[i].append(weights.layer[i].attention.self.key.bias.data)
-                    self.w[i].append(weights.layer[i].attention.self.value.weight.data.transpose(-1, -2).contiguous())
-                    self.w[i].append(weights.layer[i].attention.self.value.bias.data)
-                    self.w[i].append(weights.layer[i].attention.output.dense.weight.data.transpose(-1, -2).contiguous())
-                    self.w[i].append(weights.layer[i].attention.output.dense.bias.data)
-                    self.w[i].append(weights.layer[i].attention.output.LayerNorm.weight.data)
-                    self.w[i].append(weights.layer[i].attention.output.LayerNorm.bias.data)
-                    self.w[i].append(weights.layer[i].intermediate.dense.weight.data.transpose(-1, -2).contiguous())
-                    self.w[i].append(weights.layer[i].intermediate.dense.bias.data)
-                    self.w[i].append(weights.layer[i].output.dense.weight.data.transpose(-1, -2).contiguous())
-                    self.w[i].append(weights.layer[i].output.dense.bias.data)
-                    self.w[i].append(weights.layer[i].output.LayerNorm.weight.data)
-                    self.w[i].append(weights.layer[i].output.LayerNorm.bias.data)
+        self.int8 = False
+        self.hidden_dim = hidden_dim
+        self.weights = {}
+        if weights is None:
+            self._generated_weights = True
+            for i in range(layer_num):
+                pre = 'bert.encoder.layer.' + str(i) + '.'
+                self.weights[pre + 'attention.self.query.weight'] = torch.zeros(hidden_dim, hidden_dim)
+                self.weights[pre + 'attention.self.query.bias'] = torch.zeros(hidden_dim)
+                self.weights[pre + 'attention.self.key.weight'] = torch.zeros(hidden_dim, hidden_dim)
+                self.weights[pre + 'attention.self.key.bias'] = torch.zeros(hidden_dim)
+                self.weights[pre + 'attention.self.value.weight'] = torch.zeros(hidden_dim, hidden_dim)
+                self.weights[pre + 'attention.self.value.bias'] = torch.zeros(hidden_dim)
+                self.weights[pre + 'attention.output.dense.weight'] = torch.zeros(hidden_dim, hidden_dim)
+                self.weights[pre + 'attention.output.dense.bias'] = torch.zeros(hidden_dim)
+                self.weights[pre + 'attention.output.LayerNorm.weight'] = torch.zeros(hidden_dim)
+                self.weights[pre + 'attention.output.LayerNorm.bias'] = torch.zeros(hidden_dim)
+                self.weights[pre + 'intermediate.dense.weight'] = torch.zeros(4 * hidden_dim, hidden_dim)
+                self.weights[pre + 'intermediate.dense.bias'] = torch.zeros(4 * hidden_dim)
+                self.weights[pre + 'output.dense.weight'] = torch.zeros(hidden_dim, 4 * hidden_dim)
+                self.weights[pre + 'output.dense.bias'] = torch.zeros(hidden_dim)
+                self.weights[pre + 'output.LayerNorm.weight'] = torch.zeros(hidden_dim)
+                self.weights[pre + 'output.LayerNorm.bias'] = torch.zeros(hidden_dim)
+            for k, v in self.weights.items():
+                if not k.endswith('_amax'):
+                    self.weights[k] = torch.nn.init.uniform_(v, -1, 1)
         else:
-            for layer_weights in self.w:
-                layer_weights.append(torch.zeros(hidden_dim, hidden_dim))   # q_kernel
-                layer_weights.append(torch.zeros(hidden_dim))   # q_bias
-                layer_weights.append(torch.zeros(hidden_dim, hidden_dim))   # k_kernel
-                layer_weights.append(torch.zeros(hidden_dim))   # k_bias
-                layer_weights.append(torch.zeros(hidden_dim, hidden_dim))   # v_kernel
-                layer_weights.append(torch.zeros(hidden_dim))   # v_bias
-                layer_weights.append(torch.zeros(hidden_dim, hidden_dim))   # attr_output_kernel
-                layer_weights.append(torch.zeros(hidden_dim))   # attr_output_bias
-                layer_weights.append(torch.zeros(hidden_dim))   # attr_output_layernorm_beta
-                layer_weights.append(torch.zeros(hidden_dim))   # attr_output_layernorm_gamma
-                layer_weights.append(torch.zeros(hidden_dim, 4 * hidden_dim))   # inter_kernel
-                layer_weights.append(torch.zeros(4 * hidden_dim))   # inter_bias
-                layer_weights.append(torch.zeros(4 * hidden_dim, hidden_dim))   # output_kernel
-                layer_weights.append(torch.zeros(hidden_dim))   # output_bias
-                layer_weights.append(torch.zeros(hidden_dim))   # output_layernorm_beta
-                layer_weights.append(torch.zeros(hidden_dim))   # output_layernorm_gamma
-                for i in range(len(layer_weights)):
-                    torch.nn.init.uniform_(layer_weights[i], -1, 1)
+            self._generated_weights = False
+            for k, v in weights.items():
+                ks = k.split('.')
+                if ks[-2] == 'LayerNorm':
+                    if ks[-1] == 'gamma':
+                        ks[-1] = 'weight'
+                    elif ks[-1] == 'beta':
+                        ks[-1] = 'bias'
+                self.weights['.'.join(ks)] = v
+
+    def listed_weights(self, layer_idx):
+        ret = []
+        pre = 'bert.encoder.layer.' + str(layer_idx) + '.'
+        ret.append(self.weights[pre + 'attention.self.query.weight'])       # 0
+        ret.append(self.weights[pre + 'attention.self.query.bias'])
+        ret.append(self.weights[pre + 'attention.self.key.weight'])         # 2
+        ret.append(self.weights[pre + 'attention.self.key.bias'])
+        ret.append(self.weights[pre + 'attention.self.value.weight'])       # 4
+        ret.append(self.weights[pre + 'attention.self.value.bias'])
+        ret.append(self.weights[pre + 'attention.output.dense.weight'])     # 6
+        ret.append(self.weights[pre + 'attention.output.dense.bias'])
+        ret.append(self.weights[pre + 'attention.output.LayerNorm.weight'])
+        ret.append(self.weights[pre + 'attention.output.LayerNorm.bias'])
+        ret.append(self.weights[pre + 'intermediate.dense.weight'])         # 10
+        ret.append(self.weights[pre + 'intermediate.dense.bias'])
+        ret.append(self.weights[pre + 'output.dense.weight'])               # 12
+        ret.append(self.weights[pre + 'output.dense.bias'])
+        ret.append(self.weights[pre + 'output.LayerNorm.weight'])
+        ret.append(self.weights[pre + 'output.LayerNorm.bias'])
+        if not self.int8:
+            ret[0] = ret[0].transpose(-1, -2).contiguous()
+            ret[2] = ret[2].transpose(-1, -2).contiguous()
+            ret[4] = ret[4].transpose(-1, -2).contiguous()
+            ret[6] = ret[6].transpose(-1, -2).contiguous()
+            ret[10] = ret[10].transpose(-1, -2).contiguous()
+            ret[12] = ret[12].transpose(-1, -2).contiguous()
+            ret.append(torch.tensor(0))
+        else:
+            ret.append(self.weights[pre + 'amaxList'])
+        return ret
 
     def to_cuda(self):
-        for i in range(self.layer_num):
-            for j in range(len(self.w[i])):
-                self.w[i][j] = self.w[i][j].cuda()
+        for k, v in self.weights.items():
+            self.weights[k] = v.cuda()
 
     def to_half(self):
-        for i in range(self.layer_num):
-            for j in range(len(self.w[i])):
-                self.w[i][j] = self.w[i][j].half()
+        if self.int8:
+            raise RuntimeError("Cannot cast to half if the weights have been casted to int8.")
+        for k, v in self.weights.items():
+            self.weights[k] = v.half()
+
+    def to_int8(self, is_per_channel, module_path='./', ths_path='./lib/libths_fastertransformer.so'):
+        if self._generated_weights:
+            if is_per_channel:
+                amax_tensor_1 = torch.Tensor(self.hidden_dim).fill_(127.)
+                amax_tensor_2 = torch.Tensor(self.hidden_dim * 4).fill_(127.)
+            else:
+                amax_tensor_1 = torch.tensor(127.)
+                amax_tensor_2 = torch.tensor(127.)
+            for i in range(self.layer_num):
+                pre = 'bert.encoder.layer.' + str(i) + '.'
+                self.weights[pre + 'attention.self.query._input_quantizer._amax'] = torch.tensor(127.)
+                self.weights[pre + 'attention.self.query._weight_quantizer._amax'] = amax_tensor_1
+                self.weights[pre + 'attention.self.query._aftergemm_quantizer._amax'] = torch.tensor(127.)
+                self.weights[pre + 'attention.self.key._input_quantizer._amax'] = torch.tensor(127.)
+                self.weights[pre + 'attention.self.key._weight_quantizer._amax'] = amax_tensor_1
+                self.weights[pre + 'attention.self.key._aftergemm_quantizer._amax'] = torch.tensor(127.)
+                self.weights[pre + 'attention.self.value._input_quantizer._amax'] = torch.tensor(127.)
+                self.weights[pre + 'attention.self.value._weight_quantizer._amax'] = amax_tensor_1
+                self.weights[pre + 'attention.self.value._aftergemm_quantizer._amax'] = torch.tensor(127.)
+                self.weights[pre + 'attention.self.matmul_q_input_quantizer._amax'] = torch.tensor(127.)
+                self.weights[pre + 'attention.self.matmul_k_input_quantizer._amax'] = torch.tensor(127.)
+                self.weights[pre + 'attention.self.matmul_v_input_quantizer._amax'] = torch.tensor(127.)
+                self.weights[pre + 'attention.self.matmul_a_input_quantizer._amax'] = torch.tensor(127.)
+                self.weights[pre + 'attention.self.softmax_input_quantizer._amax'] = torch.tensor(127.)
+                self.weights[pre + 'attention.output.dense._input_quantizer._amax'] = torch.tensor(127.)
+                self.weights[pre + 'attention.output.dense._weight_quantizer._amax'] = amax_tensor_1
+                self.weights[pre + 'attention.output.dense._aftergemm_quantizer._amax'] = torch.tensor(127.)
+                self.weights[pre + 'attention.output.add_local_input_quantizer._amax'] = torch.tensor(127.)
+                self.weights[pre + 'attention.output.add_residual_input_quantizer._amax'] = torch.tensor(127.)
+                self.weights[pre + 'intermediate.dense._input_quantizer._amax'] = torch.tensor(127.)
+                self.weights[pre + 'intermediate.dense._weight_quantizer._amax'] = amax_tensor_2
+                self.weights[pre + 'intermediate.dense._aftergemm_quantizer._amax'] = torch.tensor(127.)
+                self.weights[pre + 'output.dense._input_quantizer._amax'] = torch.tensor(127.)
+                self.weights[pre + 'output.dense._weight_quantizer._amax'] = amax_tensor_1
+                self.weights[pre + 'output.dense._aftergemm_quantizer._amax'] = torch.tensor(127.)
+                self.weights[pre + 'output.add_local_input_quantizer._amax'] = torch.tensor(127.)
+                self.weights[pre + 'output.add_residual_input_quantizer._amax'] = torch.tensor(127.)
+        if 'bert.encoder.layer.0.attention.self.query._input_quantizer._amax' not in self.weights:
+            raise RuntimeError("There is no quantization node in the checkpoint, cannot be quantized to int8.")
+        if self.int8:
+            return
+        self.int8 = True
+        for k, v in self.weights.items():
+            if k.endswith('bias') or k.endswith('LayerNorm.weight'):
+                self.weights[k] = v.half()
+            else:
+                self.weights[k] = v.float().cpu()
+        self.weights = checkpoint_quantization(self.weights, is_per_channel, module_path, ths_path, verbose=False)
 
 
 class CustomEncoder(torch.nn.Module):
-    def __init__(self, layer_num, head_num, head_size, weights, path='./', use_ths=False, remove_padding=False):
+    def __init__(self, layer_num, head_num, head_size, weights,
+                 int8_mode=0, remove_padding=False, allow_gemm_test=False,
+                 use_ths=False, path='./'):
         super().__init__()
         self.layer_num = layer_num
+        self.remove_padding = remove_padding
+        self.int8_mode = int8_mode
         self.encoders = []
+        use_trt_kernel = True
         if use_ths:
             torch.classes.load_library(path)
             for i in range(layer_num):
-                self.encoders.append(torch.classes.FasterTransformerEncoder(head_num, head_size, remove_padding, *weights.w[i]))
+                assert len(weights.listed_weights(i)) == 17
+                try:
+                    self.encoders.append(
+                        torch.classes.FasterTransformer.Encoder(
+                            *weights.listed_weights(i),
+                            head_num, head_size, remove_padding, int8_mode, layer_num, i, allow_gemm_test, use_trt_kernel))
+                except:
+                    # legacy ths for 20.03 image
+                    self.encoders.append(
+                        torch.classes.FasterTransformerEncoder(
+                            *weights.listed_weights(i),
+                            head_num, head_size, remove_padding, int8_mode, layer_num, i, allow_gemm_test, use_trt_kernel))
+            self.build_mask_remove_padding = torch.ops.fastertransformer.build_mask_remove_padding
+            self.rebuild_padding = torch.ops.fastertransformer.rebuild_padding
         else:
             sys.path.insert(0, path)
-            from th_fastertransformer import FasterTransformerEncoder
+            from th_fastertransformer import FasterTransformerEncoder, build_mask_remove_padding, rebuild_padding
             for i in range(layer_num):
-                self.encoders.append(FasterTransformerEncoder(head_num, head_size, remove_padding, *weights.w[i]))
+                assert len(weights.listed_weights(i)) == 17
+                self.encoders.append(
+                    FasterTransformerEncoder(
+                        *weights.listed_weights(i),
+                        head_num, head_size, remove_padding, int8_mode, layer_num, i, allow_gemm_test, use_trt_kernel))
+            self.build_mask_remove_padding = build_mask_remove_padding
+            self.rebuild_padding = rebuild_padding
 
-    def forward(self, hidden_states, attention_mask, sequence_lengths=torch.Tensor(0).to(torch.int).cuda()):
+    def forward(self, hidden_states, attention_mask, sequence_lengths):
+        if self.remove_padding:
+            hidden_states, sequence_id_offset = self.build_mask_remove_padding(hidden_states, sequence_lengths)
+            trt_seq_len = torch.cumsum(torch.cat([torch.tensor([0]).to(sequence_lengths).cuda(), sequence_lengths], dim=0), dim=0).to(torch.int32).cuda()
+        else:
+            sequence_id_offset = torch.tensor(0).to(torch.int32).cuda()
+            batch = hidden_states.size(0)
+            max_seq_len = hidden_states.size(1)
+            padding_offset = torch.arange(0, batch*max_seq_len, max_seq_len).cuda()
+            squence_offset_with_padding = sequence_lengths + padding_offset
+            c = torch.cat([padding_offset, squence_offset_with_padding], dim=0)
+            c_r = torch.reshape(c, [2, -1])
+            t = torch.transpose(c_r, 0, 1)
+            trt_seq_len = torch.reshape(t, [-1])
+            trt_seq_len = torch.cat([trt_seq_len, torch.tensor([batch * max_seq_len]).to(trt_seq_len.dtype).cuda()], dim=0).to(torch.int32)
         for i in range(self.layer_num):
-            hidden_states = self.encoders[i].forward(hidden_states, attention_mask, sequence_lengths)
-        return (hidden_states,)
-
-
-class CustomEncoder2(torch.nn.Module):
-    w: List[List[torch.Tensor]]
-    def __init__(self, layer_num, head_num, head_size, weights, path='./', remove_padding=False):
-        super().__init__()
-        self.layer_num = layer_num
-        self.head_num = head_num
-        self.head_size = head_size
-        self.remove_padding = remove_padding
-        self.w = weights.w
-        torch.ops.load_library(path)
-
-    def forward(self, hidden_states, attention_mask, sequence_lengths=torch.Tensor(0).to(torch.int).cuda()):
-        for i in range(self.layer_num):
-            hidden_states = torch.ops.fastertransformer.encoder(self.head_num, self.head_size, self.remove_padding,
-                                                                *self.w[i], hidden_states, attention_mask, sequence_lengths)
+            hidden_states = self.encoders[i].forward(hidden_states, attention_mask, trt_seq_len, sequence_id_offset)
+        if self.remove_padding:
+            hidden_states = self.rebuild_padding(hidden_states, sequence_id_offset, attention_mask, 0)
         return (hidden_states,)
 
 
@@ -141,30 +221,11 @@ class HuggingFaceEncoder(torch.nn.Module):
         hidden_dim = head_num * head_size
         conf = BertConfig(hidden_size=hidden_dim, intermediate_size=4*hidden_dim, num_attention_heads=head_num, num_hidden_layers=layer_num)
         self.encoder = BertEncoder(conf)
-        if isinstance(weights, dict):
-            w = {}
-            for k, v in weights.items():
-                if k.startswith('bert.encoder'):
-                    w[k[13:]] = weights[k]
-            self.encoder.load_state_dict(w)
-        else:
-            for i in range(layer_num):
-                self.encoder.layer[i].attention.self.query.weight.data = weights.w[i][0].transpose(-1, -2).contiguous()
-                self.encoder.layer[i].attention.self.query.bias.data = weights.w[i][1]
-                self.encoder.layer[i].attention.self.key.weight.data = weights.w[i][2].transpose(-1, -2).contiguous()
-                self.encoder.layer[i].attention.self.key.bias.data = weights.w[i][3]
-                self.encoder.layer[i].attention.self.value.weight.data = weights.w[i][4].transpose(-1, -2).contiguous()
-                self.encoder.layer[i].attention.self.value.bias.data = weights.w[i][5]
-                self.encoder.layer[i].attention.output.dense.weight.data = weights.w[i][6].transpose(-1, -2).contiguous()
-                self.encoder.layer[i].attention.output.dense.bias.data = weights.w[i][7]
-                self.encoder.layer[i].attention.output.LayerNorm.weight.data = weights.w[i][8]
-                self.encoder.layer[i].attention.output.LayerNorm.bias.data = weights.w[i][9]
-                self.encoder.layer[i].intermediate.dense.weight.data = weights.w[i][10].transpose(-1, -2).contiguous()
-                self.encoder.layer[i].intermediate.dense.bias.data = weights.w[i][11]
-                self.encoder.layer[i].output.dense.weight.data = weights.w[i][12].transpose(-1, -2).contiguous()
-                self.encoder.layer[i].output.dense.bias.data = weights.w[i][13]
-                self.encoder.layer[i].output.LayerNorm.weight.data = weights.w[i][14]
-                self.encoder.layer[i].output.LayerNorm.bias.data = weights.w[i][15]
+        w = {}
+        for k, v in weights.weights.items():
+            if k.startswith('bert.encoder') and not k.endswith('_amax'):
+                w[k[13:]] = weights.weights[k]
+        self.encoder.load_state_dict(w)
         self.head_mask = [None] * layer_num
 
     def forward(self, hidden_states, attention_mask):

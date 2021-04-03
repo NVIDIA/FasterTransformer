@@ -14,34 +14,41 @@
 cmake_minimum_required(VERSION 3.8 FATAL_ERROR) # for PyTorch extensions, version should be greater than 3.13
 project(FasterTransformer LANGUAGES CXX CUDA)
 
-find_package(CUDA 10.0 REQUIRED)
+find_package(CUDA 10.1 REQUIRED)
 
 option(BUILD_TRT "Build in TensorRT mode" OFF)
 option(BUILD_TF "Build in TensorFlow mode" OFF)
 option(BUILD_THE "Build in PyTorch eager mode" OFF)
 option(BUILD_THS "Build in TorchScript class mode" OFF)
-option(BUILD_THSOP "Build in TorchScript OP mode" OFF)
+
+if(BUILD_THS)
+  if(DEFINED ENV{NVIDIA_PYTORCH_VERSION})
+    if($ENV{NVIDIA_PYTORCH_VERSION} VERSION_LESS "20.03")
+      message(FATAL_ERROR "NVIDIA PyTorch image is too old for TorchScript mode.")
+    endif()
+    if($ENV{NVIDIA_PYTORCH_VERSION} VERSION_EQUAL "20.03")
+      add_definitions(-DLEGACY_THS=1)
+    endif()
+  endif()
+endif()
 
 set(CXX_STD "11" CACHE STRING "C++ standard")
 
 set(CUDA_PATH ${CUDA_TOOLKIT_ROOT_DIR})
 
 set(TF_PATH "" CACHE STRING "TensorFlow path")
-#set(TF_PATH "/usr/local/lib/python3.5/dist-packages/tensorflow")
 
 if(BUILD_TF AND NOT TF_PATH)
   message(FATAL_ERROR "TF_PATH must be set if BUILD_TF(=TensorFlow mode) is on.")
 endif()
 
 set(TRT_PATH "" CACHE STRING "TensorRT path")
-#set(TRT_PATH "/myspace/TensorRT-5.1.5.0")
 
 if(BUILD_TRT AND NOT TRT_PATH)
   message(FATAL_ERROR "TRT_PATH must be set if BUILD_TRT(=TensorRT mode) is on.")
 endif()
 
 list(APPEND CMAKE_MODULE_PATH ${CUDA_PATH}/lib64)
-find_package(CUDA REQUIRED)
 
 if (${CUDA_VERSION} GREATER_EQUAL 11.0)
   message(STATUS "Add DCUDA11_MODE")
@@ -49,21 +56,24 @@ if (${CUDA_VERSION} GREATER_EQUAL 11.0)
 endif()
 
 # setting compiler flags
-set(CMAKE_C_FLAGS    "${CMAKE_C_FLAGS}")	
+set(CMAKE_C_FLAGS    "${CMAKE_C_FLAGS}")    
 set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS}")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}  -Xcompiler -Wall")
 
-if (SM STREQUAL 70 OR
+if (SM STREQUAL 80 OR
+    SM STREQUAL 86 OR
+    SM STREQUAL 70 OR
     SM STREQUAL 75 OR
     SM STREQUAL 61 OR
     SM STREQUAL 60)
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode=arch=compute_${SM},code=\\\"sm_${SM},compute_${SM}\\\" -rdc=true")
-  if (SM STREQUAL 70 OR SM STREQUAL 75)
+#set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode=arch=compute_${SM},code=\\\"sm_${SM},compute_${SM}\\\" -rdc=true")
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode=arch=compute_${SM},code=\\\"sm_${SM},compute_${SM}\\\"")
+  if (SM STREQUAL 70 OR SM STREQUAL 75 OR SM STREQUAL 80 OR SM STREQUAL 86)
     set(CMAKE_C_FLAGS    "${CMAKE_C_FLAGS}    -DWMMA")
     set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS}  -DWMMA")
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -DWMMA")
   endif()
-if(BUILD_THE OR BUILD_THS OR BUILD_THSOP)
+if(BUILD_THE OR BUILD_THS)
   string(SUBSTRING ${SM} 0 1 SM_MAJOR)
   string(SUBSTRING ${SM} 1 1 SM_MINOR)
   set(ENV{TORCH_CUDA_ARCH_LIST} "${SM_MAJOR}.${SM_MINOR}")
@@ -72,23 +82,23 @@ message("-- Assign GPU architecture (sm=${SM})")
 
 else()
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}  \
-                      -gencode=arch=compute_60,code=\\\"sm_60,compute_60\\\" \
-                      -gencode=arch=compute_61,code=\\\"sm_61,compute_61\\\" \
                       -gencode=arch=compute_70,code=\\\"sm_70,compute_70\\\" \
                       -gencode=arch=compute_75,code=\\\"sm_75,compute_75\\\" \
-                      -rdc=true")
+                      ")
+#                      -rdc=true")
 set(CMAKE_C_FLAGS    "${CMAKE_C_FLAGS}    -DWMMA")
 set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS}  -DWMMA")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -DWMMA")
-if(BUILD_THE OR BUILD_THS OR BUILD_THSOP)
-  set(ENV{TORCH_CUDA_ARCH_LIST} "6.0;6.1;7.0;7.5")
+if(BUILD_THE OR BUILD_THS)
+  set(ENV{TORCH_CUDA_ARCH_LIST} "7.0;7.5")
 endif()
-message("-- Assign GPU architecture (sm=60,61,70,75)")
+message("-- Assign GPU architecture (sm=70,75)")
 endif()
 
 set(CMAKE_C_FLAGS_DEBUG    "${CMAKE_C_FLAGS_DEBUG}    -Wall -O0")
 set(CMAKE_CXX_FLAGS_DEBUG  "${CMAKE_CXX_FLAGS_DEBUG}  -Wall -O0")
-set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -O0 -G -Xcompiler -Wall  --ptxas-options=-v --resource-usage")
+# set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -O0 -G -Xcompiler -Wall  --ptxas-options=-v --resource-usage")
+set(CMAKE_CUDA_FLAGS_DEBUG "${CMAKE_CUDA_FLAGS_DEBUG} -O0 -G -Xcompiler -Wall")
 
 set(CMAKE_CXX_STANDARD "${CXX_STD}")
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -97,6 +107,7 @@ set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --expt-relaxed-constexpr")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --std=c++${CXX_STD}")
 
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
+# set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} -Xcompiler -O3 --ptxas-options=--verbose")
 set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} -Xcompiler -O3")
 
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
@@ -123,7 +134,15 @@ if(BUILD_TRT)
 endif()
 
 set(PYTHON_PATH "python" CACHE STRING "Python path")
-if(BUILD_THE OR BUILD_THS OR BUILD_THSOP)
+if(BUILD_THS)
+  execute_process(COMMAND ${PYTHON_PATH} "-c" "from __future__ import print_function; import torch; print(torch.__version__,end='');"
+                  RESULT_VARIABLE _PYTHON_SUCCESS
+                  OUTPUT_VARIABLE TORCH_VERSION)
+  if (TORCH_VERSION VERSION_LESS "1.5.0")
+      message(FATAL_ERROR "PyTorch >= 1.5.0 is needed for TorchScript mode.")
+  endif()
+endif()
+if(BUILD_THE OR BUILD_THS)
   execute_process(COMMAND ${PYTHON_PATH} "-c" "from __future__ import print_function; import os; import torch;
 print(os.path.dirname(torch.__file__),end='');"
                   RESULT_VARIABLE _PYTHON_SUCCESS
@@ -165,8 +184,8 @@ link_directories(
   ${COMMON_LIB_DIRS}
 )
 
-add_subdirectory(tools)
 add_subdirectory(fastertransformer)
+add_subdirectory(tools)
 add_subdirectory(sample)
 
 if(BUILD_TF)
@@ -174,11 +193,10 @@ if(BUILD_TF)
   add_custom_command(TARGET copy
       POST_BUILD
       COMMAND cp ${PROJECT_SOURCE_DIR}/sample/tensorflow/ ${PROJECT_BINARY_DIR} -r
-      COMMAND cp ${PROJECT_SOURCE_DIR}/sample/tensorflow_bert ${PROJECT_BINARY_DIR}/tensorflow -r
  )
 endif()
 
-if(BUILD_THE OR BUILD_THS OR BUILD_THSOP)
+if(BUILD_THE OR BUILD_THS)
   add_custom_target(copy ALL COMMENT "Copying pytorch test scripts")
   add_custom_command(TARGET copy
       POST_BUILD

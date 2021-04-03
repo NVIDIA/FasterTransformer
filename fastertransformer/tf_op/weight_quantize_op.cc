@@ -35,6 +35,20 @@ int index_CUBLASLT_ORDER_COL4_4R2_8C(int col_id, int row_id, int m_32){
   return new_col*m_32 + new_row;
 }
 
+int index_CUBLASLT_ORDER_COL32_2R_4R4(int col_id, int row_id, int m_32){
+  int new_col = col_id >> 5;
+  int row_in_tile = row_id & 31;
+  int col_in_tile = col_id & 31;
+  int new_row =   //CUBLASLT_ORDER_COL32_2R_4R4
+                  (
+                  ((row_id >> 5) << 10) +
+                  //(((row%8)/2*4+row/8)*2+row%2)*32+col
+                  (((((((row_in_tile&7)>>1)<<2)+(row_in_tile>>3))<<1)+(row_in_tile&1))<<5)+col_in_tile
+                  )
+                  ;
+  return new_col*m_32 + new_row;
+}
+
 //be consistent with FasterTransformer
 int8_t float_to_int8_rn_host(float x){
   int8_t res;
@@ -53,22 +67,26 @@ int8_t float_to_int8_rn_host(float x){
 }
 
 template <typename T>
-void quantization_CUBLASLT_ORDER_COL4_4R2_8C(T *dst, float* amaxs, const T* weight, const float* quant_max, const float *quant_min, int n, int k){
-  float factor = 1000000.0;
+void quantization_CUBLASLT_ORDER_COL4_4R2_8C(T *dst, float* amaxs, const T* weight, const float* quant_max, const float *quant_min, int n, int k, bool per_channel_quantization){
   //quantization
   int8_t* int8_dst = (int8_t*)dst;
   float element;
   float amax;
   float amax_in_all = fabs(quant_max[0]);
-  for (int i = 0 ; i < n ; i++){
-    amaxs[i] = fabs(quant_min[i]);
-    if (fabs(quant_max[i]) > amaxs[i])
-      amaxs[i] = fabs(quant_max[i]);
-    if (amaxs[i] > amax_in_all)
-      amax_in_all = amaxs[i];
-    amaxs[i] = round(amaxs[i]*factor)/factor;
+  if (per_channel_quantization){
+    for (int i = 0 ; i < n ; i++){
+      amaxs[i] = fabs(quant_min[i]);
+      if (fabs(quant_max[i]) > amaxs[i])
+        amaxs[i] = fabs(quant_max[i]);
+      if (amaxs[i] > amax_in_all)
+        amax_in_all = amaxs[i];
+    }
+  } 
+  if (!per_channel_quantization){
+    for (int i = 0 ; i < n ; i++){
+      amaxs[i] = amax_in_all;
+    }
   }
-  amax_in_all = round(amax_in_all*factor)/factor;
   int idx_in_COL4;
   int tmp, tmpI;
   for (int col = 0 ; col < k ; col++){
@@ -78,6 +96,40 @@ void quantization_CUBLASLT_ORDER_COL4_4R2_8C(T *dst, float* amaxs, const T* weig
       element = float(weight[tmp+row]);
       idx_in_COL4 = index_CUBLASLT_ORDER_COL4_4R2_8C(col, row, 32*n);
       int8_dst[idx_in_COL4] = float_to_int8_rn_host(element*127.0/amax);
+    }
+  }
+}
+
+template <typename T>
+void quantization_CUBLASLT_ORDER_COL32_2R_4R4(T *dst, float* amaxs, const T* weight, const float* quant_max, const float *quant_min, int n, int k, bool per_channel_quantization){
+  //quantization
+  int8_t* int8_dst = (int8_t*)dst;
+  float element;
+  float amax;
+  float amax_in_all = fabs(quant_max[0]);
+  if (per_channel_quantization){
+    for (int i = 0 ; i < n ; i++){
+      amaxs[i] = fabs(quant_min[i]);
+      if (fabs(quant_max[i]) > amaxs[i])
+        amaxs[i] = fabs(quant_max[i]);
+      if (amaxs[i] > amax_in_all)
+        amax_in_all = amaxs[i];
+    }
+  }
+  if (!per_channel_quantization){
+    for (int i = 0 ; i < n ; i++){
+      amaxs[i] = amax_in_all;
+    }
+  }
+  int idx_in_COL32_2R_4R4;
+  int tmp, tmpI;
+  for (int col = 0 ; col < k ; col++){
+    tmp = col*n;
+    for (int row = 0 ; row < n ; row++){
+      amax = amaxs[row];
+      element = float(weight[tmp+row]);
+      idx_in_COL32_2R_4R4 = index_CUBLASLT_ORDER_COL32_2R_4R4(col, row, 32*n);
+      int8_dst[idx_in_COL32_2R_4R4] = float_to_int8_rn_host(element*127.0/amax);
     }
   }
 }
@@ -96,6 +148,7 @@ REGISTER_OP("WeightQuantize")
     .Output("output: T")
     .Output("output2: float")
     .Attr("T: {float, half}")
+    .Attr("per_channel_quantization: bool = false")
     .SetShapeFn([](shape_inference::InferenceContext *c) {
       c->set_output(0, c->input(0));
       c->set_output(1, c->input(1));
@@ -107,6 +160,17 @@ class WeightQuantizeOp : public CommonOp<T>
 public:
   explicit WeightQuantizeOp(OpKernelConstruction *context) : CommonOp<T>(context)
   {
+     OP_REQUIRES_OK(context, context->GetAttr("per_channel_quantization", &per_channel_quantization_));
+     use_ORDER_COL32_2R_4R4 = false;
+#ifdef CUDA11_MODE
+     int device{-1};
+     cudaGetDevice(&device);
+     cudaDeviceProp props;
+     cudaGetDeviceProperties(&props, device);
+     if (props.major * 10 + props.minor >= 80){
+       use_ORDER_COL32_2R_4R4 = true;
+     }
+#endif 
   }
 
   void Compute(OpKernelContext *context) override
@@ -140,7 +204,10 @@ public:
 
     try
     {
-      quantization_CUBLASLT_ORDER_COL4_4R2_8C(transform_out, transform_out2, weight_, quant_max_, quant_min_, n, k);
+      if (use_ORDER_COL32_2R_4R4)
+        quantization_CUBLASLT_ORDER_COL32_2R_4R4(transform_out, transform_out2, weight_, quant_max_, quant_min_, n, k, per_channel_quantization_);
+      else
+        quantization_CUBLASLT_ORDER_COL4_4R2_8C(transform_out, transform_out2, weight_, quant_max_, quant_min_, n, k, per_channel_quantization_);
     }
     catch(std::runtime_error& error)
     {
@@ -161,6 +228,8 @@ private:
   const float *quant_max_, *quant_min_;
   T* transform_out;
   float *transform_out2;
+  bool use_ORDER_COL32_2R_4R4;
+  bool per_channel_quantization_;
 };
 
 #define REGISTER_CPU(T)                                                  \

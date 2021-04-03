@@ -27,4 +27,4 @@ tar xf averaged-ende-ckpt500k.tar.gz -C translation/ckpt
 rm averaged-ende-ckpt500k.tar.gz
 
 # convert the pretrained model to fit our model structure 
-python tensorflow/utils/dump_model.py translation/ckpt/model.ckpt-500000
+# python tensorflow/utils/dump_model.py translation/ckpt/model.ckpt-500000

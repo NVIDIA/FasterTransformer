@@ -20,6 +20,82 @@
 namespace fastertransformer
 {
 
+#define TOPK_FP16_STORAGE 0
+
+template<typename T, int MAX_K, int THREADBLOCK_SIZE>
+__launch_bounds__(THREADBLOCK_SIZE)
+__global__
+void beam_topK_kernel(const T* log_probs, 
+                        int* topk_tmp_id_buf,
+                        T* topk_tmp_val_buf,
+                        const int vocab_size,
+                        T diversity_rate)
+{
+    typedef cub::BlockReduce<TopK<T, MAX_K>, THREADBLOCK_SIZE> BlockReduce;
+    __shared__ typename BlockReduce::TempStorage temp_storage;
+
+    int thread_id = threadIdx.x;
+    int block_id = blockIdx.x;
+    TopK<T, MAX_K> partial;
+    
+    for(int i = 0; i < MAX_K; ++i)
+    {
+        partial.p[i] = -1;
+        partial.u[i] = -FLT_MAX;
+    }
+
+    for(int elem_id = thread_id; elem_id < vocab_size; elem_id += THREADBLOCK_SIZE)
+    {
+        int index = elem_id + block_id * vocab_size;        
+        partial.insert( (T)log_probs[index], index);
+    }
+
+    TopK<T, MAX_K> total = BlockReduce(temp_storage).Reduce(partial, reduce_topk_op<T, MAX_K>);
+
+    if (thread_id == 0)
+    {
+        int index = block_id * MAX_K;
+        
+        for(int i = 0; i < MAX_K; ++i)
+        {
+            topk_tmp_id_buf[index + i] = total.p[i];
+            topk_tmp_val_buf[index + i] = total.u[i] + diversity_rate * (T)i;
+        }
+    }
+}
+
+template<typename T, int MAX_K, int THREADBLOCK_SIZE>
+__launch_bounds__(THREADBLOCK_SIZE)
+__global__
+void batch_topK_kernel(int* topk_tmp_id_buf,
+                        T* topk_tmp_val_buf,
+                        int* id_buf)
+{
+    int thread_id = threadIdx.x;
+    int block_id = blockIdx.x;
+    TopK<T, MAX_K> partial;
+    if (thread_id == 0)
+    {
+        for(int i = 0; i < MAX_K; ++i)
+        {
+            partial.p[i] = -1;
+            partial.u[i] = -FLT_MAX;
+        }
+
+        int index = block_id * MAX_K * MAX_K;
+        for(int i = 0; i < MAX_K * MAX_K; i++)
+        {
+            partial.insert( (T)topk_tmp_val_buf[index + i], topk_tmp_id_buf[index + i]);
+        }
+
+        index = block_id * MAX_K;
+        for(int i = 0; i < MAX_K; i++)
+        {
+            id_buf[index + i] = partial.p[i];
+        }
+    }
+}
+
 template<typename T, int MAX_K, int THREADBLOCK_SIZE>
 __launch_bounds__(THREADBLOCK_SIZE)
 __global__
@@ -53,7 +129,6 @@ void batch_topK_kernel(const int* __restrict topk_tmp_id_buf,
         }
     }
 }
-
 
 template<typename T, int MAX_K, int THREADBLOCK_SIZE>
 __launch_bounds__(THREADBLOCK_SIZE)
@@ -158,6 +233,9 @@ __global__ void beam_online_softmax_topk_kernel(
     int thread_id = threadIdx.x;
     int vector_id = blockIdx.x;
 
+    const bool IS_FP16 = std::is_same<T, half>::value;
+    const T MAX_T_VAL = (IS_FP16)? HALF_FLT_MAX : FLT_MAX;
+
     // reposition y to data for the current vector
     x += vector_id * V;
 
@@ -169,16 +247,16 @@ __global__ void beam_online_softmax_topk_kernel(
     for(int i = 0; i < MAX_K; ++i)
     {
         partial.topk.p[i] = -1;
-        partial.topk.u[i] = -FLT_MAX;
+        partial.topk.u[i] = -MAX_T_VAL;
     }
-    partial.md.m = -FLT_MAX;
+    partial.md.m = -MAX_T_VAL;
     partial.md.d = 0.0F;
 
     if (finish)
     {
         for(int elem_id = thread_id; elem_id < V; elem_id += THREADBLOCK_SIZE)
         {
-            float elem = (elem_id == E) ? FLT_MAX : -FLT_MAX;
+            float elem = (elem_id == E) ? MAX_T_VAL : -MAX_T_VAL;
             MD new_elem{elem, 1.0F};
             partial.md = reduce_md_op(partial.md, new_elem);
             partial.topk.insert(elem, elem_id);
@@ -220,7 +298,7 @@ __global__ void beam_online_softmax_topk_kernel(
 }
 
 template<typename T, int ITEMS_PER_THREAD, int MAX_K, int THREADBLOCK_SIZE>
-__launch_bounds__(THREADBLOCK_SIZE)
+__launch_bounds__(THREADBLOCK_SIZE, 1)
 __global__ void beam_online_softmax_topk_stage1_kernel(
     const T * __restrict x,
     const float * __restrict b,
@@ -235,6 +313,9 @@ __global__ void beam_online_softmax_topk_stage1_kernel(
 
     const int PACKED_TOP_KMD_SIZE = 2 * MAX_K + 2;
 
+    const bool IS_FP16 = std::is_same<T, half>::value;
+    const T MAX_T_VAL = (IS_FP16)? HALF_FLT_MAX : FLT_MAX;
+
     // one will have multiple sections per V
     const int v_local = (V + gridDim.y - 1) / gridDim.y;
     const int section_start = v_local * blockIdx.y;
@@ -243,26 +324,34 @@ __global__ void beam_online_softmax_topk_stage1_kernel(
 
     // reposition x to data for the current vector
     x += vector_id * V;
-
+#if TOPK_FP16_STORAGE == 1
+    typedef cub::BlockReduce<TopKMD<__half, MAX_K>, THREADBLOCK_SIZE> BlockReduce;
+#else
     typedef cub::BlockReduce<TopKMD<T, MAX_K>, THREADBLOCK_SIZE> BlockReduce;
+#endif
     __shared__ typename BlockReduce::TempStorage temp_storage;
     __shared__ float buf_s[PACKED_TOP_KMD_SIZE]; // save intermediate result
 
+#if TOPK_FP16_STORAGE == 1
+    TopKMD<__half, MAX_K> partial;
+#else
     TopKMD<T, MAX_K> partial;
+#endif
     bool finish = finished[vector_id];
     for(int i = 0; i < MAX_K; ++i)
     {
         partial.topk.p[i] = -1;
-        partial.topk.u[i] = -FLT_MAX;
+        partial.topk.u[i] = -MAX_T_VAL;
     }
-    partial.md.m = -FLT_MAX;
+    partial.md.m = -MAX_T_VAL;
     partial.md.d = 0.0F;
 
     if (finish)
     {
+        #pragma unroll 1
         for(int elem_id = section_start + thread_id; elem_id < section_end; elem_id += THREADBLOCK_SIZE)
         {
-            float elem = (elem_id == E) ? FLT_MAX : -FLT_MAX;
+            float elem = (elem_id == E) ? MAX_T_VAL : -MAX_T_VAL;
             MD new_elem{elem, 1.0F};
             partial.md = reduce_md_op(partial.md, new_elem);
             partial.topk.insert(elem, elem_id);
@@ -270,16 +359,22 @@ __global__ void beam_online_softmax_topk_stage1_kernel(
     }
     else
     {
+        #pragma unroll 1
         for(int elem_id = section_start + thread_id; elem_id < section_end; elem_id += THREADBLOCK_SIZE)
         {
-            T elem = x[elem_id] + b[elem_id];
+            T bias = (T)(b == nullptr ? 0.0f : b[elem_id]); // gpt-2 does not use bias
+            T elem = x[elem_id] + bias;
             MD new_elem{elem, 1.0F};
             partial.md = reduce_md_op(partial.md, new_elem);
             partial.topk.insert(elem, elem_id);
         }
     }
 
+#if TOPK_FP16_STORAGE == 1
+    TopKMD<__half, MAX_K> total = BlockReduce(temp_storage).Reduce(partial, reduce_topk_md_op<__half, MAX_K>);
+#else
     TopKMD<T, MAX_K> total = BlockReduce(temp_storage).Reduce(partial, reduce_topk_md_op<T, MAX_K>);
+#endif
 
     if (thread_id == 0)
     {
@@ -312,6 +407,9 @@ __global__ void beam_online_softmax_topk_stage2_kernel(
     const int thread_id = threadIdx.x;
     const int PACKED_TOP_KMD_SIZE = 2 * MAX_K + 2;
     
+    const bool IS_FP16 = std::is_same<T, half>::value;
+    const T MAX_T_VAL = (IS_FP16)? HALF_FLT_MAX : FLT_MAX;
+
     extern __shared__ char buf_s_[]; // intermediate result
     float * buf_s = reinterpret_cast<float *>(buf_s_);
     //__shared__ float buf_s[PACKED_TOP_KMD_SIZE * THREADBLOCK_SIZE]; // intermediate result
@@ -325,9 +423,9 @@ __global__ void beam_online_softmax_topk_stage2_kernel(
     for(int i = 0; i < MAX_K; ++i)
     {
         partial.topk.p[i] = -1;
-        partial.topk.u[i] = -FLT_MAX;
+        partial.topk.u[i] = -MAX_T_VAL;
     }
-    partial.md.m = -FLT_MAX;
+    partial.md.m = -MAX_T_VAL;
     partial.md.d = 0.0F;
 
     // load and unpack into registers through smem
@@ -361,13 +459,71 @@ __global__ void beam_online_softmax_topk_stage2_kernel(
         float d_total_log = logf(total.md.d);
         for(int i = 0; i < MAX_K; ++i)
         {
-            float val = total.topk.u[i] - total.md.m - d_total_log;
+            float val = (float)total.topk.u[i] - total.md.m - d_total_log;
             if (i < K)
             {
                 z[i] = total.topk.p[i];
-                v[i] = val + c[0]; 
+                v[i] = (float)val + (float)c[0];
             }
         }
+    }
+}
+
+template <typename T>
+void topK_kernelLauncher(T* log_probs,
+                                int* topk_tmp_id_buf,
+                                T* topk_tmp_val_buf,
+                                int* ids,
+                                DecodingBeamsearchArguments args,
+                                cudaStream_t stream)
+{
+    const int batch_size = args.batch_size_;
+    const int beam_width = args.beam_width_;
+    const int vocab_size = args.vocab_size_;
+    const int diversity_rate = args.beam_search_diversity_rate_;
+    const int block_size = SMALL_TOP_K_SOFTMAX_THREADBLOCK_SIZE;
+
+    switch(beam_width)
+    {
+        case 1 :
+            beam_topK_kernel<T, 1, block_size><<<batch_size * beam_width, block_size, 0, stream>>>(log_probs, 
+                topk_tmp_id_buf, topk_tmp_val_buf, vocab_size, diversity_rate);
+            batch_topK_kernel<T, 1, block_size><<<batch_size, block_size, 0, stream>>>(topk_tmp_id_buf, topk_tmp_val_buf, ids);
+            break;
+        case 2 :
+            beam_topK_kernel<T, 2, block_size><<<batch_size * beam_width, block_size, 0, stream>>>(log_probs, 
+                topk_tmp_id_buf, topk_tmp_val_buf, vocab_size, diversity_rate);
+            batch_topK_kernel<T, 2, block_size><<<batch_size, block_size, 0, stream>>>(topk_tmp_id_buf, topk_tmp_val_buf, ids);
+            break;
+        case 3 :
+            beam_topK_kernel<T, 3, block_size><<<batch_size * beam_width, block_size, 0, stream>>>(log_probs, 
+                topk_tmp_id_buf, topk_tmp_val_buf, vocab_size, diversity_rate);
+            batch_topK_kernel<T, 3, block_size><<<batch_size, block_size, 0, stream>>>(topk_tmp_id_buf, topk_tmp_val_buf, ids);
+            break;
+        case 4 :
+            beam_topK_kernel<T, 4, block_size><<<batch_size * beam_width, block_size, 0, stream>>>(log_probs, 
+                topk_tmp_id_buf, topk_tmp_val_buf, vocab_size, diversity_rate);
+            batch_topK_kernel<T, 4, block_size><<<batch_size, block_size, 0, stream>>>(topk_tmp_id_buf, topk_tmp_val_buf, ids);
+            break;
+        case 6 :
+            beam_topK_kernel<T, 6, block_size><<<batch_size * beam_width, block_size, 0, stream>>>(log_probs, 
+                topk_tmp_id_buf, topk_tmp_val_buf, vocab_size, diversity_rate);
+            batch_topK_kernel<T, 6, block_size><<<batch_size, block_size, 0, stream>>>(topk_tmp_id_buf, topk_tmp_val_buf, ids);
+            break;
+        case 8 :
+            beam_topK_kernel<T, 8, block_size><<<batch_size * beam_width, block_size, 0, stream>>>(log_probs, 
+                topk_tmp_id_buf, topk_tmp_val_buf, vocab_size, diversity_rate);
+            batch_topK_kernel<T, 8, block_size><<<batch_size, block_size, 0, stream>>>(topk_tmp_id_buf, topk_tmp_val_buf, ids);
+            break;
+        case 32 :
+            beam_topK_kernel<T, 32, block_size><<<batch_size * beam_width, block_size, 0, stream>>>(log_probs, 
+                topk_tmp_id_buf, topk_tmp_val_buf, vocab_size, diversity_rate);
+            batch_topK_kernel<T, 32, block_size><<<batch_size, block_size, 0, stream>>>(topk_tmp_id_buf, topk_tmp_val_buf, ids);
+            break;
+        default:
+            printf("[ERROR] Topk kernel does not support beamwidth = %d \n", beam_width);
+            exit(0);
+            break;
     }
 }
 
@@ -384,14 +540,14 @@ void beam_online_softmax_topk_stage2_kernelLauncher(
 {
     // might rewrite beam_online_softmax_topk_stage2_kernel no to depend on constant block size
     // in oreder to reduce compilation time
-    int smem_stage2_size = parts_per_beam * (2 * MAX_K + 2) * sizeof(T);
+    int smem_stage2_size = parts_per_beam * (2 * MAX_K + 2) * sizeof(float);
 
     if (parts_per_beam <= 32)
     {
         beam_online_softmax_topk_stage2_kernel<T, MAX_K, 32>
         <<<batch_size * beam_width, 32, smem_stage2_size, stream>>>
                 (temp_storage, cum_log_probs, ids, vals,
-                 beam_width, parts_per_beam);
+                    beam_width, parts_per_beam);
         return;
     }
     if (parts_per_beam <= 64)
@@ -399,7 +555,7 @@ void beam_online_softmax_topk_stage2_kernelLauncher(
         beam_online_softmax_topk_stage2_kernel<T, MAX_K, 64>
         <<<batch_size * beam_width, 64, smem_stage2_size, stream>>>
                 (temp_storage, cum_log_probs, ids, vals,
-                 beam_width, parts_per_beam);
+                    beam_width, parts_per_beam);
         return;
     }
     if (parts_per_beam <= 128)
@@ -407,7 +563,7 @@ void beam_online_softmax_topk_stage2_kernelLauncher(
         beam_online_softmax_topk_stage2_kernel<T, MAX_K, 128>
         <<<batch_size * beam_width, 128, smem_stage2_size, stream>>>
                 (temp_storage, cum_log_probs, ids, vals,
-                 beam_width, parts_per_beam);
+                    beam_width, parts_per_beam);
         return;
     }
     assert(0);
@@ -415,21 +571,22 @@ void beam_online_softmax_topk_stage2_kernelLauncher(
 
 template <typename T, int MAX_K>
 void topK_softMax_kernelLauncher(const T* log_probs,
-                                 const float* bias,
-                                 const bool* finished,
-                                 T* cum_log_probs,
-                                 int* ids,
-                                 void* temp_storage,
-                                 const int temp_storage_size,
-                                 const int batch_size, 
-                                 const int beam_width, 
-                                 const int vocab_size, 
-                                 const int end_id,
-                                 T diversity_rate,
-                                 cudaStream_t stream)
+                                    const float* bias,
+                                    const bool* finished,
+                                    T* cum_log_probs,
+                                    int* ids,
+                                    void* temp_storage,
+                                    const int temp_storage_size,
+                                    const int batch_size, 
+                                    const int beam_width, 
+                                    const int vocab_size, 
+                                    const int end_id,
+                                    T diversity_rate,
+                                    cudaStream_t stream)
 {
     const int items_per_thread = 1;
-    const int block_sz = SMALL_TOP_K_SOFTMAX_THREADBLOCK_SIZE;
+    const int block_sz = (MAX_K < 16)? (MAX_K < 8)? SMALL_TOP_K_SOFTMAX_THREADBLOCK_SIZE:128:64;
+    //const int block_sz = SMALL_TOP_K_SOFTMAX_THREADBLOCK_SIZE;
 
     assert(temp_storage_size % 2 == 0);
     assert(temp_storage_size >= 2 * batch_size * beam_width * beam_width);
@@ -442,10 +599,15 @@ void topK_softMax_kernelLauncher(const T* log_probs,
     int voc_parts = 4;
     if (batch_size * beam_width < 256)
     {
-        voc_parts = (256 + batch_size * beam_width - 1) / (batch_size * beam_width);
+        // Volta has 80 SMs, so we aim for three waves
+        voc_parts = (240 + batch_size * beam_width - 1) / (batch_size * beam_width);
         voc_parts = std::min(128, voc_parts); // we implment up to 128
     }
     dim3 grid(batch_size * beam_width, voc_parts);
+    cudaFuncSetAttribute(
+            beam_online_softmax_topk_stage1_kernel<T, items_per_thread, MAX_K, block_sz>, 
+            cudaFuncAttributePreferredSharedMemoryCarveout, 
+            cudaSharedmemCarveoutMaxL1);
     beam_online_softmax_topk_stage1_kernel<T, items_per_thread, MAX_K, block_sz>
                             <<<grid, block_sz,0,stream>>>
                             (log_probs, bias, finished, tmp_buffer,
@@ -456,7 +618,7 @@ void topK_softMax_kernelLauncher(const T* log_probs,
 #ifdef DO_SPLIT_SMALL_TOP_K_SOFTMAX
         beam_online_softmax_topk_stage2_kernelLauncher<T, MAX_K>
                                 (tmp_buffer, cum_log_probs, topk_tmp_id_buf, topk_tmp_val_buf,
-                                 batch_size, beam_width, voc_parts, stream);
+                                    batch_size, beam_width, voc_parts, stream);
 #else
         beam_online_softmax_topk_kernel<T, items_per_thread, MAX_K, block_sz>
                         <<<batch_size * beam_width, block_sz, 0, stream>>>
@@ -464,11 +626,11 @@ void topK_softMax_kernelLauncher(const T* log_probs,
                                 topk_tmp_val_buf, vocab_size, beam_width, end_id);
 #endif
 #if 0
-         // wrong result with diversity_rate != 0.f
-         batch_topK_kernel<T, MAX_K, 32><<<batch_size, 32, 0, stream>>>
+            // wrong result with diversity_rate != 0.f
+            batch_topK_kernel<T, MAX_K, 32><<<batch_size, 32, 0, stream>>>
                                 (topk_tmp_id_buf, topk_tmp_val_buf, ids, cum_log_probs);
 #else
-         batch_topk_kernel<T, MAX_K, 32><<<batch_size, 32, 0, stream>>>
+            batch_topk_kernel<T, MAX_K, 32><<<batch_size, 32, 0, stream>>>
                                 (topk_tmp_id_buf, topk_tmp_val_buf,
                                 ids, cum_log_probs, beam_width * beam_width, beam_width, diversity_rate);
 #endif
@@ -482,28 +644,21 @@ void topK_softMax_kernelLauncher(const T* log_probs,
 #else
         beam_online_softmax_topk_kernel<T, items_per_thread, MAX_K, block_sz>
                             <<<batch_size * beam_width, block_sz, 0, stream>>>
-                                   (log_probs, bias, cum_log_probs, finished, ids, 
+                                    (log_probs, bias, cum_log_probs, finished, ids, 
                                     cum_log_probs, vocab_size, beam_width, end_id);
 #endif
     }
 }
 
-#define CASE_K(K) \
-  case K : \
-    topK_softMax_kernelLauncher<T, K> \
-      (log_probs, bias, finished, cum_log_probs, ids, temp_storage, temp_storage_size, \
-      batch_size, beam_width, vocab_size, end_id, diversity_rate, stream); \
-  break; \
-
 template <typename T>
 void topK_softMax(const T* log_probs, 
-                  const float* bias, 
-                  const bool* finished, 
-                  T* cum_log_probs,
-                  int* ids,
-                  void* temp_storage,
-                  DecodingBeamsearchArguments args,
-                  cudaStream_t stream)
+                    const float* bias, 
+                    const bool* finished, 
+                    T* cum_log_probs,
+                    int* ids,
+                    void* temp_storage,
+                    DecodingBeamsearchArguments args,
+                    cudaStream_t stream)
 {
     const int temp_storage_size = args.temp_storage_size_;
     const int batch_size = args.batch_size_;
@@ -514,23 +669,73 @@ void topK_softMax(const T* log_probs,
 
     switch(beam_width)
     {
-        CASE_K(1);
-        CASE_K(2);
-        CASE_K(4);
+        case 1 :
+            topK_softMax_kernelLauncher<T, 1>
+                    (log_probs, bias, finished, cum_log_probs, ids, temp_storage, temp_storage_size,
+                    batch_size, beam_width, vocab_size, end_id, diversity_rate, stream);
+            break;
+        case 2 :
+            topK_softMax_kernelLauncher<T, 2>
+                    (log_probs, bias, finished, cum_log_probs, ids, temp_storage, temp_storage_size,
+                    batch_size, beam_width, vocab_size, end_id, diversity_rate, stream);
+            break;
+        case 3 :
+            topK_softMax_kernelLauncher<T, 3>
+                    (log_probs, bias, finished, cum_log_probs, ids, temp_storage, temp_storage_size,
+                    batch_size, beam_width, vocab_size, end_id, diversity_rate, stream);
+            break;
+        case 4 :
+            topK_softMax_kernelLauncher<T, 4>
+                    (log_probs, bias, finished, cum_log_probs, ids, temp_storage, temp_storage_size,
+                batch_size, beam_width, vocab_size, end_id, diversity_rate, stream);
+            break;
+        case 8 :
+            topK_softMax_kernelLauncher<T, 8>
+                    (log_probs, bias, finished, cum_log_probs, ids, temp_storage, temp_storage_size,
+                batch_size, beam_width, vocab_size, end_id, diversity_rate, stream);
+            break;
+        case 16 :
+            topK_softMax_kernelLauncher<T, 16>
+                    (log_probs, bias, finished, cum_log_probs, ids, temp_storage, temp_storage_size,
+                batch_size, beam_width, vocab_size, end_id, diversity_rate, stream);
+            break;
         default :
             printf("[ERROR] Topk kernel does not support beamwidth = %d \n", beam_width);
             exit(0);
             break;
     }
 }
-#undef CASE_K
+
+template void topK_kernelLauncher<float>(float* log_probs,
+    int* topk_tmp_id_buf,
+    float* topk_tmp_val_buf,
+    int* ids,
+    DecodingBeamsearchArguments args,
+    cudaStream_t stream);
+
+template void topK_kernelLauncher<half>(half* log_probs,
+    int* topk_tmp_id_buf,
+    half* topk_tmp_val_buf,
+    int* ids,
+    DecodingBeamsearchArguments args,
+    cudaStream_t stream);
 
 template void topK_softMax<float>(const float* log_probs, 
-                                const float* bias, 
-                                const bool* finished, 
-                                float* cum_log_probs,
-                                int* ids, 
-                                void * tmp_storage,
-                                DecodingBeamsearchArguments args,
-                                cudaStream_t stream);
+    const float* bias, 
+    const bool* finished, 
+    float* cum_log_probs,
+    int* ids, 
+    void * tmp_storage,
+    DecodingBeamsearchArguments args,
+    cudaStream_t stream);
+
+template void topK_softMax<half>(const half* log_probs, 
+      const float* bias, 
+      const bool* finished, 
+      half* cum_log_probs,
+      int* ids, 
+      void * tmp_storage,
+      DecodingBeamsearchArguments args,
+      cudaStream_t stream);
+
 } // end of namespace fastertransformer

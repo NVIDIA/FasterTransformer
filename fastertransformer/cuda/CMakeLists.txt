@@ -46,7 +46,7 @@ target_link_libraries(cuda_int8_kernels PUBLIC -lcublas -lcudart -lcurand cuda_k
 add_library(encoder STATIC ${encoder_kernel_files})
 set_property(TARGET encoder PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET encoder PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(encoder PUBLIC -lcublas -lcublasLt -lcudart -lcurand cuda_kernels cuda_int8_kernels)
+target_link_libraries(encoder PUBLIC -lcublas -lcublasLt -lcudart -lcurand cuda_kernels cuda_int8_kernels trt_fused_multi_head_attention encoder_gemm_func encoder_igemm_func)
 
 add_library(decoder STATIC ${decoder_kernel_files})
 set_property(TARGET decoder PROPERTY POSITION_INDEPENDENT_CODE  ON)

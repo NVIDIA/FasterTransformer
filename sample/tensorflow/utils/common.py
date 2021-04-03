@@ -30,7 +30,8 @@ class TransformerArgument:
                 bias_init_range=0.02,
                 fuse_qkv=True,
                 remove_padding=False,
-                int8_mode=0):
+                int8_mode=0,
+                allow_gemm_test=False):
     '''
     The arguments of Transformer layer (for both encoder and decoder).
     
@@ -45,6 +46,7 @@ class TransformerArgument:
         fuse_qkv: bool. Wether fuse the q, k, v gemm or not.
         remove_padding: bool. Remove the padding of sentences of encoder.
         int8_mode: Mode of int8 quantization. 0 means not using int8 quantization, 1 means using int8 quantization without quantizing residuals, 2 means using int8 quantization with quantizing residuals.
+        allow_gemm_test: whether allow gemm test inside FT.
     '''
     
     self.beam_width = beam_width
@@ -56,6 +58,7 @@ class TransformerArgument:
     self.kernel_init_range = kernel_init_range
     self.bias_init_range = bias_init_range
     self.int8_mode = int8_mode
+    self.allow_gemm_test = allow_gemm_test
     if self.dtype == tf.float32:
       self.check_threshold = 2e-5
     elif self.dtype == tf.float16:
@@ -167,6 +170,40 @@ class DecodingSamplingArgument(DecodingArgument):
       print("[ERROR] top_k and top_p cannot both be non-zero.")
       exit(-1)
 
+class DecodingGpt2Argument(DecodingArgument):
+  def __init__( self,
+                vocab_size,
+                start_id,
+                end_id,
+                max_seq_len,
+                decoder_args,
+                top_k=0,
+                top_p=0.0,
+                temperature=1.0):
+    '''
+    The arguments of Decoding with sampling.
+    Most arguments are similar to DecodingArgument except the top_k and top_p.
+    
+    Args:
+        vocab_size: The size of vocabulary of Decoding. 
+        start_id: The id of start token in vocabulary.
+        end_id: The id of end token in vocabulary.
+        max_seq_len: The maximum length of sentence in translation. 
+        decoder_args: The arguments of decoder layer.
+        top_k: A int value. The value of k for top k sampling.
+        top_p: A float value. The value of p for top p sampling. 
+    '''
+    
+    super(DecodingGpt2Argument, self).__init__(vocab_size,
+                                               start_id,
+                                               end_id,
+                                               max_seq_len,
+                                               decoder_args)
+
+    self.top_k = top_k
+    self.top_p = top_p
+    self.temperature = temperature
+
 def create_initializer(initializer_range=0.02, data_type=tf.float32):
   return tf.truncated_normal_initializer(stddev=initializer_range, dtype=data_type)
 
@@ -211,7 +248,7 @@ def int_result_cross_check(name, tf_result, op_result, shape):
     
     for i in range(tf_reshaped_result.shape[0]):
       is_true = (tf_reshaped_result[i] == op_reshaped_result[i]).all()
-      print("       Cross-Check on step-{} {}".format(i, is_true))
+      print("       Cross-Check on batch-{} {}".format(i, is_true))
       if is_true == False:
         print("TF result: {}".format(tf_reshaped_result[i]))
         print("OP result: {}".format(op_reshaped_result[i]))

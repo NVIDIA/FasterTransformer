@@ -81,6 +81,7 @@ def evaluate(args, model, tokenizer, prefix=""):
 
     for batch in tqdm(eval_dataloader, desc="Evaluating"):
         model.eval()
+        seq_lens = torch.sum((batch[0] != 0).to(torch.int32), dim=1).numpy()
         batch = tuple(t.to(args.device) for t in batch)
 
         with torch.no_grad():
@@ -122,7 +123,7 @@ def evaluate(args, model, tokenizer, prefix=""):
 
             else:
                 start_logits, end_logits = output
-                result = SquadResult(unique_id, start_logits, end_logits)
+                result = SquadResult(unique_id, start_logits[:seq_lens[i]], end_logits[:seq_lens[i]])
 
             all_results.append(result)
 
@@ -359,6 +360,12 @@ def main():
                         help='path containing the th_fastertransformer dynamic lib')
     parser.add_argument('--ths_path', type=str, default='./lib/libths_fastertransformer.so',
                         help='path of the ths_fastertransformer dynamic lib file')
+    parser.add_argument('--int8_mode', type=int, default=0, metavar='NUMBER',
+                        help='int8 mode (default: 0)', choices=[0, 1, 2])
+    parser.add_argument('--remove_padding', action='store_true',
+                        help='Remove the padding of sentences of encoder.')
+    parser.add_argument('--allow_gemm_test', action='store_true',
+                        help='per-channel quantization.')
     args = parser.parse_args()
 
     if args.doc_stride >= args.max_seq_length - args.max_query_length:
@@ -431,34 +438,57 @@ def main():
             model = BertForQuestionAnswering.from_pretrained(checkpoint, torchscript=use_ths)  # , force_download=True)
             model.to(args.device)
 
-            if args.data_type == 'fp16':
+            if args.int8_mode != 0:
+                logger.info("int8_mode: " + str(args.int8_mode))
+                model.half()
+                if args.int8_mode == 1:
+                    per_channel = True
+                elif args.int8_mode == 2:
+                    per_channel = False
+                else:
+                    raise ValueError("wrong int8_mode argument")
+            elif args.data_type == 'fp16':
                 logger.info("Use fp16")
                 model.half()
             if args.model_type == 'ext':
                 logger.info("Use custom BERT encoder")
                 from utils.encoder import EncoderWeights, CustomEncoder
-                weights = EncoderWeights(model.config.num_hidden_layers, model.config.hidden_size, model.bert.encoder)
-                weights.to_cuda()
-                if args.data_type == 'fp16':
+                weights = EncoderWeights(
+                    model.config.num_hidden_layers, model.config.hidden_size,
+                    torch.load(os.path.join(checkpoint, 'pytorch_model.bin'), map_location='cpu'))
+                if args.int8_mode != 0:
+                    weights.to_int8(per_channel, args.module_path, args.ths_path)
+                elif args.data_type == 'fp16':
                     weights.to_half()
+                weights.to_cuda()
                 enc = CustomEncoder(model.config.num_hidden_layers,
                                     model.config.num_attention_heads,
                                     model.config.hidden_size//model.config.num_attention_heads,
                                     weights,
-                                    os.path.abspath(args.module_path))
+                                    int8_mode=args.int8_mode,
+                                    remove_padding=args.remove_padding,
+                                    allow_gemm_test=(args.allow_gemm_test),
+                                    use_ths=False, path=os.path.abspath(args.module_path))
                 model.replace_encoder(enc)
             if args.model_type == 'thsext':
                 logger.info("Use custom BERT encoder for TorchScript")
                 from utils.encoder import EncoderWeights, CustomEncoder
-                weights = EncoderWeights(model.config.num_hidden_layers, model.config.hidden_size, model.bert.encoder)
-                weights.to_cuda()
-                if args.data_type == 'fp16':
+                weights = EncoderWeights(
+                    model.config.num_hidden_layers, model.config.hidden_size,
+                    torch.load(os.path.join(checkpoint, 'pytorch_model.bin'), map_location='cpu'))
+                if args.int8_mode != 0:
+                    weights.to_int8(per_channel, args.module_path, args.ths_path)
+                elif args.data_type == 'fp16':
                     weights.to_half()
+                weights.to_cuda()
                 enc = CustomEncoder(model.config.num_hidden_layers,
                                     model.config.num_attention_heads,
                                     model.config.hidden_size//model.config.num_attention_heads,
                                     weights,
-                                    os.path.abspath(args.ths_path), True)
+                                    int8_mode=args.int8_mode,
+                                    remove_padding=args.remove_padding,
+                                    allow_gemm_test=(args.allow_gemm_test),
+                                    use_ths=True, path=os.path.abspath(args.ths_path))
                 enc_ = torch.jit.script(enc)
                 model.replace_encoder(enc_)
             if use_ths:

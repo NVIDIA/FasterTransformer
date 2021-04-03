@@ -34,67 +34,42 @@ from utils.encoder import tf_encoder
 from utils.encoder import op_encoder
 from utils.encoder import build_sequence_mask
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-batch', '--batch_size', type=int, default=1, metavar='NUMBER',
-                        help='batch size (default: 1)')
-    parser.add_argument('-l', '--num_layer', type=int, default=12, metavar='NUMBER',
-                        help='number of layers (default: 12)')
-    parser.add_argument('-s', '--max_seq_len', type=int, default=32, metavar='NUMBER',
-                        help='max sequence length (default: 32)')
-    parser.add_argument('-n', '--head_number', type=int, default=12, metavar='NUMBER',
-                        help='head number (default: 12)')
-    parser.add_argument('-size', '--size_per_head', type=int, default=64, metavar='NUMBER',
-                        help='size per head (default: 64)')
-    parser.add_argument('-d', '--data_type', type=str, default="fp32", metavar='STRING',
-                        help='data type (default: fp32)', choices=['fp32', 'fp16'])
-    parser.add_argument('-int8_mode', '--int8_mode', type=int, default=0, metavar='NUMBER',
-                        help='int8 mode (default: 0)', choices=[0, 1, 2]) 
-    parser.add_argument('-time', '--test_time', type=int, default=0, metavar='BOOL',
-                        help='test the time or not. (default: False (0)), True is 1.',
-                        choices=[0, 1])
-    parser.add_argument("-remove_padding", "--remove_padding", type=str, default="False", metavar="BOOL",
-                        choices=["True", "False"],
-                        help="remove the padding of sentence or not. This brings speedups when the average of \
-                            sequence length is smaller than the maximum sequence length.")
-    parser.add_argument('-avg_seq', '--avg_seq_len', type=int, default=-1, metavar='NUMBER',
-                        help='average sequence length (default: -1)')
-
-    args = parser.parse_args()
+def encoder_sample(args_dict):
     print("\n=============== Argument ===============")
-    for key in vars(args):
-        print("{}: {}".format(key, vars(args)[key]))
+    for key in args_dict:
+        print("{}: {}".format(key, args_dict[key]))
     print("========================================")
 
     np.random.seed(1)
     tf.set_random_seed(1)
-    kernel_initializer_range = 0.02
-    bias_initializer_range = 0.02
 
-    batch_size = args.batch_size
-    num_layer = args.num_layer
-    max_seq_len = args.max_seq_len
-    avg_seq_len = args.avg_seq_len
-    head_num = args.head_number
-    size_per_head = args.size_per_head
-    remove_padding = True if args.remove_padding.lower() == "true" else False
+    batch_size = args_dict['batch_size']
+    num_layer = args_dict['num_layer']
+    max_seq_len = args_dict['max_seq_len']
+    avg_seq_len = args_dict['avg_seq_len']
+    head_num = args_dict['head_number']
+    size_per_head = args_dict['size_per_head']
+    remove_padding = True if args_dict['remove_padding'].lower() == "true" else False
     tf_datatype = tf.float32
     np_datatype = np.float32
     atol_threshold = 3e-5
-    int8_mode = args.int8_mode
-    if args.data_type == "fp16":
+    int8_mode = args_dict['int8_mode']
+    allow_gemm_test = True if args_dict['allow_gemm_test'].lower() == "true" else False
+    if args_dict['data_type'] == "fp16":
         tf_datatype = tf.float16
         np_datatype = np.float16
         atol_threshold = 3e-2
 
     hidden_dim = head_num * size_per_head
-    initializer_range = 0.02
 
-    sequence_length = np.random.randint(1, max_seq_len + 1, size=batch_size).astype(np.int32)
+    sequence_length = np.random.randint(1, max_seq_len + 1, size=batch_size)
     if avg_seq_len != -1 and remove_padding == True:
         # This means we use "remove_padding" and set a smaller average sequence length
         sequence_length = np.ones(batch_size) * avg_seq_len
-        
+    else:
+        sequence_length = np.ones(batch_size) * (max_seq_len / 2)
+    sequence_length = sequence_length.astype(np.int32)
+
     from_data = np.random.randn(batch_size, max_seq_len, hidden_dim)
     from_tensor = tf.convert_to_tensor(from_data, dtype=tf_datatype)
     
@@ -106,7 +81,8 @@ if __name__ == "__main__":
                                        num_layer=num_layer,
                                        dtype=tf_datatype,
                                        remove_padding=remove_padding,
-                                       int8_mode=int8_mode)
+                                       int8_mode=int8_mode,
+                                       allow_gemm_test=allow_gemm_test)
 
     tf_encoder_result = tf_encoder(input_tensor=from_tensor,
                                    encoder_args=encoder_args,
@@ -146,10 +122,9 @@ if __name__ == "__main__":
         print("#################################")
         tf_encoder_result_val = sess.run(tf_encoder_result)
         op_encoder_result_val = sess.run(op_encoder_result)
-        
+
         cross_check("Encoder TF v.s. FT with tensor input", tf_encoder_result_val,
                     op_encoder_result_val, atol_threshold)
-        
         
         ''' 
             Use the numpy array as inputs of FasterTransformer OP. 
@@ -170,7 +145,7 @@ if __name__ == "__main__":
         # cross_check("Encoder TF v.s. FT with numpy input", tf_encoder_result_val,
         #             op_encoder_result_val_2, atol_threshold)
 
-        if args.test_time == 1:
+        if args_dict['test_time'] == 1:
             
             ite = 50
             tf_time = time_test(sess, tf_encoder_result, ite)
@@ -180,3 +155,36 @@ if __name__ == "__main__":
             print("[INFO] batch_size {} max_seq_len {} {} layer TF-time {:6.2f} ms".format(batch_size, max_seq_len, num_layer, tf_time))
             print("[INFO] batch_size {} max_seq_len {} {} layer FT-OP-tensor-time {:6.2f} ms".format(batch_size, max_seq_len, num_layer, op_time))
             # print("[INFO] batch_size {} max_seq_len {} {} layer FT-OP-numpy-time {:6.2f} ms".format(batch_size, max_seq_len, num_layer, op_time_2))
+
+        return (tf_encoder_result_val.reshape([-1]) - op_encoder_result_val.reshape([-1])).max()
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-batch', '--batch_size', type=int, default=4, metavar='NUMBER',
+                        help='batch size (default: 4)')
+    parser.add_argument('-l', '--num_layer', type=int, default=12, metavar='NUMBER',
+                        help='number of layers (default: 12)')
+    parser.add_argument('-s', '--max_seq_len', type=int, default=32, metavar='NUMBER',
+                        help='max sequence length (default: 32)')
+    parser.add_argument('-n', '--head_number', type=int, default=12, metavar='NUMBER',
+                        help='head number (default: 12)')
+    parser.add_argument('-size', '--size_per_head', type=int, default=64, metavar='NUMBER',
+                        help='size per head (default: 64)')
+    parser.add_argument('-d', '--data_type', type=str, default="fp32", metavar='STRING',
+                        help='data type (default: fp32)', choices=['fp32', 'fp16'])
+    parser.add_argument('-int8_mode', '--int8_mode', type=int, default=0, metavar='NUMBER',
+                        help='int8 mode (default: 0)', choices=[0, 1, 2])
+    parser.add_argument('-allow_gemm_test', '--allow_gemm_test', type=str, default="False", metavar='BOOL',
+                        help='whether allow gemm test inside FT (default: False)', choices=["True", "False"])
+    parser.add_argument('-time', '--test_time', type=int, default=0, metavar='BOOL',
+                        help='test the time or not. (default: False (0)), True is 1.',
+                        choices=[0, 1])
+    parser.add_argument("-remove_padding", "--remove_padding", type=str, default="False", metavar="BOOL",
+                        choices=["True", "False"],
+                        help="remove the padding of sentence or not. This brings speedups when the average of \
+                            sequence length is smaller than the maximum sequence length.")
+    parser.add_argument('-avg_seq', '--avg_seq_len', type=int, default=-1, metavar='NUMBER',
+                        help='average sequence length (default: -1)')
+
+    args = parser.parse_args()
+    encoder_sample(vars(args))

@@ -41,10 +41,14 @@ class MultiHeadInitParam{
    cublasLtHandle_t cublaslt_handle;
    cudaStream_t stream;
 
-  //First 80 are for activation amaxs.
-  //For each activation amax, there are 4 values: amax, amax/127.0f, amax/127.0f/127.0f, 127.0f/amax -- input_amax 0-3 , Qbias_amax 4-7, Kbias_amax 8-11, Vbias_amax 12-15, Softmax_amax 16-19, bmm2_amax 20-23, ProjBiasNorm_amax 24-27, F1Bias_amax 28-31, F2BiasNorm_amax 32-35, reserve 36-80
-  //following by kernel amaxs : query_weight_amax_list, key_weight_amax_list, value_weight_amax_list, proj_weight_amax_list, FC1_weight_amax_list, FC2_weight_amax_list
+   //First 80 are for activation amaxs. 
+   //For each activation amax, there are 4 values: amax, amax/127.0f, amax/127.0f/127.0f, 127.0f/amax -- input_amax 0-3 , Q_aftergemm_amax 4-7, Qbias_amax 8-11, K_aftergemm_amax 12-15, Kbias_amax 16-19, V_aftergemm_amax 20-23, Vbias_amax 24-27, bmm1_amax 28-31, Softmax_amax 32-35, bmm2_amax 36-39, Proj_aftergemm_scale 40-43, ProjBiasNorm_amax 44-47, FC1_aftergemm_amax 48-51, F1Bias_amax 52-55, FC2_aftergemm_amax 56-59, F2BiasNorm_amax 60-63, reserve 64-79
+   //following by kernel amaxs : query_weight_amax_list, key_weight_amax_list, value_weight_amax_list, proj_weight_amax_list, FC1_weight_amax_list, FC2_weight_amax_list
+   //following by int8 gemm deQ scale list: Q_deQ_scale, K_deQ_scale, V_deQ_scale, bmm1_deQ_scale, bmm2_deQ_scale, proj_deQ_scale, FC1_deQ_scale, FC2_deQ_scale
    const float *amaxList;
+   const float *int8O_gemm_deQ_scale_list;
+   const int *trt_seqlen_offset;
+   int trt_seqlen_size;
 
    MultiHeadInitParam(){
      from_tensor = nullptr;
@@ -56,7 +60,11 @@ class MultiHeadInitParam{
      cublaslt_handle = nullptr;
      int8_from_tensor = nullptr;
      amaxList = nullptr;
+     int8O_gemm_deQ_scale_list = nullptr;
+     
      stream = 0;
+     trt_seqlen_offset = nullptr;
+     trt_seqlen_size = -1;
    }
 };
 

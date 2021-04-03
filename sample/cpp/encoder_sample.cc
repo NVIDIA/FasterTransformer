@@ -28,24 +28,32 @@ template <typename T>
 void device_malloc(T **ptr, int size);
 
 template <typename T>
+void device_malloc_one(T **ptr, int batchSize, int seqLen, float rate);
+
+template <typename T>
 void encoder_sample(int batch_size,
                     int num_layers,
                     int seq_len,
                     int head_num,
                     int size_per_head,
                     bool is_remove_padding,
-                    int int8_mode);
+                    int int8_mode,
+                    bool allow_gemm_test=false);
 
 int main(int argc, char* argv[])
 {
   struct cudaDeviceProp prop;
   check_cuda_error(cudaGetDeviceProperties(&prop, 0));
-  if(argc != 9)
+  if(argc != 9 && argc != 10)
   {
     printf("[ERROR] encoder_sample batch_size num_layers seq_len head_num size_per_head is_fp16 is_remove_padding int8_mode\n");
     printf("e.g., ./bin/encoder_sample 1 12 128 12 64 0 0 0\n");
     return 0;
   }
+  printf("Device %s\n", prop.name);
+  bool allow_gemm_test = false;
+  if (argc >= 10)
+    allow_gemm_test = (atoi(argv[9]) == 1) ? true : false; 
 
   printf("Device %s\n", prop.name);
   int batch_size = atoi(argv[1]);
@@ -57,9 +65,9 @@ int main(int argc, char* argv[])
   int int8_mode = atoi(argv[8]);	
 
   if(atoi(argv[6]) == 0)
-    encoder_sample<float>(batch_size, num_layers, seq_len, head_num, size_per_head, is_remove_padding, int8_mode);
+    encoder_sample<float>(batch_size, num_layers, seq_len, head_num, size_per_head, is_remove_padding, int8_mode, allow_gemm_test);
   else if(atoi(argv[6]) == 1)
-    encoder_sample<half>(batch_size, num_layers, seq_len, head_num, size_per_head, is_remove_padding, int8_mode);
+    encoder_sample<half>(batch_size, num_layers, seq_len, head_num, size_per_head, is_remove_padding, int8_mode, allow_gemm_test);
   else
   {
     printf("[ERROR] is_fp16 should be 0 (use float) or 1 (use half). \n");
@@ -84,13 +92,36 @@ void device_malloc(T **ptr, int size)
 }
 
 template <typename T>
+void device_malloc_one(T **ptr, int batchSize, int seqLen, int avg_len)
+{
+  int size = batchSize * seqLen * seqLen;
+  check_cuda_error(cudaMalloc((void **)ptr, sizeof(T) * size));
+  T *tmp = new T[size];
+  int j = 0;
+  for (int b = 0 ; b < batchSize ; b++)
+  {
+    for (int l1 = 0 ; l1 < seqLen ; l1++)
+    {
+      for (int l2 = 0 ; l2 < avg_len ; l2++)
+        tmp[j++] = (T)(1.0f);
+      for (int l2 = avg_len ; l2 < seqLen ; l2++) 
+        tmp[j++] = T(0.0f);
+    }
+  }
+  cudaMemcpy(*ptr, tmp, sizeof(T) * size, cudaMemcpyHostToDevice);
+  delete tmp;
+
+}
+
+template <typename T>
 void encoder_sample(int batch_size,
                     int num_layers,
                     int seq_len,
                     int head_num,
                     int size_per_head,
                     bool is_remove_padding,
-                    int int8_mode)
+                    int int8_mode,
+                    bool allow_gemm_test)
 {
   int from_seq_len = seq_len;
   int to_seq_len = seq_len;
@@ -105,6 +136,7 @@ void encoder_sample(int batch_size,
   T *d_inter_kernel = NULL, *d_inter_bias = NULL;
   T *d_output_kernel = NULL, *d_output_bias = NULL, *d_output_layernorm_beta = NULL, *d_output_layernorm_gamma = NULL;
   float *amaxList = NULL;
+  int* d_trt_seqlen_offset = NULL;
   
   // pre_process buffer
   T *d_from_tensor_with_padding = NULL;
@@ -118,9 +150,43 @@ void encoder_sample(int batch_size,
   int* h_sequence_length = new int[batch_size];
   for(int i = 0; i < batch_size; i++)
   {
-    h_sequence_length[i] = random() % from_seq_len;
+    h_sequence_length[i] = from_seq_len/2;
   }
 
+  int h_trt_seqlen_size = 0;
+  if(is_remove_padding)
+  {
+    h_trt_seqlen_size = batch_size + 1;
+
+    int* h_trt_seqlen_offset = new int[h_trt_seqlen_size];
+    h_trt_seqlen_offset[0] = 0;
+    for(int i = 1; i < h_trt_seqlen_size; i++)
+    {
+      h_trt_seqlen_offset[i] = h_trt_seqlen_offset[i-1] + h_sequence_length[i - 1];
+    }
+    cudaMalloc(&d_trt_seqlen_offset, sizeof(int) * (h_trt_seqlen_size));
+    cudaMemcpy(d_trt_seqlen_offset, h_trt_seqlen_offset, sizeof(int) * (h_trt_seqlen_size), cudaMemcpyHostToDevice);
+    device_malloc_one(&d_attr_mask, batch_size, seq_len, seq_len/2);    
+    delete [] h_trt_seqlen_offset;
+  }
+  else
+  {
+    h_trt_seqlen_size = batch_size * 2 + 1;
+
+    int* h_trt_seqlen_offset = new int[h_trt_seqlen_size];
+    h_trt_seqlen_offset[0] = 0;
+    for(int i = 1; i < h_trt_seqlen_size; i++)
+    {
+      if(i % 2 == 1)
+        h_trt_seqlen_offset[i] = h_trt_seqlen_offset[i-1] + h_sequence_length[(i-1) / 2];
+      else
+        h_trt_seqlen_offset[i] = seq_len * (i / 2);
+    }
+    cudaMalloc(&d_trt_seqlen_offset, sizeof(int) * (h_trt_seqlen_size));
+    cudaMemcpy(d_trt_seqlen_offset, h_trt_seqlen_offset, sizeof(int) * (h_trt_seqlen_size), cudaMemcpyHostToDevice);
+    device_malloc_one(&d_attr_mask, batch_size, seq_len, seq_len);
+    delete [] h_trt_seqlen_offset;
+  }
 
   size_t free_bytes, total_bytes;
   check_cuda_error(cudaMemGetInfo(&free_bytes, &total_bytes));
@@ -140,7 +206,6 @@ void encoder_sample(int batch_size,
   device_malloc(&d_attr_bias_Q, hidden_dim);
   device_malloc(&d_attr_bias_K, hidden_dim);
   device_malloc(&d_attr_bias_V, hidden_dim);
-  device_malloc(&d_attr_mask, batch_size * seq_len * seq_len);
   device_malloc(&d_attr_output_kernel, hidden_dim * hidden_dim);
   device_malloc(&d_attr_output_bias, hidden_dim);
   device_malloc(&d_attr_output_layernorm_beta, hidden_dim);
@@ -151,8 +216,8 @@ void encoder_sample(int batch_size,
   device_malloc(&d_output_bias, hidden_dim);
   device_malloc(&d_output_layernorm_beta, hidden_dim);
   device_malloc(&d_output_layernorm_gamma, hidden_dim);
-  device_malloc(&amaxList, ACTIVATION_AMAX_NUM + 9*hidden_dim);
- 
+  device_malloc(&amaxList, ACTIVATION_AMAX_NUM + 9*hidden_dim + INT8O_GEMM_NUM);
+
   if(is_remove_padding == true)
   {
     const int pre_process_buf_size = ceil((batch_size * from_seq_len + 1) * sizeof(int) / 4.) * 4;
@@ -208,19 +273,18 @@ void encoder_sample(int batch_size,
   encoder_param.amaxList = amaxList;
   encoder_param.layer_idx = 0;
   encoder_param.layer_num = num_layers;
+  encoder_param.trt_seqlen_offset = d_trt_seqlen_offset;
+  encoder_param.trt_seqlen_size = h_trt_seqlen_size;
 
   BertEncoderTransformer<EncoderTraits_> *encoder_transformer_ = 
-          new BertEncoderTransformer<EncoderTraits_>(allocator, 
-                                                    batch_size, 
-                                                    from_seq_len,
-                                                    to_seq_len,
-                                                    head_num, 
-                                                    size_per_head,
-                                                    int8_mode);
+          new BertEncoderTransformer<EncoderTraits_>(int8_mode, allow_gemm_test);
+
+  encoder_transformer_->allocateBuffer(&allocator, batch_size, from_seq_len, to_seq_len, head_num, size_per_head);
 
   //warm up
   cudaDeviceSynchronize();
   check_cuda_error(cudaGetLastError());
+  const int ite = 50;
   for (int i = 0; i < 2; ++i)
   {
     if(is_remove_padding == true)
@@ -243,6 +307,11 @@ void encoder_sample(int batch_size,
       encoder_param.sequence_id_offset = d_sequence_id_offset;
       encoder_param.valid_word_num = valid_word_num;
     }
+    else
+    {
+      encoder_param.valid_word_num = batch_size * seq_len;
+    }
+    
 
     encoder_transformer_->initialize(encoder_param);
     for(int i = 0; i < num_layers; i++)
@@ -261,7 +330,6 @@ void encoder_sample(int batch_size,
   cudaDeviceSynchronize();
   cudaProfilerStart();
   gettimeofday(&start, NULL);
-  int ite = 50;
   for (int i = 0; i < ite; ++i)
   {
     if(is_remove_padding == true)
@@ -283,6 +351,10 @@ void encoder_sample(int batch_size,
       
       encoder_param.sequence_id_offset = d_sequence_id_offset;
       encoder_param.valid_word_num = valid_word_num;
+    }
+    else
+    {
+      encoder_param.valid_word_num = batch_size * seq_len;
     }
 
     for(int i = 0; i < num_layers; i++){

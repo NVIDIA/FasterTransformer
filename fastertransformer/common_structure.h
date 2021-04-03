@@ -44,6 +44,8 @@ struct FFNWeight{
 
 namespace fastertransformer{
 
+enum class ActivationType{RELU, GELU};
+
 template<OperationType OpType_>
 class TransformerTraits;
 

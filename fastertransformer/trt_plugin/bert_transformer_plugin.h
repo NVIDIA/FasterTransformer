@@ -123,8 +123,8 @@ class TransformerPlugin: public IPluginV2
         int device_id;
         check_cuda_error(cudaGetDevice(&device_id));
         allocator_ = new fastertransformer::Allocator<AllocatorType::CUDA>(device_id);
-        encoder_transformer_ = new 
-          BertEncoderTransformer<EncoderTraits_>(*allocator_, max_batch_size, seq_len, seq_len, head_num, hidden_dim / head_num);
+        encoder_transformer_ = new BertEncoderTransformer<EncoderTraits_>(0, false);
+        encoder_transformer_->allocateBuffer(allocator_, max_batch_size, seq_len, seq_len, head_num, hidden_dim / head_num);
 
         EncoderInitParam<T> encoder_param; //init param here
 
@@ -197,8 +197,8 @@ class TransformerPlugin: public IPluginV2
         int device_id;
         check_cuda_error(cudaGetDevice(&device_id));
         allocator_ = new fastertransformer::Allocator<AllocatorType::CUDA>(device_id);
-        encoder_transformer_ = new 
-          BertEncoderTransformer<EncoderTraits_>(*allocator_, max_batch_size, seq_len, seq_len, head_num, hidden_dim / head_num);
+        encoder_transformer_ = new BertEncoderTransformer<EncoderTraits_>(0, false);
+        encoder_transformer_->allocateBuffer(allocator_, max_batch_size, seq_len, seq_len, head_num, hidden_dim / head_num);
 
         EncoderInitParam<T> encoder_param; //init param here
    

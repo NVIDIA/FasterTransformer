@@ -60,7 +60,7 @@ REGISTER_OP("DecodingSampling")
     .Input("decoding_gamma: T") // 29
     .Input("embedding_table: T") // 30
     .Input("embedding_kernel: T") // 31
-    .Input("embedding_bias: float32") // 32
+    .Input("embedding_bias: T") // 32
     .Input("position_encoding_table: T") // 33
     .Output("output_ids: int32")
     .Output("sequence_lengths: int32")
@@ -203,9 +203,7 @@ public:
         this->get_tensor(context, 29, &decoding_params.layernorm.gamma);
         this->get_tensor(context, 30, &decoding_params.embedding_table);
         this->get_tensor(context, 31, &decoding_params.embedding_kernel);
-
-        decoding_params.embedding_bias = reinterpret_cast<const float *>(context->input(32).flat<float>().data());
-        OP_REQUIRES(context, decoding_params.embedding_bias != nullptr, errors::InvalidArgument("embedding_bias"));
+        this->get_tensor(context, 32, &decoding_params.embedding_bias_T);
         this->get_tensor(context, 33, &decoding_params.position_encoding_table);
 
         try

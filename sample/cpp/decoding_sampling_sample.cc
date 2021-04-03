@@ -193,7 +193,7 @@ void decoding_sample(int batch_size,
   T *d_memory_tensor;
   T *d_embedding_table;
   T* d_embedding_kernel;
-  float* d_embedding_bias;
+  T* d_embedding_bias;
   T* d_position_encoding_table;
   int* d_output_ids;
   int* d_parent_ids;
@@ -222,7 +222,7 @@ void decoding_sample(int batch_size,
   decoding_params.memory_tensor = d_memory_tensor;
   decoding_params.embedding_table = d_embedding_table;
   decoding_params.embedding_kernel = d_embedding_kernel;
-  decoding_params.embedding_bias = d_embedding_bias;
+  decoding_params.embedding_bias_T = d_embedding_bias;
   decoding_params.position_encoding_table = d_position_encoding_table;
   decoding_params.output_ids = d_output_ids;
   decoding_params.parent_ids = d_parent_ids;
