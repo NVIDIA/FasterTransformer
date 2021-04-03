@@ -15,13 +15,14 @@
  */
 
 #include "encoder_gemm.h"
+#include "encoder_igemm.h"
 
 int main(int argc, char* argv[])
 {
-  if(argc != 6)
+  if(argc != 7)
   {
-    printf("[ERROR] encoder_gemm batch_size seq_len head_number size_per_head is_fp16. \n");
-    printf("e.g. ./bin/encoder_gemm 1 32 12 64 0\n");
+    printf("[ERROR] encoder_gemm batch_size seq_len head_number size_per_head is_fp16 int8_mode. \n");
+    printf("e.g. ./bin/encoder_gemm 1 32 12 64 0 0\n");
     return 0;
   }
 
@@ -29,15 +30,22 @@ int main(int argc, char* argv[])
   const int seq_len = atoi(argv[2]);
   const int head_num = atoi(argv[3]);
   const int size_per_head = atoi(argv[4]);
+  const int is_fp16 = atoi(argv[5]); 
+  const int int8_mode = atoi(argv[6]);
 
-  if(atoi(argv[5]) == 0)
-    generate_encoder_gemm_config<float>(batch_size, seq_len, head_num, size_per_head);
-  else if(atoi(argv[5]) == 1)
-    generate_encoder_gemm_config<half>(batch_size, seq_len, head_num, size_per_head);
-  else
-  {
-    printf("[ERROR] is_fp16 should be 0 (use float) or 1 (use half). \n");
-    return -1;
+  if (int8_mode != 0){
+    generate_encoder_igemm_config(batch_size, seq_len, head_num, size_per_head);
+  }
+  else{
+    if(is_fp16 == 0)
+      generate_encoder_gemm_config<float>(batch_size, seq_len, head_num, size_per_head);
+    else if(is_fp16 == 1)
+      generate_encoder_gemm_config<half>(batch_size, seq_len, head_num, size_per_head);
+    else
+    {
+      printf("[ERROR] is_fp16 should be 0 (use float) or 1 (use half). \n");
+      return -1;
+    }
   }
 
   return 0;

@@ -22,7 +22,7 @@ set(decoding_gemm_files
 )
 
 add_executable(encoder_gemm ${encoder_gemm_files})
-target_link_libraries(encoder_gemm PUBLIC -lcublas -lcudart)
+target_link_libraries(encoder_gemm PUBLIC -lcublas -lcublasLt -lcudart)
 
 add_executable(decoding_gemm ${decoding_gemm_files})
 target_link_libraries(decoding_gemm PUBLIC -lcublas -lcudart)

@@ -54,9 +54,9 @@ cd $MAIN_PATH
 
 if [ "$1" == "ext" ] || [ "$1" == "thsext" ]; then
     if [ "$2" == "fp32" ]; then
-        $MAIN_PATH/bin/encoder_gemm ${batch_size} ${seq_len} 16 64 0
+        $MAIN_PATH/bin/encoder_gemm ${batch_size} ${seq_len} 16 64 0 0
     else
-        $MAIN_PATH/bin/encoder_gemm ${batch_size} ${seq_len} 16 64 1
+        $MAIN_PATH/bin/encoder_gemm ${batch_size} ${seq_len} 16 64 1 0
     fi
 fi
 

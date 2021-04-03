@@ -13,6 +13,10 @@
 # limitations under the License.
 cmake_minimum_required(VERSION 3.8)
 
+set(tf_weight_quantize_files
+  weight_quantize_op.cc
+)
+
 set(tf_bert_transformer_files
   bert_transformer_op.cc
 )
@@ -32,6 +36,8 @@ set(tf_decoding_sampling_files
 add_definitions(-D_GLIBCXX_USE_CXX11_ABI=0)
 add_definitions(-DGOOGLE_CUDA=1)
 
+add_library(tf_weight_quantize SHARED ${tf_weight_quantize_files})
+target_link_libraries(tf_weight_quantize PRIVATE -ltensorflow_framework encoder)
 add_library(tf_fastertransformer SHARED ${tf_bert_transformer_files})
 target_link_libraries(tf_fastertransformer PRIVATE -lcublas -lcudart -ltensorflow_framework encoder)
 add_library(tf_decoder SHARED ${tf_decoder_files})

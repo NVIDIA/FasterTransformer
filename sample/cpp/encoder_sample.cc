@@ -33,16 +33,17 @@ void encoder_sample(int batch_size,
                     int seq_len,
                     int head_num,
                     int size_per_head,
-                    bool is_remove_padding);
+                    bool is_remove_padding,
+                    int int8_mode);
 
 int main(int argc, char* argv[])
 {
   struct cudaDeviceProp prop;
   check_cuda_error(cudaGetDeviceProperties(&prop, 0));
-  if(argc != 8)
+  if(argc != 9)
   {
-    printf("[ERROR] encoder_sample batch_size num_layers seq_len head_num size_per_head is_fp16 is_remove_padding\n");
-    printf("e.g., ./bin/encoder_sample 1 12 128 12 64 0 0\n");
+    printf("[ERROR] encoder_sample batch_size num_layers seq_len head_num size_per_head is_fp16 is_remove_padding int8_mode\n");
+    printf("e.g., ./bin/encoder_sample 1 12 128 12 64 0 0 0\n");
     return 0;
   }
 
@@ -53,11 +54,12 @@ int main(int argc, char* argv[])
   int head_num = atoi(argv[4]);
   int size_per_head = atoi(argv[5]);
   bool is_remove_padding = (bool)atoi(argv[7]);
+  int int8_mode = atoi(argv[8]);	
 
   if(atoi(argv[6]) == 0)
-    encoder_sample<float>(batch_size, num_layers, seq_len, head_num, size_per_head, is_remove_padding);
+    encoder_sample<float>(batch_size, num_layers, seq_len, head_num, size_per_head, is_remove_padding, int8_mode);
   else if(atoi(argv[6]) == 1)
-    encoder_sample<half>(batch_size, num_layers, seq_len, head_num, size_per_head, is_remove_padding);
+    encoder_sample<half>(batch_size, num_layers, seq_len, head_num, size_per_head, is_remove_padding, int8_mode);
   else
   {
     printf("[ERROR] is_fp16 should be 0 (use float) or 1 (use half). \n");
@@ -87,7 +89,8 @@ void encoder_sample(int batch_size,
                     int seq_len,
                     int head_num,
                     int size_per_head,
-                    bool is_remove_padding)
+                    bool is_remove_padding,
+                    int int8_mode)
 {
   int from_seq_len = seq_len;
   int to_seq_len = seq_len;
@@ -101,6 +104,7 @@ void encoder_sample(int batch_size,
   T *d_attr_output_layernorm_gamma = NULL;
   T *d_inter_kernel = NULL, *d_inter_bias = NULL;
   T *d_output_kernel = NULL, *d_output_bias = NULL, *d_output_layernorm_beta = NULL, *d_output_layernorm_gamma = NULL;
+  float *amaxList = NULL;
   
   // pre_process buffer
   T *d_from_tensor_with_padding = NULL;
@@ -129,8 +133,10 @@ void encoder_sample(int batch_size,
   device_malloc(&d_from_tensor, batch_size * seq_len * hidden_dim);
   device_malloc(&d_transformer_out, batch_size * seq_len * hidden_dim);
   device_malloc(&d_attr_kernel_Q, hidden_dim * hidden_dim * 3);
-  device_malloc(&d_attr_kernel_K, hidden_dim * hidden_dim);
-  device_malloc(&d_attr_kernel_V, hidden_dim * hidden_dim);
+  d_attr_kernel_K = d_attr_kernel_Q + hidden_dim * hidden_dim;
+  d_attr_kernel_V = d_attr_kernel_K + hidden_dim * hidden_dim;
+  //device_malloc(&d_attr_kernel_K, hidden_dim * hidden_dim);
+  //device_malloc(&d_attr_kernel_V, hidden_dim * hidden_dim);
   device_malloc(&d_attr_bias_Q, hidden_dim);
   device_malloc(&d_attr_bias_K, hidden_dim);
   device_malloc(&d_attr_bias_V, hidden_dim);
@@ -145,7 +151,8 @@ void encoder_sample(int batch_size,
   device_malloc(&d_output_bias, hidden_dim);
   device_malloc(&d_output_layernorm_beta, hidden_dim);
   device_malloc(&d_output_layernorm_gamma, hidden_dim);
-
+  device_malloc(&amaxList, ACTIVATION_AMAX_NUM + 9*hidden_dim);
+ 
   if(is_remove_padding == true)
   {
     const int pre_process_buf_size = ceil((batch_size * from_seq_len + 1) * sizeof(int) / 4.) * 4;
@@ -162,7 +169,9 @@ void encoder_sample(int batch_size,
   printf("After allocate free %.2f GB used %.2f GB total %.2f GB\n", free, total - free, total);
 
   cublasHandle_t cublasHandle;
+  cublasLtHandle_t cublaslt_handle;
   check_cuda_error(cublasCreate(&cublasHandle));
+  check_cuda_error(cublasLtCreate(&cublaslt_handle));
 
   cudaStream_t stream;
   check_cuda_error(cudaStreamCreate(&stream));
@@ -194,7 +203,11 @@ void encoder_sample(int batch_size,
   encoder_param.ffn_layernorm.gamma = d_output_layernorm_gamma;
   encoder_param.transformer_out = d_transformer_out;
   encoder_param.cublas_handle = cublasHandle;
+  encoder_param.cublaslt_handle = cublaslt_handle;
   encoder_param.stream = stream;
+  encoder_param.amaxList = amaxList;
+  encoder_param.layer_idx = 0;
+  encoder_param.layer_num = num_layers;
 
   BertEncoderTransformer<EncoderTraits_> *encoder_transformer_ = 
           new BertEncoderTransformer<EncoderTraits_>(allocator, 
@@ -202,7 +215,8 @@ void encoder_sample(int batch_size,
                                                     from_seq_len,
                                                     to_seq_len,
                                                     head_num, 
-                                                    size_per_head);
+                                                    size_per_head,
+                                                    int8_mode);
 
   //warm up
   cudaDeviceSynchronize();
@@ -271,9 +285,12 @@ void encoder_sample(int batch_size,
       encoder_param.valid_word_num = valid_word_num;
     }
 
-    encoder_transformer_->initialize(encoder_param);
-    for(int i = 0; i < num_layers; i++)
+    for(int i = 0; i < num_layers; i++){
+      if (int8_mode != 0)
+        encoder_param.layer_idx = i;
+      encoder_transformer_->initialize(encoder_param);
       encoder_transformer_->forward();
+    }
     
     if(is_remove_padding == true)
     {

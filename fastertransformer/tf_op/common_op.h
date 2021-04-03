@@ -48,10 +48,11 @@ public:
     try
     {
       check_cuda_error(cublasCreate(&cublas_handle_));
+      check_cuda_error(cublasLtCreate(&cublaslt_handle_));
     }
     catch(std::runtime_error& error)
     {
-      OP_REQUIRES(context, false, errors::Internal(error.what()));
+    OP_REQUIRES(context, false, errors::Internal(error.what()));
     }
   };
 
@@ -62,10 +63,12 @@ public:
   }
 
   cublasHandle_t get_cublas_handler() {return cublas_handle_; }
+  cublasLtHandle_t get_cublaslt_handler() {return cublaslt_handle_;}
 
-  ~CommonOp() { cublasDestroy(cublas_handle_); }
+  ~CommonOp() { cublasDestroy(cublas_handle_); cublasLtDestroy(cublaslt_handle_);}
 private:
   cublasHandle_t cublas_handle_;
+  cublasLtHandle_t cublaslt_handle_;
 
 };
 

@@ -24,9 +24,6 @@
 #include <cfloat>
 namespace fastertransformer{
 
-#define FINAL_MASK 0xffffffff
-#define CUDART_PI_F 3.141592654f
-
 template <typename T>
 __inline__ __device__
 T gelu(T x)
@@ -46,7 +43,9 @@ half2 gelu(half2 val)
   tmp.x = 0.5f * (1.0f + tanhf((0.7978845608028654f * (tmp.x + 0.044715f * tmp_pow.x))));
   tmp.y = 0.5f * (1.0f + tanhf((0.7978845608028654f * (tmp.y + 0.044715f * tmp_pow.y))));
   return __hmul2(val, __float22half2_rn(tmp));
+
 }
+
 
 template <typename T>
 __inline__ __device__
@@ -61,20 +60,21 @@ template <typename T>
 __inline__ __device__
 T blockReduceSum(T val)
 {
-  static __shared__ T shared[32]; 
-  int lane = threadIdx.x & 0x1f; 
-  int wid = threadIdx.x >> 5;  
+  static __shared__ T shared[32];
+  int lane = threadIdx.x & 0x1f;
+  int wid = threadIdx.x >> 5;
 
   val = warpReduceSum<T>(val);
 
   if(lane == 0)
     shared[wid] = val;
   __syncthreads();
-  
+
   val = (threadIdx.x < (blockDim.x >> 5 )) ? shared[lane] : (T)0.0f;
   val = warpReduceSum(val);
   return val;
 }
+
 
 template <typename T>
   __inline__ __device__
@@ -100,14 +100,11 @@ T blockReduceMax(T val)
     shared[wid] = val;
 
   __syncthreads();
-
-
   val = (threadIdx.x < (blockDim.x >> 5 )) ? shared[lane] : (T)-1e20f;
   val = warpReduceMax<T>(val);
 
   return val;
 }
-
 
 template <typename T>
 __global__ 

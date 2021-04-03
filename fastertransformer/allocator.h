@@ -47,7 +47,7 @@ namespace fastertransformer
 class IAllocator
 {
 public:
-  virtual void *malloc(size_t size) const = 0;
+  virtual void *malloc(size_t size, const bool is_set_zero=true) const = 0;
   virtual void free(void *ptr) const = 0;
 };
 
@@ -62,7 +62,7 @@ class Allocator<AllocatorType::CUDA> : public IAllocator
 public:
   Allocator(int device_id) : device_id_(device_id) {}
 
-  void *malloc(size_t size) const
+  void *malloc(size_t size, const bool is_set_zero=true) const
   {
     void *ptr = nullptr;
     int o_device = 0;
@@ -97,7 +97,7 @@ public:
     allocated_tensor_vector = new std::vector<Tensor>;
   }
 
-  void *malloc(size_t size) const
+  void *malloc(size_t size, const bool is_set_zero=true) const
   {
     Tensor buf;
     long long int buf_size = (long long int)size;
@@ -109,7 +109,7 @@ public:
 
     auto flat = buf.flat<uint8>();
     void *ptr = (void *)flat.data();
-    cudaMemsetAsync(ptr, 0, buf_size, stream_);
+    if(is_set_zero==true) cudaMemsetAsync(ptr, 0, buf_size, stream_);
     return ptr;
   }
 
@@ -138,7 +138,7 @@ class Allocator<AllocatorType::TH> : public IAllocator
 public:
   Allocator() : allocated_tensor_vector(std::make_shared<std::vector<torch::Tensor>>()) {}
 
-  void *malloc(size_t size) const
+  void *malloc(size_t size, const bool is_set_zero=true) const
   {
     int64_t buf_size = static_cast<int64_t>(size);
     torch::Tensor buf = torch::empty({buf_size}, torch::dtype(torch::kUInt8).device(torch::kCUDA));
