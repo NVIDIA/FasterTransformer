@@ -24,7 +24,7 @@
 namespace fastertransformer{
 
   enum class OperationType{FP32, FP16};
-  enum class AllocatorType{CUDA, TF};
+  enum class AllocatorType{CUDA, TF, TH};
 
 #define PRINT_FUNC_NAME_() do{\
   std::cout << "[FT][CALL] " << __FUNCTION__ << " " << std::endl; \

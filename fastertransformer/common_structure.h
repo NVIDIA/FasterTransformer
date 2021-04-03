@@ -18,14 +18,14 @@
 
 template<typename T>
 struct DenseWeight{
-    const T* kernel;
-    const T* bias;
+    const T* kernel = nullptr;
+    const T* bias = nullptr;
 };
 
 template<typename T>
 struct LayerNormWeight{
-    const T* gamma;
-    const T* beta;
+    const T* gamma = nullptr;
+    const T* beta = nullptr;
 };
 
 template<typename T>

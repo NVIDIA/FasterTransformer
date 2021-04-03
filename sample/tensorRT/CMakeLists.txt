@@ -18,4 +18,4 @@ set(trt_files
 )
 
 add_executable(transformer_trt ${trt_files})
-target_link_libraries(transformer_trt PRIVATE -lcublas -lcudart -lnvinfer fastertransformer)
+target_link_libraries(transformer_trt PRIVATE -lcublas -lcudart -lnvinfer encoder)

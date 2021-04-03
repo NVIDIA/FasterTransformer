@@ -48,7 +48,8 @@ class TransformerModel(object):
                  input_tensor,
                  attention_mask,
                  transformer_model_fn,
-                 scope=None):
+                 scope=None,
+                 sequence_length=None):
         config = my_modeling.copy.deepcopy(config)
         if not is_training:
             config.hidden_dropout_prob = 0.0
@@ -74,7 +75,8 @@ class TransformerModel(object):
                     hidden_dropout_prob=config.hidden_dropout_prob,
                     attention_probs_dropout_prob=config.attention_probs_dropout_prob,
                     initializer_range=config.initializer_range,
-                    do_return_all_layers=True)
+                    do_return_all_layers=True,
+                    sequence_length=sequence_length)
 
             self.sequence_output = self.all_encoder_layers[-1]
             with tf.variable_scope("pooler"):
@@ -94,13 +96,14 @@ class TransformerModel(object):
 
 def model_fn_builder(bert_config, transformer_model_fn):
 
-    def model_fn(input_tensor, attention_mask):  # pylint: disable=unused-argument
+    def model_fn(input_tensor, attention_mask, sequence_length=None):  # pylint: disable=unused-argument
         model = TransformerModel(
             config=bert_config,
             is_training=False,
             input_tensor=input_tensor,
             attention_mask=attention_mask,
-            transformer_model_fn=transformer_model_fn)
+            transformer_model_fn=transformer_model_fn,
+            sequence_length=sequence_length)
         seq_output = model.get_sequence_output()
         return seq_output
 
@@ -111,11 +114,13 @@ def profile_model(config, jit_xla, num_iter):
     # initialize data
     input_data = np.random.randn(
         FLAGS.predict_batch_size, FLAGS.max_seq_length, config.hidden_size)
-    attention_mask = np.random.randint(2, size=(
-        FLAGS.predict_batch_size, FLAGS.max_seq_length))
+    sequence_length = np.random.randint(0, FLAGS.max_seq_length + 1, size=FLAGS.predict_batch_size).astype(np.int32)
+    attention_mask = np.zeros((FLAGS.predict_batch_size, FLAGS.max_seq_length))
+    for i in range(len(sequence_length)):
+        attention_mask[i, 0:sequence_length[i]] = 1
     attention_mask = np.repeat(
         attention_mask[:, np.newaxis, :], FLAGS.max_seq_length, axis=1)
-
+    
     model_fn_tf = model_fn_builder(config, my_modeling.transformer_model)
     model_fn_ft = model_fn_builder(config, fiu.fast_transformer_model_trans)
 
@@ -124,7 +129,7 @@ def profile_model(config, jit_xla, num_iter):
             input_tensor = tf.constant(input_data, dtype=FLAGS.floatx)
             mask_tensor = tf.constant(attention_mask, dtype=FLAGS.floatx)
 
-            output_var = model_fn(input_tensor, mask_tensor)
+            output_var = model_fn(input_tensor, mask_tensor, sequence_length)
             # for saving memcopy time
             return tf.reduce_mean(output_var)
         return graph_fn
@@ -152,8 +157,8 @@ def profile_model(config, jit_xla, num_iter):
             model_fn_ft), jit_xla, num_iter, check_result=False, init_checkpoint=FLAGS.init_checkpoint)
 
     # check errors
-    print('average time (seconds) elasped original tensorflow:', t1)
-    print('average time (seconds) elasped fast transformer:', t2)
+    print('average time (seconds) elapsed original tensorflow:', t1)
+    print('average time (seconds) elapsed fast transformer:', t2)
 
     if len(r1) + len(r2) > 0:
         check_res = np.asarray([np.allclose(
@@ -220,4 +225,5 @@ if __name__ == "__main__":
     flags.mark_flag_as_required("xla")
     flags.DEFINE_bool("tf_profile", False,
                       "whether to use tensorflow profiling")
+    flags.DEFINE_bool("remove_padding", False, "Whether remove the padding of sentences")
     tf.app.run()

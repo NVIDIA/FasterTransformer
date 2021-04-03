@@ -25,6 +25,12 @@
 
 using namespace std;
 
+template <typename T>
+void device_malloc(T **ptr, int size)
+{
+  check_cuda_error(cudaMalloc((void **)ptr, sizeof(T) * size));
+}
+
 template<typename T>
 void generate_encoder_gemm_config(int batch_size,
                                     int seq_len,
@@ -42,11 +48,11 @@ void generate_encoder_gemm_config(int batch_size,
   check_cuda_error(cudaGetDeviceProperties(&prop, 0));
   printf("Device %s\n", prop.name);
 
-  const int gemm_num = 5;
+  const int gemm_num = 6;
   int M[gemm_num];
   int N[gemm_num];
   int K[gemm_num];
-  int batchCount[gemm_num] = {1,1,1,1,1};
+  int batchCount[gemm_num] = {1,1,1,1,1,1};
   char mess[gemm_num][256];
   
   //gemm1 
@@ -79,6 +85,12 @@ void generate_encoder_gemm_config(int batch_size,
   batchCount[4] = batch_size * head_num;
   strcpy(mess[4], "attention batched Gemm2");
 
+  M[5] = batch_size * seq_len;
+  N[5] = head_num * size_per_head; 
+  K[5] = N[5];
+  batchCount[5] = 3;
+  strcpy(mess[5], "from_tensor * weight_QKV in BatchGemm");
+
   cublasHandle_t cublas_handle;
   check_cuda_error(cublasCreate(&cublas_handle));
 
@@ -110,18 +122,35 @@ void generate_encoder_gemm_config(int batch_size,
   T alpha = (T)1.0f;
   T beta = (T)0.0f;
 
-  printf("***FP32 Gemm Testing***\n");
+  printf("***Encoder Gemm Testing***\n");
   for(int i = 0; i < gemm_num; ++i)
   {
+    // if(i != 0 && i != 5) continue; 
+
     int m = M[i], n = N[i], k = K[i];
     printf("\n-----------------------------\n");
     printf("GEMM test %d: [M: %d, K: %d, N: %d] %s\n", i, m, k, n, mess[i]);
     T* d_A;
     T* d_B;
     T* d_C;
-    check_cuda_error(cudaMalloc((void**)&d_A, sizeof(T) * m * k * batchCount[i]));
-    check_cuda_error(cudaMalloc((void**)&d_B, sizeof(T) * k * n * batchCount[i]));
-    check_cuda_error(cudaMalloc((void**)&d_C, sizeof(T) * m * n * batchCount[i]));
+    device_malloc(&d_A, sizeof(T) * m * k * batchCount[i]);
+    device_malloc(&d_B, sizeof(T) * k * n * batchCount[i]);
+    device_malloc(&d_C, sizeof(T) * m * n * batchCount[i]);
+
+    // array of pointer for batchedGemm
+    T* harray[9];
+    for(int i = 0; i < 9; i++)
+    {
+      if( i >= 0 && i < 3) device_malloc(&harray[i], sizeof(T) * m * k);
+      else if(i >= 3 && i < 6) device_malloc(&harray[i], sizeof(T) * k * n);
+      else if(i >= 6 && i < 9) device_malloc(&harray[i], sizeof(T) * m * n);
+    }
+    T** darray = 0;
+    check_cuda_error(cudaMalloc((void**)&darray, sizeof(T*) * 9));
+    cudaMemcpy((void*)darray, (void*)harray, sizeof(T*) * 9, cudaMemcpyHostToDevice);
+    T** dAarray = darray;
+    T** dBarray = darray + 3;
+    T** dCarray = darray + 6;
 
     float exec_time = 99999.0f;
     int fast_algo = 0;
@@ -159,7 +188,7 @@ void generate_encoder_gemm_config(int batch_size,
                 computeType,
                 static_cast<cublasGemmAlgo_t>(algo));
         }
-        else
+        else if(i == 4)
         {
           status = cublasGemmStridedBatchedEx(cublas_handle,
                 CUBLAS_OP_N, CUBLAS_OP_N,
@@ -173,6 +202,21 @@ void generate_encoder_gemm_config(int batch_size,
                 computeType,
                 static_cast<cublasGemmAlgo_t>(algo));
         }
+        else if(i == 5)
+        {
+          status = cublasGemmBatchedEx(cublas_handle, 
+                            CUBLAS_OP_N, CUBLAS_OP_N, 
+                            n, m, k, 
+                            &alpha, 
+                            (const void* const*) dBarray, BType, n,
+                            (const void* const*) dAarray, AType, k,
+                            &beta,
+                            (void* const*)dCarray, CType, n,
+                            3, 
+                            computeType,
+                            static_cast<cublasGemmAlgo_t>(algo));
+        }
+        if(status != CUBLAS_STATUS_SUCCESS) break;
       }
       cudaDeviceSynchronize();
       gettimeofday(&end, NULL);
@@ -187,7 +231,13 @@ void generate_encoder_gemm_config(int batch_size,
       }
     }
     printf("fast_algo %d costs %.3f ms\n", fast_algo, exec_time);
-    fprintf(fd, "%d\n", fast_algo);
+    fprintf(fd, "%d %f\n", fast_algo, exec_time);
+
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cudaFree(d_C);
+    for(int i = 0; i < 9; i++) cudaFree(harray[i]);
+    cudaFree(darray);
   }
   return;
 }

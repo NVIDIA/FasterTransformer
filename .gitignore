@@ -1,4 +1,5 @@
 *~
 *.o
-build/
+build*/
 *.pyc
+.vscode/

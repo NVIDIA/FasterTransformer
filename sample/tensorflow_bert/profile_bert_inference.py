@@ -161,8 +161,8 @@ def main(_):
         t2, r2 = profile_util.run_profile(
             graph_fn, jit_xla, num_iter, check_result=False, init_checkpoint=FLAGS.init_checkpoint)
 
-    print('average time (seconds) elasped original tensorflow:', t1)
-    print('average time (seconds) elasped fast transformer:', t2)
+    print('average time (seconds) elapsed original tensorflow:', t1)
+    print('average time (seconds) elapsed fast transformer:', t2)
     if len(r1) + len(r2) > 0:
         check_res = np.asarray([np.allclose(
             r1[i], r2[i], atol=1e-4, rtol=0) for i in range(num_iter)])

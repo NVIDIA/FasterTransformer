@@ -15,7 +15,7 @@
 import math
 import abc
 import tensorflow as tf
-from reducer import SumReducer
+from utils.reducer import SumReducer
 
 class PositionEncoder(tf.keras.layers.Layer):
     """Base class for position encoders."""
@@ -43,7 +43,7 @@ class PositionEncoder(tf.keras.layers.Layer):
         batch_size = tf.shape(inputs)[0]
         timesteps = tf.shape(inputs)[1]
         input_dim = inputs.get_shape().as_list()[-1] # return int 
-        positions = tf.range(timesteps) + 1 if position is None else [position]
+        positions = tf.range(timesteps) + 1 if position is None else position
         position_encoding = self._encode([positions], input_dim, dtype=inputs.dtype)
         position_encoding = tf.tile(position_encoding, [batch_size, 1, 1])
         return self.reducer([inputs, position_encoding])
@@ -58,6 +58,12 @@ class PositionEncoder(tf.keras.layers.Layer):
           A ``tf.Tensor`` of shape :math:`[B, ..., D]`.
         """
         raise NotImplementedError()
+      
+    def _create_position_encoding_table(self, max_seq_len, input_dim, dtype):
+      positions = tf.range(max_seq_len) + 1
+      self.position_encoding_table = self._encode([positions], input_dim, dtype=dtype)
+      self.position_encoding_table = tf.squeeze(self.position_encoding_table)
+      return self.position_encoding_table
 
 
 class SinusoidalPositionEncoder(PositionEncoder):

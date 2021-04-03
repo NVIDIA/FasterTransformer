@@ -16,9 +16,13 @@ import tensorflow as tf
 import numpy as np
 import argparse
 import numpy as np
-from utils.common import DecodingArgument, TransformerArgument
-from utils.decoding import tf_decoding
-from utils.encoder import tf_encoder, op_encoder
+from utils.common import TransformerArgument
+from utils.common import DecodingBeamsearchArgument
+from utils.encoder import tf_encoder
+from utils.encoder import op_encoder
+from utils.encoder import build_sequence_mask
+from utils.decoding import tf_beamsearch_decoding
+from utils.decoding import generate_encoder_result
 
 if __name__ == "__main__":
 
@@ -51,10 +55,16 @@ if __name__ == "__main__":
                         + ' type 1: only run op decoder;'
                         + ' type 2: run both tf and op decoder, and compare the difference.'
                         + ' default: type 2')
+    parser.add_argument("-remove_padding", "--remove_padding", type=str, default="False", metavar="BOOL",
+                        choices=["True", "False"],
+                        help="remove the padding of sentence or not. This brings speedups when the average of \
+                            sequence length is smaller than the maximum sequence length.")
 
     args = parser.parse_args()
     print("\n=============== Argument ===============")
-    print(args)
+    for key in vars(args):
+        print("{}: {}".format(key, vars(args)[key]))
+    print("========================================")
 
     start_of_sentence_id = 1
     end_of_sentence_id = 2
@@ -77,6 +87,7 @@ if __name__ == "__main__":
     encoder_hidden_dim = encoder_head_num * encoder_size_per_head
     decoder_hidden_dim = decoder_head_num * decoder_size_per_head
     vocab_size = args.vocab_size
+    remove_padding = True if args.remove_padding.lower() == "true" else False
     tf_datatype = tf.float32
     np_datatype = np.float32
     atol_threshold = 2e-5
@@ -85,37 +96,38 @@ if __name__ == "__main__":
         np_datatype = np.float16
         atol_threshold = 2e-2
 
-    initializer_range = 0.02
-    from_data = np.random.randn(batch_size, max_seq_len, encoder_hidden_dim)
+    from_data = np.random.randn(batch_size, max_seq_len, encoder_hidden_dim) * initializer_range
     from_tensor = tf.convert_to_tensor(from_data, dtype=tf_datatype)
     memory_sequence_length = np.random.randint(
         1, max_seq_len + 1, size=batch_size).astype(np.int32)
-    embedding_table = np.random.randn(vocab_size, decoder_hidden_dim).astype(
-        np_datatype)  # a [vocab_size, decoder_hidden_dim] table
+    memory_sequence_length[np.random.randint(0, batch_size)] = max_seq_len
+    embedding_table = np.random.randn(vocab_size, decoder_hidden_dim).astype(np_datatype) * initializer_range  # a [vocab_size, decoder_hidden_dim] table
     embedding_table = tf.convert_to_tensor(embedding_table)
+    
+    attention_mask = build_sequence_mask(memory_sequence_length, num_heads=encoder_head_num, maximum_length=max_seq_len, dtype=tf_datatype)
+    
+    encoder_args = TransformerArgument(beam_width=1,
+                                    head_num=encoder_head_num,
+                                    size_per_head=encoder_size_per_head,
+                                    num_layer=encoder_num_layer,
+                                    dtype=tf_datatype,
+                                    remove_padding=remove_padding)
 
-    mask = np.random.randint(2, size=(batch_size, max_seq_len, max_seq_len))
-    attention_mask = tf.convert_to_tensor(mask, dtype=tf_datatype)
-
-    encoder_args = TransformerArgument(batch_size=batch_size,
-                                       beam_width=1,
-                                       head_num=encoder_head_num,
-                                       size_per_head=encoder_size_per_head,
-                                       num_layer=encoder_num_layer,
-                                       max_seq_len=max_seq_len,
-                                       dtype=tf_datatype)
-
-    decoding_args = DecodingArgument(batch_size=batch_size,
-                                     beam_width=beam_width,
-                                     head_num=decoder_head_num,
-                                     size_per_head=decoder_size_per_head,
-                                     num_layer=decoder_num_layer,
-                                     max_seq_len=max_seq_len,
-                                     vocab_size=vocab_size,
-                                     start_id=start_of_sentence_id,
-                                     end_id=end_of_sentence_id,
-                                     encoder_hidden_dim=encoder_head_num * encoder_size_per_head,
-                                     dtype=tf_datatype)
+    decoder_args = TransformerArgument(beam_width=beam_width,
+                                    head_num=decoder_head_num,
+                                    size_per_head=decoder_size_per_head,
+                                    num_layer=decoder_num_layer,
+                                    dtype=tf_datatype,
+                                    kernel_init_range=kernel_initializer_range,
+                                    bias_init_range=bias_initializer_range,
+                                    fuse_qkv=False)
+    
+    decoding_args = DecodingBeamsearchArgument(vocab_size,
+                                                start_of_sentence_id,
+                                                end_of_sentence_id,
+                                                max_seq_len,
+                                                decoder_args,
+                                                0.0)
 
     tf_encoder_result = tf_encoder(input_tensor=from_tensor,
                                    encoder_args=encoder_args,
@@ -123,31 +135,31 @@ if __name__ == "__main__":
     tf_encoder_result = tf.reshape(
         tf_encoder_result, [batch_size, max_seq_len, encoder_hidden_dim])
 
-    tf_decoding_result, _, _, _, _ = tf_decoding(tf_encoder_result,
-                                                 memory_sequence_length,
-                                                 embedding_table,
-                                                 decoding_args,
-                                                 args.decoder_type,
-                                                 kernel_initializer_range,
-                                                 bias_initializer_range,
-                                                 atol_threshold)
-
-    encoder_variables = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
+    tf_encoder_result = tf_encoder_result * tf.expand_dims(tf.sequence_mask(memory_sequence_length, maxlen=max_seq_len, dtype=tf_datatype), axis=-1)
+    tf_decoding_result, _, _, _, _  = tf_beamsearch_decoding(tf_encoder_result,
+                                                            memory_sequence_length,
+                                                            embedding_table,
+                                                            decoding_args,
+                                                            decoder_type=args.decoder_type)
+        
+    encoder_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
+    encoder_variables_dict = {}
+    for v in encoder_vars:
+        encoder_variables_dict[v.name] = v
     op_encoder_result = op_encoder(inputs=from_tensor,
                                    encoder_args=encoder_args,
-                                   encoder_vars=encoder_variables,
-                                   attention_mask=attention_mask)
+                                   attention_mask=attention_mask,
+                                   encoder_vars_dict=encoder_variables_dict,
+                                   sequence_length=memory_sequence_length)
     op_encoder_result = tf.reshape(
         op_encoder_result, [batch_size, max_seq_len, encoder_hidden_dim])
-
-    op_decoding_result, _, _, _, _ = tf_decoding(op_encoder_result,
-                                                 memory_sequence_length,
-                                                 embedding_table,
-                                                 decoding_args,
-                                                 args.decoder_type,
-                                                 kernel_initializer_range,
-                                                 bias_initializer_range,
-                                                 atol_threshold)
+    op_encoder_result = op_encoder_result * tf.expand_dims(tf.sequence_mask(memory_sequence_length, maxlen=max_seq_len, dtype=tf_datatype), axis=-1)
+    
+    op_decoding_result, _, _, _, _  = tf_beamsearch_decoding(op_encoder_result,
+                                                            memory_sequence_length,
+                                                            embedding_table,
+                                                            decoding_args,
+                                                            decoder_type=args.decoder_type)
 
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True

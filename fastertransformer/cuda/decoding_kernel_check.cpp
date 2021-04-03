@@ -30,7 +30,7 @@ void init_kernel_check(bool *d_finished, int *d_sequence_length, int *d_word_ids
     int *h_word_ids = new int[batch_size * beam_width];
     float *h_cum_log_probs = new float[batch_size * beam_width];
 
-    init(d_finished, d_sequence_length, d_word_ids, d_cum_log_probs,
+    init_kernelLauncher(d_finished, d_sequence_length, d_word_ids, d_cum_log_probs,
          sentence_id, batch_size, beam_width, stream);
     cudaDeviceSynchronize();
     check_cuda_error(cudaGetLastError());
@@ -346,7 +346,7 @@ void update_kernel_check(float *log_probs, float *cum_log_probs, int *ids, bool 
     check_cuda_error(cudaMemcpy(h_output_ids, output_ids, sizeof(int) * batch_size * beam_width, cudaMemcpyDeviceToHost));
 
     // compute on GPU and copy to GPU output
-    update(log_probs, cum_log_probs, ids, finished, parent_ids, sequence_length, word_ids, output_ids,
+    update_kernelLauncher(log_probs, cum_log_probs, ids, finished, parent_ids, sequence_length, word_ids, output_ids,
            batch_size, beam_width, vocab_size, stream, end_id, finished_count);
     cudaDeviceSynchronize();
     check_cuda_error(cudaGetLastError());

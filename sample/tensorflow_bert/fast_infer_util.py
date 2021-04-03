@@ -23,7 +23,7 @@ import os
 import sys
 from my_modeling import *
 
-build_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../build/lib')
+build_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '../../lib')
 
 transformer_op_module = tf.load_op_library(
     os.path.join(build_path, 'libtf_fastertransformer.so'))
@@ -122,6 +122,48 @@ def create_model(bert_config, is_training, input_ids, input_mask, segment_ids,
 
     return (loss, per_example_loss, logits, probabilities)
 
+def create_model_squad(bert_config, is_training, input_ids, input_mask, segment_ids,
+                 use_one_hot_embeddings):
+  """Creates a classification model."""
+  model = BertModel(
+      config=bert_config,
+      is_training=is_training,
+      input_ids=input_ids,
+      input_mask=input_mask,
+      token_type_ids=segment_ids,
+      use_one_hot_embeddings=use_one_hot_embeddings)
+
+  final_hidden = model.get_sequence_output()
+
+  final_hidden_shape = get_shape_list(final_hidden, expected_rank=3)
+  batch_size = final_hidden_shape[0]
+  seq_length = final_hidden_shape[1]
+  hidden_size = final_hidden_shape[2]
+
+  output_weights = tf.get_variable(
+      "cls/squad/output_weights", [2, hidden_size],
+      dtype=tf.flags.FLAGS.floatx,
+      initializer=tf.truncated_normal_initializer(stddev=0.02))
+
+  output_bias = tf.get_variable(
+      "cls/squad/output_bias", [2],
+      dtype=tf.flags.FLAGS.floatx,
+      initializer=tf.zeros_initializer())
+
+  final_hidden_matrix = tf.reshape(final_hidden,
+                                   [batch_size * seq_length, hidden_size])
+  logits = tf.matmul(final_hidden_matrix, output_weights, transpose_b=True)
+  logits = tf.nn.bias_add(logits, output_bias)
+
+  logits = tf.reshape(logits, [batch_size, seq_length, 2])
+  logits = tf.transpose(logits, [2, 0, 1])
+
+  unstacked_logits = tf.unstack(logits, axis=0)
+
+  (start_logits, end_logits) = (unstacked_logits[0], unstacked_logits[1])
+
+  return (start_logits, end_logits)
+
 
 def get_available_gpus():
     local_device_protos = device_lib.list_local_devices()
@@ -138,7 +180,8 @@ def fast_transformer_model_trans(input_tensor,
                                  hidden_dropout_prob=0.1,
                                  attention_probs_dropout_prob=0.1,
                                  initializer_range=0.02,
-                                 do_return_all_layers=False):
+                                 do_return_all_layers=False,
+                                 sequence_length=None):
     """ Re-implementation of transformer_model function from modeling.py from Google's BERT repository https://github.com/google-research/bert
         using FasterTransformer Tensorflow op.
 
@@ -260,21 +303,50 @@ def fast_transformer_model_trans(input_tensor,
                 layer_output = dropout(layer_output, hidden_dropout_prob)
                 layer_output = layer_norm(layer_output + attention_output)
 
-            # FASTINFER: fast transformer encoder inference
-            trainable_vars = tf.get_collection(
-                tf.GraphKeys.TRAINABLE_VARIABLES, scope=tf.get_variable_scope().name)
-            layer_output = transformer_op_module.bert_transformer(
-                layer_input,
-                layer_input,
-                trainable_vars[0], trainable_vars[2], trainable_vars[4], trainable_vars[1], trainable_vars[3], trainable_vars[5],
-                attention_mask,
-                trainable_vars[6], trainable_vars[7], trainable_vars[8], trainable_vars[9], trainable_vars[10], trainable_vars[11],
-                trainable_vars[12], trainable_vars[13], trainable_vars[14], trainable_vars[15],
-                from_seq_len=seq_length, to_seq_len=seq_length, head_num=num_attention_heads, size_per_head=attention_head_size)
+            
+    # FASTINFER: fast transformer encoder inference
+    inputs = input_tensor
+    remove_padding = tf.flags.FLAGS.remove_padding
+    if remove_padding == True:
+        inputs, sequence_id_offset = transformer_op_module.build_mask_remove_padding(inputs, sequence_length)
+    else:
+        sequence_id_offset = []
+    graph = tf.get_default_graph()
+    for layer_idx in range(num_hidden_layers):
+        layer_output = transformer_op_module.bert_transformer(
+            inputs,
+            inputs,
+            graph.get_tensor_by_name('bert/encoder/layer_%d/attention/self/query/kernel:0' % layer_idx),
+            graph.get_tensor_by_name('bert/encoder/layer_%d/attention/self/query/bias:0' % layer_idx),
+            graph.get_tensor_by_name('bert/encoder/layer_%d/attention/self/key/kernel:0' % layer_idx),
+            graph.get_tensor_by_name('bert/encoder/layer_%d/attention/self/key/bias:0' % layer_idx),
+            graph.get_tensor_by_name('bert/encoder/layer_%d/attention/self/value/kernel:0' % layer_idx),
+            graph.get_tensor_by_name('bert/encoder/layer_%d/attention/self/value/bias:0' % layer_idx),
+            tf.expand_dims(attention_mask, 1),
+            graph.get_tensor_by_name('bert/encoder/layer_%d/attention/output/dense/kernel:0' % layer_idx),
+            graph.get_tensor_by_name('bert/encoder/layer_%d/attention/output/dense/bias:0' % layer_idx),
+            graph.get_tensor_by_name('bert/encoder/layer_%d/attention/output/LayerNorm/beta:0' % layer_idx),
+            graph.get_tensor_by_name('bert/encoder/layer_%d/attention/output/LayerNorm/gamma:0' % layer_idx),
+            graph.get_tensor_by_name('bert/encoder/layer_%d/intermediate/dense/kernel:0' % layer_idx),
+            graph.get_tensor_by_name('bert/encoder/layer_%d/intermediate/dense/bias:0' % layer_idx),
+            graph.get_tensor_by_name('bert/encoder/layer_%d/output/dense/kernel:0' % layer_idx),
+            graph.get_tensor_by_name('bert/encoder/layer_%d/output/dense/bias:0' % layer_idx),
+            graph.get_tensor_by_name('bert/encoder/layer_%d/output/LayerNorm/beta:0' % layer_idx),
+            graph.get_tensor_by_name('bert/encoder/layer_%d/output/LayerNorm/gamma:0' % layer_idx),
+            sequence_id_offset,
+            head_num=num_attention_heads, size_per_head=attention_head_size,
+            remove_padding=remove_padding)
 
-            prev_output = layer_output
+        if remove_padding == True:
+            all_layer_outputs.append(transformer_op_module.rebuild_padding(layer_output, sequence_id_offset, tf.expand_dims(attention_mask, 1)))
+        else:
             all_layer_outputs.append(layer_output)
-
+        inputs = layer_output
+    
+    if remove_padding == True:
+        layer_output = transformer_op_module.rebuild_padding(layer_output, sequence_id_offset, tf.expand_dims(attention_mask, 1))
+            
+            
     if do_return_all_layers:
         final_outputs = []
         for layer_output in all_layer_outputs:

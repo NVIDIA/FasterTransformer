@@ -13,6 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 #include "fastertransformer/common.h"
 
 #include "cuda_kernels.h"
@@ -168,8 +169,7 @@ void add_bias_input_layernorm(T* out, const T* input, const T* bias, const T* ga
   float variance = 0.0f;
 
   float local_out = 0.0f;
-  for(int i = tid; i < n; i += blockDim.x)
-    local_out += (float)(out[blockIdx.x * n + i] + input[blockIdx.x * n + i] + __ldg(&bias[i]));
+  local_out += (float)(out[blockIdx.x * n + tid] + input[blockIdx.x * n + tid] + __ldg(&bias[tid]));
 
   mean = blockReduceSum<float>(local_out);
   if(threadIdx.x == 0)
@@ -181,9 +181,8 @@ void add_bias_input_layernorm(T* out, const T* input, const T* bias, const T* ga
     s_variance = variance / n + 1e-6f;
   __syncthreads();
 
-  for(int i = tid; i < n; i += blockDim.x)
-    out[blockIdx.x * n + i] = 
-	    (T)(((local_out - s_mean) * rsqrtf(s_variance)) * (float)(__ldg(&gamma[i])) + (float)(__ldg(&beta[i])));
+  out[blockIdx.x * n + tid] = 
+	    (T)(((local_out - s_mean) * rsqrtf(s_variance)) * (float)(__ldg(&gamma[tid])) + (float)(__ldg(&beta[tid])));
 }
 
 template <>
@@ -204,7 +203,7 @@ void add_bias_input_layernorm(half* out, const half* input, const half* bias,
   const half2* bias_ptr = (const half2*)bias;
   const half2* gamma_ptr = (const half2*)gamma;
   const half2* beta_ptr = (const half2*)beta;
- 
+
   float local_out = 0.0f;
   int id = blockIdx.x * n / 2 + tid; 
   local_out_fp2 = __half22float2(__hadd2(__hadd2(out_ptr[id], input_ptr[id]), __ldg(&bias_ptr[tid])));
@@ -230,25 +229,127 @@ void add_bias_input_layernorm(half* out, const half* input, const half* bias,
   out_ptr[id] = __float22half2_rn(local_out_fp2);
 }
 
-template<typename T>
-__global__
-void broadcast_kernel(T* log_probs, T* cum_log_probs, const int batch_size, const int beam_width, const int vocab_size, const int N)
-{
-  int tid = blockIdx.x * blockDim.x + threadIdx.x;
-  int bid = tid / vocab_size;
 
-  if(tid < N)
-    log_probs[tid] += cum_log_probs[bid];
+template <typename T>
+__global__ 
+void add_bias_input_layernorm_v2(T* out, const T* __restrict input, const T* __restrict bias, 
+                                const T* __restrict gamma, const T* __restrict beta, int n)
+{
+  const int ite = 4;
+  const int tid = threadIdx.x;
+  const int bid = blockIdx.x;
+
+  __shared__ float s_mean;
+  __shared__ float s_variance;
+  float mean =  0.0f;
+  float variance = 0.0f;
+  float local_out[ite];
+
+  float sum = 0.0f;
+  #pragma unroll
+  for(int i = 0; i < ite; i++)
+  {
+    int col_id = i * blockDim.x + tid; 
+    int id = bid * n + col_id; 
+    local_out[i] = (float)(out[id] + __ldg(&input[id]) + __ldg(&bias[col_id]));
+    sum += local_out[i];
+  }
+
+  mean = blockReduceSum<float>(sum);
+  if(tid == 0)
+    s_mean = mean / n;
+  __syncthreads();
+
+  float var = 0.0f;
+  #pragma unroll
+  for(int i = 0; i < ite; i++)
+  {
+    float diff = local_out[i] - s_mean;
+    var += diff * diff;
+  }
+
+  variance = blockReduceSum<float>(var);
+  if(tid == 0)
+    s_variance = rsqrtf(variance / n + 1e-6f);
+  __syncthreads();
+
+  #pragma unroll
+  for(int i = 0; i < ite; i++)
+  {
+    int col_id = i * blockDim.x + tid; 
+    int id = bid * n + col_id; 
+    out[id] = (T)((local_out[i] - s_mean) * s_variance * (float)__ldg(&gamma[col_id]) + (float)__ldg(&beta[col_id]));
+  }
+}
+
+template <>
+__global__ 
+void add_bias_input_layernorm_v2(half* out, const half* __restrict input, const half* __restrict bias, 
+  const half* __restrict gamma, const half* __restrict beta, int n)
+{
+  const int ite = 4;
+  const int tid = threadIdx.x;
+  const int bid = blockIdx.x;
+  __shared__ float s_mean;
+  __shared__ float s_variance;
+  float mean =  0.0f;
+  float variance = 0.0f;
+  half2 local_out_half2[ite];
+
+  half2* out_ptr = (half2*)out;
+  const half2* input_ptr = (const half2*)input;
+  const half2* bias_ptr = (const half2*)bias;
+  const half2* gamma_ptr = (const half2*)gamma;
+  const half2* beta_ptr = (const half2*)beta;
+
+  // float sum = 0.0f;
+  half2 sum = __float2half2_rn(0.0f);
+  #pragma unroll
+  for(int i = 0; i < ite; i++)
+  {
+    int col_id = i * blockDim.x + tid; 
+    int id = bid * n / 2 + col_id; 
+    local_out_half2[i] = out_ptr[id] + __ldg(&input_ptr[id]) + __ldg(&bias_ptr[col_id]);
+    sum += local_out_half2[i];
+  }
+
+  mean = blockReduceSum<float>((float)(sum.x + sum.y));
+  if(threadIdx.x == 0)
+    s_mean = mean / n;
+  __syncthreads();
+
+  float var = 0.0f;
+  half2 s_mean_2 = __float2half2_rn(s_mean);
+  #pragma unroll
+  for(int i = 0; i < ite; i++)
+  {
+    local_out_half2[i] = local_out_half2[i] - s_mean_2;
+    float v1 = (float)local_out_half2[i].x;
+    float v2 = (float)local_out_half2[i].y;
+    var += v1 * v1 + v2 * v2;
+  }
+
+  variance = blockReduceSum<float>(var);
+  if(threadIdx.x == 0)
+    s_variance = rsqrtf(variance / n + 1e-6f);
+  __syncthreads();
+
+  half2 s_var_2 = __float2half2_rn(s_variance);
+  #pragma unroll
+  for(int i = 0; i < ite; i++)
+  {
+    int col_id = i * blockDim.x + tid; 
+    int id = bid * n / 2 + col_id; 
+    out_ptr[id] = local_out_half2[i] * s_var_2 * __ldg(&gamma_ptr[col_id]) + __ldg(&beta_ptr[col_id]);
+  }
 }
 
 template <typename T>
 void add_bias_act_kernelLauncher(T* out, const T* bias, int m, int n, cudaStream_t stream)
 {
-//  dim3 grid(m / 64);
-  dim3 grid(m / 4);
+  dim3 grid(ceil(m / 4.));
   dim3 block(n / 4);
   assert(block.x <= 1024);
-//  dim3 block(n);
   add_bias_act<T><<<grid, block, 0, stream>>>(out, bias, m, n);
 }
 
@@ -259,9 +360,11 @@ void add_bias_input_layernorm_kernelLauncher(T* out, const T* input, const T* bi
   dim3 grid(m);
   dim3 block(n);
   assert(n <= 1024);
-  add_bias_input_layernorm<T><<<grid, block, 0, stream>>>(out, input, bias, gamma, beta, m, n);
+  if(n == 768 || n == 1024)
+    add_bias_input_layernorm_v2<T><<<grid, n / 4, 0, stream>>>(out, input, bias, gamma, beta, n);
+  else
+    add_bias_input_layernorm<T><<<grid, block, 0, stream>>>(out, input, bias, gamma, beta, m, n);
 }
-
 
 template <>
 void add_bias_input_layernorm_kernelLauncher(half* out, const half* input, const half* bias, 
@@ -270,19 +373,318 @@ void add_bias_input_layernorm_kernelLauncher(half* out, const half* input, const
   dim3 grid(m);
   dim3 block(n / 2);
   assert(n / 2 <= 1024);
-  add_bias_input_layernorm<half><<<grid, block, 0, stream>>>(out, input, bias, gamma, beta, m, n);
-}
-
-void broadcast_kernelLauncher(float* log_probs, float* cum_log_probs, const int batch_size, const int beam_width, 
-  const int vocab_size, cudaStream_t stream)
-{
   
-  int N = batch_size * beam_width * vocab_size;
-  dim3 block(1024);
-  dim3 grid((N - 1) / block.x + 1);
-
-  broadcast_kernel<float><<<grid, block, 0, stream>>>(log_probs, cum_log_probs, batch_size, beam_width, vocab_size, N);
+  if(m >= 512 && (n == 768 || n == 1024))
+    add_bias_input_layernorm_v2<half><<<grid, n / 8, 0, stream>>>(out, input, bias, gamma, beta, n);
+  else
+    add_bias_input_layernorm<half><<<grid, block, 0, stream>>>(out, input, bias, gamma, beta, m, n);
 }
+
+template <typename T>
+__global__ void update_logits_kernel(T* logits, const T* bias, const int end_id, const bool* finished, const int n)
+{
+  int bid = blockIdx.x;
+  bool finish = finished[bid];
+  int offset = bid * n;
+
+  float max_val = -1 * FLT_MAX;
+  __shared__ float s_max_val;
+  __shared__ float s_sum_val;
+
+  for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
+  {
+    if(finish)
+      logits[offset + tid] = (tid == end_id) ? FLT_MAX : -1 * FLT_MAX;
+    else
+      logits[offset + tid] += bias[tid];
+    max_val = max(max_val, logits[offset + tid]);
+  }
+
+  max_val = blockReduceMax<float>((float)max_val);
+  if(threadIdx.x == 0)
+    s_max_val = max_val;
+  __syncthreads();
+
+  float sum_val = 0.0f;
+  for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
+  {
+    logits[offset + tid] = __expf((float)logits[offset + tid] - s_max_val);
+    sum_val += (float)logits[offset + tid];
+  }
+
+  sum_val = blockReduceSum<float>(sum_val);
+  if(threadIdx.x == 0)
+    s_sum_val = sum_val;
+  __syncthreads();
+
+  for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
+  {
+    logits[offset + tid] = logf((float)logits[offset + tid] / s_sum_val);
+  }
+}
+
+template <typename T>
+__global__ void update_logits_kernel_without_softmax(T* logits, const T* bias, const int end_id, const bool* finished, const int n)
+{
+  int bid = blockIdx.x;
+  bool finish = finished[bid];
+  int offset = bid * n;
+
+  for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
+  {
+    if(finish)
+      logits[offset + tid] = (tid == end_id) ? FLT_MAX : -1 * FLT_MAX;
+    else
+      logits[offset + tid] += bias[tid];
+  }
+}
+
+template <typename T>
+__global__ void update_logits_kernel_without_log(T* logits, const T* bias, const int end_id, const bool* finished, const int n)
+{
+  int bid = blockIdx.x;
+  bool finish = finished[bid];
+  int offset = bid * n;
+
+  float max_val = -1 * FLT_MAX;
+  __shared__ float s_max_val;
+  __shared__ float s_sum_val;
+
+  for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
+  {
+    if(finish)
+      logits[offset + tid] = (tid == end_id) ? FLT_MAX : -1 * FLT_MAX;
+    else
+      logits[offset + tid] += bias[tid];
+    max_val = max(max_val, logits[offset + tid]);
+  }
+
+  max_val = blockReduceMax<float>((float)max_val);
+  if(threadIdx.x == 0)
+    s_max_val = max_val;
+  __syncthreads();
+
+  float sum_val = 0.0f;
+  for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
+  {
+    logits[offset + tid] = __expf((float)logits[offset + tid] - s_max_val);
+    sum_val += (float)logits[offset + tid];
+  }
+
+  sum_val = blockReduceSum<float>(sum_val);
+  if(threadIdx.x == 0)
+    s_sum_val = sum_val;
+  __syncthreads();
+
+  for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
+  {
+    logits[offset + tid] = ((float)logits[offset + tid] / s_sum_val);
+  }
+}
+
+template<typename T>
+__global__ void remove_sequence_length_padding(const T* src, T* tgt,
+                                              const int* tmp_mask_offset,
+                                              int* mask_offset,
+                                              const int n)
+{
+  const int tid = threadIdx.x;
+  const int bid = blockIdx.x;
+  mask_offset[bid] = tmp_mask_offset[bid];
+  const int src_seq_id = bid + mask_offset[bid];
+  const int tgt_seq_id = bid;
+
+
+  for(int i = tid; i < n; i += blockDim.x)
+  {
+    tgt[tgt_seq_id * n + i] = src[src_seq_id * n + i];
+  }
+}
+
+template<typename T>
+void remove_sequence_length_padding_kernelLauncher(const T* src, T* tgt, 
+                                                  const int* tmp_mask_offset, 
+                                                  int* mask_offset,
+                                                  const int m, const int n, cudaStream_t stream)
+{
+  // src: [batch_size*max_seq_len, hidden_dim]
+  // tgt: [valid_word_num, hidden_dim]
+  remove_sequence_length_padding<<<m, 256, 0, stream>>>(src, tgt, tmp_mask_offset, mask_offset, n);
+}
+
+template<typename T>
+__global__ void rebuild_sequence_length_padding(const T* src, T* tgt,
+                                            const int* mask_offset,
+                                            const int n)
+{
+  const int tid = threadIdx.x;
+  const int bid = blockIdx.x;
+  const int tgt_seq_id = bid + mask_offset[bid];
+  const int src_seq_id = bid;
+
+  for(int i = tid; i < n; i += blockDim.x)
+  {
+    tgt[tgt_seq_id * n + i] = src[src_seq_id * n + i];
+  }
+}
+
+template<typename T>
+void rebuild_sequence_length_padding_kernelLauncher(const T* src, T* tgt, 
+                                                  const int* mask_offset, const int m, 
+                                                  const int n, cudaStream_t stream)
+{
+  // src: [valid_word_num, hidden_dim]
+  // tgt: [batch_size*max_seq_len, hidden_dim]
+  rebuild_sequence_length_padding<<<m, 256, 0, stream>>>(src, tgt, mask_offset, n);
+}
+
+__global__ void build_sequence_length_padding_offset(const int* sequence_length, 
+  const int batch_size, const int max_seq_len, int* valid_word_num, int* tmp_mask_offset)
+{
+  // do cumulated sum
+  int total_seq_len = 0;
+  int cum_offset = 0;
+  int index = 0;
+  for(int i = 0; i < batch_size; i++) 
+  {
+    const int seq_len = sequence_length[i];
+    for(int j = 0; j < seq_len; j++)
+    {
+      tmp_mask_offset[index] = cum_offset;
+      index++;
+    }
+    cum_offset += max_seq_len - seq_len;
+    total_seq_len += seq_len;
+  }
+  valid_word_num[0] = total_seq_len;
+}
+
+void build_sequence_length_padding_offset_kernelLauncher(const int* sequence_length, 
+  const int batch_size, const int max_seq_len, int* valid_word_num, int* tmp_mask_offset,
+  cudaStream_t stream)
+{
+  build_sequence_length_padding_offset<<<1, 1, 0, stream>>>(sequence_length, 
+    batch_size, max_seq_len, valid_word_num, tmp_mask_offset);
+}
+
+template void rebuild_sequence_length_padding_kernelLauncher(const float* src, float* tgt, 
+  const int* mask_offset, const int m, 
+  const int n, cudaStream_t stream);
+
+
+template void rebuild_sequence_length_padding_kernelLauncher(const half* src, half* tgt, 
+  const int* mask_offset, const int m, 
+  const int n, cudaStream_t stream);
+
+template void remove_sequence_length_padding_kernelLauncher(const float* src, float* tgt, 
+  const int* tmp_mask_offset, 
+  int* mask_offset, const int m, 
+  const int n, cudaStream_t stream);
+
+template void remove_sequence_length_padding_kernelLauncher(const half* src, half* tgt, 
+  const int* tmp_mask_offset, 
+  int* mask_offset, const int m, 
+  const int n, cudaStream_t stream);
+
+void update_logits(float* logits, const float* bias, const int end_id, const bool* finished, 
+  const int m, const int n, cudaStream_t stream)
+{
+  dim3 grid(m);
+  dim3 block(min(n, 1024));
+  /*n is the vocab_size, e.g., 30000, 7000.... vocab_size is usually very big. */
+  update_logits_kernel<float><<<grid, block, 0, stream>>>(logits, bias, end_id, finished, n);
+}
+
+void update_logits_without_softmax(float* logits, const float* bias, const int end_id, const bool* finished, 
+  const int m, const int n, cudaStream_t stream)
+{
+  dim3 grid(m);
+  dim3 block(min(n, 1024));
+  /*n is the vocab_size, e.g., 30000, 7000.... vocab_size is usually very big. */
+  update_logits_kernel_without_softmax<float><<<grid, block, 0, stream>>>(logits, bias, end_id, finished, n);
+}
+
+void update_logits_without_log(float* logits, const float* bias, const int end_id, const bool* finished, 
+  const int m, const int n, cudaStream_t stream)
+{
+  dim3 grid(m);
+  dim3 block(min(n, 1024));
+  /*n is the vocab_size, e.g., 30000, 7000.... vocab_size is usually very big. */
+  update_logits_kernel_without_log<float><<<grid, block, 0, stream>>>(logits, bias, end_id, finished, n);
+}
+
+template void add_bias_act_kernelLauncher<float>(
+  float* out, const float* bias, int m, int n, cudaStream_t stream);
+
+template void add_bias_input_layernorm_kernelLauncher<float>(
+  float* out, const float* input, const float* bias, const float* gamma, const float* beta, 
+  int m, int n, cudaStream_t stream);
+
+template void add_bias_act_kernelLauncher<half>(
+  half* out, const half* bias, int m, int n, cudaStream_t stream);
+
+template void add_bias_input_layernorm_kernelLauncher<half>(
+  half* out, const half* input, const half* bias, const half* gamma, const half* beta, 
+  int m, int n, cudaStream_t stream);
+
+/* *********************************** Debug tools *********************************** */
+
+template <typename T>
+__global__
+void print_abs_mean_kernel(const T* buf, uint size)
+{
+  float sum;
+  for(int i = 0; i < size; i++)
+  {
+    sum += abs((float)buf[i]);
+    // printf("[INFO] buf[%d] %f \n", i, buf[i]);
+  }
+  printf("mean: %f \n", (float) sum / (float) size);
+  printf("sum: %f \n", sum);
+}
+
+template <typename T>
+__global__
+void print_kernel(const T* buf, uint size)
+{
+  for(int i = 0; i < size; i++)
+  {
+    printf("%f ", (float(buf[i])));
+  }
+  printf("\n");
+}
+
+template <typename T>
+void print_first_k(const T* buf, uint size, cudaStream_t stream)
+{
+  cudaDeviceSynchronize();
+  check_cuda_error(cudaGetLastError());
+  print_kernel<<<1, 1, 0, stream>>>(buf, size);
+  cudaDeviceSynchronize();
+  check_cuda_error(cudaGetLastError());
+}
+
+template <typename T>
+void print_abs_mean(const T* buf, uint size, cudaStream_t stream)
+{
+  cudaDeviceSynchronize();
+  check_cuda_error(cudaGetLastError());
+  print_abs_mean_kernel<<<1, 1, 0, stream>>>(buf, size);
+  cudaDeviceSynchronize();
+  check_cuda_error(cudaGetLastError());
+}
+
+template void print_first_k(const float*, uint size, cudaStream_t);
+template void print_first_k(const half*, uint size, cudaStream_t);
+template void print_first_k(const int*, uint size, cudaStream_t);
+
+template void print_abs_mean(const float* buf, uint size, cudaStream_t stream);
+template void print_abs_mean(const half* buf, uint size, cudaStream_t stream);
+template void print_abs_mean(const int* buf, uint size, cudaStream_t stream);
+
+/* **************************** end of Debug tools *********************************** */
+
+/* *************************** depreciated kernels *********************************** */
 
 template <typename T>
 __global__
@@ -295,11 +697,11 @@ void topK_kernel(const T* log_probs, int* ids, const int batch_size, const int N
   {
     bool choosed = false;
     val = (tid < N ) ? (float)log_probs[ite * N + tid] : -1e20f;
-    
+
     for(int kids = 0; kids < K; ++kids)
     {
       max_val = blockReduceMax<float>(val);
-      
+
       if(threadIdx.x == 0)
         s_max_val = max_val;
       __syncthreads();
@@ -351,7 +753,7 @@ void topK_kernel_2nd(const T* log_probs, int* ids, const int batch_size, const i
         choosed = true;
       }
       __syncthreads();
-     
+
       // simply sort the ids
       if(threadIdx.x == 0 && beam_index - begin_beam_index > 1){
         for(int i = begin_beam_index; i < beam_index; i++){
@@ -384,36 +786,6 @@ void topK(const float* log_probs, int* ids, const int batch_size, const int beam
 }
 
 template <typename T>
-__global__
-void update_kernel(T* log_probs, T* cum_log_probs, 
-                  int* ids, bool* finished, 
-                  int* parent_ids, int* sequence_length, 
-                  int* word_ids, int* output_ids, 
-                  const int batch_size, const int beam_width, 
-                  const int vocab_size, const int end_id, 
-                  int* finished_count)
-{
-  int tid = threadIdx.x;
-  sequence_length[tid] = finished[tid] ? sequence_length[tid] : sequence_length[tid] + 1;
-
-  int beam_id = ids[tid];
-  beam_id /= vocab_size;
-  int word_id = ids[tid];
-  word_id %= vocab_size;
-
-  cum_log_probs[tid] = log_probs[ids[tid]];
-  sequence_length[tid] = sequence_length[beam_id];
-  finished[tid] = word_id == end_id ? 1 : 0;
-  parent_ids[tid] = beam_id;
-  word_ids[tid] = word_id;
-  output_ids[tid] = word_id;
-
-  // TODO use reduce sum to compute how many sentence are finished
-  // int fi = finished[tid]
-  // int total_finish = reduceSum(fi);
-}
-
-template <typename T>
 __global__ void embedding_lookup_kernel(const T* embedding_table, const int* word_ids,
     const int hidden_units, T* from_tensor)
 {
@@ -421,156 +793,15 @@ __global__ void embedding_lookup_kernel(const T* embedding_table, const int* wor
   from_tensor[write_pos] = embedding_table[word_ids[blockIdx.x] * hidden_units + threadIdx.x];
 }
 
-void update(float* log_probs, float* cum_log_probs, 
-            int* ids, bool* finished, 
-            int* parent_ids, int* sequence_length,
-            int* word_ids, int* output_ids, 
-            const int batch_size, const int beam_width, 
-            const int vocab_size, cudaStream_t stream, 
-            const int end_id, int* finished_count)
-{ 
-  
-  dim3 grid(1);
-  dim3 block(batch_size * beam_width);
-
-  assert(block.x <= 1024);
-
-  update_kernel<float><<<grid, block, 0, stream>>>(log_probs, cum_log_probs, ids, 
-                                                  finished, parent_ids, sequence_length,
-                                                  word_ids, output_ids, batch_size, 
-                                                  beam_width, vocab_size, end_id, 
-                                                  finished_count);
-}
-
 template <typename T>
 void embedding_lookup(const T* embedding_table, const int* word_ids, T* from_tensor,
   const int batch_size, const int beam_width, const int hidden_units, cudaStream_t stream)
 {
-   dim3 grid(batch_size * beam_width);
-   dim3 block(hidden_units);
-   assert(hidden_units <= 1024);
-   embedding_lookup_kernel<<<grid, block, 0, stream>>>(embedding_table, word_ids, hidden_units, from_tensor);
+  dim3 grid(batch_size * beam_width);
+  dim3 block(hidden_units);
+  assert(hidden_units <= 1024);
+  embedding_lookup_kernel<<<grid, block, 0, stream>>>(embedding_table, word_ids, hidden_units, from_tensor);
 }
-
-template <typename T>
-__global__ void update_logits_kernel(T* logits, const T* bias, const int end_id, const bool* finished, const int n)
-{
-  int bid = blockIdx.x;
-  bool finish = finished[bid];
-  int offset = bid * n;
-
-  float max_val = -1 * FLT_MAX;
-  __shared__ float s_max_val;
-  __shared__ float s_sum_val;
-
-  for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
-  {
-    if(finish)
-      logits[offset + tid] = (tid == end_id) ? FLT_MAX : -1 * FLT_MAX;
-    else
-      logits[offset + tid] += bias[tid];
-    max_val = max(max_val, logits[offset + tid]);
-  }
-
-  max_val = blockReduceMax<float>((float)max_val);
-  if(threadIdx.x == 0)
-    s_max_val = max_val;
-  __syncthreads();
-
-  float sum_val = 0.0f;
-  for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
-  {
-    logits[offset + tid] = __expf((float)logits[offset + tid] - s_max_val);
-    sum_val += (float)logits[offset + tid];
-  }
-
-  sum_val = blockReduceSum<float>(sum_val);
-  if(threadIdx.x == 0)
-    s_sum_val = sum_val;
-  __syncthreads();
-
-  for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
-  {
-    logits[offset + tid] = logf((float)logits[offset + tid] / s_sum_val);
-  }
-}
-
-void update_logits(float* logits, const float* bias, const int end_id, const bool* finished, 
-  const int m, const int n, cudaStream_t stream)
-{
-  dim3 grid(m);
-  dim3 block(min(n, 1024));
-  /*n is the vocab_size, e.g., 30000, 7000.... vocab_size is usually very big. */
-  update_logits_kernel<float><<<grid, block, 0, stream>>>(logits, bias, end_id, finished, n);
-}
-
-template <typename T>
-__global__ void init_kernel(bool* finished, int* sequence_length, int* word_ids, T* cum_log_probs, const int sentence_id, const int n, const int beam_width)
-{
-  int tid = threadIdx.x;
-  finished[tid] = false;
-  sequence_length[tid] = 0;
-  word_ids[tid] = sentence_id;
-  cum_log_probs[tid] = (T)(tid % beam_width == 0 ? 0.0f: -1e20f);
-}
-
-template <typename T>
-__global__ void update_KV_cache_kernel(
-  T* key_src_cache, T* key_tgt_cache,
-  T* value_src_cache, T* value_tgt_cache,
-  const int* beam_ids, const int batch_size, const int beam_width, const int hidden_dim, const int cache_size, const int step, const int decoder_layers)
-{
-  int layer_id = blockIdx.x / batch_size / beam_width / step;
-  int batch_id = (blockIdx.x % (batch_size * beam_width * step)) / (beam_width * step);
-  int beam_id = (blockIdx.x % (beam_width * step)) / step;
-  int step_id = blockIdx.x % step;
-
-  int hidden_id = step_id * batch_size * beam_width * hidden_dim + 
-    beam_ids[batch_id * beam_width + beam_id] * hidden_dim;
-
-  int tgt_hidden_id = step_id * batch_size * beam_width * hidden_dim + 
-    batch_id * beam_width * hidden_dim + beam_id * hidden_dim;
-
-  T* key_src_ptr = key_src_cache + layer_id * cache_size;
-  T* key_tgt_ptr = key_tgt_cache + layer_id * cache_size;
-  T* value_src_ptr = value_src_cache + layer_id * cache_size;
-  T* value_tgt_ptr = value_tgt_cache + layer_id * cache_size;
-
-
-  for(int tid = threadIdx.x; tid < hidden_dim; tid += blockDim.x)
-  {
-    key_tgt_ptr[tgt_hidden_id + tid] = key_src_ptr[hidden_id + tid];
-    value_tgt_ptr[tgt_hidden_id + tid] = value_src_ptr[hidden_id + tid];
-  }
-  
-}
-template <typename T>
-void update_KV_cache(T** key_cache, T** value_cache, const int* beam_ids, const int batch_size, const int beam_width, const int hidden_dim,
-  const int step, const int cache_size, const int decoder_layers, cudaStream_t stream)
-{
-  dim3 grid(decoder_layers * batch_size * beam_width * step);
-  dim3 block(min(1024, hidden_dim));
-
-  int src_id = step & 0x1;
-  int tgt_id = 1 - src_id;
-
-  update_KV_cache_kernel<<<grid, block, 0, stream>>>(
-    key_cache[src_id], key_cache[tgt_id],
-    value_cache[src_id], value_cache[tgt_id],
-    beam_ids, batch_size, beam_width, hidden_dim, cache_size, step, decoder_layers);
-}
-
-void init(bool* finished, int* sequence_length, int* word_ids, float* cum_log_probs, const int sentence_id, const int batch_size, 
-  const int beam_width, cudaStream_t stream)
-{
-  dim3 grid(1);
-  dim3 block(min(1024, batch_size * beam_width));
-
-  assert(batch_size * beam_width <= 1024);
-  
-  init_kernel<float><<<grid, block, 0, stream>>>(finished, sequence_length, word_ids, cum_log_probs, sentence_id, batch_size * beam_width, beam_width);
-}
-
 
 template<typename T>
 __global__
@@ -602,31 +833,11 @@ void sine_position_encoder(
   sine_position_encoder_kernel<T><<<grid, block, 0, stream>>>(output, step, n);
 }
 
-template void add_bias_act_kernelLauncher<float>(
-  float* out, const float* bias, int m, int n, cudaStream_t stream);
-
-template void add_bias_input_layernorm_kernelLauncher<float>(
-  float* out, const float* input, const float* bias, const float* gamma, const float* beta, 
-  int m, int n, cudaStream_t stream);
-
-template void add_bias_act_kernelLauncher<half>(
-  half* out, const half* bias, int m, int n, cudaStream_t stream);
-
-template void add_bias_input_layernorm_kernelLauncher<half>(
-  half* out, const half* input, const half* bias, const half* gamma, const half* beta, 
-  int m, int n, cudaStream_t stream);
-
 template void embedding_lookup(const float* embedding_table, const int* word_ids, float* from_tensor,
   const int batch_size, const int beam_width, const int hidden_units, cudaStream_t stream);
 
 template void embedding_lookup(const half* embedding_table, const int* word_ids, half* from_tensor,
   const int batch_size, const int beam_width, const int hidden_units, cudaStream_t stream);
-
-template void update_KV_cache(float** key_cache, float** value_cache, const int* beam_ids, const int batch_size, const int beam_width, const int hidden_dim,
-  const int step, const int cache_size, const int decoder_layers, cudaStream_t stream);
-
-template void update_KV_cache(half** key_cache, half** value_cache, const int* beam_ids, const int batch_size, const int beam_width, const int hidden_dim,
-  const int step, const int cache_size, const int decoder_layers, cudaStream_t stream);
 
 template void sine_position_encoder(
   float* output,
@@ -639,5 +850,7 @@ template void sine_position_encoder(
   int step,
   int m, int n,
   cudaStream_t stream);
+
+/* *************************** end of depreciated kernels *********************************** */
 
 }//namespace 

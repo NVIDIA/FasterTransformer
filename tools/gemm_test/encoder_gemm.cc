@@ -30,10 +30,6 @@ int main(int argc, char* argv[])
   const int head_num = atoi(argv[3]);
   const int size_per_head = atoi(argv[4]);
 
-  struct cudaDeviceProp prop;
-  check_cuda_error(cudaGetDeviceProperties(&prop, 0));
-  printf("Device %s\n", prop.name);
-
   if(atoi(argv[5]) == 0)
     generate_encoder_gemm_config<float>(batch_size, seq_len, head_num, size_per_head);
   else if(atoi(argv[5]) == 1)

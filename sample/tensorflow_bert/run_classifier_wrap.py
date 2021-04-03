@@ -73,4 +73,5 @@ if __name__ == "__main__":
     flags.mark_flag_as_required("output_dir")
     flags.DEFINE_string("floatx", None, "float32 or float16")
     flags.mark_flag_as_required("floatx")
+    flags.DEFINE_bool("remove_padding", False, "Whether remove the padding of sentences")
     tf.app.run()

@@ -33,19 +33,23 @@ template <typename T>
 class EncoderInitParam
 {
 public:
-  const T *from_tensor;
-  const T *to_tensor;
+  const T *from_tensor = nullptr;
+  const T *to_tensor = nullptr;
 
   AttentionWeight<T> self_attention;
-  const T *attr_mask;
+  const T *attr_mask = nullptr;
   LayerNormWeight<T> self_layernorm;
 
   FFNWeight<T> ffn;
   LayerNormWeight<T> ffn_layernorm;
 
   T *transformer_out;
-  cublasHandle_t cublas_handle;
-  cudaStream_t stream;
+  cublasHandle_t cublas_handle = nullptr;
+  cudaStream_t stream = 0;
+
+  const int* sequence_id_offset = nullptr;
+  int valid_word_num = -1;
+
 };
 
 template <OperationType OpType_, template <OperationType> class MultiHeadAttention_>
@@ -85,6 +89,10 @@ class BertEncoderTransformer
   DataType_ *attr_out_buf_;
   DataType_ *attr_matmul_buf_;
   DataType_ *inter_matmul_buf_;
+  
+  DataType_ *attr_out_tmp_buf_;
+  DataType_ *out_tmp_buf_;
+  DataType_ *from_tensor_tmp_buf_;
 
   int batch_size_;
   int from_seq_len_;
@@ -109,14 +117,18 @@ public:
 
     try
     {
-      buf_ = reinterpret_cast<DataType_ *>(allocator_.malloc(sizeof(DataType_) * buf_size * 6));
+      buf_ = reinterpret_cast<DataType_ *>(allocator_.malloc(sizeof(DataType_) * buf_size * (6 + 3)));
       if (buf_ == nullptr)
-        throw std::runtime_error(std::string("Tensorflow Allocator failed to allocate internal buffer."));
+        throw std::runtime_error(std::string("Allocator failed to allocate internal buffer."));
 
       attr_out_buf_ = buf_;
       attr_matmul_buf_ = attr_out_buf_ + buf_size;
       inter_matmul_buf_ = attr_matmul_buf_ + buf_size;
-
+      
+      attr_out_tmp_buf_ = inter_matmul_buf_ + 4 * buf_size;
+      out_tmp_buf_ = attr_out_tmp_buf_ + buf_size;
+      from_tensor_tmp_buf_ = out_tmp_buf_ + buf_size;
+      
       attention_ = new typename Traits_::MultiHeadAttention(allocator_, batch_size_, from_seq_len_, to_seq_len_, head_num_, size_per_head_);
       FILE *fd = fopen("gemm_config.in", "r");
       int err = 0;
@@ -124,7 +136,7 @@ public:
         printf("gemm_config.in is not found\n");
       else
       {
-        err = fscanf(fd, "%d%d%d%*d%*d", &cublasAlgo_[0], &cublasAlgo_[1], &cublasAlgo_[2]);
+        err = fscanf(fd, "%d %*f %d %*f %d %*f %*d %*f %*d %*f %*d %*f", &cublasAlgo_[0], &cublasAlgo_[1], &cublasAlgo_[2]);
         fclose(fd);
       }
       if (err != 3)
@@ -161,7 +173,6 @@ public:
 #endif
     param_ = param;
     cuda::MultiHeadInitParam<DataType_> multi_head_init_param;
-
     multi_head_init_param.from_tensor = param.from_tensor;
     multi_head_init_param.to_tensor = param.to_tensor;
     multi_head_init_param.self_attention = param.self_attention;
@@ -169,6 +180,8 @@ public:
     multi_head_init_param.stream = param.stream;
     multi_head_init_param.cublas_handle = param.cublas_handle;
     multi_head_init_param.attr_out = attr_out_buf_;
+    multi_head_init_param.valid_word_num = param.valid_word_num;
+    multi_head_init_param.sequence_id_offset = param.sequence_id_offset;
 
     attention_->initialize(multi_head_init_param);
   }
@@ -192,10 +205,10 @@ public:
 
       DataType_ alpha = (DataType_)1.0f;
       DataType_ beta = (DataType_)0.0f;
-      int m = batch_size_ * from_seq_len_;
+      const int m = param_.sequence_id_offset == nullptr ? batch_size_ * from_seq_len_ : param_.valid_word_num;
       int k = head_num_ * size_per_head_;
       int n = k;
-
+      
       check_cuda_error(cublasGemmEx(param_.cublas_handle,
                                     CUBLAS_OP_N, CUBLAS_OP_N,
                                     n, m, k,
@@ -253,6 +266,7 @@ public:
                                                          param_.ffn_layernorm.gamma,
                                                          param_.ffn_layernorm.beta,
                                                          m, n, param_.stream);
+
 #ifndef NDEBUG
       cudaDeviceSynchronize();
       check_cuda_error(cudaGetLastError());

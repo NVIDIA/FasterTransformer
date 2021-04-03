@@ -26,48 +26,6 @@ namespace fastertransformer{
 void init_kernel_check(bool* d_finished, int* d_sequence_length, int* d_word_ids, float* d_cum_log_probs, const int sentence_id, const int batch_size, 
   const int beam_width, cudaStream_t stream);
 
-template <typename T>
-void embedding_lookup_kernel_check(const T* embedding_table, const int* word_ids, T* from_tensor, const int batch_size, const int beam_width, 
-  const int hidden_units, const int vocab_size, cudaStream_t stream){
-
-    printf("[INFO] decoding embedding_lookup check. \n");
-
-    T *h_embedding_table = new T[vocab_size * hidden_units];
-    int *h_word_ids = new int[batch_size * beam_width];
-    T *h_from_tensor = new T[batch_size * beam_width * hidden_units];
-
-    embedding_lookup(embedding_table, word_ids, from_tensor, batch_size, beam_width, hidden_units, stream);
-    cudaDeviceSynchronize();
-    check_cuda_error(cudaGetLastError());
-    check_cuda_error(cudaMemcpy(h_embedding_table, embedding_table, sizeof(T) * vocab_size * hidden_units, cudaMemcpyDeviceToHost));
-    check_cuda_error(cudaMemcpy(h_word_ids, word_ids, sizeof(int) * batch_size * beam_width, cudaMemcpyDeviceToHost));
-    check_cuda_error(cudaMemcpy(h_from_tensor, from_tensor, sizeof(T) * batch_size * beam_width * hidden_units, cudaMemcpyDeviceToHost));
-
-    T *h_from_tensor_cpu = new T[batch_size * beam_width * hidden_units];
-
-    for(int i = 0; i < batch_size * beam_width; i++){
-        const int row_id = h_word_ids[i];
-        for(int j = 0; j < hidden_units; j++){
-            h_from_tensor_cpu[i * hidden_units + j] = h_embedding_table[row_id * hidden_units + j];
-        }
-    }
-
-    for(int i = 0; i < batch_size * beam_width * hidden_units; i++){
-        float diff = (float)(h_from_tensor_cpu[i] - h_from_tensor[i]);
-        if(diff < 0) diff = diff * -1;
-        if(diff > 1e-6){
-            printf("[ERROR] embedding lookup fail with difference %f. \n", diff);
-            exit(-1);
-        }
-    }
-
-    delete [] h_from_tensor_cpu;
-    delete [] h_embedding_table;
-    delete [] h_word_ids;
-    delete [] h_from_tensor;
-    printf("[INFO] decoding embedding_lookup check finish. \n");
-}
-
 void update_logits_kernel_check(float* logits, const float* bias, const int end_id, const bool* finished, const int m, const int n, cudaStream_t stream);
 
 void broadcast_kernel_check(float* log_probs, float* cum_log_probs, const int batch_size, const int beam_width,
@@ -109,7 +67,7 @@ void update_KV_cache_kernel_check(T** key_cache, T** value_cache, const int* bea
     check_cuda_error(cudaMemcpy(h_beam_ids, beam_ids, sizeof(int) * batch_size * beam_width, cudaMemcpyDeviceToHost));
 
     // compute on GPU and copy the result to CPU
-    update_KV_cache<T>(key_cache, value_cache, beam_ids, batch_size, beam_width, hidden_dim, step, cache_size, decoder_layers, stream);
+    update_KV_cache_kernelLauncher<T>(key_cache, value_cache, beam_ids, batch_size, beam_width, hidden_dim, step, cache_size, decoder_layers, stream);
     cudaDeviceSynchronize();
     check_cuda_error(cudaGetLastError());
     check_cuda_error(cudaMemcpy(h_key_cache_tgt_after_update, key_cache[tgt_id], sizeof(T) * cache_size * decoder_layers, cudaMemcpyDeviceToHost));
