@@ -20,33 +20,48 @@
 #include "fastertransformer/th_op/encoder_ths_op.h"
 #include "fastertransformer/th_op/decoder_ths_op.h"
 #include "fastertransformer/th_op/decoding_ths_op.h"
+#include "fastertransformer/th_op/weight_quantize_op.h"
 
 using torch::Tensor;
 
 static auto fasterTransformerEncoderTHS = 
+#ifdef LEGACY_THS
   torch::jit::class_<torch_ths::FasterTransformerEncoder>("FasterTransformerEncoder")
-  .def(torch::jit::init<int64_t, int64_t, bool,
+#else
+  torch::jit::class_<torch_ths::FasterTransformerEncoder>("FasterTransformer", "Encoder")
+#endif
+  .def(torch::jit::init<Tensor, Tensor, Tensor, Tensor, Tensor, Tensor,
                         Tensor, Tensor, Tensor, Tensor, Tensor, Tensor,
-                        Tensor, Tensor, Tensor, Tensor, Tensor, Tensor,
-                        Tensor, Tensor, Tensor, Tensor>())
+                        Tensor, Tensor, Tensor, Tensor, Tensor,
+                        int64_t, int64_t, bool, int64_t, int64_t, int64_t, bool, bool>())
   .def("forward", &torch_ths::FasterTransformerEncoder::forward)
   .def_pickle(
     [](const c10::intrusive_ptr<torch_ths::FasterTransformerEncoder>& self) -> std::vector<Tensor> {
       return self->get_pickle_info();
     },
     [](std::vector<Tensor> state) -> c10::intrusive_ptr<torch_ths::FasterTransformerEncoder> {
-      int head_num = state[16][0].item().to<int>();
-      int head_size = state[16][1].item().to<int>();
-      bool remove_padding = (bool)(state[16][2].item().to<int>());
-      return c10::make_intrusive<torch_ths::FasterTransformerEncoder>(head_num, head_size, remove_padding,
+      int64_t head_num = state[17][0].item().to<int>();
+      int64_t head_size = state[17][1].item().to<int>();
+      bool remove_padding = (bool)(state[17][2].item().to<int>());
+      int64_t int8_mode = state[17][3].item().to<int>();
+      int64_t layer_num = state[17][4].item().to<int>();
+      int64_t layer_idx = state[17][5].item().to<int>();
+      bool allow_gemm_test = (bool)(state[17][6].item().to<int>());
+      bool use_trt_kernel = (bool)(state[17][7].item().to<int>());
+      return c10::make_intrusive<torch_ths::FasterTransformerEncoder>(
         state[0], state[1], state[2], state[3], state[4], state[5],
         state[6], state[7], state[8], state[9], state[10], state[11],
-        state[12], state[13], state[14], state[15]);
+        state[12], state[13], state[14], state[15], state[16],
+        head_num, head_size, remove_padding, int8_mode, layer_num, layer_idx, allow_gemm_test, use_trt_kernel);
     }
   );
 
 static auto fasterTransformerDecoderTHS = 
+#ifdef LEGACY_THS
   torch::jit::class_<torch_ths::FasterTransformerDecoder>("FasterTransformerDecoder")
+#else
+  torch::jit::class_<torch_ths::FasterTransformerDecoder>("FasterTransformer", "Decoder")
+#endif
   .def(torch::jit::init<int64_t, int64_t,
                         Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor,
                         Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor,
@@ -68,7 +83,11 @@ static auto fasterTransformerDecoderTHS =
   );
 
 static auto fasterTransformerDecodingTHS = 
+#ifdef LEGACY_THS
   torch::jit::class_<torch_ths::FasterTransformerDecoding>("FasterTransformerDecoding")
+#else
+  torch::jit::class_<torch_ths::FasterTransformerDecoding>("FasterTransformer", "Decoding")
+#endif
   .def(torch::jit::init<int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, double,
                         Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor,
                         Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor, Tensor,
@@ -97,5 +116,14 @@ static auto fasterTransformerDecodingTHS =
     }
   );
 
+static auto build_mask_remove_padding =
+  torch::RegisterOperators("fastertransformer::build_mask_remove_padding", &torch_ths::build_mask_remove_padding);
+
+static auto rebuild_padding =
+  torch::RegisterOperators("fastertransformer::rebuild_padding", &torch_ths::rebuild_padding);
+
 static auto gather_tree =
   torch::RegisterOperators("fastertransformer::gather_tree", &torch_ths::gather_tree);
+
+static auto weight_quantize =
+  torch::RegisterOperators("fastertransformer::weight_quantize", &torch_ext::weight_quantize);

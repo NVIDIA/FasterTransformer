@@ -28,6 +28,12 @@ void transpose_COL32_kernelLauncher(int8_t *dst, const int *src,
                                     const int head_num, const int size_per_head,
                                     const float *v_buf_addBias_deQFactor, const float *qk_afterSM_deQFactor,
                                     const float *out_scale_ptr, cudaStream_t stream);
+                                    
+void transpose_COL32_kernelLauncher(int8_t *dst, const int8_t *src,
+                                    const int batch_size, const int seq_len,
+                                    const int head_num, const int size_per_head,
+                                    const float *bmm2_deQFactor, 
+                                    const float *out_scale_ptr, cudaStream_t stream);                                    
 
 void transpose_COL32_rebuild_padding_kernelLauncher(int8_t *dst, const int *src,
                                                     const int *sequence_id_map, const int valid_word_num,
@@ -36,6 +42,13 @@ void transpose_COL32_rebuild_padding_kernelLauncher(int8_t *dst, const int *src,
                                                     const float *v_buf_addBias_deQFactor,
                                                     const float *qk_afterSM_deQFactor, const float *out_scale_ptr,
                                                     cudaStream_t stream);
+
+void transpose_COL32_rebuild_padding_kernelLauncher(int8_t* dst, const int8_t* src, 
+                                                    const int* sequence_id_map, const int valid_word_num, 
+                                                    const int batch_size, const int seq_len, 
+                                                    const int head_num, const int size_per_head, 
+                                                    const float *bmm2_deQFactor,
+                                                    const float* out_scale_ptr, cudaStream_t stream);
 
 template <typename T>
 void add_bias_input_layernorm_COL32_int32I_DataTypeO_kernelLauncher(T *output, const int32_t *input1,
@@ -46,13 +59,21 @@ void add_bias_input_layernorm_COL32_int32I_DataTypeO_kernelLauncher(T *output, c
                                                                     const float *input1_amax_ptr);
 
 template <typename T>
-void add_bias_input_layernorm_COL32_mixIntI_int8O_kernelLauncher(int8_t *output, const int32_t *input1,
-                                                                 const int8_t *input2, const T *bias,
-                                                                 const T *gamma, const T *beta,
-                                                                 int m, int n,
-                                                                 cudaStream_t stream, const float *weight_amax,
-                                                                 const float *input1_deQFactor_div127_ptr, const float *input2_deQFactor_ptr,
-                                                                 const float *output_scale_ptr);
+void add_bias_input_layernorm_COL32_int8I_DataTypeO_kernelLauncher(T *output, const int8_t *input1,
+                                                                   const int8_t *input2, const T *bias,
+                                                                   const T *gamma, const T *beta,
+                                                                   int m, int n,
+                                                                   cudaStream_t stream, 
+                                                                   const float *input1_deQFactor_ptr, const float *input2_deQFactor_ptr);                                                                 
+                                                                 
+template <typename T>
+void add_bias_input_layernorm_COL32_int8IO_kernelLauncher(int8_t *output, const int8_t *input1,
+                                                          const int8_t *input2, const T *bias,
+                                                          const T *gamma, const T *beta,
+                                                          int m, int n,
+                                                          cudaStream_t stream,
+                                                          const float *input1_deQFactor_ptr, const float *input2_deQFactor_ptr,
+                                                          const float *output_scale_ptr);                                                                 
 
 template <typename T>
 void add_bias_act_COL32_int32I_int8O_kernelLauncher(int8_t *out, const int32_t *input,
@@ -60,21 +81,26 @@ void add_bias_act_COL32_int32I_int8O_kernelLauncher(int8_t *out, const int32_t *
                                                     const int n, cudaStream_t stream,
                                                     const float *weight_amax, const float *input_deQFactor_div127_ptr,
                                                     const float *out_scale_ptr);
+                                                    
+template <typename T>
+void add_bias_act_COL32_int8IO_kernelLauncher(int8_t *out, const int8_t* input, 
+                                              const T* bias, const int m, const int n, 
+                                              cudaStream_t stream, const float* input_deQFactor_ptr, const float* out_scale_ptr);
 
 template <typename T>
-void FT_transformA_kernelLauncher(T *dst, const T *src,
-                                  int m, int n,
-                                  cudaStream_t stream);
-
+void transposeMatrix_COL32ToColMajor_kernelLauncher(T* dst, const T* src, 
+                                                    const int m, const int n, 
+                                                    cudaStream_t stream);
+                                         
 template <typename T>
-void FT_transformC_kernelLauncher(T *dst, const T *src,
-                                  int m, int n,
-                                  cudaStream_t stream);
-
+void transposeMatrix_colMajorToCOL32_kernelLauncher(T* dst, const T* src, 
+                                                    const int m, const int n, 
+                                                    cudaStream_t stream);
+                                                   
 template <typename T>
-void transposeMatrix_kernelLauncher(T *dst, const T *src,
-                                    const int m, const int n,
-                                    cudaStream_t stream);
+void transposeMatrix_colMajorToCOL32_quantize_kernelLauncher(int8_t* dst, const T* src, 
+                                                             const int m, const int n, 
+                                                             const float* scale_ptr, cudaStream_t stream);
 
 template <typename T>
 void quantized_kernelLauncher(int8_t *dst, const T *src,
@@ -85,5 +111,10 @@ template <typename T>
 void dequantized_kernelLauncher(T *dst, const int8_t *src,
                                 const int size, const float *scale_ptr,
                                 cudaStream_t stream);
+
+template<typename T>
+void rebuild_sequence_length_padding_COL32_kernelLauncher(const T* src, T* tgt,
+                                                          const int* mask_offset, const int m,
+                                                          const int n, const int tgt_m, cudaStream_t stream);
 
 } //namespace fastertransformer

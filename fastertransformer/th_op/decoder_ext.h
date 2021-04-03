@@ -100,7 +100,7 @@ public:
     T* decoder_buffer = (T*)allocator.malloc(decoder_buffer_size);
 
     decoder->initialize(decoder_params, decoder_buffer);
-    decoder->forward(input_ptr, memory_ptr, K_cache, V_cache, K_mem_cache, V_mem_cache, memory_seq_lens_ptr, output_ptr, step);
+    decoder->forward(input_ptr, memory_ptr, K_cache, V_cache, K_mem_cache, V_mem_cache, memory_seq_lens_ptr, output_ptr, step, true);
     allocator.free(decoder_buffer);
     delete decoder;
   }

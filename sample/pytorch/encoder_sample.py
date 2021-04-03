@@ -20,7 +20,7 @@ import timeit
 import torch
 import torch.cuda.nvtx as nvtx
 
-from utils.encoder import EncoderWeights, CustomEncoder, CustomEncoder2, HuggingFaceEncoder
+from utils.encoder import EncoderWeights, CustomEncoder, HuggingFaceEncoder
 
 
 def sequence_mask(lengths, max_len=None, is_2d=True):
@@ -52,31 +52,30 @@ def main():
                         help='size per head')
     parser.add_argument('--fp16', action='store_true',
                         help='is fp16')
+    parser.add_argument('--int8_mode', type=int, default=0, metavar='NUMBER',
+                        help='int8 mode (default: 0)', choices=[0, 1, 2])
     parser.add_argument('--time', action='store_true',
                         help='test the time or not.')
-    parser.add_argument('--use_pretrained', action='store_true',
-                        help='use pretrained weights or not.')
+    parser.add_argument('--avg_seq_len', type=int, default=-1, metavar='NUMBER',
+                        help='average sequence length (default: -1)')
     parser.add_argument('--remove_padding', action='store_true',
                         help='Remove the padding of sentences of encoder.')
+    parser.add_argument('--allow_gemm_test', action='store_true',
+                        help='Whether allow gemm test inside FT.')
     parser.add_argument('--weight_path', type=str,
-                        default='./pytorch/bert_squad/models/bert-large-uncased-whole-word-masking-finetuned-squad/pytorch_model.bin',
+                        default=None,
                         help='path containing the pretrained weights')
     parser.add_argument('--module_path', type=str, default='./',
                         help='directory containing the th_fastertransformer dynamic lib')
     parser.add_argument('--ths', action='store_true',
                         help='use TorchScript mode')
-    parser.add_argument('--ths_type', type=int, default=0,
-                        help='custom TorchScript type')
     parser.add_argument('--ths_path', type=str, default='./lib/libths_fastertransformer.so',
                         help='path of the ths_fastertransformer dynamic lib file')
-    parser.add_argument('--ths_path_2', type=str, default='./lib/libths_fastertransformer_op.so',
-                        help='path of the ths_fastertransformer op dynamic lib file')
-
     args = parser.parse_args()
 
     batch_size = args.batch_size
     seq_len = args.seq_len
-    if args.use_pretrained:
+    if args.weight_path is not None:
         if 'large' in args.weight_path:
             layer_num = 24
             head_num = 16
@@ -95,6 +94,13 @@ def main():
         head_size = args.head_size
     hidden_dim = head_num * head_size
 
+    if args.int8_mode == 1:
+        per_channel = True
+    elif args.int8_mode == 2:
+        per_channel = False
+    elif args.int8_mode != 0:
+        raise ValueError("wrong int8_mode argument")
+
     print("\n=============== Argument ===============")
     print('batch_size: ' + str(batch_size))
     print('layer_num: ' + str(layer_num))
@@ -102,58 +108,58 @@ def main():
     print('head_num: ' + str(head_num))
     print('head_size: ' + str(head_size))
     print('hidden_dim: ' + str(hidden_dim))
-    print('use_pretrained: ' + str(args.use_pretrained))
+    print('weight_path: ' + str(args.weight_path))
     print('use_fp16: ' + str(args.fp16))
+    print('int8_mode: ' + str(args.int8_mode))
+    print('avg_seq_len: ' + str(args.avg_seq_len))
     print('TorchScript mode: ' + str(args.ths))
-    print('TorchScript type: ' + str(args.ths_type))
     print('test_time: ' + str(args.time))
     print('remove_padding: ' + str(args.remove_padding))
+    print('allow_gemm_test: ' + str(args.allow_gemm_test))
     print("========================================\n")
 
     inp = torch.empty(batch_size, seq_len, hidden_dim).cuda()
     torch.nn.init.uniform_(inp, -1, 1)
     mem_seq_lens = torch.randint(1, seq_len+1, (batch_size,), dtype=torch.int32).cuda()
+    if args.remove_padding:
+        if args.avg_seq_len > 0:
+            mem_seq_lens = torch.ones((batch_size,)) * args.avg_seq_len
+            mem_seq_lens = mem_seq_lens.to(torch.int32).cuda()
+        elif args.avg_seq_len == -1:
+            mem_seq_lens = torch.ones((batch_size,)) * seq_len / 2
+            mem_seq_lens = mem_seq_lens.to(torch.int32).cuda()
+        else:
+            raise ValueError("wrong avg_seq_len")
+
     mask = sequence_mask(mem_seq_lens, args.seq_len, False).to(torch.float)
     # mask = torch.randint(0, 2, (batch_size, seq_len, seq_len), dtype=torch.float32).cuda()
-    if args.fp16:
+    if args.fp16 or args.int8_mode != 0:
         inp = inp.half()
         mask = mask.half()
 
-    if args.use_pretrained:
-        pretrained_weights = torch.load(args.weight_path)
-        weights = EncoderWeights(layer_num, hidden_dim, pretrained_weights)
-    else:
-        weights = EncoderWeights(layer_num, hidden_dim)
+    pretrained_weights = torch.load(args.weight_path) if (args.weight_path is not None) else None
+    weights = EncoderWeights(layer_num, hidden_dim, pretrained_weights)
 
-    if args.use_pretrained:
-        hf_encoder = HuggingFaceEncoder(layer_num, head_num, head_size, pretrained_weights)
-    else:
-        hf_encoder = HuggingFaceEncoder(layer_num, head_num, head_size, weights)
+    hf_encoder = HuggingFaceEncoder(layer_num, head_num, head_size, weights)
     hf_encoder.cuda()
-    if args.fp16:
+    if args.fp16 or args.int8_mode != 0:
         hf_encoder.half()
     hf_encoder.eval()
     if args.ths:
         hf_encoder = torch.jit.trace(hf_encoder, (inp, mask))
 
-    weights.to_cuda()
-    if args.fp16:
+    if args.int8_mode != 0:
+        weights.to_int8(per_channel, args.module_path, args.ths_path)
+    elif args.fp16:
         weights.to_half()
+    weights.to_cuda()
+    module_path = args.ths_path if args.ths else args.module_path
+    custom_encoder = CustomEncoder(layer_num, head_num, head_size, weights,
+                                    int8_mode=args.int8_mode,
+                                    remove_padding=args.remove_padding, allow_gemm_test=args.allow_gemm_test,
+                                    use_ths=args.ths, path=module_path)
     if args.ths:
-        if args.ths_type == 0:
-            custom_encoder = CustomEncoder(layer_num, head_num, head_size, weights,
-                                           os.path.abspath(args.ths_path), args.ths, remove_padding=args.remove_padding)
-        else:
-            custom_encoder = CustomEncoder2(layer_num, head_num, head_size, weights,
-                                            os.path.abspath(args.ths_path_2), remove_padding=args.remove_padding)
-    else:
-        custom_encoder = CustomEncoder(layer_num, head_num, head_size, weights,
-                                       os.path.abspath(args.module_path), remove_padding=args.remove_padding)
-    if args.ths:
-        if args.ths_type == 0:
-            custom_encoder = torch.jit.script(custom_encoder)
-        else:
-            custom_encoder = torch.jit.trace(custom_encoder, (inp, mask, mem_seq_lens))
+        custom_encoder = torch.jit.script(custom_encoder)
 
     with torch.no_grad():
         output_mask = sequence_mask(mem_seq_lens, args.seq_len).to(mask.dtype).unsqueeze(-1)

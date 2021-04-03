@@ -49,6 +49,7 @@ REGISTER_OP("BertTransformer")
     .Input("output_layernorm_gamma: T")
     .Input("sequence_id_offset: int32") // shape: [valid_word_num]
     .Input("amax_list: float")
+    .Input("trt_seqlen_offset: int32") // shape: [batch + 1] or [batch * 2 + 1] (view the padding like other batch). (like [0, seq_1, seq_1 + seq_2, ...])
     .Output("output: T")
     .Attr("T: {float, half}")
     .Attr("head_num: int >= 1")
@@ -56,7 +57,8 @@ REGISTER_OP("BertTransformer")
     .Attr("remove_padding: bool = true")
     .Attr("int8_mode: int = 0")
     .Attr("layer_idx: int = 0")
-    .Attr("layer_num: int = 12")
+    .Attr("layer_num: int = 12") 
+    .Attr("allow_gemm_test: bool = false")
     .SetShapeFn([](shape_inference::InferenceContext *c) {
       c->set_output(0, c->input(0));
       return Status::OK();
@@ -70,11 +72,29 @@ public:
     OP_REQUIRES_OK(context, context->GetAttr("head_num", &head_num_));
     OP_REQUIRES_OK(context, context->GetAttr("size_per_head", &size_per_head_));
     OP_REQUIRES_OK(context, context->GetAttr("remove_padding", &remove_padding_));
+
     context->GetAttr("int8_mode", &int8_mode_);
     if (int8_mode_ != 0){
       context->GetAttr("layer_idx", &layer_idx_);
       context->GetAttr("layer_num", &layer_num_);
     }
+    context->GetAttr("allow_gemm_test", &allow_gemm_test_);
+    try
+    {
+      encoder_transformer_ = new BertEncoderTransformer<EncoderTraits_>(int8_mode_,
+                                                                        allow_gemm_test_);
+    }
+    catch (std::runtime_error &error)
+    {
+      OP_REQUIRES(context, false, errors::Internal(error.what()));
+    }
+
+  }
+
+  ~BertTransformerOp()
+  {
+    if (encoder_transformer_ != NULL)
+      delete encoder_transformer_;
   }
 
   void Compute(OpKernelContext *context) override
@@ -93,25 +113,8 @@ public:
     OP_REQUIRES(context, (from_seq_len_ == to_seq_len_),
                 errors::InvalidArgument("Only support from_seq_len == to_seq_len"));
 
-    typedef BertEncoderTransformerTraits<traits_::OpType, cuda::OpenMultiHeadAttention> EncoderTraits_;
-    BertEncoderTransformer<EncoderTraits_> *encoder_transformer_;
     const cudaStream_t &stream = context->eigen_device<Device>().stream();
-    fastertransformer::Allocator<AllocatorType::TF> allocator_(context, stream);
-    try
-    {
-      encoder_transformer_ = new BertEncoderTransformer<EncoderTraits_>(allocator_,
-                                                                        batch_size_,
-                                                                        from_seq_len_, 
-                                                                        to_seq_len_, 
-                                                                        head_num_, 
-                                                                        size_per_head_,
-                                                                        int8_mode_);
-    }
-    catch (std::runtime_error &error)
-    {
-      OP_REQUIRES(context, false, errors::Internal(error.what()));
-    }
-    OP_REQUIRES(context, context->num_inputs() == 21, errors::InvalidArgument("Less input arguments"));
+    OP_REQUIRES(context, context->num_inputs() == 22, errors::InvalidArgument("BertTransformerOp requires 22 inputs, but only receives ", context->num_inputs(), " inputs."));
     const int hidden_units = head_num_ * size_per_head_;
     EncoderInitParam<DataType_> param; //init param here
     param.stream = stream;
@@ -162,6 +165,10 @@ public:
       param.amaxList = nullptr;
     }
     
+    param.trt_seqlen_offset = reinterpret_cast<const int *>(context->input(21).flat<int>().data());
+    OP_REQUIRES(context, param.trt_seqlen_offset != nullptr, errors::InvalidArgument("trt_seqlen_offset is null"));
+    param.trt_seqlen_size = (int)context->input(21).dim_size(0);
+    
     Tensor *output = nullptr;
     OP_REQUIRES_OK(
         context,
@@ -170,8 +177,18 @@ public:
 
     try
     {
+      fastertransformer::Allocator<AllocatorType::TF> * allocator = new fastertransformer::Allocator<AllocatorType::TF>(context, stream);
+      encoder_transformer_->allocateBuffer(allocator,
+                                           batch_size_,
+                                           from_seq_len_,
+                                           to_seq_len_,
+                                           head_num_,
+                                           size_per_head_
+                                           );
       encoder_transformer_->initialize(param);
       encoder_transformer_->forward();
+      encoder_transformer_->freeBuffer();
+      delete allocator;
     }
     catch(std::runtime_error& error)
     {
@@ -184,14 +201,16 @@ public:
       exit(-1);
     }
 
-    delete encoder_transformer_;
   }
 
 private:
-  int batch_size_, from_seq_len_, to_seq_len_, head_num_, size_per_head_, int8_mode_, layer_idx_, layer_num_;
+  int batch_size_ = 0, from_seq_len_ = 0, to_seq_len_ = 0, head_num_ = 0, size_per_head_ = 0, int8_mode_, layer_idx_, layer_num_;
   bool remove_padding_;
+  bool allow_gemm_test_;
   typedef TFTraits<T> traits_;
   typedef typename traits_::DataType DataType_;
+  typedef BertEncoderTransformerTraits<traits_::OpType, cuda::OpenMultiHeadAttention> EncoderTraits_;
+  BertEncoderTransformer<EncoderTraits_> *encoder_transformer_ = NULL;
 };
 
 #ifdef GOOGLE_CUDA
@@ -338,6 +357,8 @@ REGISTER_OP("RebuildPadding")
     .Input("atten_mask: T") // shape: [batch_size, 1, seq_len, seq_len]
     .Output("output: T") // shape: [batch_size, seq_len, hidden_dim] 
     .Attr("T: {float, half}")
+    .Attr("isCOL32: bool = false") //if true, deal with layout == CUBLASLT_ORDER_COL32
+    .Attr("int8_mode: int = 0")
     .SetShapeFn([](shape_inference::InferenceContext *c) {
 
       assert(c->Rank(c->input(0)) == 2);
@@ -356,6 +377,8 @@ class RebuildPaddingOp : public CommonOp<T>
 public:
   explicit RebuildPaddingOp(OpKernelConstruction *context) : CommonOp<T>(context)
   {
+    context->GetAttr("int8_mode", &int8_mode_);
+    context->GetAttr("isCOL32", &isCOL32_);
   }
 
   void Compute(OpKernelContext *context) override
@@ -392,10 +415,25 @@ public:
     cudaMemsetAsync(output_ptr, 0, sizeof(DataType_) * batch_size * seq_len * hidden_dim, stream);
     try
     {
-      rebuild_sequence_length_padding_kernelLauncher(input_ptr, output_ptr, 
-                                                    sequence_id_offset, 
-                                                    valid_word_num, hidden_dim,
-                                                    stream);
+      if (!isCOL32_)
+        rebuild_sequence_length_padding_kernelLauncher(input_ptr, output_ptr, 
+                                                      sequence_id_offset, 
+                                                      valid_word_num, hidden_dim,
+                                                      stream);
+      else if (isCOL32_ && int8_mode_ == 1)
+      {
+        rebuild_sequence_length_padding_COL32_kernelLauncher(input_ptr, output_ptr,
+                                                             sequence_id_offset,
+                                                             valid_word_num, hidden_dim,
+                                                             batch_size * seq_len, stream);
+      }
+      else if (isCOL32_ && int8_mode_ == 2)
+      {
+        rebuild_sequence_length_padding_COL32_kernelLauncher((const int8_t*)input_ptr, (int8_t *)output_ptr,
+                                                             sequence_id_offset,
+                                                             valid_word_num, hidden_dim,
+                                                             batch_size * seq_len, stream);
+      }
     }
     catch(std::runtime_error& error)
     {
@@ -411,6 +449,8 @@ public:
 private:
   typedef TFTraits<T> traits_;
   typedef typename traits_::DataType DataType_;
+  int int8_mode_;
+  bool isCOL32_;
 };
 
 #ifdef GOOGLE_CUDA

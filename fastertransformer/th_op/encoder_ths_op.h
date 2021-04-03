@@ -27,9 +27,6 @@ using torch::Tensor;
 class FasterTransformerEncoder : public torch::jit::CustomClassHolder {
 public:
   FasterTransformerEncoder(
-    int64_t head_num,
-    int64_t head_size,
-    bool remove_padding,
     Tensor q_kernel,
     Tensor q_bias,
     Tensor k_kernel,
@@ -45,11 +42,20 @@ public:
     Tensor output_kernel,
     Tensor output_bias,
     Tensor output_layernorm_gamma,
-    Tensor output_layernorm_beta);
+    Tensor output_layernorm_beta,
+    Tensor amax_list,
+    int64_t head_num,
+    int64_t head_size,
+    bool remove_padding,
+    int64_t int8_mode,
+    int64_t layer_num,
+    int64_t layer_idx,
+    bool allow_gemm_test,
+    bool use_trt_kernel);
 
   ~FasterTransformerEncoder();
   
-  Tensor forward(Tensor input, Tensor attr_mask, Tensor sequence_lengths);
+  Tensor forward(Tensor input, Tensor attr_mask, Tensor trt_seqlen_offset, Tensor sequence_id_offset);
 
   std::vector<Tensor> get_pickle_info() const;
 
@@ -59,5 +65,11 @@ private:
   torch_ext::IFTEncoder* ftencoder;
   Tensor head_info;
   std::vector<Tensor> weights;
+  bool _allow_gemm_test;
 };
+
+std::vector<Tensor> build_mask_remove_padding(Tensor input, Tensor sequence_lengths);
+
+Tensor rebuild_padding(Tensor input, Tensor sequence_id_offset, Tensor attention_mask, int64_t int8_mode);
+
 } // namespace torch_ths

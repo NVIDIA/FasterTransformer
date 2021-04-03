@@ -141,6 +141,10 @@ public:
   void *malloc(size_t size, const bool is_set_zero=true) const
   {
     int64_t buf_size = static_cast<int64_t>(size);
+    // TODO: test this later
+    // torch::Tensor buf = is_set_zero ?
+    //                     torch::zeros({buf_size}, torch::dtype(torch::kUInt8).device(torch::kCUDA)) :
+    //                     torch::empty({buf_size}, torch::dtype(torch::kUInt8).device(torch::kCUDA));
     torch::Tensor buf = torch::empty({buf_size}, torch::dtype(torch::kUInt8).device(torch::kCUDA));
     allocated_tensor_vector->push_back(buf);
     return (*allocated_tensor_vector)[allocated_tensor_vector->size()-1].data_ptr();

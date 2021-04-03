@@ -32,20 +32,26 @@ class DecodingInitParam
 {
 public:
   /* weights for masked_multi_head_attention */
-  const T *embedding_table;
-  const T *embedding_kernel;
-  const float *embedding_bias;
+  const T *embedding_table = nullptr;
+  const T *embedding_kernel = nullptr;
+  // TODO we use float type bias in beam search 
+  // to prevent the bad performance, but use T type in
+  // sampling because there is no cumulated log prob 
+  // in sampling.
+  // Try to merge them in the future. 
+  const T *embedding_bias_T = nullptr;
+  const float *embedding_bias = nullptr;
 
-  const T *memory_tensor;
-  const int *memory_sequence_length;
+  const T *memory_tensor = nullptr;
+  const int *memory_sequence_length = nullptr;
 
-  const T *position_encoding_table;
+  const T *position_encoding_table = nullptr;
 
   LayerNormWeight<T> layernorm;
 
-  int *output_ids;
-  int *parent_ids;
-  int *sequence_length;
+  int *output_ids = nullptr;
+  int *parent_ids = nullptr;
+  int *sequence_length = nullptr;
   cublasHandle_t cublas_handle;
   cudaStream_t stream;
 };
@@ -65,13 +71,14 @@ struct DecodingArguments : public TransformerArguments
   int vocab_size_;
   int start_id_;
   int end_id_;
+  int vocab_size_padded_;
 };
 
 struct DecodingSamplingArguments : public DecodingArguments
 {
   int candidate_num_;
   float probability_threshold_;
-  size_t temp_storage_size_;
+  size_t cub_temp_storage_size_{0};
 };
 
 struct DecodingBeamsearchArguments : public DecodingArguments
@@ -81,4 +88,14 @@ struct DecodingBeamsearchArguments : public DecodingArguments
   float beam_search_diversity_rate_;
 };
 
-} // end of namespace transformer
+struct Gpt2Arguments : public DecodingSamplingArguments
+{
+  int **start_ids_;
+  int start_len_;
+  float temperature_{2.0};
+  float len_penalty{1.0};
+  float repeat_penalty{2.0};
+  int *vocab_mask{nullptr};
+};
+
+} // namespace fastertransformer

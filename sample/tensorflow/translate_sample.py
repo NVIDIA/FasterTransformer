@@ -42,65 +42,13 @@ from utils.decoding import tf_sampling_decoding
 from utils.decoding import op_beamsearch_decoding
 from utils.decoding import op_sampling_decoding
 from utils.bleu_score import bleu_score
-from opennmt.utils import misc
 from opennmt.inputters import WordEmbedder
 from opennmt.inputters import ExampleInputter
 
-if __name__ == "__main__":
-
-    parser = argparse.ArgumentParser()
-    parser.add_argument('-batch', '--batch_size', type=int, default=1, metavar='NUMBER',
-                        help='batch size (default: 1)')
-    parser.add_argument('-beam', '--beam_width', type=int, default=4, metavar='NUMBER',
-                        help='beam width (default: 4)')
-    parser.add_argument('-s', '--max_seq_len', type=int, default=200, metavar='NUMBER',
-                        help='max sequence length (default: 200)')
-    parser.add_argument('-encoder_head', '--encoder_head_number', type=int, default=8, metavar='NUMBER',
-                        help='encoder head number (default: 8)')
-    parser.add_argument('-encoder_size', '--encoder_size_per_head', type=int, default=64, metavar='NUMBER',
-                        help='encoder size per head (default: 64)')
-    parser.add_argument('-decoder_head', '--decoder_head_number', type=int, default=8, metavar='NUMBER',
-                        help='decoder head number (default: 8)')
-    parser.add_argument('-decoder_size', '--decoder_size_per_head', type=int, default=64, metavar='NUMBER',
-                        help='decoder size per head (default: 64)')
-    parser.add_argument('-encoder_layer', '--encoder_num_layer', type=int, default=6, metavar='NUMBER',
-                        help='number of layers (default: 6)')
-    parser.add_argument('-decoder_layer', '--decoder_num_layer', type=int, default=6, metavar='NUMBER',
-                        help='number of layers (default: 6)')
-    parser.add_argument('-d', '--data_type', type=str, default="fp32", metavar='STRING',
-                        help='data type (default: fp32)', choices=['fp32', 'fp16'])
-    parser.add_argument('-time', '--test_time', type=str, default='', metavar='STRING',
-                        help='''
-                        Test the time of which one (default: '' (not test anyone) ); 
-                        '': not test anyone 
-                        '0': test tf_decoding_beamsearch  
-                        '1': test op_decoder_beamsearch 
-                        '2': test op_decoding_beamsearch 
-                        '3': test tf_decoding_sampling 
-                        '4': test op_decoder_sampling 
-                        '5': test op_decoding_sampling 
-                        'e.g., if you want to test op_decoder_beamsearch and op_decoding_sampling, 
-                               then you need to use -time '15' ''')
-    parser.add_argument('-diversity_rate', '--beam_search_diversity_rate', type=float, default=0.0, metavar='NUMBER',
-                        help='deviersity rate of beam search. default is 0. When diversity rate = 0, it is equivalent to the naive beams earch.')
-    parser.add_argument('-topk', '--sampling_topk', type=int, default=1, metavar='NUMBER',
-                        help='Candidate (k) value of top k sampling in decoding. Default is 1.')
-    parser.add_argument('-topp', '--sampling_topp', type=float, default=0.0, metavar='NUMBER',
-                        help='Probability (p) value of top p sampling in decoding. Default is 0.0. ')
-    
-    parser.add_argument('--source_vocabulary', type=str, default="./tensorflow/utils/translation/wmtende.vocab", metavar='STRING',
-                        help='Source vocabulary file path. Default is ./tensorflow/utils/translation/wmtende.vocab ')
-    parser.add_argument('--target_vocabulary', type=str, default="./tensorflow/utils/translation/wmtende.vocab", metavar='STRING',
-                        help='Target vocabulary file path. Default is ./tensorflow/utils/translation/wmtende.vocab ')
-    parser.add_argument('--source', type=str, default="./tensorflow/utils/translation/test.en", metavar='STRING',
-                        help='Source file path. Default is ./tensorflow/utils/translation/test.en ')
-    parser.add_argument('--target', type=str, default="./tensorflow/utils/translation/test.de", metavar='STRING',
-                        help='Target file path. Default is ./tensorflow/utils/translation/test.de ')
-
-    args = parser.parse_args()
+def translate_sample(args_dict):
     print("\n=============== Argument ===============")
-    for key in vars(args):
-        print("{}: {}".format(key, vars(args)[key]))
+    for key in args_dict:
+        print("{}: {}".format(key, args_dict[key]))
     print("========================================")
 
     start_of_sentence_id = 1
@@ -109,35 +57,33 @@ if __name__ == "__main__":
     kernel_initializer_range = 0.02
     bias_initializer_range = 0.02
 
-    batch_size = args.batch_size
-    beam_width = args.beam_width
-    max_seq_len = args.max_seq_len
-    encoder_head_num = args.encoder_head_number
-    encoder_size_per_head = args.encoder_size_per_head
-    decoder_head_num = args.decoder_head_number
-    decoder_size_per_head = args.decoder_size_per_head
-    encoder_num_layer = args.encoder_num_layer
-    decoder_num_layer = args.decoder_num_layer
+    batch_size = args_dict['batch_size']
+    beam_width = args_dict['beam_width']
+    max_seq_len = args_dict['max_seq_len']
+    encoder_head_num = args_dict['encoder_head_number']
+    encoder_size_per_head = args_dict['encoder_size_per_head']
+    decoder_head_num = args_dict['decoder_head_number']
+    decoder_size_per_head = args_dict['decoder_size_per_head']
+    encoder_num_layer = args_dict['encoder_num_layer']
+    decoder_num_layer = args_dict['decoder_num_layer']
     encoder_hidden_dim = encoder_head_num * encoder_size_per_head
     decoder_hidden_dim = decoder_head_num * decoder_size_per_head
     tf_datatype = tf.float32
-    np_datatype = np.float32
-    if args.data_type == "fp16":
+    if args_dict['data_type'] == "fp16":
         tf_datatype = tf.float16
-        np_datatype = np.float16
-    beam_search_diversity_rate = args.beam_search_diversity_rate
-    sampling_topk = args.sampling_topk
-    sampling_topp = args.sampling_topp
+    beam_search_diversity_rate = args_dict['beam_search_diversity_rate']
+    sampling_topk = args_dict['sampling_topk']
+    sampling_topp = args_dict['sampling_topp']
 
     source_inputter = WordEmbedder("source_vocabulary", embedding_size=encoder_hidden_dim, dtype=tf_datatype)
     target_inputter = WordEmbedder("target_vocabulary", embedding_size=decoder_hidden_dim, dtype=tf_datatype)
     inputter = ExampleInputter(source_inputter, target_inputter)
     inputter.initialize({
-        "source_vocabulary": args.source_vocabulary,
-        "target_vocabulary": args.target_vocabulary
+        "source_vocabulary": args_dict['source_vocabulary'],
+        "target_vocabulary": args_dict['target_vocabulary']
         })
     vocab_size = target_inputter.vocabulary_size
-    source_file = args.source
+    source_file = args_dict['source']
     
     encoder_args = TransformerArgument(beam_width=1,
                                         head_num=encoder_head_num,
@@ -174,7 +120,6 @@ if __name__ == "__main__":
                                                     sampling_topk,
                                                     sampling_topp)
 
-    mode = tf.estimator.ModeKeys.PREDICT
     with tf.variable_scope("transformer/encoder", reuse=tf.AUTO_REUSE):
         dataset = inputter.make_inference_dataset(source_file, batch_size)
         iterator = dataset.make_initializable_iterator()
@@ -245,7 +190,6 @@ if __name__ == "__main__":
     
     while all_vars[decoder_var_start_id].name.find("transformer/decoder") == -1:
         decoder_var_start_id += 1
-    encoder_variables = all_vars[:decoder_var_start_id]
     decoder_variables = all_vars[decoder_var_start_id + 1:] # decoder_var_start_id + 1 means skip the embedding table
     
     ### OP BeamSearch Decoding ###
@@ -273,7 +217,7 @@ if __name__ == "__main__":
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
 
-    time_args = args.test_time
+    time_args = args_dict['test_time']
     
     class TranslationResult(object):
         def __init__(self, token_op, length_op, name):
@@ -354,10 +298,66 @@ if __name__ == "__main__":
                     file_b.write("\n")
                     
             ref_file_path = "./.ref_file.txt"
-            os.system("head -n %d %s > %s" % (len(translation_result_list[i].token_list), args.target, ref_file_path))
+            os.system("head -n %d %s > %s" % (len(translation_result_list[i].token_list), args_dict['target'], ref_file_path))
             translation_result_list[i].bleu_score = bleu_score(translation_result_list[i].file_name, ref_file_path)
             os.system("rm {}".format(ref_file_path))
 
     for t in translation_result_list:
-        print("[INFO] {} translates {} batches taking {:.2f} ms to translate {} tokens, BLEU score: {:.2f}, {:.0f} tokens/sec.".format(
+        print("[INFO] {} translates {} batches taking {:.2f} sec to translate {} tokens, BLEU score: {:.2f}, {:.0f} tokens/sec.".format(
             t.name, t.batch_num, t.execution_time, t.bleu_score.sys_len, t.bleu_score.score, t.bleu_score.sys_len / t.execution_time))
+
+    return translation_result_list
+
+if __name__ == "__main__":
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('-batch', '--batch_size', type=int, default=1, metavar='NUMBER',
+                        help='batch size (default: 1)')
+    parser.add_argument('-beam', '--beam_width', type=int, default=4, metavar='NUMBER',
+                        help='beam width (default: 4)')
+    parser.add_argument('-s', '--max_seq_len', type=int, default=200, metavar='NUMBER',
+                        help='max sequence length (default: 200)')
+    parser.add_argument('-encoder_head', '--encoder_head_number', type=int, default=8, metavar='NUMBER',
+                        help='encoder head number (default: 8)')
+    parser.add_argument('-encoder_size', '--encoder_size_per_head', type=int, default=64, metavar='NUMBER',
+                        help='encoder size per head (default: 64)')
+    parser.add_argument('-decoder_head', '--decoder_head_number', type=int, default=8, metavar='NUMBER',
+                        help='decoder head number (default: 8)')
+    parser.add_argument('-decoder_size', '--decoder_size_per_head', type=int, default=64, metavar='NUMBER',
+                        help='decoder size per head (default: 64)')
+    parser.add_argument('-encoder_layer', '--encoder_num_layer', type=int, default=6, metavar='NUMBER',
+                        help='number of layers (default: 6)')
+    parser.add_argument('-decoder_layer', '--decoder_num_layer', type=int, default=6, metavar='NUMBER',
+                        help='number of layers (default: 6)')
+    parser.add_argument('-d', '--data_type', type=str, default="fp32", metavar='STRING',
+                        help='data type (default: fp32)', choices=['fp32', 'fp16'])
+    parser.add_argument('-time', '--test_time', type=str, default='', metavar='STRING',
+                        help='''
+                        Test the time of which one (default: '' (not test anyone) ); 
+                        '': not test anyone 
+                        '0': test tf_decoding_beamsearch  
+                        '1': test op_decoder_beamsearch 
+                        '2': test op_decoding_beamsearch 
+                        '3': test tf_decoding_sampling 
+                        '4': test op_decoder_sampling 
+                        '5': test op_decoding_sampling 
+                        'e.g., if you want to test op_decoder_beamsearch and op_decoding_sampling, 
+                        then you need to use -time '15' ''')
+    parser.add_argument('-diversity_rate', '--beam_search_diversity_rate', type=float, default=0.0, metavar='NUMBER',
+                        help='deviersity rate of beam search. default is 0. When diversity rate = 0, it is equivalent to the naive beams earch.')
+    parser.add_argument('-topk', '--sampling_topk', type=int, default=1, metavar='NUMBER',
+                        help='Candidate (k) value of top k sampling in decoding. Default is 1.')
+    parser.add_argument('-topp', '--sampling_topp', type=float, default=0.0, metavar='NUMBER',
+                        help='Probability (p) value of top p sampling in decoding. Default is 0.0. ')
+    
+    parser.add_argument('--source_vocabulary', type=str, default="./tensorflow/utils/translation/wmtende.vocab", metavar='STRING',
+                        help='Source vocabulary file path. Default is ./tensorflow/utils/translation/wmtende.vocab ')
+    parser.add_argument('--target_vocabulary', type=str, default="./tensorflow/utils/translation/wmtende.vocab", metavar='STRING',
+                        help='Target vocabulary file path. Default is ./tensorflow/utils/translation/wmtende.vocab ')
+    parser.add_argument('--source', type=str, default="./tensorflow/utils/translation/test.en", metavar='STRING',
+                        help='Source file path. Default is ./tensorflow/utils/translation/test.en ')
+    parser.add_argument('--target', type=str, default="./tensorflow/utils/translation/test.de", metavar='STRING',
+                        help='Target file path. Default is ./tensorflow/utils/translation/test.de ')
+
+    args = parser.parse_args()
+    translate_sample(vars(args))

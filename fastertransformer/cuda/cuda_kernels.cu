@@ -179,7 +179,7 @@ void add_bias_input_layernorm(T* out, const T* input, const T* bias, const T* ga
   __syncthreads();
 
   out[blockIdx.x * n + tid] = 
-	    (T)(((local_out - s_mean) * rsqrtf(s_variance)) * (float)(__ldg(&gamma[tid])) + (float)(__ldg(&beta[tid])));
+        (T)(((local_out - s_mean) * rsqrtf(s_variance)) * (float)(__ldg(&gamma[tid])) + (float)(__ldg(&beta[tid])));
 }
 
 template <>
@@ -424,36 +424,49 @@ template <typename T>
 __global__ void update_logits_kernel_without_softmax(T* logits, const T* bias, const int end_id, const bool* finished, const int n)
 {
   int bid = blockIdx.x;
-  bool finish = finished[bid];
+  bool finish = finished != nullptr ? finished[bid] : false;
   int offset = bid * n;
-
+  
+  const bool IS_FP16 = std::is_same<T, half>::value;
+  const T MAX_T_VAL = (IS_FP16)? HALF_FLT_MAX : FLT_MAX;
   for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
   {
     if(finish)
-      logits[offset + tid] = (tid == end_id) ? FLT_MAX : -1 * FLT_MAX;
+    {
+      logits[offset + tid] = (tid == end_id) ? MAX_T_VAL : -MAX_T_VAL;
+    }
     else
+    {
       logits[offset + tid] += bias[tid];
+    }
   }
 }
 
 template <typename T>
-__global__ void update_logits_kernel_without_log(T* logits, const T* bias, const int end_id, const bool* finished, const int n)
+__global__ void softmax_kernel(T* logits, const T* bias,
+                               const int end_id, const bool* finished,
+                               const int n)
 {
   int bid = blockIdx.x;
-  bool finish = finished[bid];
+  bool finish = (finished != nullptr) ? finished[bid] : false;
   int offset = bid * n;
 
   float max_val = -1 * FLT_MAX;
+  const bool IS_FP16 = std::is_same<T, half>::value;
+  const T MAX_T_VAL = (IS_FP16)? HALF_FLT_MAX : FLT_MAX;
   __shared__ float s_max_val;
   __shared__ float s_sum_val;
 
   for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
   {
     if(finish)
-      logits[offset + tid] = (tid == end_id) ? FLT_MAX : -1 * FLT_MAX;
+      logits[offset + tid] = (tid == end_id) ? MAX_T_VAL : -MAX_T_VAL;
     else
-      logits[offset + tid] += bias[tid];
-    max_val = max(max_val, logits[offset + tid]);
+    {
+      T bias_val = (bias != nullptr) ? bias[tid] : (T)0.0f;
+      logits[offset + tid] += bias_val;
+    }
+    max_val = max(max_val, (float)logits[offset + tid]);
   }
 
   max_val = blockReduceMax<float>((float)max_val);
@@ -592,23 +605,37 @@ void update_logits(float* logits, const float* bias, const int end_id, const boo
   update_logits_kernel<float><<<grid, block, 0, stream>>>(logits, bias, end_id, finished, n);
 }
 
-void update_logits_without_softmax(float* logits, const float* bias, const int end_id, const bool* finished, 
+template<typename T>
+void update_logits_without_softmax(T* logits, const T* bias, const int end_id, const bool* finished, 
   const int m, const int n, cudaStream_t stream)
 {
   dim3 grid(m);
   dim3 block(min(n, 1024));
   /*n is the vocab_size, e.g., 30000, 7000.... vocab_size is usually very big. */
-  update_logits_kernel_without_softmax<float><<<grid, block, 0, stream>>>(logits, bias, end_id, finished, n);
+  update_logits_kernel_without_softmax<<<grid, block, 0, stream>>>(logits, bias, end_id, finished, n);
 }
 
-void update_logits_without_log(float* logits, const float* bias, const int end_id, const bool* finished, 
-  const int m, const int n, cudaStream_t stream)
+template void update_logits_without_softmax(float* logits, const float* bias, const int end_id, const bool* finished, 
+  const int m, const int n, cudaStream_t stream);
+
+template void update_logits_without_softmax(half* logits, const half* bias, const int end_id, const bool* finished, 
+  const int m, const int n, cudaStream_t stream);
+  
+template<typename T>
+void softmax_kernelLauncher(T* logits, const T* bias, const int end_id, const bool* finished,
+                            const int m, const int n, cudaStream_t stream)
 {
   dim3 grid(m);
   dim3 block(min(n, 1024));
   /*n is the vocab_size, e.g., 30000, 7000.... vocab_size is usually very big. */
-  update_logits_kernel_without_log<float><<<grid, block, 0, stream>>>(logits, bias, end_id, finished, n);
+  softmax_kernel<<<grid, block, 0, stream>>>(logits, bias, end_id, finished, n);
 }
+
+template void softmax_kernelLauncher(float* logits, const float* bias, const int end_id, const bool* finished,
+                                     const int m, const int n, cudaStream_t stream);
+
+template void softmax_kernelLauncher(half* logits, const half* bias, const int end_id, const bool* finished,
+                                     const int m, const int n, cudaStream_t stream);
 
 template void add_bias_act_kernelLauncher<float>(
   float* out, const float* bias, int m, int n, cudaStream_t stream);

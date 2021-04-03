@@ -24,6 +24,7 @@ from utils.translator import Translator
 parser = argparse.ArgumentParser()
 parser.add_argument("--batch_size", type=int, default=1, help="batch size")
 parser.add_argument("--beam_size", type=int, default=4, help="beam size")
+parser.add_argument("--max_seq_len", type=int, default=100, help="max_seq_len")
 parser.add_argument("--model_type", type=str, help="ori, decoder_ext, decoding_ext, torch_decoding, torch_decoding_with_decoder_ext")
 parser.add_argument("--data_type", type=str, help="fp32, fp16")
 parser.add_argument('--model_path', type=str, default='./pytorch/translation/models/averaged-10-epoch.pt',
@@ -42,7 +43,7 @@ args = parser.parse_args()
 opt = argparse.Namespace(models=[args.model_path],
                          fp32=False, data_type='text', output='/dev/null', report_align=False, report_time=True,
                          random_sampling_topk=1, random_sampling_temp=1.0, seed=829,
-                         beam_size=args.beam_size, min_length=0, max_length=100,
+                         beam_size=args.beam_size, min_length=0, max_length=args.max_seq_len,
                          stepwise_penalty=False, length_penalty='none', ratio=-0.0, coverage_penalty='none', alpha=0.0, beta=-0.0,
                          block_ngram_repeat=0, ignore_when_blocking=[], replace_unk=False, phrase_table='',
                          verbose=True, dump_beam='', n_best=1, batch_type='sents', gpu=0)

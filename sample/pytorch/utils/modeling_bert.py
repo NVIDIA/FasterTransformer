@@ -64,17 +64,22 @@ class BertModel(BertPreTrainedModel):
             token_type_ids = torch.zeros(input_shape, dtype=torch.long, device=device)
 
         if self.use_ext_encoder:
-            if attention_mask.dim() == 3:
-                extended_attention_mask = attention_mask
-            elif attention_mask.dim() == 2:
-                extended_attention_mask = attention_mask[:, None, :].repeat(1, input_shape[1], 1)
-            else:
-                raise ValueError(
-                    "Wrong shape for input_ids (shape {}) or attention_mask (shape {})".format(
-                        input_shape, attention_mask.shape
-                    )
-                )
+            # if attention_mask.dim() == 3:
+            #     extended_attention_mask = attention_mask
+            # elif attention_mask.dim() == 2:
+            #     extended_attention_mask = attention_mask[:, None, :].repeat(1, input_shape[1], 1)
+            # else:
+            #     raise ValueError(
+            #         "Wrong shape for input_ids (shape {}) or attention_mask (shape {})".format(
+            #             input_shape, attention_mask.shape
+            #         )
+            #     )
+            assert attention_mask.dim() == 2
+            extended_attention_mask = attention_mask.view(-1, 1, 1, attention_mask.size(-1))
+            m_2 = extended_attention_mask.transpose(-1, -2)
+            extended_attention_mask = extended_attention_mask * m_2
             extended_attention_mask = extended_attention_mask.to(dtype=next(self.parameters()).dtype)  # fp16 compatibility
+            seq_lens = torch.sum(attention_mask, 1, dtype=torch.int32).cuda()
         else:
             # We can provide a self-attention mask of dimensions [batch_size, from_seq_length, to_seq_length]
             # ourselves in which case we just need to make it broadcastable to all heads.
@@ -100,10 +105,7 @@ class BertModel(BertPreTrainedModel):
             input_ids=input_ids, position_ids=position_ids, token_type_ids=token_type_ids, inputs_embeds=inputs_embeds
         )
         if self.use_ext_encoder:
-            encoder_outputs = self.encoder(
-                embedding_output,
-                attention_mask=extended_attention_mask
-            )
+            encoder_outputs = self.encoder(embedding_output, extended_attention_mask, seq_lens)
         else:
             head_mask = [None] * self.config.num_hidden_layers
             encoder_outputs = self.encoder(

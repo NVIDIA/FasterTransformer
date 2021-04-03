@@ -24,8 +24,16 @@
 #include <map>
 #include "stdio.h"
 
+#define MAX_CONFIG_NUM 20
+#define GEMM_NUM 6
 #define COL32_ 32
 #define ACTIVATION_AMAX_NUM 80
+#define INT8O_GEMM_NUM 8
+#define GEMM_CONFIG "gemm_config.in"
+#define IGEMM_CONFIG "igemm_config.in"
+
+#include "fastertransformer/gemm_test/encoder_gemm_func.h"
+#include "fastertransformer/gemm_test/encoder_igemm_func.h"
 
 namespace fastertransformer
 {
@@ -41,13 +49,6 @@ enum class AllocatorType
   TF,
   TH
 };
-
-typedef struct
-{
-  int algoId, customOption, tile, splitK_val, swizzle, reductionScheme, workspaceSize;
-  //only used in cublasLt >= 11.0
-  int stages;
-} cublasLtMatmulAlgo_info;
 
 #define PRINT_FUNC_NAME_()                                          \
   do                                                                \
@@ -108,13 +109,14 @@ static const char *_cudaGetErrorEnum(cublasStatus_t error)
 
 //for int8 cublasLtMM with algo
 //ATransform should be m*n, CUBLASLT_ORDER_COL32
-//kernel should be n*k, CUBLASLT_ORDER_COL4_4R2_8C
+//kernel should be n*k, CUBLASLT_ORDER_COL4_4R2_8C or CUBLASLT_ORDER_COL32_2R_4R4
 //res is m*n, CUBLASLT_ORDER_COL32
 template <typename T>
 void cublasLtMM_withAlgo(int *res, int batchCount, int m, int n, int k,
                          int64_t stridea, int64_t strideb, int64_t stridec,
                          const int8_t *ATransform, const T *kernel, cublasLtHandle_t cublasLt_handle,
-                         cudaStream_t stream, std::map<std::string, cublasLtMatmulAlgo_info> &cublasLtAlgoMap)
+                         cudaStream_t stream, std::map<std::string, cublasLtMatmulAlgo_info> &cublasLtAlgoMap,
+                         bool use_ORDER_COL32_2R_4R4, bool use_default_algo = false)
 {
   cublasOperation_t opTranspose = CUBLAS_OP_T;
 #ifdef CUDA11_MODE
@@ -127,9 +129,25 @@ void cublasLtMM_withAlgo(int *res, int batchCount, int m, int n, int k,
   cublasLtMatrixLayout_t BtransformDesc = NULL;
   cublasLtMatrixLayout_t CtransformDesc = NULL;
   cublasLtOrder_t order_COL32 = CUBLASLT_ORDER_COL32;
-  cublasLtOrder_t order_COL4_4R2_8C = CUBLASLT_ORDER_COL4_4R2_8C;
+
+  cublasLtOrder_t order_matrixB;
+#ifdef CUDA11_MODE
+  if (use_ORDER_COL32_2R_4R4)
+    order_matrixB = CUBLASLT_ORDER_COL32_2R_4R4;
+  else
+    order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
+#else
+    order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
+#endif
+
+    
+  
   int ldaTransform = 32 * m;
-  int ldbTransform = 32 * ((n + 8 - 1) / 8) * 8;
+  int ldbTransform;
+  if (use_ORDER_COL32_2R_4R4)
+    ldbTransform = 32 * ((n + 32 - 1) / 32) * 32;
+  else
+    ldbTransform = 32 * ((n + 8 - 1) / 8) * 8;
   int ldcTransform = 32 * m;
 
   // create matmulDesc
@@ -142,7 +160,7 @@ void cublasLtMM_withAlgo(int *res, int batchCount, int m, int n, int k,
   cublasLtMatrixLayoutCreate(&AtransformDesc, CUDA_R_8I, m, k, ldaTransform);
   cublasLtMatrixLayoutSetAttribute(AtransformDesc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order_COL32, sizeof(order_COL32));
   cublasLtMatrixLayoutCreate(&BtransformDesc, CUDA_R_8I, n, k, ldbTransform);
-  cublasLtMatrixLayoutSetAttribute(BtransformDesc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order_COL4_4R2_8C, sizeof(order_COL4_4R2_8C));
+  cublasLtMatrixLayoutSetAttribute(BtransformDesc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order_matrixB, sizeof(order_matrixB));
   cublasLtMatrixLayoutCreate(&CtransformDesc, CUDA_R_32I, m, n, ldcTransform);
   cublasLtMatrixLayoutSetAttribute(CtransformDesc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order_COL32, sizeof(order_COL32));
   if (batchCount > 1)
@@ -164,7 +182,7 @@ void cublasLtMM_withAlgo(int *res, int batchCount, int m, int n, int k,
   sprintf(mark, "%d_%d_%d_%d", batchCount, m, n, k);
   std::string markStr(mark);
   int findAlgo = 0;
-  if (cublasLtAlgoMap.find(markStr) != cublasLtAlgoMap.end() && cublasLtAlgoMap[markStr].workspaceSize == 0)
+  if ((!use_default_algo) && cublasLtAlgoMap.find(markStr) != cublasLtAlgoMap.end() && cublasLtAlgoMap[markStr].workspaceSize == 0)
   {
     //printf("find algo %s\n", markStr.c_str());
     findAlgo = 1;
@@ -178,6 +196,38 @@ void cublasLtMM_withAlgo(int *res, int batchCount, int m, int n, int k,
 #ifdef CUDA11_MODE
     cublasLtMatmulAlgoConfigSetAttribute(&algo, CUBLASLT_ALGO_CONFIG_STAGES_ID, &(cublasLtAlgoMap[markStr].stages), sizeof(cublasLtAlgoMap[markStr].stages));
 #endif
+  }
+  else
+  {
+    findAlgo = 1; 
+    int algoId;
+    if (use_ORDER_COL32_2R_4R4)
+    {
+      algoId = 7;
+    }
+    else
+    {
+      algoId = 6;
+    }
+    int swizzle = 0;
+    int customOption = 0;
+    int tile = 20;
+    int splitK_val = 0;
+    int reductionScheme = 0;
+    cublasLtMatmulAlgoInit(cublasLt_handle, computeType, CUDA_R_32I, CUDA_R_8I, CUDA_R_8I, CUDA_R_32I, CUDA_R_32I, algoId, &algo);
+    cublasLtMatmulAlgoConfigSetAttribute(&algo, CUBLASLT_ALGO_CONFIG_CUSTOM_OPTION, &(customOption), sizeof(customOption));
+    cublasLtMatmulAlgoConfigSetAttribute(&algo, CUBLASLT_ALGO_CONFIG_TILE_ID, &(tile), sizeof(tile));
+    cublasLtMatmulAlgoConfigSetAttribute(&algo, CUBLASLT_ALGO_CONFIG_SPLITK_NUM, &(splitK_val), sizeof(splitK_val));
+    cublasLtMatmulAlgoConfigSetAttribute(&algo, CUBLASLT_ALGO_CONFIG_CTA_SWIZZLING, &(swizzle), sizeof(swizzle));
+    cublasLtMatmulAlgoConfigSetAttribute(&algo, CUBLASLT_ALGO_CONFIG_REDUCTION_SCHEME, &(reductionScheme), sizeof(int));
+#ifdef CUDA11_MODE
+    int stages;
+    if (use_ORDER_COL32_2R_4R4) 
+      stages = 15;
+    else
+      stages = 13;
+    cublasLtMatmulAlgoConfigSetAttribute(&algo, CUBLASLT_ALGO_CONFIG_STAGES_ID, &(stages), sizeof(stages));
+#endif       
   }
 
   cublasLtMatmul(cublasLt_handle,
@@ -201,17 +251,20 @@ void cublasLtMM_withAlgo(int *res, int batchCount, int m, int n, int k,
 }
 
 //for int8 IO cublasLtMM with algo
-//ATransform should be m*n CUBLASLT_ORDER_COL32
+//ATransform should be m*k CUBLASLT_ORDER_COL32
 //kernel should be n*k CUBLASLT_ORDER_COL4_4R2_8C
 //res is m*n CUBLASLT_ORDER_COL32
 template <typename T>
 void cublasLtMM_withAlgo_int8IO(int8_t *res, int batchCount, int m, int n, int k,
                                 int64_t stridea, int64_t strideb, int64_t stridec,
-                                float scale, const int8_t *ATransform, const T *kernel,
+                                const float alpha, const int8_t *ATransform, const T *kernel,
                                 cublasLtHandle_t cublasLt_handle, cudaStream_t stream,
-                                std::map<std::string, cublasLtMatmulAlgo_info> &cublasLtAlgoMap)
+                                std::map<std::string, cublasLtMatmulAlgo_info> &cublasLtAlgoMap,
+                                bool use_ORDER_COL32_2R_4R4, bool use_default_algo=false)
 {
   cublasOperation_t opTranspose = CUBLAS_OP_T;
+  //int8 gemm does not support CUBLAS_POINTER_MODE_DEVICE
+  //cublasLtPointerMode_t pointerMode = CUBLASLT_POINTER_MODE_ALPHA_DEVICE_VECTOR_BETA_ZERO; 
   cudaDataType_t scaleType = CUDA_R_32F;
 #ifdef CUDA11_MODE
   cublasComputeType_t computeType = CUBLAS_COMPUTE_32I;
@@ -223,9 +276,27 @@ void cublasLtMM_withAlgo_int8IO(int8_t *res, int batchCount, int m, int n, int k
   cublasLtMatrixLayout_t BtransformDesc = NULL;
   cublasLtMatrixLayout_t CtransformDesc = NULL;
   cublasLtOrder_t order_COL32 = CUBLASLT_ORDER_COL32;
-  cublasLtOrder_t order_COL4_4R2_8C = CUBLASLT_ORDER_COL4_4R2_8C;
+  
+  cublasLtOrder_t order_matrixB;
+#ifdef CUDA11_MODE
+  if (use_ORDER_COL32_2R_4R4)
+    order_matrixB = CUBLASLT_ORDER_COL32_2R_4R4;
+  else
+    order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
+#else
+    order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
+#endif
+
+      
   int ldaTransform = 32 * m;
-  int ldbTransform = 32 * ((n + 8 - 1) / 8) * 8;
+  
+  int ldbTransform;
+  if (use_ORDER_COL32_2R_4R4)
+    ldbTransform = 32 * ((n + 32 - 1) / 32) * 32;
+  else
+    ldbTransform = 32 * ((n + 8 - 1) / 8) * 8;
+
+
   int ldcTransform = 32 * m;
 
   // create matmulDesc
@@ -236,10 +307,11 @@ void cublasLtMM_withAlgo_int8IO(int8_t *res, int batchCount, int m, int n, int k
 #endif
   cublasLtMatmulDescSetAttribute(matmulDesc, CUBLASLT_MATMUL_DESC_TRANSB, &opTranspose, sizeof(cublasOperation_t));
   cublasLtMatmulDescSetAttribute(matmulDesc, CUBLASLT_MATMUL_DESC_SCALE_TYPE, &scaleType, sizeof(scaleType));
+  //cublasLtMatmulDescSetAttribute(matmulDesc, CUBLASLT_MATMUL_DESC_POINTER_MODE, &pointerMode, sizeof(cublasLtPointerMode_t));
   cublasLtMatrixLayoutCreate(&AtransformDesc, CUDA_R_8I, m, k, ldaTransform);
   cublasLtMatrixLayoutSetAttribute(AtransformDesc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order_COL32, sizeof(order_COL32));
   cublasLtMatrixLayoutCreate(&BtransformDesc, CUDA_R_8I, n, k, ldbTransform);
-  cublasLtMatrixLayoutSetAttribute(BtransformDesc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order_COL4_4R2_8C, sizeof(order_COL4_4R2_8C));
+  cublasLtMatrixLayoutSetAttribute(BtransformDesc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order_matrixB, sizeof(order_matrixB));
   cublasLtMatrixLayoutCreate(&CtransformDesc, CUDA_R_8I, m, n, ldcTransform);
   cublasLtMatrixLayoutSetAttribute(CtransformDesc, CUBLASLT_MATRIX_LAYOUT_ORDER, &order_COL32, sizeof(order_COL32));
   if (batchCount > 1)
@@ -251,15 +323,13 @@ void cublasLtMM_withAlgo_int8IO(int8_t *res, int batchCount, int m, int n, int k
     cublasLtMatrixLayoutSetAttribute(CtransformDesc, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &batchCount, sizeof(batchCount));
     cublasLtMatrixLayoutSetAttribute(CtransformDesc, CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET, &stridec, sizeof(stridec));
   }
-  float alpha = scale;
-  float beta = 0.0f;
   //get algo
   cublasLtMatmulAlgo_t algo;
   char mark[1000];
   sprintf(mark, "%d_%d_%d_%d", batchCount, m, n, k);
   std::string markStr(mark);
   int findAlgo = 0;
-  if (cublasLtAlgoMap.find(markStr) != cublasLtAlgoMap.end() && cublasLtAlgoMap[markStr].workspaceSize == 0)
+  if ((!use_default_algo) && cublasLtAlgoMap.find(markStr) != cublasLtAlgoMap.end() && cublasLtAlgoMap[markStr].workspaceSize == 0)
   {
     findAlgo = 1;
     cublasLtMatmulAlgoInit(cublasLt_handle, computeType, CUDA_R_32F, CUDA_R_8I, CUDA_R_8I, CUDA_R_8I, CUDA_R_8I, cublasLtAlgoMap[markStr].algoId, &algo);
@@ -272,7 +342,40 @@ void cublasLtMM_withAlgo_int8IO(int8_t *res, int batchCount, int m, int n, int k
     cublasLtMatmulAlgoConfigSetAttribute(&algo, CUBLASLT_ALGO_CONFIG_STAGES_ID, &(cublasLtAlgoMap[markStr].stages), sizeof(cublasLtAlgoMap[markStr].stages));
 #endif
   }
-
+  else
+  {
+    findAlgo = 1; 
+    int algoId;
+    if (use_ORDER_COL32_2R_4R4)
+    {
+      algoId = 7;
+    }
+    else
+    {
+      algoId = 6;
+    }
+    int swizzle = 0;
+    int customOption = 0;
+    int tile = 20;
+    int splitK_val = 0;
+    int reductionScheme = 0;
+    cublasLtMatmulAlgoInit(cublasLt_handle, computeType, CUDA_R_32F, CUDA_R_8I, CUDA_R_8I, CUDA_R_8I, CUDA_R_8I, algoId, &algo);
+    cublasLtMatmulAlgoConfigSetAttribute(&algo, CUBLASLT_ALGO_CONFIG_CUSTOM_OPTION, &(customOption), sizeof(customOption));
+    cublasLtMatmulAlgoConfigSetAttribute(&algo, CUBLASLT_ALGO_CONFIG_TILE_ID, &(tile), sizeof(tile));
+    cublasLtMatmulAlgoConfigSetAttribute(&algo, CUBLASLT_ALGO_CONFIG_SPLITK_NUM, &(splitK_val), sizeof(splitK_val));
+    cublasLtMatmulAlgoConfigSetAttribute(&algo, CUBLASLT_ALGO_CONFIG_CTA_SWIZZLING, &(swizzle), sizeof(swizzle));
+    cublasLtMatmulAlgoConfigSetAttribute(&algo, CUBLASLT_ALGO_CONFIG_REDUCTION_SCHEME, &(reductionScheme), sizeof(int));
+#ifdef CUDA11_MODE
+    int stages;
+    if (use_ORDER_COL32_2R_4R4) 
+      stages = 15;
+    else
+      stages = 13;
+    cublasLtMatmulAlgoConfigSetAttribute(&algo, CUBLASLT_ALGO_CONFIG_STAGES_ID, &(stages), sizeof(stages));
+#endif       
+  }
+  
+  float beta = 0.0f;
   cublasLtMatmul(cublasLt_handle,
                  matmulDesc,
                  &alpha,
@@ -310,10 +413,17 @@ template <typename T>
 void print_to_file(T *result, const int size, char *file)
 {
   FILE *fd = fopen(file, "w");
-  float *tmp = (float *)malloc(sizeof(float) * size);
-  check_cuda_error(cudaMemcpy(tmp, result, sizeof(float) * size, cudaMemcpyDeviceToHost));
+  T *tmp = (T *)malloc(sizeof(T) * size);
+  check_cuda_error(cudaMemcpy(tmp, result, sizeof(T) * size, cudaMemcpyDeviceToHost));
   for (int i = 0; i < size; ++i)
-    fprintf(fd, "%f\n", (float)tmp[i]);
+  {
+    float val;
+    if (sizeof(T) == 2)
+      val = (T)__half2float(tmp[i]);
+    else
+      val = (T)tmp[i];
+    fprintf(fd, "%f\n", val);
+  }
   free(tmp);
   fclose(fd);
 }
@@ -321,8 +431,8 @@ void print_to_file(T *result, const int size, char *file)
 template <typename T>
 void print_to_screen(T *result, const int size)
 {
-  float *tmp = (float *)malloc(sizeof(float) * size);
-  check_cuda_error(cudaMemcpy(tmp, result, sizeof(float) * size, cudaMemcpyDeviceToHost));
+  T *tmp = (T *)malloc(sizeof(T) * size);
+  check_cuda_error(cudaMemcpy(tmp, result, sizeof(T) * size, cudaMemcpyDeviceToHost));
   for (int i = 0; i < size; ++i)
     printf("%d, %f\n", i, (float)tmp[i]);
   free(tmp);
@@ -342,6 +452,34 @@ void check_max_val(const T *result, const int size)
   }
   delete tmp;
   printf("[INFO][CUDA] addr %p max val: %f \n", result, max_val);
+}
+
+inline int getSMVersion()
+{
+    int device{-1};
+    check_cuda_error(cudaGetDevice(&device));
+    cudaDeviceProp props;
+    check_cuda_error(cudaGetDeviceProperties(&props, device));
+    return props.major * 10 + props.minor;
+}
+
+template <typename T>
+void check_abs_mean_val(const T *result, const int size)
+{
+  T *tmp = new T[size];
+  cudaMemcpy(tmp, result, sizeof(T) * size, cudaMemcpyDeviceToHost);
+  float sum = 0.0f;
+  for (int i = 0; i < size; i++)
+  {
+    sum += abs((float)tmp[i]);
+  }
+  delete tmp;
+  printf("[INFO][CUDA] addr %p abs mean val: %f \n", result, sum / size);
+}
+
+inline int div_up(int a, int n)
+{
+  return (a + n - 1) / n;
 }
 
 } //namespace fastertransformer

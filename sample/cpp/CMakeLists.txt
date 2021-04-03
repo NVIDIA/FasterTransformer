@@ -21,6 +21,10 @@ set(decoding_beamsearch_sample_files
   decoding_beamsearch_sample.cc
 )
 
+set(gpt2_sample_files
+  gpt2_sample.cc
+)
+
 set(decoding_sampling_sample_files
   decoding_sampling_sample.cc
 )
@@ -30,6 +34,9 @@ target_link_libraries(encoder_sample PUBLIC -lcublas -lcudart encoder)
 
 add_executable(decoding_beamsearch_sample ${decoding_beamsearch_sample_files})
 target_link_libraries(decoding_beamsearch_sample PUBLIC -lcublas -lcudart decoder decoding)
+
+add_executable(gpt2_sample ${gpt2_sample_files})
+target_link_libraries(gpt2_sample PUBLIC -lcublas -lcudart decoder decoding)
 
 add_executable(decoding_sampling_sample ${decoding_sampling_sample_files})
 target_link_libraries(decoding_sampling_sample PUBLIC -lcublas -lcudart -lcurand decoder decoding)

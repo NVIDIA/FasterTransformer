@@ -247,8 +247,12 @@ def main():
     parser.add_argument("--data_type", type=str, help="fp32, fp16")
     parser.add_argument('--module_path', type=str, default='./',
                         help='path containing the th_fastertransformer dynamic lib')
-    parser.add_argument('--ths_path', type=str, default='./lib/libths_fastertransformer_op.so',
+    parser.add_argument('--ths_path', type=str, default='./lib/libths_fastertransformer.so',
                         help='path of the ths_fastertransformer dynamic lib file')
+    parser.add_argument('--remove_padding', action='store_true',
+                        help='Remove the padding of sentences of encoder.')
+    parser.add_argument('--allow_gemm_test', action='store_true',
+                        help='per-channel quantization.')
 
     args = parser.parse_args()
 
@@ -328,7 +332,9 @@ def main():
             if args.model_type == 'ext':
                 logger.info("Use custom BERT encoder")
                 from utils.encoder import EncoderWeights, CustomEncoder
-                weights = EncoderWeights(model.config.num_hidden_layers, model.config.hidden_size, model.bert.encoder)
+                weights = EncoderWeights(
+                    model.config.num_hidden_layers, model.config.hidden_size,
+                    torch.load(os.path.join(checkpoint, 'pytorch_model.bin'), map_location='cpu'))
                 weights.to_cuda()
                 if args.data_type == 'fp16':
                     weights.to_half()
@@ -336,27 +342,27 @@ def main():
                                     model.config.num_attention_heads,
                                     model.config.hidden_size//model.config.num_attention_heads,
                                     weights,
-                                    os.path.abspath(args.module_path))
+                                    remove_padding=args.remove_padding,
+                                    allow_gemm_test=(args.allow_gemm_test),
+                                    use_ths=False, path=os.path.abspath(args.module_path))
                 model.replace_encoder(enc)
             if args.model_type == 'thsext':
                 logger.info("Use custom BERT encoder for TorchScript")
-                from utils.encoder import EncoderWeights, CustomEncoder2
-                weights = EncoderWeights(model.config.num_hidden_layers, model.config.hidden_size, model.bert.encoder)
+                from utils.encoder import EncoderWeights, CustomEncoder
+                weights = EncoderWeights(
+                    model.config.num_hidden_layers, model.config.hidden_size,
+                    torch.load(os.path.join(checkpoint, 'pytorch_model.bin'), map_location='cpu'))
                 weights.to_cuda()
                 if args.data_type == 'fp16':
                     weights.to_half()
-                enc = CustomEncoder2(model.config.num_hidden_layers,
+                enc = CustomEncoder(model.config.num_hidden_layers,
                                     model.config.num_attention_heads,
                                     model.config.hidden_size//model.config.num_attention_heads,
                                     weights,
-                                    os.path.abspath(args.ths_path))
-                fake_inp = torch.zeros(args.per_gpu_eval_batch_size, args.max_seq_length, model.config.hidden_size).cuda()
-                torch.nn.init.uniform_(fake_inp, -1, 1)
-                fake_mask = torch.randint(0, 2, (args.per_gpu_eval_batch_size, args.max_seq_length, args.max_seq_length), dtype=torch.float32).cuda()
-                if args.data_type == 'fp16':
-                    fake_inp = fake_inp.half()
-                    fake_mask = fake_mask.half()
-                enc_ = torch.jit.trace(enc, (fake_inp, fake_mask))
+                                    remove_padding=args.remove_padding,
+                                    allow_gemm_test=(args.allow_gemm_test),
+                                    use_ths=True, path=os.path.abspath(args.ths_path))
+                enc_ = torch.jit.script(enc)
                 model.replace_encoder(enc_)
             if use_ths:
                 logger.info("Use TorchScript mode")

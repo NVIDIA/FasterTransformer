@@ -94,7 +94,11 @@ class CustomDecoder(torch.nn.Module):
         if use_ths:
             torch.classes.load_library(path)
             for i in range(layer_num):
-                self.decoders.append(torch.classes.FasterTransformerDecoder(head_num, head_size, *weights.w[i]))
+                try:
+                    self.decoders.append(torch.classes.FasterTransformer.Decoder(head_num, head_size, *weights.w[i]))
+                except:
+                    # legacy ths for 20.03 image
+                    self.decoders.append(torch.classes.FasterTransformerDecoder(head_num, head_size, *weights.w[i]))
         else:
             sys.path.insert(0, path)
             from th_fastertransformer import FasterTransformerDecoder

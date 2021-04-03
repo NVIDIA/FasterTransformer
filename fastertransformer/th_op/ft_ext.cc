@@ -19,16 +19,17 @@
 #include "fastertransformer/th_op/encoder_ext.h"
 #include "fastertransformer/th_op/decoder_ext.h"
 #include "fastertransformer/th_op/decoding_ext.h"
+#include "fastertransformer/th_op/weight_quantize_op.h"
 
 using torch::Tensor;
 namespace py = pybind11;
 
 PYBIND11_MODULE(th_fastertransformer, m) {
   py::class_<torch_ext::FasterTransformerEncoder>(m, "FasterTransformerEncoder")
-    .def(py::init<int, int, bool,
+    .def(py::init<Tensor, Tensor, Tensor, Tensor, Tensor, Tensor,
                   Tensor, Tensor, Tensor, Tensor, Tensor, Tensor,
-                  Tensor, Tensor, Tensor, Tensor, Tensor, Tensor,
-                  Tensor, Tensor, Tensor, Tensor>())
+                  Tensor, Tensor, Tensor, Tensor, Tensor,
+                  int, int, bool, int, int, int, bool, bool>())
     .def("forward", &torch_ext::FasterTransformerEncoder::forward);
 
   py::class_<torch_ext::FasterTransformerDecoder>(m, "FasterTransformerDecoder")
@@ -46,5 +47,11 @@ PYBIND11_MODULE(th_fastertransformer, m) {
                   Tensor, Tensor, Tensor, Tensor, Tensor, Tensor>())
     .def("forward", &torch_ext::FasterTransformerDecoding::forward);
 
+  m.def("build_mask_remove_padding", &torch_ext::build_mask_remove_padding);
+
+  m.def("rebuild_padding", &torch_ext::rebuild_padding);
+
   m.def("gather_tree", &torch_ext::gather_tree);
+
+  m.def("weight_quantize", &torch_ext::weight_quantize);
 }

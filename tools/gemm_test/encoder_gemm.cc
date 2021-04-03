@@ -14,8 +14,9 @@
  * limitations under the License.
  */
 
-#include "encoder_gemm.h"
-#include "encoder_igemm.h"
+#include "fastertransformer/gemm_test/encoder_gemm_func.h"
+#include "fastertransformer/gemm_test/encoder_igemm_func.h"
+#include "common.h"
 
 int main(int argc, char* argv[])
 {
@@ -32,22 +33,49 @@ int main(int argc, char* argv[])
   const int size_per_head = atoi(argv[4]);
   const int is_fp16 = atoi(argv[5]); 
   const int int8_mode = atoi(argv[6]);
+  
+  char filename[128];
+  if (int8_mode == 0)
+  {
+    sprintf(filename, "gemm_config.in");
+  }
+  else
+  {
+    sprintf(filename, "igemm_config.in");
+  }
+  
+  void *gemm_test_buf;
+  size_t buf_size_in_byte = fastertransformer::calGemmTestBufSizeInByte(batch_size, seq_len, head_num, size_per_head, int8_mode, is_fp16);
+  size_t total, free;
+  check_cuda_error(cudaMemGetInfo(&free, &total));
+  if (free < buf_size_in_byte + 10*1024*1024)
+  {
+    printf("[ERROR] There is no enough device memory for gemm test!\n %ld Bytes is needed, but only %ld Bytes is free.\n", buf_size_in_byte, free);
+    gemm_test_buf = NULL;
+    return -1;
+  }
+  else
+  {
+    check_cuda_error(cudaMalloc((void**)&gemm_test_buf, buf_size_in_byte));
+  }
 
   if (int8_mode != 0){
-    generate_encoder_igemm_config(batch_size, seq_len, head_num, size_per_head);
+    fastertransformer::generate_encoder_igemm_config(batch_size, seq_len, head_num, 
+                                                     size_per_head, gemm_test_buf, false);
   }
   else{
     if(is_fp16 == 0)
-      generate_encoder_gemm_config<float>(batch_size, seq_len, head_num, size_per_head);
+      fastertransformer::generate_encoder_gemm_config<float>(batch_size, seq_len, head_num, size_per_head, gemm_test_buf, false);
     else if(is_fp16 == 1)
-      generate_encoder_gemm_config<half>(batch_size, seq_len, head_num, size_per_head);
+      fastertransformer::generate_encoder_gemm_config<half>(batch_size, seq_len, head_num, size_per_head, gemm_test_buf, false);
     else
     {
       printf("[ERROR] is_fp16 should be 0 (use float) or 1 (use half). \n");
       return -1;
     }
   }
-
+  
+  check_cuda_error(cudaFree(gemm_test_buf));
   return 0;
 }
 

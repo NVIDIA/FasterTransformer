@@ -346,7 +346,7 @@ void update_kernel_check(float *log_probs, float *cum_log_probs, int *ids, bool 
     check_cuda_error(cudaMemcpy(h_output_ids, output_ids, sizeof(int) * batch_size * beam_width, cudaMemcpyDeviceToHost));
 
     // compute on GPU and copy to GPU output
-    update_kernelLauncher(log_probs, cum_log_probs, ids, finished, parent_ids, sequence_length, word_ids, output_ids,
+    update_kernelLauncher(log_probs, cum_log_probs, finished, parent_ids, sequence_length, word_ids, output_ids,
            batch_size, beam_width, vocab_size, stream, end_id, finished_count);
     cudaDeviceSynchronize();
     check_cuda_error(cudaGetLastError());

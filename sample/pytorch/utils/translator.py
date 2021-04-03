@@ -339,6 +339,10 @@ class Translator(object):
                 batch_data = self.translate_batch(
                     batch, data.src_vocabs, attn_debug
                 )
+            batch_data["batch"].indices = batch_data["batch"].indices.cpu()
+            batch_data["batch"].src = (batch_data["batch"].src[0].cpu(), batch_data["batch"].src[1].cpu())
+            if isinstance(batch_data["predictions"], torch.Tensor):
+                batch_data["predictions"] = batch_data["predictions"].cpu()
             translations = xlation_builder.from_batch(batch_data)
 
             for trans in translations:

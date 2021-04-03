@@ -68,8 +68,6 @@ python $MAIN_PATH/pytorch/run_squad.py \
     --output_dir $MAIN_PATH/pytorch/bert_squad/output/ \
     --cache_dir $MAIN_PATH/pytorch/bert_squad/models/ \
     --max_seq_length ${seq_len} \
-    --doc_stride 128 \
-    --max_query_length 64 \
     --per_gpu_eval_batch_size ${batch_size} \
     --model_type $1 \
     --data_type $2 \

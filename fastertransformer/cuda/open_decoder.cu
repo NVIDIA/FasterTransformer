@@ -18,7 +18,6 @@
  **/
 
 #include "fastertransformer/open_decoder.h"
-
 #include "cub/cub.cuh"
 
 namespace fastertransformer{
@@ -77,27 +76,67 @@ T blockReduceSum(T val)
                               
   return val;
 }
+
+/* gelu activation */
+template <typename T>
+__inline__ __device__
+T gelu(T x)
+{
+  float cdf = 0.5f * (1.0f + tanhf((0.7978845608028654f * (x + 0.044715f * x * x * x))));
+  return x * cdf;
+}
+
+/* gelu activation for half2 */
+template <>
+__inline__ __device__
+half2 gelu(half2 val)
+{
+  half2 val_pow3 = __hmul2(val, __hmul2(val, val));
+  float2 tmp_pow = __half22float2(val_pow3);
+  float2 tmp =  __half22float2(val);
+
+  tmp.x = 0.5f * (1.0f + tanhf((0.7978845608028654f * (tmp.x + 0.044715f * tmp_pow.x))));
+  tmp.y = 0.5f * (1.0f + tanhf((0.7978845608028654f * (tmp.y + 0.044715f * tmp_pow.y))));
+  return __hmul2(val, __float22half2_rn(tmp));
+}
+
+
+template <typename T>
+__global__ 
+void add_bias_gelu(T* out, const T* bias, int m, int n)
+{
+  for(int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x)
+  {
+    T reg_bias = __ldg(&bias[id % n]);
+    T val = out[id] + reg_bias;
+    out[id] = (T)(gelu(val));
+  }
+}
+
+template <>
+  __global__ 
+void add_bias_gelu(half* out, const half* bias, int m, int n)
+{
+  half2* out_ptr = (half2*) out;
+  const half2* bias_ptr = (half2*) bias;
+
+  for(int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x)
+  {
+    half2 reg_bias = __ldg(&bias_ptr[id % n]);
+    half2 val = out_ptr[id] + reg_bias;
+    out_ptr[id] = gelu(val);
+  }
+}
+
 template <typename T>
 __global__ 
 void add_bias_relu(T* out, const T* bias, int m, int n)
 {
-  T val, reg_bias;
-
-  int row_id = blockIdx.x;
-  int ite = n / blockDim.x;
-  int tid = threadIdx.x;
-
-  for(int i = 0; i < ite; ++i)
+  for(int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x)
   {
-    reg_bias = __ldg(&bias[i * blockDim.x + tid]);
-    row_id = blockIdx.x;
-
-    while(row_id < m)
-    {
-      val = out[tid + i * blockDim.x + row_id * n] + reg_bias;
-      out[tid + i * blockDim.x + row_id * n] = (T)(val > 0.0f ? val : 0.0f);
-      row_id += gridDim.x;
-     }
+    T reg_bias = __ldg(&bias[id % n]);
+    T val = out[id] + reg_bias;
+    out[id] = (T)(val > 0.0f ? val : 0.0f);
   }
 }
 
@@ -105,29 +144,19 @@ template <>
   __global__ 
 void add_bias_relu(half* out, const half* bias, int m, int n)
 {
-  half2 val, reg_bias;
-  int row_id = blockIdx.x;
-  int ite = n / blockDim.x / 2;
-  int tid = threadIdx.x;
-
   half2* out_ptr = (half2*) out;
   const half2* bias_ptr = (half2*) bias;
-  for(int i = 0; i < ite; ++i)
-  {
-    reg_bias = __ldg(&bias_ptr[i * blockDim.x + tid]);
-    row_id = blockIdx.x;
 
-    while(row_id < m)
-    {
-      val = out_ptr[tid + i * blockDim.x + row_id * n / 2];
-      val = __hadd2(val, reg_bias);
-      val.x = val.x > (half)0.0f ? val.x : (half)0.0f;
-      val.y = val.y > (half)0.0f ? val.y : (half)0.0f;
-      out_ptr[tid + i * blockDim.x + row_id * n / 2] = val;
-      row_id += gridDim.x;
-    }
+  for(int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x)
+  {
+    half2 reg_bias = __ldg(&bias_ptr[id % n]);
+    half2 val = out_ptr[id] + reg_bias;
+    val.x = val.x > (half)0.0f ? val.x : (half)0.0f;
+    val.y = val.y > (half)0.0f ? val.y : (half)0.0f;
+    out_ptr[id] = val;
   }
 }
+
 template <typename T>
   __inline__ __device__
 T warpReduceMax(T val)
@@ -184,7 +213,7 @@ void masked_attention_kernel_opt(
 
   __shared__ float_n_t sq[block_sz];
 
-  __shared__ float logits[1024]; // only use [0 ~ step-1], the step should be smaller than 1024
+  extern __shared__ float logits[]; // use to store the logits from [0~step]
 
   const int tid = threadIdx.x;
   const int warp_num = block_sz / WARP_SIZE;
@@ -379,7 +408,7 @@ void masked_attention_kernel_opt_half2(
 
   __shared__ half_n_t sq[block_sz];
 
-  __shared__ float logits[1024]; // only use [0 ~ step-1]
+  extern __shared__ float logits[]; // use to store the logits from [0~step]
 
   const int tid = threadIdx.x;
   const int warp_num = block_sz / WARP_SIZE;
@@ -726,19 +755,19 @@ void masked_attention_dispatch(
     switch (cond)
     {
       case 32:
-        masked_attention_kernel_opt<32, block_sz, T><<<grid, block_sz, 0, stream>>>(
+        masked_attention_kernel_opt<32, block_sz, T><<<grid, block_sz, sizeof(float)*step, stream>>>(
           key_buf, value_buf,
           query_buf, self_Q_bias,  key_cache, self_K_bias, value_cache, self_V_bias, context_buf, 
           batch_size, head_num, step, scalar); 
         break;
       case 64:
         if(sizeof(T) == 2)
-          masked_attention_kernel_opt_half2<64, block_sz><<<grid, block_sz, 0, stream>>>(
+          masked_attention_kernel_opt_half2<64, block_sz><<<grid, block_sz, sizeof(float)*step, stream>>>(
             key_buf, value_buf,
             query_buf, self_Q_bias,  key_cache, self_K_bias, value_cache, self_V_bias, context_buf, 
             batch_size, head_num, step, scalar);
         else
-          masked_attention_kernel_opt<64, block_sz, T><<<grid, block_sz, 0, stream>>>(
+          masked_attention_kernel_opt<64, block_sz, T><<<grid, block_sz, sizeof(float)*step, stream>>>(
             key_buf, value_buf,
             query_buf, self_Q_bias,  
             key_cache, self_K_bias, 
@@ -748,12 +777,12 @@ void masked_attention_dispatch(
         break;
       case 128:
         if(sizeof(T) == 2)
-          masked_attention_kernel_opt_half2<128, block_sz><<<grid, block_sz, 0, stream>>>(
+          masked_attention_kernel_opt_half2<128, block_sz><<<grid, block_sz, sizeof(float)*step, stream>>>(
             key_buf, value_buf,
             query_buf, self_Q_bias,  key_cache, self_K_bias, value_cache, self_V_bias, context_buf, 
             batch_size, head_num, step, scalar);
         else
-          masked_attention_kernel_opt<128, block_sz, T><<<grid, block_sz, 0, stream>>>(
+          masked_attention_kernel_opt<128, block_sz, T><<<grid, block_sz, sizeof(float)*step, stream>>>(
             key_buf, value_buf,
             query_buf, self_Q_bias,  key_cache, self_K_bias, value_cache, self_V_bias, context_buf, 
             batch_size, head_num, step, scalar);
@@ -902,7 +931,7 @@ void cross_attention_kernel_opt(
   } float_n_t;
 
   __shared__ float_n_t sq[block_sz];
-  __shared__ float logits[1024];
+  extern __shared__ float logits[]; // use to store the logits from [0~step]
 
   const int warp_id = threadIdx.x / WARP_SIZE;
   const int warp_num = block_sz / WARP_SIZE;
@@ -1160,17 +1189,17 @@ void cross_attention_dispatch(T* query_buf, const T* Q_bias,
     switch (cond)
     {
       case 32:
-        cross_attention_kernel_opt<T, 32, block_sz><<<grid, block_sz, 0, stream>>>(
+        cross_attention_kernel_opt<T, 32, block_sz><<<grid, block_sz, sizeof(float)*seq_len, stream>>>(
           query_buf, Q_bias, key_cache, K_bias, value_cache, V_bias, length, context_buf,  
           batch_size, head_num, step, seq_len, scalar);
         break;
       case 64:
-        cross_attention_kernel_opt<T, 64, block_sz><<<grid, block_sz, 0, stream>>>(
+        cross_attention_kernel_opt<T, 64, block_sz><<<grid, block_sz, sizeof(float)*seq_len, stream>>>(
           query_buf, Q_bias, key_cache, K_bias, value_cache, V_bias, length, context_buf,  
           batch_size, head_num, step, seq_len, scalar);
         break;
       case 128:
-        cross_attention_kernel_opt<T, 128, block_sz><<<grid, block_sz, 0, stream>>>(
+        cross_attention_kernel_opt<T, 128, block_sz><<<grid, block_sz, sizeof(float)*seq_len, stream>>>(
           query_buf, Q_bias, key_cache, K_bias, value_cache, V_bias, length, context_buf,  
           batch_size, head_num, step, seq_len, scalar);
         break;
@@ -1290,6 +1319,53 @@ void OpenDecoder<OpType_>::cross_multi_head_attention(
 
 template <typename T>
 __global__
+void decoder_norm1_kernel_generalize(const T* __restrict input, 
+                          const T* __restrict gamma, 
+                          const T* __restrict beta, 
+                          T* output, 
+                          int m, int n)
+{
+  const int tid = threadIdx.x;
+
+  __shared__ float s_mean;
+  __shared__ float s_variance;
+  float mean =  0.0f;
+  float variance = 0.0f;
+
+  float local_sum = 0.0f; 
+  for(int i = tid; i < n; i+= blockDim.x)
+  {
+    local_sum += (float)(__ldg(&input[blockIdx.x * n + i]));
+  }
+
+  mean = blockReduceSum<float>(local_sum);
+
+  if(threadIdx.x == 0)
+    s_mean = mean / n;
+  __syncthreads();
+
+  float local_var_sum = 0.0f;
+  for(int i = tid; i < n; i+= blockDim.x)
+  {
+    float diff = (float)(__ldg(&input[blockIdx.x * n + i])) - s_mean;
+    local_var_sum += diff * diff;
+  }
+  variance = blockReduceSum<float>(local_var_sum);
+
+  if(threadIdx.x == 0)
+    s_variance = rsqrtf(variance / n + 1e-6);
+
+  __syncthreads();
+
+  for(int i = tid; i < n; i+= blockDim.x)
+  {
+    output[blockIdx.x * n + i] = 
+      (T)((( (float)input[blockIdx.x * n + i] - s_mean) * s_variance) * (float)(__ldg(&gamma[i])) + (float)(__ldg(&beta[i])));
+  }
+}
+
+template <typename T>
+__global__
 void decoder_norm1_kernel(const T* __restrict input, 
                           const T* __restrict gamma, 
                           const T* __restrict beta, 
@@ -1371,6 +1447,57 @@ void decoder_norm1_kernel(const half* __restrict input,
     local_out_fp2.x = (local_out_fp2.x - s_mean) * s_variance * gamma_val.x + beta_val.x;
     local_out_fp2.y = (local_out_fp2.y - s_mean) * s_variance * gamma_val.y + beta_val.y;
     output_ptr[id] = __float22half2_rn(local_out_fp2);
+  }
+}
+
+template <typename T>
+__global__
+void decoder_norm2_kernel_generalize(const T* __restrict input, 
+                          const T* __restrict gamma, 
+                          const T* __restrict beta, 
+                          const T* __restrict bias, 
+                          T* output, T* norm_output, 
+                          int m, int n)
+{
+  int tid = threadIdx.x;
+
+  __shared__ float s_mean;
+  __shared__ float s_variance;
+  float mean =  0.0f;
+  float variance = 0.0f;
+
+  float local_sum = 0.0f; 
+  for(int i = tid; i < n; i+= blockDim.x)
+  {
+    float local_out = (float)(__ldg(&input[blockIdx.x * n + i]));
+    local_out += (float)(output[blockIdx.x * n + i]);
+    local_out += (float)(__ldg(&bias[i]));
+    output[blockIdx.x * n + i] = (T)local_out;
+    local_sum += local_out;
+  }
+
+  mean = blockReduceSum<float>(local_sum);
+
+  if(threadIdx.x == 0)
+    s_mean = mean / n;
+  __syncthreads();
+
+  float local_var_sum = 0.0f;
+  for(int i = tid; i < n; i+= blockDim.x)
+  {
+    float diff = (float)(__ldg(&output[blockIdx.x * n + i])) - s_mean;
+    local_var_sum += diff * diff;
+  }
+  variance = blockReduceSum<float>(local_var_sum);
+  
+  if(threadIdx.x == 0)
+    s_variance = rsqrtf(variance / n + 1e-6);
+  __syncthreads();
+
+  for(int i = tid; i < n; i+= blockDim.x)
+  {
+    norm_output[blockIdx.x * n + i] = 
+      (T)((( (float)output[blockIdx.x * n + i] - s_mean) * s_variance) * (float)(__ldg(&gamma[i])) + (float)(__ldg(&beta[i])));
   }
 }
 
@@ -1487,10 +1614,11 @@ void OpenDecoder<OpType_>::decoder_norm1(
     block.x = 1024;
 
   block.x = block.x / (4 / sizeof(DataType_)); // if using half, only need half of block.x
-  assert(block.x <= 1024);
 
-/* should pay attention to the rsqrt precision*/
-  decoder_norm1_kernel<DataType_><<<grid, block, 0, param_.stream>>>(input, gamma, beta, output, m, n);
+  /* should pay attention to the rsqrt precision*/
+  // assert(block.x <= 1024);
+  // decoder_norm1_kernel<DataType_><<<grid, block, 0, param_.stream>>>(input, gamma, beta, output, m, n);
+  decoder_norm1_kernel_generalize<DataType_><<<grid, block, 0, param_.stream>>>(input, gamma, beta, output, m, n); // For gpt-3
 }
 
 template<OperationType OpType_>
@@ -1512,13 +1640,14 @@ void OpenDecoder<OpType_>::decoder_norm2(
   */
   
   if(n % 32 != 0)
-  block.x = 1024;
+    block.x = 1024;
   
   block.x = block.x / (4 / sizeof(DataType_)); // if using half, only need half of block.x
-  assert(block.x <= 1024);
 
   /* should pay attention to the rsqrt precision*/
-  decoder_norm2_kernel<DataType_><<<grid, block, 0, param_.stream>>>(input, gamma, beta, bias, output, norm_output, m, n);
+  // assert(block.x <= 1024);
+  // decoder_norm2_kernel<DataType_><<<grid, block, 0, param_.stream>>>(input, gamma, beta, bias, output, norm_output, m, n);
+  decoder_norm2_kernel_generalize<DataType_><<<grid, block, 0, param_.stream>>>(input, gamma, beta, bias, output, norm_output, m, n); // For gpt-3 
 }
 
 template<OperationType OpType_>
@@ -1528,7 +1657,8 @@ void OpenDecoder<OpType_>::ffn(
   DataType_* output,
   const int m,
   const int inner_size,
-  const int n)
+  const int n,
+  ActivationType activation_type)
 {
   int m1 = m, k1 = n, n1 = inner_size;
   DataType_ alpha = (DataType_)1.0f;
@@ -1545,12 +1675,25 @@ void OpenDecoder<OpType_>::ffn(
     computeType_, 
     static_cast<cublasGemmAlgo_t>(cublasAlgo_[2])));
 
-  dim3 grid(m1);
-  dim3 block(n1 / 4);
+  // dim3 grid(min(m1, 65536));
+  // dim3 block(min(n1 / 4, 1024));
 
-  assert(block.x <= 1024);
+  // // TODO remove this limitation
+  // // assert(block.x <= 1024);
 
-  add_bias_relu<DataType_><<<grid, block, 0, param_.stream>>>(ffn_inner, param_.ffn.intermediate_weight.bias, m1, n1);
+  // if(activation_type == ActivationType::RELU)
+  //   add_bias_relu<DataType_><<<grid, block, 0, param_.stream>>>(ffn_inner, param_.ffn.intermediate_weight.bias, m1, n1);
+  // else if(activation_type == ActivationType::GELU)
+  //   add_bias_gelu<DataType_><<<grid, block, 0, param_.stream>>>(ffn_inner, param_.ffn.intermediate_weight.bias, m1, n1);
+
+  dim3 block(min((int)(n1 / 4 / (4 / sizeof(DataType_))), 1024));
+  dim3 grid(min(m1 * n1 / block.x, 65536));
+
+  if(activation_type == ActivationType::RELU)
+    add_bias_relu<DataType_><<<grid, block, 0, param_.stream>>>(ffn_inner, param_.ffn.intermediate_weight.bias, m1, n1 / (4 / sizeof(DataType_)));
+  else if(activation_type == ActivationType::GELU)
+    add_bias_gelu<DataType_><<<grid, block, 0, param_.stream>>>(ffn_inner, param_.ffn.intermediate_weight.bias, m1, n1 / (4 / sizeof(DataType_)));
+
 
   int m2 = m, n2 = n, k2 = inner_size;
   check_cuda_error(cublasGemmEx(param_.cublas_handle, 
@@ -1569,17 +1712,36 @@ template <typename T>
 __global__ 
 void add_bias_input_kernel(T* output, const T* input, const T* bias, const int m, const int n)
 {
+  // original kernel, which only supports cases of n <= 1024.
   int id = blockIdx.x * n + threadIdx.x;
   output[id] = output[id] + input[id] + __ldg(&bias[threadIdx.x]);
+}
+
+
+template <typename T>
+__global__ 
+void add_bias_input_kernel_generalize(T* output, const T* input, const T* bias, const int m, const int n)
+{
+  // TODO For GPT-3
+  // This kernel can run with any block size and grid size
+  // Since the hidden dimension of GPT-3 would be larger than 1024
+  const int bid = blockIdx.x;
+  const int blocks_per_row = n / blockDim.x;
+  const int col_index = (bid % blocks_per_row) * blockDim.x + threadIdx.x;
+  T bias_val = __ldg(&bias[col_index]);
+  for(int index = bid * blockDim.x + threadIdx.x; index < m * n; index += blockDim.x * gridDim.x)
+  {
+    output[index] = output[index] + input[index] + bias_val; 
+  }
 }
 
 template<OperationType OpType_>
 void OpenDecoder<OpType_>::add_bias_input(DataType_* output, const DataType_* input, const int m, const int n)
 {
-  dim3 grid(m);
-  dim3 block(n);
-  assert(n <= 1024);
-  add_bias_input_kernel<<<grid, block, 0, param_.stream>>>(output, input, param_.ffn.output_weight.bias, m, n);
+  dim3 grid(min(m, 65536));
+  dim3 block(min(n, 1024));
+  
+  add_bias_input_kernel_generalize<<<grid, block, 0, param_.stream>>>(output, input, param_.ffn.output_weight.bias, m, n);
 }
 
 template void OpenDecoder<OperationType::FP32>::masked_multi_head_attention(
@@ -1622,7 +1784,8 @@ template void OpenDecoder<OperationType::FP32>::ffn(
   float* otuput,
   const int m,
   const int inner_size,
-  const int n);
+  const int n,
+  ActivationType activation_type);
 
 template void OpenDecoder<OperationType::FP16>::ffn(
   const half* input,
@@ -1630,7 +1793,8 @@ template void OpenDecoder<OperationType::FP16>::ffn(
   half* otuput,
   const int m,
   const int inner_size,
-  const int n);
+  const int n,
+  ActivationType activation_type);
 
 template void OpenDecoder<OperationType::FP32>::decoder_norm1(
   const float* input,

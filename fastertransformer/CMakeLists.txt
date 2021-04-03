@@ -13,10 +13,13 @@
 # limitations under the License.
 cmake_minimum_required(VERSION 3.8)
 add_subdirectory(cuda)
+add_subdirectory(gemm_test)
 if(BUILD_TF)
   add_subdirectory(tf_op)
 endif()
 
-if(BUILD_THE OR BUILD_THS OR BUILD_THSOP)
+if(BUILD_THE OR BUILD_THS)
   add_subdirectory(th_op)
 endif()
+
+add_subdirectory(trt_fused_multihead_attention)

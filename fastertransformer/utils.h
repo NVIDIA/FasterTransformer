@@ -44,7 +44,7 @@ inline cudaError_t get_set_device(int i_device, int* o_device = NULL){
     else{
       err = cudaSetDevice(i_device);
       if (err != cudaSuccess) {
-	return err;
+        return err;
       }
       *o_device = current_dev_id;
     }

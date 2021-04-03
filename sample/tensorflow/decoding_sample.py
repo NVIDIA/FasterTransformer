@@ -12,19 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-'''
-This is a sample code to demonstrate how to use the TensorFlow custom op with 
-FasterTransformer library in decoding. 
+"""This is a sample code to demonstrate how to use the TensorFlow custom op
+with FasterTransformer library in decoding.
 
-This sample code builds a decoding model by TensorFlow and TensorFlow custom 
-op. Compare 1. the results of TensorFlow decoding with beam search and 
-the results FasterTransformer decoding with beam search; and 2. the results 
-of TensorFlow decoding with sampling and the results FasterTransformer decoding 
+This sample code builds a decoding model by TensorFlow and TensorFlow custom
+op. Compare 1. the results of TensorFlow decoding with beam search and
+the results FasterTransformer decoding with beam search; and 2. the results
+of TensorFlow decoding with sampling and the results FasterTransformer decoding
 with sampling.
 
-Users are also able to use this sample code to test the average forward time of 
-TensorFlow and FasterTransformer. 
-'''
+Users are also able to use this sample code to test the average forward time of
+TensorFlow and FasterTransformer.
+"""
 
 import copy
 import numpy as np

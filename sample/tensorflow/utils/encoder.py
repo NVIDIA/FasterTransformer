@@ -244,7 +244,7 @@ def tf_encoder(input_tensor,
 
             # amaxList for int8 quantization
             if encoder_args.int8_mode != 0:
-                amaxList = tf.get_variable(name="amaxList", shape=[80 + 9*encoder_args.hidden_dim], dtype=tf.float32)
+                amaxList = tf.get_variable(name="amaxList", shape=[80 + 9*encoder_args.hidden_dim + 8], dtype=tf.float32)
 
     prev_output = tf.reshape(prev_output, shape=tf.shape(input_tensor))
     return prev_output
@@ -455,13 +455,24 @@ def op_encoder(inputs,
     transformer_op_module = tf.load_op_library(os.path.join('./lib/libtf_fastertransformer.so'))
     if remove_padding == True:
         inputs, sequence_id_offset = transformer_op_module.build_mask_remove_padding(inputs, sequence_length)
+        trt_seq_len = tf.cumsum(tf.concat([[0], sequence_length], axis=0), axis=0)
     else:
         sequence_id_offset = []
+        batch = tf.shape(inputs)[0]
+        max_seq_len = tf.shape(inputs)[1]
+        padding_offset = tf.range(0, batch*max_seq_len, max_seq_len)
+        squence_offset_with_padding = sequence_length + padding_offset
+        c = tf.concat([padding_offset, squence_offset_with_padding], axis=0)
+        c_r = tf.reshape(c, [2, -1])
+        t = tf.transpose(c_r)
+        trt_seq_len = tf.reshape(t, [-1])
+        trt_seq_len = tf.concat([trt_seq_len, [batch*max_seq_len]], axis=0)
     for layer_idx in range(encoder_args.num_layer):
         if encoder_args.int8_mode != 0:
             amaxList = encoder_vars_dict['layer_%d/amaxList:0' % layer_idx]
         else:
             amaxList = []
+
         outputs = transformer_op_module.bert_transformer(
             inputs,
             inputs,
@@ -484,12 +495,12 @@ def op_encoder(inputs,
             encoder_vars_dict['layer_%d/output/LayerNorm/gamma:0' % layer_idx],
             sequence_id_offset,
             amaxList,
+            trt_seq_len,
             head_num=encoder_args.head_num, size_per_head=encoder_args.size_per_head,
             remove_padding=remove_padding,
-            int8_mode=encoder_args.int8_mode, layer_idx=layer_idx, layer_num=encoder_args.num_layer)
+            int8_mode=encoder_args.int8_mode, layer_idx=layer_idx, layer_num=encoder_args.num_layer,
+            allow_gemm_test=encoder_args.allow_gemm_test)
         inputs = outputs
-    
     if remove_padding == True:
         outputs = transformer_op_module.rebuild_padding(outputs, sequence_id_offset, attention_mask)
-
     return outputs
