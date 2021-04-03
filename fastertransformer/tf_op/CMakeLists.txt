@@ -15,33 +15,28 @@ cmake_minimum_required(VERSION 3.8)
 
 set(tf_bert_transformer_files
   bert_transformer_op.cc
-  bert_transformer_op.cu.cc
-  ../cuda/open_attention.cu
-  ../cuda/cuda_kernels.cu
 )
 
 set(tf_decoder_files
   decoder_op.cc
-  decoder_op.cu.cc
-  ../cuda/open_decoder.cu
-  ../cuda/cuda_kernels.cu
 )
 
-set(tf_decoding_files
-  decoding_op.cc
-  decoding_op.cu.cc
-  ../cuda/open_decoder.cu
-  ../cuda/cuda_kernels.cu
-  ../cuda/open_attention.cu
-  ../cuda/decoding_kernel_check.cpp
+set(tf_decoding_beamsearch_files
+  decoding_beamsearch_op.cc
+)
+
+set(tf_decoding_sampling_files
+  decoding_sampling_op.cc
 )
 
 add_definitions(-D_GLIBCXX_USE_CXX11_ABI=0)
 add_definitions(-DGOOGLE_CUDA=1)
 
 add_library(tf_fastertransformer SHARED ${tf_bert_transformer_files})
-target_link_libraries(tf_fastertransformer PRIVATE -lcublas -lcudart -ltensorflow_framework)
+target_link_libraries(tf_fastertransformer PRIVATE -lcublas -lcudart -ltensorflow_framework encoder)
 add_library(tf_decoder SHARED ${tf_decoder_files})
-target_link_libraries(tf_decoder PRIVATE -lcublas -lcudart -ltensorflow_framework)
-add_library(tf_decoding SHARED ${tf_decoding_files})
-target_link_libraries(tf_decoding PRIVATE -lcublas -lcudart -ltensorflow_framework)
+target_link_libraries(tf_decoder PUBLIC -lcublas -lcudart -ltensorflow_framework decoder encoder)
+add_library(tf_decoding_beamsearch SHARED ${tf_decoding_beamsearch_files})
+target_link_libraries(tf_decoding_beamsearch PRIVATE -lcublas -lcudart -ltensorflow_framework decoder decoding)
+add_library(tf_decoding_sampling SHARED ${tf_decoding_sampling_files})
+target_link_libraries(tf_decoding_sampling PRIVATE -lcublas -lcudart -ltensorflow_framework decoder decoding)

@@ -145,7 +145,7 @@ class TransformerPlugin: public IPluginV2
         encoder_param.ffn_layernorm.beta = d_output_layernorm_beta_;
         encoder_param.ffn_layernorm.gamma = d_output_layernorm_gamma_;
         encoder_param.cublas_handle = cublas_handle_;
-        
+
         encoder_transformer_->initialize(encoder_param);
       }
       catch(std::runtime_error& error)
@@ -201,7 +201,7 @@ class TransformerPlugin: public IPluginV2
           BertEncoderTransformer<EncoderTraits_>(*allocator_, max_batch_size, seq_len, seq_len, head_num, hidden_dim / head_num);
 
         EncoderInitParam<T> encoder_param; //init param here
-
+   
         encoder_param.self_attention.query_weight.kernel = d_attr_kernel_Q_;
         encoder_param.self_attention.key_weight.kernel = d_attr_kernel_K_;
         encoder_param.self_attention.value_weight.kernel = d_attr_kernel_V_;
@@ -269,13 +269,13 @@ class TransformerPlugin: public IPluginV2
 
     bool supportsFormat(nvinfer1::DataType type, PluginFormat format) const override 
     {
-      return type == nvinfer1::DataType::kFLOAT && format == PluginFormat::kNCHW;
+      return type == TransformerTrtTraits<T>::DataType && format == PluginFormat::kNCHW;
     }
 
     void configureWithFormat(const Dims* pInputDim, int nInputDim, const Dims* pOutputDim, 
         int nOutputDim, nvinfer1::DataType dataType, nvinfer1::PluginFormat pluginFormat, int maxBatchSize) override 
     {
-      assert(dataType == nvinfer1::DataType::kFLOAT && pluginFormat == nvinfer1::PluginFormat::kNCHW);
+      assert(dataType == TransformerTrtTraits<T>::DataType && pluginFormat == nvinfer1::PluginFormat::kNCHW);
       assert(nInputDim == 2);
       assert(pInputDim[0].nbDims == 2 && pInputDim[0].d[0] == seq_len_ && pInputDim[0].d[1] == hidden_dim_);
       assert(pInputDim[1].nbDims == 2 && pInputDim[1].d[0] == seq_len_ && pInputDim[1].d[1] == seq_len_);

@@ -14,7 +14,7 @@
 
 import os
 import tensorflow as tf
-from common import create_initializer
+from utils.common import create_initializer
 
 def norm(inputs):
     """Layer normalizes :obj:`inputs`."""
@@ -69,9 +69,34 @@ def tf_decoder(decoder_args,
                memory,
                memory_sequence_length,
                step,
-               cache=None,
-               kernel_initializer_range=0.02,
-               bias_initializer_range=0):
+               cache=None):
+    '''
+    Run the decoder transformer layer by TensorFlow.
+                      
+    Args:
+        decoder_args: The arguments for decoder. The details are in the class "TransformerArgument" of common.py
+        inputs: A tf.Tensor with shape [batch_size * beam_width, 1, hidden_dimension].
+                The inputs tensor of encoder. The rank must be 3.
+        memory: A tf.tensor with shape [batch_size * beam_width, max(memory_sequence_length), encoder_hidden_dimension]. 
+                The results of encoder transformer layer. The rank must be 3. 
+                Note that it must be extended by beam_width times
+        memory_sequence_length: A tf.Tensor with shape [batch_size * beam_width], type tf.int. 
+                                The lenght of each sentence of results of encoder. 
+                                Note that it must be extended by beam_width times
+        step: A tf.Tensor with tf.int type. The current step in the translation process.
+        cache: A dict. The cache space to store the keys and values of attention layers.
+
+    Outputs:
+        outputs: A tf.Tensor with shape [batch_size * beam_width, 1, hidden_dimension].
+                 The results of decoder.
+    '''
+    
+    k_init_range = decoder_args.kernel_init_range
+    b_init_range = decoder_args.bias_init_range
+    data_type = decoder_args.dtype
+    fuse_qkv = decoder_args.fuse_qkv
+    hidden_dim = decoder_args.hidden_dim
+    
     memory_mask = None  # has something
 
     if memory is not None and not tf.contrib.framework.nest.is_sequence(memory):
@@ -81,84 +106,62 @@ def tf_decoder(decoder_args,
                 memory_sequence_length = (memory_sequence_length,)
             memory_mask = [
                 build_sequence_mask(
-                    length, num_heads=decoder_args.head_num, maximum_length=tf.shape(m)[1], data_type=decoder_args.dtype)
+                    length, num_heads=decoder_args.head_num, maximum_length=tf.shape(m)[1], data_type=data_type)
                 for m, length in zip(memory, memory_sequence_length)]
 
     for l in range(decoder_args.num_layer):
         layer_name = "layer_{}".format(l)
         layer_cache = cache[layer_name] if cache is not None else None
-
+        
         with tf.variable_scope(layer_name):
             with tf.variable_scope("masked_multi_head"):
                 norm_inputs = norm(inputs)
-                queries = tf.layers.conv1d(
-                    norm_inputs,
-                    decoder_args.hidden_dim,
-                    1,
-                    activation=None,
-                    name="query",
-                    use_bias=True,
-                    bias_initializer=create_initializer(
-                        bias_initializer_range, decoder_args.dtype),
-                    kernel_initializer=create_initializer(kernel_initializer_range, decoder_args.dtype))
+                if fuse_qkv == True:
+                    queries, keys, values = tf.split( tf.layers.conv1d(norm_inputs, decoder_args.hidden_dim * 3, 1, 
+                                                                bias_initializer=create_initializer(b_init_range, data_type),
+                                                                kernel_initializer=create_initializer(k_init_range, data_type)), 3, axis=2)
+                else:
+                    '''
+                    This progress wants to prevent a addictional tf.concat to concat the q, k, v kernels for decoder op 
+                    becuase the concat bring large overhead for small batch size.
+                    '''
+                    queries = tf.layers.conv1d(norm_inputs, decoder_args.hidden_dim, 1, 
+                                                bias_initializer=create_initializer(b_init_range, data_type),
+                                                kernel_initializer=create_initializer(k_init_range, data_type))
+                    keys = tf.layers.conv1d(norm_inputs, decoder_args.hidden_dim, 1, 
+                                            bias_initializer=create_initializer(b_init_range, data_type),
+                                            kernel_initializer=create_initializer(k_init_range, data_type),
+                                            name="key")
+                    values = tf.layers.conv1d(norm_inputs, decoder_args.hidden_dim, 1, 
+                                                bias_initializer=create_initializer(b_init_range, data_type),
+                                                kernel_initializer=create_initializer(k_init_range, data_type),
+                                                name="value")
 
-                keys = tf.layers.conv1d(
-                    norm_inputs,
-                    decoder_args.hidden_dim,
-                    1,
-                    activation=None,
-                    name="key",
-                    use_bias=True,
-                    bias_initializer=create_initializer(
-                        bias_initializer_range, decoder_args.dtype),
-                    kernel_initializer=create_initializer(kernel_initializer_range, decoder_args.dtype))
-
-                values = tf.layers.conv1d(
-                    norm_inputs,
-                    decoder_args.hidden_dim,
-                    1,
-                    activation=None,
-                    name="value",
-                    use_bias=True,
-                    bias_initializer=create_initializer(
-                        bias_initializer_range, decoder_args.dtype),
-                    kernel_initializer=create_initializer(kernel_initializer_range, decoder_args.dtype))
-
-                keys = tf.reshape(keys, [decoder_args.batch_size * decoder_args.beam_width,
-                                         1, decoder_args.head_num, decoder_args.size_per_head])
+                keys = tf.reshape(keys, [tf.shape(keys)[0], 1, decoder_args.head_num, decoder_args.size_per_head])
                 keys = tf.transpose(keys, [0, 2, 1, 3])
-                values = tf.reshape(values, [
-                                    decoder_args.batch_size * decoder_args.beam_width, 1, decoder_args.head_num, decoder_args.size_per_head])
+                values = tf.reshape(values, [tf.shape(values)[0], 1, decoder_args.head_num, decoder_args.size_per_head])
                 values = tf.transpose(values, [0, 2, 1, 3])
-
                 keys = tf.concat([layer_cache["self_keys"], keys], axis=2)
-                values = tf.concat(
-                    [layer_cache["self_values"], values], axis=2)
+                values = tf.concat([layer_cache["self_values"], values], axis=2)
                 layer_cache["self_keys"] = keys
                 layer_cache["self_values"] = values
 
-                queries = tf.reshape(queries, [
-                                     decoder_args.batch_size * decoder_args.beam_width, 1, decoder_args.head_num, decoder_args.size_per_head])
+                queries = tf.reshape(queries, [tf.shape(queries)[0], 1, decoder_args.head_num, decoder_args.size_per_head])
                 queries = tf.transpose(queries, [0, 2, 1, 3])
                 queries *= (decoder_args.size_per_head)**-0.5
 
                 dot = tf.matmul(queries, keys, transpose_b=True)
 
-                attn = tf.cast(tf.nn.softmax(
-                    tf.cast(dot, decoder_args.dtype)), dot.dtype)
+                attn = tf.cast(tf.nn.softmax(tf.cast(dot, data_type)), dot.dtype)
                 context = tf.matmul(attn, values)
                 context = tf.transpose(context, [0, 2, 1, 3])
-                context = tf.reshape(context, [
-                                     decoder_args.batch_size * decoder_args.beam_width, 1, decoder_args.head_num * decoder_args.size_per_head])
+                context = tf.reshape(context, [tf.shape(context)[0], 1, decoder_args.head_num * decoder_args.size_per_head])
 
                 outputs = tf.layers.conv1d(context,
-                                           decoder_args.hidden_dim,
-                                           1,
-                                           activation=None,
-                                           use_bias=True,
-                                           bias_initializer=create_initializer(
-                                               bias_initializer_range, decoder_args.dtype),
-                                           kernel_initializer=create_initializer(kernel_initializer_range, decoder_args.dtype))
+                                            decoder_args.hidden_dim,
+                                            1,
+                                            bias_initializer=create_initializer(b_init_range, data_type),
+                                            kernel_initializer=create_initializer(k_init_range, data_type))
 
                 # drop_and_add
                 input_dim = inputs.get_shape().as_list()[-1]
@@ -176,41 +179,29 @@ def tf_decoder(decoder_args,
                             norm(last_context),
                             decoder_args.hidden_dim,
                             1,
-                            activation=None,
-                            name="query",
-                            use_bias=True,
-                            bias_initializer=create_initializer(
-                                bias_initializer_range, decoder_args.dtype),
-                            kernel_initializer=create_initializer(kernel_initializer_range, decoder_args.dtype))
+                            bias_initializer=create_initializer(b_init_range, data_type),
+                            kernel_initializer=create_initializer(k_init_range, data_type))
 
                         def _project_and_split():
-                            keys = tf.layers.conv1d(
-                                mem,
-                                decoder_args.hidden_dim,
-                                1,
-                                activation=None,
-                                name="key",
-                                use_bias=True,
-                                bias_initializer=create_initializer(
-                                    bias_initializer_range, decoder_args.dtype),
-                                kernel_initializer=create_initializer(kernel_initializer_range, decoder_args.dtype))
+                            if fuse_qkv == True:
+                                keys, values = tf.split( tf.layers.conv1d(mem, decoder_args.hidden_dim * 2, 1, 
+                                                                bias_initializer=create_initializer(b_init_range, data_type),
+                                                                kernel_initializer=create_initializer(k_init_range, data_type)), 2, axis=2)
+                            else:
+                                keys = tf.layers.conv1d(mem, decoder_args.hidden_dim, 1, 
+                                                        bias_initializer=create_initializer(b_init_range, data_type),
+                                                        kernel_initializer=create_initializer(k_init_range, data_type))
+                                values = tf.layers.conv1d(mem, decoder_args.hidden_dim, 1, 
+                                                        bias_initializer=create_initializer(b_init_range, data_type),
+                                                        kernel_initializer=create_initializer(k_init_range, data_type),
+                                                        name="value")
+                            
 
-                            values = tf.layers.conv1d(
-                                mem,
-                                decoder_args.hidden_dim,
-                                1,
-                                activation=None,
-                                name="value",
-                                use_bias=True,
-                                bias_initializer=create_initializer(
-                                    bias_initializer_range, decoder_args.dtype),
-                                kernel_initializer=create_initializer(kernel_initializer_range, decoder_args.dtype))
-
-                            keys = tf.reshape(keys, [decoder_args.batch_size * decoder_args.beam_width, tf.shape(keys)[1],
-                                                     decoder_args.head_num, decoder_args.size_per_head])
+                            keys = tf.reshape(keys, [tf.shape(keys)[0], tf.shape(keys)[1],
+                                                        decoder_args.head_num, decoder_args.size_per_head])
                             keys = tf.transpose(keys, [0, 2, 1, 3])
-                            values = tf.reshape(values, [decoder_args.batch_size * decoder_args.beam_width, tf.shape(values)[1],
-                                                         decoder_args.head_num, decoder_args.size_per_head])
+                            values = tf.reshape(values, [tf.shape(values)[0], tf.shape(values)[1],
+                                                        decoder_args.head_num, decoder_args.size_per_head])
                             values = tf.transpose(values, [0, 2, 1, 3])
 
                             return keys, values
@@ -224,30 +215,25 @@ def tf_decoder(decoder_args,
                         memory_cache["memory_keys"] = keys
                         memory_cache["memory_values"] = values
 
-                        queries = tf.reshape(queries, [decoder_args.batch_size * decoder_args.beam_width, 1,
-                                                       decoder_args.head_num, decoder_args.size_per_head])
+                        queries = tf.reshape(queries, [tf.shape(queries)[0], 1,decoder_args.head_num, decoder_args.size_per_head])
                         queries = tf.transpose(queries, [0, 2, 1, 3])
                         queries *= (decoder_args.size_per_head)**-0.5
-
+                        
                         dot = tf.matmul(queries, keys, transpose_b=True)
-
-                        dot = tf.cast(tf.cast(dot, decoder_args.dtype) * mask +
-                                      ((1.0 - mask) * decoder_args.dtype.min), dot.dtype)
+                        dot = tf.cast(tf.cast(dot, data_type) * mask +
+                                      ((1.0 - mask) * data_type.min), dot.dtype)
 
                         attn = tf.cast(tf.nn.softmax(
-                            tf.cast(dot, decoder_args.dtype)), dot.dtype)
+                            tf.cast(dot, data_type)), dot.dtype)
                         context = tf.matmul(attn, values)
                         context = tf.transpose(context, [0, 2, 1, 3])
-                        context = tf.reshape(context, [decoder_args.batch_size * decoder_args.beam_width, 1,
+                        context = tf.reshape(context, [tf.shape(context)[0], 1,
                                                        decoder_args.head_num * decoder_args.size_per_head])
                         context = tf.layers.conv1d(context,
-                                                   decoder_args.hidden_dim,
-                                                   1,
-                                                   activation=None,
-                                                   use_bias=True,
-                                                   bias_initializer=create_initializer(
-                                                       bias_initializer_range, decoder_args.dtype),
-                                                   kernel_initializer=create_initializer(kernel_initializer_range, decoder_args.dtype))
+                                                    decoder_args.hidden_dim,
+                                                    1,
+                                                    bias_initializer=create_initializer(b_init_range, data_type),
+                                                    kernel_initializer=create_initializer(k_init_range, data_type))
 
                         # drop_and_add
                         input_dim = last_context.get_shape().as_list()[-1]
@@ -260,27 +246,24 @@ def tf_decoder(decoder_args,
                 normed_last_context = norm(context)
                 input_dim = normed_last_context.get_shape().as_list()[-1]
                 inner = tf.layers.conv1d(normed_last_context,
-                                         decoder_args.hidden_dim * 4,
-                                         1,
-                                         activation=tf.nn.relu,
-                                         use_bias=True,
-                                         bias_initializer=create_initializer(
-                                             bias_initializer_range, decoder_args.dtype),
-                                         kernel_initializer=create_initializer(kernel_initializer_range, decoder_args.dtype))
+                                        decoder_args.hidden_dim * 4,
+                                        1,
+                                        activation=tf.nn.relu,
+                                        use_bias=True,
+                                        bias_initializer=create_initializer(b_init_range, data_type),
+                                        kernel_initializer=create_initializer(k_init_range, data_type))
                 transformed = tf.layers.conv1d(inner,
-                                               input_dim,
-                                               1,
-                                               use_bias=True,
-                                               bias_initializer=create_initializer(
-                                                   bias_initializer_range, decoder_args.dtype),
-                                               kernel_initializer=create_initializer(kernel_initializer_range, decoder_args.dtype))
+                                                input_dim,
+                                                1,
+                                                use_bias=True,
+                                                bias_initializer=create_initializer(b_init_range, data_type),
+                                                kernel_initializer=create_initializer(k_init_range, data_type))
 
                 # drop_and_add
                 input_dim = context.get_shape().as_list()[-1]
                 output_dim = transformed.get_shape().as_list()[-1]
                 if input_dim == output_dim:
                     transformed += context
-
         inputs = transformed
     outputs = inputs
     return outputs
@@ -309,53 +292,160 @@ def init_tf_cache(batch_size,
     return cache
 
 
-def init_op_cache(decoder_args):
-    self_cache = tf.zeros([decoder_args.num_layer, 2, 0, decoder_args.batch_size * decoder_args.beam_width,
+def init_op_cache(decoder_args, batchxbeam, memory_max_seq_len):
+    self_cache = tf.zeros([decoder_args.num_layer, 2, 0, batchxbeam,
                            decoder_args.hidden_dim], dtype=decoder_args.dtype, name="op_self_caches")
-    mem_cache = tf.zeros([decoder_args.num_layer, 2, decoder_args.batch_size * decoder_args.beam_width,
-                          decoder_args.max_seq_len, decoder_args.hidden_dim], dtype=decoder_args.dtype, name="op_memory_caches")
+    mem_cache = tf.zeros([decoder_args.num_layer, 2, batchxbeam,
+                          memory_max_seq_len, decoder_args.hidden_dim], dtype=decoder_args.dtype, name="op_memory_caches")
 
     return self_cache, mem_cache
 
-
 def op_decoder(inputs,
-               step,
                memory_tensor,
                memory_sequence_length,
                op_self_cache,
                op_mem_cache,
                psuedo_input,
-               decoder_vars,
-               decoder_args,
-               memory_hidden_dim):
+               var_dict,
+               decoder_args):
+    '''
+    Run the decoder transformer layer by FasterTransformer.
+    
+    Args:
+        inputs: A tf.Tensor with shape [batch_size * beam_width, 1, hidden_dimension].
+                The inputs tensor of encoder. The rank must be 3.
+        memory_tensor: A tf.tensor with shape [batch_size * beam_width, max(memory_sequence_length), encoder_hidden_dimension]. 
+                       The results of encoder transformer layer. The rank must be 3. 
+                       Note that it must be extended by beam_width times
+        memory_sequence_length: A tf.Tensor with shape [batch_size * beam_width], type tf.int. 
+                                The lenght of each sentence of results of encoder. 
+                                Note that it must be extended by beam_width times
+        op_self_cache: A tf.Tensor with shape [num_layer, 2, None, batch_size * beam_width, hidden_dimension]. 
+                       The cache space to store the keys and values of first attention layer in each step.
+        op_mem_cache: A tf.Tensor with shape [num_layer, 2, batch_size * beam_width, max(memory_sequence_length) hidden_dimension]. 
+                      The cache space to store the keys and values of second attention layer.
+                      Since they are same in each step, it is only need to compute them in first time. 
+        psuedo_input: A tf.Tensor or null list. 
+                      Put the decoder results of TensorFlow when running the TensorFlow decoder and FasterTransformer
+                      decoder in one model. This prevents the race condition. 
+                      It is useless when only run the FasterTransformer decoder.
+        decoder_args: The arguments for decoder. The details are in the class "TransformerArgument" of common.py
+        var_dict: A dict of tf.Tensor or numpy array. The variables for decoder. 
+                      They can be either some tensor or some numpy array. 
+
+    Outputs:
+        outputs: A tf.Tensor with shape [batch_size * beam_width, 1, hidden_dimension].
+                 The results of decoder.
+    '''
+    
+    '''
+    If fuse_qkv == Ture, this means that the computation of q, k, v in decoder are fused in one convolution. 
+    
+    Therefore, we need to split them and then passing into the decoder op. The split will bring additional overhead, 
+    especially when the batch size is small because the computation time is short. 
+    
+    However, because most of the pretrained model on network fuse the qkv, so we fuse them as default.
+    '''
 
     decoder_op_module = tf.load_op_library(
         os.path.join('./lib/libtf_decoder.so'))
-
+    
     op_self_cache = tf.concat([op_self_cache, tf.zeros([decoder_args.num_layer, 2, 1,
-                                                        decoder_args.batch_size * decoder_args.beam_width,
+                                                        tf.shape(memory_tensor)[0],
                                                         decoder_args.hidden_dim], dtype=decoder_args.dtype)], axis=2)
-
+    fuse_qkv = decoder_args.fuse_qkv
+    
     for i in range(decoder_args.num_layer):
+        ''' 
+            Handling the names of q, k, v kernel and bias because their names 
+            are different for fusing the qkv or not.
+        '''
+        
+        layer_prefix_name = "transformer/decoder/layer_%d/" % i
+        if fuse_qkv == True:
+            var_dict[layer_prefix_name + 'masked_multi_head/query/kernel:0'], \
+            var_dict[layer_prefix_name + 'masked_multi_head/key/kernel:0'], \
+            var_dict[layer_prefix_name + 'masked_multi_head/value/kernel:0'] = \
+                tf.split(var_dict[layer_prefix_name + 'masked_multi_head/conv1d/kernel:0'], 3, axis=-1)
+                
+            var_dict[layer_prefix_name + 'masked_multi_head/query/bias:0'], \
+            var_dict[layer_prefix_name + 'masked_multi_head/key/bias:0'], \
+            var_dict[layer_prefix_name + 'masked_multi_head/value/bias:0'] = \
+                tf.split(var_dict[layer_prefix_name + 'masked_multi_head/conv1d/bias:0'], 3, axis=-1)
+            
+            var_dict[layer_prefix_name + 'multi_head/query/kernel:0'] = \
+                var_dict[layer_prefix_name + 'multi_head/conv1d/kernel:0']
+            var_dict[layer_prefix_name + 'multi_head/query/bias:0'] = \
+                var_dict[layer_prefix_name + 'multi_head/conv1d/bias:0']
+            var_dict[layer_prefix_name + 'multi_head/key/kernel:0'], \
+            var_dict[layer_prefix_name + 'multi_head/value/kernel:0'] = \
+                tf.split(var_dict[layer_prefix_name + 'multi_head/conv1d_1/kernel:0'], 2, axis=-1)
+            var_dict[layer_prefix_name + 'multi_head/key/bias:0'], \
+            var_dict[layer_prefix_name + 'multi_head/value/bias:0'] = \
+                tf.split(var_dict[layer_prefix_name + 'multi_head/conv1d_1/bias:0'], 2, axis=-1)
+        else:
+            var_dict[layer_prefix_name + 'masked_multi_head/query/kernel:0'] = \
+                var_dict[layer_prefix_name + 'masked_multi_head/conv1d/kernel:0']
+            var_dict[layer_prefix_name + 'masked_multi_head/key/kernel:0'] = \
+                var_dict[layer_prefix_name + 'masked_multi_head/key/kernel:0']
+            var_dict[layer_prefix_name + 'masked_multi_head/value/kernel:0'] = \
+                var_dict[layer_prefix_name + 'masked_multi_head/value/kernel:0']
+                
+            var_dict[layer_prefix_name + 'masked_multi_head/query/bias:0'] = \
+                var_dict[layer_prefix_name + 'masked_multi_head/conv1d/bias:0']
+            var_dict[layer_prefix_name + 'masked_multi_head/key/bias:0'] = \
+                var_dict[layer_prefix_name + 'masked_multi_head/key/bias:0']
+            var_dict[layer_prefix_name + 'masked_multi_head/value/bias:0'] = \
+                var_dict[layer_prefix_name + 'masked_multi_head/value/bias:0']
+            
+            var_dict[layer_prefix_name + 'multi_head/query/kernel:0'] = \
+                var_dict[layer_prefix_name + 'multi_head/conv1d/kernel:0']
+            var_dict[layer_prefix_name + 'multi_head/query/bias:0'] = \
+                var_dict[layer_prefix_name + 'multi_head/conv1d/bias:0']
+            var_dict[layer_prefix_name + 'multi_head/key/kernel:0'] = \
+                var_dict[layer_prefix_name + 'multi_head/conv1d_1/kernel:0']
+            var_dict[layer_prefix_name + 'multi_head/key/bias:0'] = \
+                var_dict[layer_prefix_name + 'multi_head/conv1d_1/bias:0']
+            var_dict[layer_prefix_name + 'multi_head/value/kernel:0'] = \
+                var_dict[layer_prefix_name + 'multi_head/value/kernel:0']
+            var_dict[layer_prefix_name + 'multi_head/value/bias:0'] = \
+                var_dict[layer_prefix_name + 'multi_head/value/bias:0']
+                
         op_result, _, _ = decoder_op_module.decoder(
-            inputs, memory_tensor, memory_sequence_length,
-            decoder_vars[0 + 26 * i], decoder_vars[1 + 26 * i],
-            decoder_vars[2 + 26 * i], decoder_vars[3 + 26 * i],
-            decoder_vars[4 + 26 * i], decoder_vars[5 + 26 * i],
-            decoder_vars[6 + 26 * i], decoder_vars[7 + 26 * i],
-            decoder_vars[8 + 26 * i], decoder_vars[9 + 26 * i],
-            decoder_vars[10 + 26 * i], decoder_vars[11 + 26 * i],
-            decoder_vars[12 + 26 * i], decoder_vars[13 + 26 * i],
-            decoder_vars[14 + 26 * i], decoder_vars[15 + 26 * i],
-            decoder_vars[16 + 26 * i], decoder_vars[17 + 26 * i],
-            decoder_vars[18 + 26 * i], decoder_vars[19 + 26 * i],
-            decoder_vars[20 + 26 * i], decoder_vars[21 + 26 * i],
-            decoder_vars[22 + 26 * i], decoder_vars[23 + 26 * i],
-            decoder_vars[24 + 26 * i], decoder_vars[25 + 26 * i],
-            op_self_cache[i], op_mem_cache[i],
-            psuedo_input,  # add tf_result as input to prevent the OP and TF from parallel execution and lead to error result
+            inputs,  # 0
+            memory_tensor, # 1
+            memory_sequence_length, # 2
+            var_dict[layer_prefix_name + 'masked_multi_head/LayerNorm/beta:0'], # 3
+            var_dict[layer_prefix_name + 'masked_multi_head/LayerNorm/gamma:0'], # 4
+            var_dict[layer_prefix_name + 'masked_multi_head/query/kernel:0'], # 5
+            var_dict[layer_prefix_name + 'masked_multi_head/query/bias:0'], # 6
+            var_dict[layer_prefix_name + 'masked_multi_head/key/kernel:0'], # 7
+            var_dict[layer_prefix_name + 'masked_multi_head/key/bias:0'], # 8
+            var_dict[layer_prefix_name + 'masked_multi_head/value/kernel:0'], # 9
+            var_dict[layer_prefix_name + 'masked_multi_head/value/bias:0'], # 10
+            var_dict[layer_prefix_name + 'masked_multi_head/conv1d_1/kernel:0'], # 11
+            var_dict[layer_prefix_name + 'masked_multi_head/conv1d_1/bias:0'],  # 12
+            var_dict[layer_prefix_name + 'multi_head/LayerNorm/beta:0'], # 13
+            var_dict[layer_prefix_name + 'multi_head/LayerNorm/gamma:0'], # 14
+            var_dict[layer_prefix_name + 'multi_head/query/kernel:0'], # 15
+            var_dict[layer_prefix_name + 'multi_head/query/bias:0'], # 16
+            var_dict[layer_prefix_name + 'multi_head/key/kernel:0'], # 17
+            var_dict[layer_prefix_name + 'multi_head/key/bias:0'], # 18
+            var_dict[layer_prefix_name + 'multi_head/value/kernel:0'], # 19
+            var_dict[layer_prefix_name + 'multi_head/value/bias:0'], # 20
+            var_dict[layer_prefix_name + 'multi_head/conv1d_2/kernel:0'], # 21
+            var_dict[layer_prefix_name + 'multi_head/conv1d_2/bias:0'], # 22
+            var_dict[layer_prefix_name + 'ffn/LayerNorm/beta:0'], # 23
+            var_dict[layer_prefix_name + 'ffn/LayerNorm/gamma:0'], # 24
+            var_dict[layer_prefix_name + 'ffn/conv1d/kernel:0'], # 25
+            var_dict[layer_prefix_name + 'ffn/conv1d/bias:0'], # 26
+            var_dict[layer_prefix_name + 'ffn/conv1d_1/kernel:0'], # 27
+            var_dict[layer_prefix_name + 'ffn/conv1d_1/bias:0'], # 28
+            op_self_cache[i], # 29
+            op_mem_cache[i], # 30
+            psuedo_input,  # 31, add tf_result as input to prevent the OP and TF from parallel execution and lead to error result
             head_num=decoder_args.head_num, 
             size_per_head=decoder_args.size_per_head)
         inputs = op_result
-
+    
     return op_result, op_self_cache, op_mem_cache

@@ -41,7 +41,7 @@ void generate_decoding_gemm_config(int batch_size,
   }
 
   const int hidden_units = head_number * size_per_head;
-  const int gemm_num = 5;
+  const int gemm_num = 6;
   int M[gemm_num];
   int N[gemm_num];
   int K[gemm_num];
@@ -74,6 +74,11 @@ void generate_decoding_gemm_config(int batch_size,
   K[4] = hidden_units * 4;
   N[4] = hidden_units; 
   strcpy(mess[4], "ffn gemm2");
+
+  M[5] = batch_size * beam_width;
+  K[5] = hidden_units;
+  N[5] = hidden_units;
+  strcpy(mess[5], "from_tensor * QKV (batchstridedgemm) in masked attention");
 
   cublasHandle_t cublas_handle;
   check_cuda_error(cublasCreate(&cublas_handle));
@@ -114,9 +119,19 @@ void generate_decoding_gemm_config(int batch_size,
     T* d_A;
     T* d_B;
     T* d_C;
-    check_cuda_error(cudaMalloc((void**)&d_A, sizeof(T) * m * k));
-    check_cuda_error(cudaMalloc((void**)&d_B, sizeof(T) * k * n));
-    check_cuda_error(cudaMalloc((void**)&d_C, sizeof(T) * m * n));
+
+    if(i == 5)
+    {
+      check_cuda_error(cudaMalloc((void**)&d_A, sizeof(T) * m * k));
+      check_cuda_error(cudaMalloc((void**)&d_B, sizeof(T) * k * n * 3));
+      check_cuda_error(cudaMalloc((void**)&d_C, sizeof(T) * m * n * 3));
+    }
+    else
+    {
+      check_cuda_error(cudaMalloc((void**)&d_A, sizeof(T) * m * k));
+      check_cuda_error(cudaMalloc((void**)&d_B, sizeof(T) * k * n));
+      check_cuda_error(cudaMalloc((void**)&d_C, sizeof(T) * m * n));
+    }
 
     float exec_time = 99999.0f;
     int fast_algo = 0;
@@ -127,16 +142,33 @@ void generate_decoding_gemm_config(int batch_size,
       gettimeofday(&start, NULL);
       for(int ite = 0; ite < ites; ++ite)
       {
-        status = cublasGemmEx(cublas_handle, 
-                              CUBLAS_OP_N, CUBLAS_OP_N,
-                              n, m, k, 
-                              &alpha, 
-                              d_B, BType, n, 
-                              d_A, AType, k, 
-                              &beta, 
-                              d_C, CType, n, 
-                              computeType, 
-                              static_cast<cublasGemmAlgo_t>(algo));
+        if(i == 5)
+        {
+          status = cublasGemmStridedBatchedEx(cublas_handle,
+                CUBLAS_OP_N, CUBLAS_OP_N,
+                n, m, k,
+                &alpha,
+                d_B, BType, n, k*n,
+                d_A, AType, k, 0,
+                &beta,
+                d_C, CType, n, m*n,
+                3,
+                computeType,
+                static_cast<cublasGemmAlgo_t>(algo));
+        }
+        else
+        {
+          status = cublasGemmEx(cublas_handle, 
+                                CUBLAS_OP_N, CUBLAS_OP_N,
+                                n, m, k, 
+                                &alpha, 
+                                d_B, BType, n, 
+                                d_A, AType, k, 
+                                &beta, 
+                                d_C, CType, n, 
+                                computeType, 
+                                static_cast<cublasGemmAlgo_t>(algo));
+        }
       }
       cudaDeviceSynchronize();
       gettimeofday(&end, NULL);
@@ -151,7 +183,7 @@ void generate_decoding_gemm_config(int batch_size,
       }
     }
     printf("fast_algo %d costs %.3f ms\n", fast_algo, exec_time);
-    fprintf(fd, "%d\n", fast_algo);
+    fprintf(fd, "%d %f\n", fast_algo, exec_time);
     cudaFree(d_A);
     cudaFree(d_B);
     cudaFree(d_C);

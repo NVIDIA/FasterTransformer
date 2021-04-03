@@ -13,12 +13,24 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "fastertransformer/open_decoder.h"
-#include "fastertransformer/tf_op/decoder_op.h"
+
+#pragma once 
+
+#ifndef TENSORFLOW_COMMON_OP_H
+#define TENSORFLOW_COMMON_OP_H
+
+#include "fastertransformer/common.h"
+#include "fastertransformer/tf_op/tf_traits.h"
+
 #include "tensorflow/core/framework/op.h"
 #include "tensorflow/core/framework/op_kernel.h"
 #include "tensorflow/core/framework/shape_inference.h"
 #include "tensorflow/core/framework/register_types.h"
+#include "tensorflow/core/lib/core/errors.h"
+#include "tensorflow/core/framework/types.h"
+#include "tensorflow/core/framework/tensor_types.h"
+#include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
+
 #include <cuda_fp16.h>
 
 namespace tensorflow
@@ -35,11 +47,11 @@ public:
   explicit CommonOp(OpKernelConstruction *context) : OpKernel(context) {
     try
     {
-    check_cuda_error(cublasCreate(&cublas_handle_));
+      check_cuda_error(cublasCreate(&cublas_handle_));
     }
     catch(std::runtime_error& error)
     {
-    OP_REQUIRES(context, false, errors::Internal(error.what()));
+      OP_REQUIRES(context, false, errors::Internal(error.what()));
     }
   };
 
@@ -59,3 +71,5 @@ private:
 
 } //namespace
 } //namespace tensorflow
+
+#endif

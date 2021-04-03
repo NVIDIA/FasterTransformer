@@ -12,34 +12,40 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+'''
+This is a sample code to demonstrate how to use the Fastertransformer op 
+to translate sentence from English to German. 
+
+This sample code builds then encoder model by TensorFlow, which has the same 
+model structure to OpenNMT-tf encoder. Next, building the decoder model by
+TensorFlow and FasterTransformer op, which has the same model structure to
+OpenNMT-tf decoder. So, we can restore the checkpoint of OpenNMT-tf 
+transformer model directly. 
+
+We compare the bleu scores and the times of translating all sentences in test 
+dataset of TensorFlow and FasterTransformer op. 
+'''
+
 from __future__ import print_function
+import copy
+from datetime import datetime
 import tensorflow as tf
 import numpy as np
 import argparse
-from utils.common import DecodingArgument
-from utils.decoding import tf_decoding, op_decoding
+import os
+from utils.common import TransformerArgument
+from utils.common import DecodingSamplingArgument
+from utils.common import DecodingBeamsearchArgument
+from utils.encoder import tf_encoder_opennmt
+from utils.decoding import tf_beamsearch_decoding
+from utils.decoding import tf_sampling_decoding
+from utils.decoding import op_beamsearch_decoding
+from utils.decoding import op_sampling_decoding
+from utils.bleu_score import bleu_score
 from opennmt.utils import misc
-from opennmt.encoders.self_attention_encoder import SelfAttentionEncoder
-from opennmt.decoders.self_attention_decoder import SelfAttentionDecoder
 from opennmt.inputters import WordEmbedder
 from opennmt.inputters import ExampleInputter
 
-def restore_model_by_pkl(sess, variables):
-    import pickle as pkl
-    with open("model.pkl", 'rb') as model_file:
-        model_dict = pkl.load(model_file)
-
-        assign_op_list = []
-        for var in variables:
-            print(var.name, end=' ')
-            if var.name in model_dict:
-                print("restore", end=' ')
-                assign_op_list.append(tf.assign(var, np.reshape(model_dict[var.name], var.shape)))
-                print("mean: {} , var: {} . ".format(np.mean(model_dict[var.name]), np.std(model_dict[var.name])), end=' ')
-            print()
-        assert(len(assign_op_list) == len(variables))
-        sess.run(assign_op_list)
-    
 if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
@@ -50,7 +56,7 @@ if __name__ == "__main__":
     parser.add_argument('-s', '--max_seq_len', type=int, default=200, metavar='NUMBER',
                         help='max sequence length (default: 200)')
     parser.add_argument('-encoder_head', '--encoder_head_number', type=int, default=8, metavar='NUMBER',
-                        help='encoder head number (default: 12)')
+                        help='encoder head number (default: 8)')
     parser.add_argument('-encoder_size', '--encoder_size_per_head', type=int, default=64, metavar='NUMBER',
                         help='encoder size per head (default: 64)')
     parser.add_argument('-decoder_head', '--decoder_head_number', type=int, default=8, metavar='NUMBER',
@@ -62,17 +68,44 @@ if __name__ == "__main__":
     parser.add_argument('-decoder_layer', '--decoder_num_layer', type=int, default=6, metavar='NUMBER',
                         help='number of layers (default: 6)')
     parser.add_argument('-d', '--data_type', type=str, default="fp32", metavar='STRING',
-                        help='data type (default: fp32)')
+                        help='data type (default: fp32)', choices=['fp32', 'fp16'])
+    parser.add_argument('-time', '--test_time', type=str, default='', metavar='STRING',
+                        help='''
+                        Test the time of which one (default: '' (not test anyone) ); 
+                        '': not test anyone 
+                        '0': test tf_decoding_beamsearch  
+                        '1': test op_decoder_beamsearch 
+                        '2': test op_decoding_beamsearch 
+                        '3': test tf_decoding_sampling 
+                        '4': test op_decoder_sampling 
+                        '5': test op_decoding_sampling 
+                        'e.g., if you want to test op_decoder_beamsearch and op_decoding_sampling, 
+                               then you need to use -time '15' ''')
+    parser.add_argument('-diversity_rate', '--beam_search_diversity_rate', type=float, default=0.0, metavar='NUMBER',
+                        help='deviersity rate of beam search. default is 0. When diversity rate = 0, it is equivalent to the naive beams earch.')
+    parser.add_argument('-topk', '--sampling_topk', type=int, default=1, metavar='NUMBER',
+                        help='Candidate (k) value of top k sampling in decoding. Default is 1.')
+    parser.add_argument('-topp', '--sampling_topp', type=float, default=0.0, metavar='NUMBER',
+                        help='Probability (p) value of top p sampling in decoding. Default is 0.0. ')
+    
+    parser.add_argument('--source_vocabulary', type=str, default="./tensorflow/utils/translation/wmtende.vocab", metavar='STRING',
+                        help='Source vocabulary file path. Default is ./tensorflow/utils/translation/wmtende.vocab ')
+    parser.add_argument('--target_vocabulary', type=str, default="./tensorflow/utils/translation/wmtende.vocab", metavar='STRING',
+                        help='Target vocabulary file path. Default is ./tensorflow/utils/translation/wmtende.vocab ')
+    parser.add_argument('--source', type=str, default="./tensorflow/utils/translation/test.en", metavar='STRING',
+                        help='Source file path. Default is ./tensorflow/utils/translation/test.en ')
+    parser.add_argument('--target', type=str, default="./tensorflow/utils/translation/test.de", metavar='STRING',
+                        help='Target file path. Default is ./tensorflow/utils/translation/test.de ')
 
     args = parser.parse_args()
     print("\n=============== Argument ===============")
-    print(args)
+    for key in vars(args):
+        print("{}: {}".format(key, vars(args)[key]))
+    print("========================================")
 
     start_of_sentence_id = 1
     end_of_sentence_id = 2
 
-    np.random.seed(1)
-    tf.set_random_seed(1)
     kernel_initializer_range = 0.02
     bias_initializer_range = 0.02
 
@@ -89,164 +122,242 @@ if __name__ == "__main__":
     decoder_hidden_dim = decoder_head_num * decoder_size_per_head
     tf_datatype = tf.float32
     np_datatype = np.float32
-    atol_threshold = 2e-5
     if args.data_type == "fp16":
         tf_datatype = tf.float16
         np_datatype = np.float16
-        atol_threshold = 2e-2
+    beam_search_diversity_rate = args.beam_search_diversity_rate
+    sampling_topk = args.sampling_topk
+    sampling_topp = args.sampling_topp
 
-    initializer_range = 0.02
-    
-    source_inputter = WordEmbedder("source_vocabulary", embedding_size=512)
-    target_inputter = WordEmbedder("target_vocabulary", embedding_size=512)
+    source_inputter = WordEmbedder("source_vocabulary", embedding_size=encoder_hidden_dim, dtype=tf_datatype)
+    target_inputter = WordEmbedder("target_vocabulary", embedding_size=decoder_hidden_dim, dtype=tf_datatype)
     inputter = ExampleInputter(source_inputter, target_inputter)
     inputter.initialize({
-        "source_vocabulary": "./utils/translation/wmtende.vocab",
-        "target_vocabulary": "./utils/translation/wmtende.vocab"
+        "source_vocabulary": args.source_vocabulary,
+        "target_vocabulary": args.target_vocabulary
         })
     vocab_size = target_inputter.vocabulary_size
-    source_file = "./utils/translation/test.en"
+    source_file = args.source
     
-    decoding_args = DecodingArgument(batch_size=batch_size,
-                                     beam_width=beam_width,
-                                     head_num=decoder_head_num,
-                                     size_per_head=decoder_size_per_head,
-                                     num_layer=decoder_num_layer,
-                                     max_seq_len=max_seq_len,
-                                     vocab_size=vocab_size,
-                                     start_id=start_of_sentence_id,
-                                     end_id=end_of_sentence_id,
-                                     encoder_hidden_dim=encoder_head_num * encoder_size_per_head,
-                                     dtype=tf_datatype)
+    encoder_args = TransformerArgument(beam_width=1,
+                                        head_num=encoder_head_num,
+                                        size_per_head=encoder_size_per_head,
+                                        num_layer=encoder_num_layer,
+                                        dtype=tf_datatype,
+                                        kernel_init_range=kernel_initializer_range,
+                                        bias_init_range=bias_initializer_range)
+    
+    decoder_args = TransformerArgument(beam_width=beam_width,
+                                        head_num=decoder_head_num,
+                                        size_per_head=decoder_size_per_head,
+                                        num_layer=decoder_num_layer,
+                                        dtype=tf_datatype,
+                                        kernel_init_range=kernel_initializer_range,
+                                        bias_init_range=bias_initializer_range)
+    
+    decoder_args_2 = copy.deepcopy(decoder_args) # for beam search
+    decoder_args_2.__dict__ = copy.deepcopy(decoder_args.__dict__)
+    decoder_args_2.beam_width = 1 # for sampling
+        
+    decoding_beamsearch_args = DecodingBeamsearchArgument(vocab_size,
+                                                        start_of_sentence_id,
+                                                        end_of_sentence_id,
+                                                        max_seq_len,
+                                                        decoder_args,
+                                                        beam_search_diversity_rate)
+    
+    decoding_sampling_args = DecodingSamplingArgument(vocab_size,
+                                                    start_of_sentence_id,
+                                                    end_of_sentence_id,
+                                                    max_seq_len,
+                                                    decoder_args_2,
+                                                    sampling_topk,
+                                                    sampling_topp)
 
     mode = tf.estimator.ModeKeys.PREDICT
-    with tf.variable_scope("transformer/encoder"):
+    with tf.variable_scope("transformer/encoder", reuse=tf.AUTO_REUSE):
         dataset = inputter.make_inference_dataset(source_file, batch_size)
         iterator = dataset.make_initializable_iterator()
         source = iterator.get_next()
         source_embedding = source_inputter.make_inputs(source)
+        source_embedding = tf.cast(source_embedding, tf_datatype)
         memory_sequence_length = source["length"]
+
+        tf_encoder_result = tf_encoder_opennmt(source_embedding, encoder_args, sequence_length=memory_sequence_length)
+        tf_encoder_result = tf.cast(tf_encoder_result, tf_datatype) 
         
-        encoder = SelfAttentionEncoder(
-            num_layers=encoder_num_layer,
-            num_units=512,
-            num_heads=8,
-            ffn_inner_dim=2048,
-            dropout=0.1,
-            attention_dropout=0.1,
-            relu_dropout=0.1)
-        memory, _, _ = encoder.encode(source_embedding, memory_sequence_length, mode=mode)
-        tf_encoder_result = memory
-        
-    tf_encoder_result = tf.reshape(
-        tf_encoder_result, [batch_size, -1, encoder_hidden_dim])
+    tf_encoder_result = tf.reshape(tf_encoder_result, tf.shape(source_embedding))
 
     with tf.variable_scope("transformer/decoder", reuse=tf.AUTO_REUSE):
         target_inputter.build()
+    target_vocab_rev = target_inputter.vocabulary_lookup_reverse()
     
-    with tf.variable_scope("transformer/decoder", reuse=tf.AUTO_REUSE):
-        decoder = SelfAttentionDecoder(
-            num_layers=6,
-            num_units=512,
-            num_heads=8,
-            ffn_inner_dim=2048,
-            dropout=0.0,
-            attention_dropout=0.0,
-            relu_dropout=0.0)
+    ### TF BeamSearch Decoding ###    
+    tf_beamsearch_target_ids, tf_beamsearch_target_length, _, _, _ = tf_beamsearch_decoding(tf_encoder_result,
+                                                                                            memory_sequence_length,
+                                                                                            target_inputter.embedding,
+                                                                                            decoding_beamsearch_args,
+                                                                                            decoder_type=0)
         
-        start_tokens = tf.fill([batch_size], start_of_sentence_id)
-        end_token = end_of_sentence_id
+    # tf_beamsearch_target_tokens: [batch_size, beam_width, seq_len]
+    tf_beamsearch_target_tokens = target_vocab_rev.lookup(tf.cast(tf_beamsearch_target_ids, tf.int64))
+    tf_beamsearch_target_length = tf.minimum(tf_beamsearch_target_length + 1, tf.shape(tf_beamsearch_target_ids)[-1])
+    ### end of TF BeamSearch Decoding ###
     
-        target_ids, _, target_length, _ = decoder.dynamic_decode_and_search(
-            target_inputter.embedding,
-            start_tokens,
-            end_token,
-            vocab_size=vocab_size,
-            beam_width=beam_width,
-            memory=memory,
-            memory_sequence_length=memory_sequence_length)
-        target_vocab_rev = target_inputter.vocabulary_lookup_reverse()
-        target_tokens = target_vocab_rev.lookup(tf.cast(target_ids, tf.int64))
-        opennmt_target_length = target_length
-        opennmt_target_tokens = target_tokens
-        opennmt_target_ids = target_ids
+    ### TF Sampling Decoding ###    
+    tf_sampling_target_ids, tf_sampling_target_length = tf_sampling_decoding(tf_encoder_result,
+                                                                            memory_sequence_length,
+                                                                            target_inputter.embedding,
+                                                                            decoding_sampling_args,
+                                                                            decoder_type=0)
         
-        opennmt_variables = tf.global_variables()
+    # tf_sampling_target_tokens: [batch_size, seq_len]
+    tf_sampling_target_tokens = target_vocab_rev.lookup(tf.cast(tf_sampling_target_ids, tf.int64))
+    tf_sampling_target_length = tf.minimum(tf_sampling_target_length + 1, tf.shape(tf_sampling_target_ids)[-1])
+    ### end of TF BeamSearch Decoding ###
+    
+    ### OP BeamSearch Decoder ###    
+    op_decoder_beamsearch_target_ids, op_decoder_beamsearch_target_length, _, _, _ = tf_beamsearch_decoding(tf_encoder_result,
+                                                                                            memory_sequence_length,
+                                                                                            target_inputter.embedding,
+                                                                                            decoding_beamsearch_args,
+                                                                                            decoder_type=1)
         
-    ## TF Decoding ###    
-    finalized_tf_output_ids, finalized_tf_sequence_lengths, tf_output_ids, \
-        tf_parent_ids, tf_sequence_lengths = tf_decoding(tf_encoder_result,
-                                                            memory_sequence_length,
-                                                            target_inputter.embedding,
-                                                            decoding_args,
-                                                            decoder_type=1,
-                                                            kernel_initializer_range=kernel_initializer_range,
-                                                            bias_initializer_range=bias_initializer_range)
+    # op_decoder_beamsearch_target_tokens: [batch_size, beam_width, seq_len]
+    op_decoder_beamsearch_target_tokens = target_vocab_rev.lookup(tf.cast(op_decoder_beamsearch_target_ids, tf.int64))
+    op_decoder_beamsearch_target_length = tf.minimum(op_decoder_beamsearch_target_length + 1, tf.shape(op_decoder_beamsearch_target_ids)[-1])
+    ### end of OP BeamSearch Decoder ###
     
-    tf_target_ids = finalized_tf_output_ids
-    tf_target_length = finalized_tf_sequence_lengths
-    tf_target_tokens = target_vocab_rev.lookup(tf.cast(tf_target_ids, tf.int64))
-    ## end of tf decoding ##
+    ### OP Sampling Decoder ###    
+    op_decoder_sampling_target_ids, op_decoder_sampling_target_length = tf_sampling_decoding(tf_encoder_result,
+                                                                            memory_sequence_length,
+                                                                            target_inputter.embedding,
+                                                                            decoding_sampling_args,
+                                                                            decoder_type=1)
+        
+    op_decoder_sampling_target_tokens = target_vocab_rev.lookup(tf.cast(op_decoder_sampling_target_ids, tf.int64))
+    op_decoder_sampling_target_length = tf.minimum(op_decoder_sampling_target_length + 1, tf.shape(op_decoder_sampling_target_ids)[-1])
+    ### end of OP BeamSearch Decoder ###
     
-    ## op decoding ##
+    ### Prepare Decoding variables for FasterTransformer  ###
     all_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
     decoder_var_start_id = 0
-
-    while all_vars[decoder_var_start_id].name.find("transformer/decoding") == -1:
+    
+    while all_vars[decoder_var_start_id].name.find("transformer/decoder") == -1:
         decoder_var_start_id += 1
     encoder_variables = all_vars[:decoder_var_start_id]
-    decoder_variables = all_vars[decoder_var_start_id:]
+    decoder_variables = all_vars[decoder_var_start_id + 1:] # decoder_var_start_id + 1 means skip the embedding table
     
-    finalized_op_output_ids, finalized_op_sequence_lengths, op_output_ids, \
-            op_parent_ids, op_sequence_lengths = op_decoding(tf_encoder_result,
-                                                            memory_sequence_length,
-                                                            target_inputter.embedding,
-                                                            decoder_variables, # first one is embedding table
-                                                            decoding_args)
+    ### OP BeamSearch Decoding ###
+    op_beamsearch_target_ids, op_beamsearch_target_length, _, _, _ = op_beamsearch_decoding(tf_encoder_result,
+                                                                                            memory_sequence_length,
+                                                                                            target_inputter.embedding,
+                                                                                            decoder_variables,
+                                                                                            decoding_beamsearch_args)
 
-    op_target_ids = finalized_op_output_ids
-    op_target_length = finalized_op_sequence_lengths
-    op_target_tokens = target_vocab_rev.lookup(tf.cast(op_target_ids, tf.int64))
-    
-    ## end of op decoding
+    op_beamsearch_target_tokens = target_vocab_rev.lookup(tf.cast(op_beamsearch_target_ids, tf.int64))
+    op_beamsearch_target_length = tf.minimum(op_beamsearch_target_length + 1, tf.shape(op_beamsearch_target_ids)[-1])
+    ### end of OP BeamSearch Decoding ###
 
-    opennmt_target_ids = tf.cast(opennmt_target_ids, tf.int32)
-    tf_target_ids = tf.cast(tf_target_ids, tf.int32)
-    op_target_ids = tf.cast(op_target_ids, tf.int32)
+    ### OP Sampling Decoding ###
+    op_sampling_target_ids, op_sampling_target_length = op_sampling_decoding(tf_encoder_result,
+                                                                            memory_sequence_length,
+                                                                            target_inputter.embedding,
+                                                                            decoder_variables,
+                                                                            decoding_sampling_args)
 
-    opennmt_target_length = tf.minimum(opennmt_target_length + 1, tf.shape(opennmt_target_ids)[2])
-    tf_target_length = tf.minimum(tf_target_length + 1, tf.shape(tf_target_ids)[2])
-    op_target_length = tf.minimum(op_target_length + 1, tf.shape(op_target_ids)[2])
+    op_sampling_target_tokens = target_vocab_rev.lookup(tf.cast(op_sampling_target_ids, tf.int64))
+    op_sampling_target_length = tf.minimum(op_sampling_target_length + 1, tf.shape(op_sampling_target_ids)[-1])
+    ### end of OP Sampling Decoding ###
 
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
-    with tf.Session(config=config) as sess:
-        saver = tf.train.Saver(opennmt_variables)
-        sess.run(tf.global_variables_initializer())        
-        saver.restore(sess, "translation/ckpt/model.ckpt-500000")
-        sess.run(tf.tables_initializer())
-        sess.run(iterator.initializer)
-        restore_model_by_pkl(sess, decoder_variables)
-        
-        iteration = 0
-        while iteration < 3:
-            try:
-                opennmt_batch_tokens, opennmt_batch_length, \
-                tf_batch_tokens, tf_batch_length, \
-                op_batch_tokens, op_batch_length, source_result = sess.run([opennmt_target_tokens, opennmt_target_length,
-                                                                tf_target_tokens, tf_target_length,
-                                                                op_target_tokens, op_target_length, source])
-                print("[INFO] opennmt: ", end='')
-                for tokens, length in zip(opennmt_batch_tokens, opennmt_batch_length):
-                    misc.print_bytes(b" ".join(tokens[0][:length[0] - 1]))
-                print("[INFO] tf     : ", end='')
-                for tokens, length in zip(tf_batch_tokens, tf_batch_length):
-                    misc.print_bytes(b" ".join(tokens[0][:length[0] - 1]))
-                print("[INFO] op     : ", end='')
-                for tokens, length in zip(op_batch_tokens, op_batch_length):
-                    misc.print_bytes(b" ".join(tokens[0][:length[0] - 1]))
-                
-                iteration += 1
-            except tf.errors.OutOfRangeError:
-                break
+
+    time_args = args.test_time
+    
+    class TranslationResult(object):
+        def __init__(self, token_op, length_op, name):
+            self.token_op = token_op
+            self.length_op = length_op
+            self.name = name
+            self.file_name = name + ".txt"
             
+            self.token_list = []
+            self.length_list = []
+            self.batch_num = 0
+            self.execution_time = 0.0 # seconds
+            self.sentence_num = 0
+            self.bleu_score = None
+    
+    translation_result_list = []
+    
+    if time_args.find("0") != -1:
+        translation_result_list.append(TranslationResult(
+            tf_beamsearch_target_tokens, tf_beamsearch_target_length, "tf-decoding-beamsearch"))
+    if time_args.find("1") != -1:
+        translation_result_list.append(TranslationResult(
+            op_decoder_beamsearch_target_tokens, op_decoder_beamsearch_target_length, "op-decoder-beamsearch"))
+    if time_args.find("2") != -1:
+        translation_result_list.append(TranslationResult(
+            op_beamsearch_target_tokens, op_beamsearch_target_length, "op-decoding-beamsearch"))
+    if time_args.find("3") != -1:
+        translation_result_list.append(TranslationResult(
+            tf_sampling_target_tokens, tf_sampling_target_length, "tf-decoding-sampling"))
+    if time_args.find("4") != -1:
+        translation_result_list.append(TranslationResult(
+            op_decoder_sampling_target_tokens, op_decoder_sampling_target_length, "op-decoder-sampling"))
+    if time_args.find("5") != -1:
+        translation_result_list.append(TranslationResult(
+            op_sampling_target_tokens, op_sampling_target_length, "op-decoding-sampling"))
+    
+    float_var_list = []
+    half_var_list = []
+    for var in tf.global_variables()[:-1]:
+        if var.dtype.base_dtype == tf.float32:
+            float_var_list.append(var)
+        elif var.dtype.base_dtype == tf.float16:
+            half_var_list.append(var)
+    
+    for i in range(len(translation_result_list)):
+        with tf.Session(config=config) as sess:
+            sess.run(tf.global_variables_initializer())        
+            sess.run(tf.tables_initializer())
+            sess.run(iterator.initializer)
+
+            if(len(float_var_list) > 0):
+                float_saver = tf.train.Saver(float_var_list)
+                float_saver.restore(sess, "translation/ckpt/model.ckpt-500000")
+            if(len(half_var_list) > 0):
+                half_saver = tf.train.Saver(half_var_list)
+                half_saver.restore(sess, "translation/ckpt/fp16_model.ckpt-500000")
+                
+            t1 = datetime.now()
+            while True:
+                try:
+                    batch_tokens, batch_length = sess.run([translation_result_list[i].token_op, 
+                                                           translation_result_list[i].length_op])
+                    for tokens, length in zip(batch_tokens, batch_length):
+                        if translation_result_list[i].name.find("beamsearch") != -1:
+                            translation_result_list[i].token_list.append(b" ".join(tokens[0][:length[0] - 2]).decode("UTF-8"))
+                        else:
+                            translation_result_list[i].token_list.append(b" ".join(tokens[:length - 2]).decode("UTF-8"))
+                    translation_result_list[i].batch_num += 1
+                except tf.errors.OutOfRangeError:
+                    break
+            t2 = datetime.now()
+            time_sum = (t2 - t1).total_seconds()
+            translation_result_list[i].execution_time = time_sum
+            
+            with open(translation_result_list[i].file_name, "w") as file_b:
+                for s in translation_result_list[i].token_list:
+                    file_b.write(s)
+                    file_b.write("\n")
+                    
+            ref_file_path = "./.ref_file.txt"
+            os.system("head -n %d %s > %s" % (len(translation_result_list[i].token_list), args.target, ref_file_path))
+            translation_result_list[i].bleu_score = bleu_score(translation_result_list[i].file_name, ref_file_path)
+            os.system("rm {}".format(ref_file_path))
+
+    for t in translation_result_list:
+        print("[INFO] {} translates {} batches taking {:.2f} ms to translate {} tokens, BLEU score: {:.2f}, {:.0f} tokens/sec.".format(
+            t.name, t.batch_num, t.execution_time, t.bleu_score.sys_len, t.bleu_score.score, t.bleu_score.sys_len / t.execution_time))

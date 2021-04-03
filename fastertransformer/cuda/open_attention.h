@@ -71,7 +71,8 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
   const IAllocator& allocator_;
   MultiHeadInitParam<DataType_> param_;
 
-  int cublasAlgo_[3];
+  int cublasAlgo_[4];
+  bool is_fuse_QKV;
 
   DataType_* buf_;
   DataType_* query_buf_;
@@ -83,12 +84,16 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
   DataType_* qk_buf_;
   DataType_* transpose_dst_;
 
+  DataType_** qkv_kernel_;
+  DataType_** qkv_input_;
+  DataType_** qkv_buf_;
 
   int batch_size_;
   int from_seq_len_;
   int to_seq_len_;
   int head_num_;
   int size_per_head_;
+
  public:
   //Ctor
   OpenMultiHeadAttention(const IAllocator& allocator, int batch_size, int from_seq_len, 
@@ -104,7 +109,7 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
     int qk_buf_size = batch_size_ * head_num_ * from_seq_len_ * from_seq_len_;
     try
     {
-      buf_ = (DataType_*) allocator_.malloc(sizeof(DataType_) * (buf_size * 7 + qk_buf_size));
+      buf_ = (DataType_*) allocator_.malloc(sizeof(DataType_) * (buf_size * 7 + qk_buf_size) + sizeof(DataType_*) * 9);
       query_buf_ = buf_;
       key_buf_ = buf_ + buf_size;
       value_buf_ = buf_ + 2 * buf_size;
@@ -113,6 +118,9 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
       v_buf_ = buf_ + 5 * buf_size;
       qk_buf_ = buf_ + 6 * buf_size;
       transpose_dst_ = qk_buf_ + qk_buf_size;
+      qkv_kernel_ = (DataType_**)(transpose_dst_ + buf_size);
+      qkv_input_ = qkv_kernel_ + 3;
+      qkv_buf_ = qkv_input_ + 3;
 
       FILE* fd = fopen("gemm_config.in", "r");
       int err = 0;
@@ -120,24 +128,30 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
         printf("gemm_config.in is not found\n");
       else
       {
-        err = fscanf(fd, "%d%*d%*d%d%d", &cublasAlgo_[0], &cublasAlgo_[1], &cublasAlgo_[2]);
+        float split_time, fused_time;
+        err = fscanf(fd, "%d %f %*d %*f %*d %*f %d %*f %d %*f %d %f", 
+                      &cublasAlgo_[0], &split_time, &cublasAlgo_[1], &cublasAlgo_[2], &cublasAlgo_[3], &fused_time);
+        is_fuse_QKV = fused_time < split_time * 3 ? true : false;
         fclose(fd);
       }
-      if(err != 3)
+      if(err != 6)
       {
-	 printf("loading GEMM algorithms error, using default GEMM algorithms\n");
-         if(OpType_ == OperationType::FP32)
-         {
-           cublasAlgo_[0] = -1;
-           cublasAlgo_[1] = -1;
-           cublasAlgo_[2] = -1;
-         }
-         else
-         {
-           cublasAlgo_[0] = 99;
-           cublasAlgo_[1] = 99;
-           cublasAlgo_[2] = 99;
-         }
+        printf("loading GEMM algorithms error, using default GEMM algorithms\n");
+        if(OpType_ == OperationType::FP32)
+        {
+          cublasAlgo_[0] = -1;
+          cublasAlgo_[1] = -1;
+          cublasAlgo_[2] = -1;
+          cublasAlgo_[3] = -1;
+        }
+        else
+        {
+          cublasAlgo_[0] = 99;
+          cublasAlgo_[1] = 99;
+          cublasAlgo_[2] = 99;
+          cublasAlgo_[3] = 99;
+        }
+        is_fuse_QKV = false;
       }
     }
     catch(std::runtime_error& error)
@@ -151,57 +165,74 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
 #ifndef NDEBUG
     PRINT_FUNC_NAME_();
 #endif
-    int m = batch_size_ * from_seq_len_;
-    int k = head_num_ * size_per_head_;
-    int n = k;
+    const int m = param_.sequence_id_offset == nullptr ? batch_size_ * from_seq_len_ : param_.valid_word_num;
+    const int k = head_num_ * size_per_head_;
+    const int n = k;
 
-    DataType_ alpha = (DataType_)1.0f, beta = (DataType_)0.0f;
-    
+    const DataType_ alpha = (DataType_)1.0f, beta = (DataType_)0.0f;
+
     try
     {
-      check_cuda_error(cublasGemmEx(param_.cublas_handle, 
-        CUBLAS_OP_N, CUBLAS_OP_N, 
-        n, m, k, 
-        &alpha, 
-        param_.self_attention.query_weight.kernel, AType_, n, 
-        param_.from_tensor, BType_, k, 
-        &beta, 
-        query_buf_, CType_, n, 
-        computeType_, 
-        static_cast<cublasGemmAlgo_t>(cublasAlgo_[0])));
+      if(is_fuse_QKV == true)
+      {
+        check_cuda_error(cublasGemmBatchedEx(param_.cublas_handle, 
+                            CUBLAS_OP_N, CUBLAS_OP_N, 
+                            n, m, k, 
+                            &alpha, 
+                            (const void* const*) qkv_kernel_, AType_, n,
+                            (const void* const*) qkv_input_, BType_, k,
+                            &beta,
+                            (void* const*)qkv_buf_, CType_, n,
+                            3, 
+                            computeType_,
+                            static_cast<cublasGemmAlgo_t>(cublasAlgo_[3])));
+      }
+      else
+      {
+        check_cuda_error(cublasGemmEx(param_.cublas_handle, 
+          CUBLAS_OP_N, CUBLAS_OP_N, 
+          n, m, k, 
+          &alpha, 
+          param_.self_attention.query_weight.kernel, AType_, n, 
+          param_.from_tensor, BType_, k, 
+          &beta, 
+          query_buf_, CType_, n, 
+          computeType_, 
+          static_cast<cublasGemmAlgo_t>(cublasAlgo_[0])));
 
 #ifndef NDEBUG
       cudaDeviceSynchronize();
       check_cuda_error(cudaGetLastError());
 #endif
 
-      check_cuda_error(cublasGemmEx(param_.cublas_handle, 
-        CUBLAS_OP_N, CUBLAS_OP_N,
-        n, m, k, 
-        &alpha, 
-        param_.self_attention.key_weight.kernel, AType_, n, 
-        param_.to_tensor, BType_, k, 
-        &beta, 
-        key_buf_, CType_, n, 
-        computeType_, 
-        static_cast<cublasGemmAlgo_t>(cublasAlgo_[0])));
+        check_cuda_error(cublasGemmEx(param_.cublas_handle, 
+          CUBLAS_OP_N, CUBLAS_OP_N,
+          n, m, k, 
+          &alpha, 
+          param_.self_attention.key_weight.kernel, AType_, n, 
+          param_.to_tensor, BType_, k, 
+          &beta, 
+          key_buf_, CType_, n, 
+          computeType_, 
+          static_cast<cublasGemmAlgo_t>(cublasAlgo_[0])));
 
 #ifndef NDEBUG
       cudaDeviceSynchronize();
       check_cuda_error(cudaGetLastError());
 #endif
 
-      check_cuda_error(cublasGemmEx(param_.cublas_handle, 
-        CUBLAS_OP_N, CUBLAS_OP_N, 
-        n, m, k,
-        &alpha,
-        param_.self_attention.value_weight.kernel, AType_, n, 
-        param_.to_tensor, BType_, k, 
-        &beta, 
-        value_buf_, CType_, n, 
-        computeType_, 
-        static_cast<cublasGemmAlgo_t>(cublasAlgo_[0])));
-
+        check_cuda_error(cublasGemmEx(param_.cublas_handle, 
+          CUBLAS_OP_N, CUBLAS_OP_N, 
+          n, m, k,
+          &alpha,
+          param_.self_attention.value_weight.kernel, AType_, n, 
+          param_.to_tensor, BType_, k, 
+          &beta, 
+          value_buf_, CType_, n, 
+          computeType_, 
+          static_cast<cublasGemmAlgo_t>(cublasAlgo_[0])));
+      }
+      
 #ifndef NDEBUG
       cudaDeviceSynchronize();
       check_cuda_error(cudaGetLastError());
@@ -269,8 +300,17 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
 #ifndef NDEBUG
     PRINT_FUNC_NAME_();
 #endif
-    //Do all the malloc here
     param_ = param;
+    if(is_fuse_QKV == true && param_.from_tensor != nullptr)
+    {
+      // For tensorrt, we cannot get the pointer of from tensor until enqueue
+      const DataType_* hA[] {param_.self_attention.query_weight.kernel, 
+                            param_.self_attention.key_weight.kernel, 
+                            param_.self_attention.value_weight.kernel,
+                            param_.from_tensor, param_.from_tensor, param_.from_tensor,
+                            query_buf_, key_buf_, value_buf_};
+      cudaMemcpyAsync((void*)qkv_kernel_, hA, sizeof(DataType_*) * 9, cudaMemcpyHostToDevice, param_.stream);
+    }
   }
   void trt_initialize(DataType_* from_tensor, DataType_* to_tensor, DataType_* attr_mask, cudaStream_t stream, 
     cublasHandle_t cublas_handle)
@@ -280,6 +320,15 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
     param_.attr_mask = attr_mask;
     param_.stream = stream;
     param_.cublas_handle = cublas_handle;
+    if(is_fuse_QKV == true)
+    {
+      const DataType_* hA[] {param_.self_attention.query_weight.kernel, 
+                            param_.self_attention.key_weight.kernel, 
+                            param_.self_attention.value_weight.kernel,
+                            param_.from_tensor, param_.from_tensor, param_.from_tensor,
+                            query_buf_, key_buf_, value_buf_};
+      cudaMemcpyAsync((void*)qkv_kernel_, hA, sizeof(DataType_*) * 9, cudaMemcpyHostToDevice, param_.stream);
+    }
   }
 
   ~OpenMultiHeadAttention() override

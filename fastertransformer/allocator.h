@@ -22,6 +22,7 @@
 #include "fastertransformer/common.h"
 #include "fastertransformer/utils.h"
 #include <cuda_runtime.h>
+#include <vector>
 
 #ifdef GOOGLE_CUDA
 #include "tensorflow/core/framework/op.h"
@@ -33,6 +34,11 @@
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
+#endif
+
+#ifdef TORCH_CUDA
+#include <memory>
+#include "torch/extension.h"
 #endif
 
 namespace fastertransformer
@@ -76,8 +82,6 @@ public:
   }
 };
 
-//TODO: allocator of TensorFlow
-//      You can add context to constructor
 #ifdef GOOGLE_CUDA
 using namespace tensorflow;
 template <>
@@ -85,9 +89,10 @@ class Allocator<AllocatorType::TF> : public IAllocator
 {
   OpKernelContext *context_;
   std::vector<Tensor> *allocated_tensor_vector;
+  cudaStream_t stream_;
 
 public:
-  Allocator(OpKernelContext *context) : context_(context)
+  Allocator(OpKernelContext *context, cudaStream_t stream) : context_(context), stream_(stream)
   {
     allocated_tensor_vector = new std::vector<Tensor>;
   }
@@ -104,7 +109,7 @@ public:
 
     auto flat = buf.flat<uint8>();
     void *ptr = (void *)flat.data();
-    cudaMemset(ptr, 0, buf_size);
+    cudaMemsetAsync(ptr, 0, buf_size, stream_);
     return ptr;
   }
 
@@ -120,6 +125,33 @@ public:
   {
     allocated_tensor_vector->clear();
     delete allocated_tensor_vector;
+  }
+};
+#endif
+
+#ifdef TORCH_CUDA
+template <>
+class Allocator<AllocatorType::TH> : public IAllocator
+{
+  std::shared_ptr<std::vector<torch::Tensor>> allocated_tensor_vector;
+
+public:
+  Allocator() : allocated_tensor_vector(std::make_shared<std::vector<torch::Tensor>>()) {}
+
+  void *malloc(size_t size) const
+  {
+    int64_t buf_size = static_cast<int64_t>(size);
+    torch::Tensor buf = torch::empty({buf_size}, torch::dtype(torch::kUInt8).device(torch::kCUDA));
+    allocated_tensor_vector->push_back(buf);
+    return (*allocated_tensor_vector)[allocated_tensor_vector->size()-1].data_ptr();
+  }
+
+  void free(void *ptr) const
+  {
+#ifndef NDEBUG
+    printf("call from allocator free\n");
+#endif
+    return;
   }
 };
 #endif

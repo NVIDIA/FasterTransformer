@@ -16,3 +16,7 @@ add_subdirectory(cuda)
 if(BUILD_TF)
   add_subdirectory(tf_op)
 endif()
+
+if(BUILD_THE OR BUILD_THS OR BUILD_THSOP)
+  add_subdirectory(th_op)
+endif()

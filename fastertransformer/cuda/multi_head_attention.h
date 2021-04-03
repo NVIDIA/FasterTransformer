@@ -33,6 +33,9 @@ class MultiHeadInitParam{
    AttentionWeight<T> self_attention;
    const T* attr_mask;
    T* attr_out;
+
+   const int* sequence_id_offset;
+   int valid_word_num;
    cublasHandle_t cublas_handle;
    cudaStream_t stream;
    MultiHeadInitParam(){
@@ -41,6 +44,7 @@ class MultiHeadInitParam{
      attr_mask = nullptr;
      attr_out = nullptr;
      cublas_handle = nullptr;
+     sequence_id_offset = nullptr;
      stream = 0;
    }
 };

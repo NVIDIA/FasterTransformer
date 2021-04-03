@@ -63,7 +63,6 @@ class OpenDecoder
 {
 private:
   typedef DecoderTransformerTraits<OpType_> Traits_;
-  const IAllocator &allocator_;
   typedef typename Traits_::DataType DataType_;
   DecoderInitParam<DataType_> param_;
 
@@ -71,7 +70,7 @@ private:
   const cudaDataType_t AType_ = Traits_::AType;
   const cudaDataType_t BType_ = Traits_::BType;
   const cudaDataType_t CType_ = Traits_::CType;
-  int cublasAlgo_[4];
+  int cublasAlgo_[5];
 
   int batch_size_;
   int max_seq_len_;
@@ -82,13 +81,19 @@ private:
 
   DataType_ *norm_from_tensor_buf_, *query_buf_, *context_buf_, *masked_output_buf_;
   DataType_ *norm_masked_output_buf_, *cross_output_buf_, *norm_cross_output_buf_, *ffn_inner_buf_;
+  DataType_ *key_buf_, *value_buf_;
+
+  DataType_** qkv_kernel_;
+  DataType_** qkv_input_;
+  DataType_** qkv_buf_;
+
+  bool is_fuse_QKV;
 
 public:
-  OpenDecoder(const IAllocator &allocator, 
-              int batch_size, int seq_len,
+  OpenDecoder(int batch_size, int seq_len,
               int head_num, int size_per_head,
               int memory_hidden_units) : 
-              allocator_(allocator), batch_size_(batch_size),
+              batch_size_(batch_size),
               max_seq_len_(seq_len), head_num_(head_num), 
               size_per_head_(size_per_head),
               memory_hidden_units_(memory_hidden_units)
@@ -111,34 +116,33 @@ public:
     {
       // first number is a setting for gemm in Decoding, which computes the embedding output.
       // so we need to skip the number
-      int tmp;
-      err = fscanf(fd, "%d%d%d%d%d%*d%*d", &tmp, &cublasAlgo_[0], &cublasAlgo_[1], &cublasAlgo_[2], &cublasAlgo_[3]);
+      float split_time, fused_time;
+      err = fscanf(fd, "%*d %*f %d %f %d %*f %d %*f %d %*f %d %f", &cublasAlgo_[0], &split_time, &cublasAlgo_[1], 
+                                                                  &cublasAlgo_[2], &cublasAlgo_[3], &cublasAlgo_[4], &fused_time);
+      is_fuse_QKV = fused_time < split_time * 3 ? true : false;
       fclose(fd);
     }
-    if (err != 5)
+    if (err != 7)
     {
       printf("[WARNING] decoder loading GEMM algorithms error, using default GEMM algorithms!\n");
+      int default_algo;
       if (Traits_::OpType == OperationType::FP32)
       {
-        cublasAlgo_[0] = CUBLAS_GEMM_DEFAULT;
-        cublasAlgo_[1] = CUBLAS_GEMM_DEFAULT;
-        cublasAlgo_[2] = CUBLAS_GEMM_DEFAULT;
-        cublasAlgo_[3] = CUBLAS_GEMM_DEFAULT;
+        default_algo = CUBLAS_GEMM_DEFAULT;
       }
       else
       {
-        cublasAlgo_[0] = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
-        cublasAlgo_[1] = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
-        cublasAlgo_[2] = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
-        cublasAlgo_[3] = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+        default_algo = CUBLAS_GEMM_DEFAULT_TENSOR_OP;
       }
+      for(int i = 0; i < 5; i++) cublasAlgo_[i] = default_algo;
+      is_fuse_QKV = false;
     }
     else
     {
       // check that the gemm_config setting is runnable
       if (Traits_::OpType == OperationType::FP32)
       {
-        for (int i = 0; i < 4; i++)
+        for (int i = 0; i < 5; i++)
         {
           if (cublasAlgo_[i] > CUBLAS_GEMM_ALGO23 || cublasAlgo_[i] < CUBLAS_GEMM_DEFAULT)
           {
@@ -150,7 +154,7 @@ public:
       }
       else
       {
-        for (int i = 0; i < 4; i++)
+        for (int i = 0; i < 5; i++)
         {
           if (cublasAlgo_[i] > CUBLAS_GEMM_ALGO15_TENSOR_OP || cublasAlgo_[i] < CUBLAS_GEMM_DEFAULT_TENSOR_OP)
           {
@@ -166,7 +170,7 @@ public:
   int getWorkspaceSize()
   {
     int buf_size = batch_size_ * hidden_units_;
-    return 12 * buf_size;
+    return 13 * buf_size  + sizeof(DataType_*) * 9;
   }
 
   void initialize(DecoderInitParam<DataType_> param, DataType_ *buf)
@@ -178,14 +182,31 @@ public:
     int buf_size = batch_size_ * hidden_units_;
     norm_from_tensor_buf_ = buf;
     query_buf_ = buf + buf_size;       //store the query values (from_tensor * Q) in both masked and multi-head attention
-    context_buf_ = buf + 2 * buf_size; //store the context result (softmax(qk)v) in both masked and multi-head attention
+    key_buf_ = buf + 2 * buf_size;
+    value_buf_ = buf + 3 * buf_size;
+    context_buf_ = buf + 4 * buf_size; //store the context result (softmax(qk)v) in both masked and multi-head attention
 
-    masked_output_buf_ = buf + 3 * buf_size;      //masked_attention_output
-    norm_masked_output_buf_ = buf + 4 * buf_size; //norm(masked_attention_output)
+    masked_output_buf_ = buf + 5 * buf_size;      //masked_attention_output
+    norm_masked_output_buf_ = buf + 6 * buf_size; //norm(masked_attention_output)
 
-    cross_output_buf_ = buf + 5 * buf_size;      //mutli-head attention_output
-    norm_cross_output_buf_ = buf + 6 * buf_size; //norm(multi-head attention_output)
-    ffn_inner_buf_ = buf + 7 * buf_size;         //4 buf size to store inner product
+    cross_output_buf_ = buf + 7 * buf_size;      //mutli-head attention_output
+    norm_cross_output_buf_ = buf + 8 * buf_size; //norm(multi-head attention_output)
+    ffn_inner_buf_ = buf + 9 * buf_size;         //4 buf size to store inner product
+
+    qkv_kernel_ = (DataType_**)(ffn_inner_buf_ + 4 * buf_size);
+    qkv_input_ = qkv_kernel_ + 3;
+    qkv_buf_ = qkv_input_ + 3;
+
+    if(is_fuse_QKV == true)
+    {
+      const DataType_* hA[] {param_.self_attention.query_weight.kernel, 
+                            param_.self_attention.key_weight.kernel, 
+                            param_.self_attention.value_weight.kernel,
+                            norm_from_tensor_buf_, norm_from_tensor_buf_, norm_from_tensor_buf_,
+                            query_buf_, key_buf_, value_buf_};
+      cudaMemcpyAsync((void*)qkv_kernel_, hA, sizeof(DataType_*) * 9, cudaMemcpyHostToDevice, param_.stream);
+    }
+
   }
 
   void forward(const DataType_ *from_tensor, const DataType_ *memory_tensor,
@@ -196,8 +217,8 @@ public:
 #ifndef NDEBUG
     PRINT_FUNC_NAME_();
 #endif
-    int m = batch_size_;
-    int n = hidden_units_;
+    const int m = batch_size_;
+    const int n = hidden_units_;
 
     try
     {
@@ -299,6 +320,18 @@ public:
 
   ~OpenDecoder()
   {
+    norm_from_tensor_buf_ = nullptr;
+    query_buf_ = nullptr;
+    key_buf_ = nullptr;
+    value_buf_ = nullptr;
+    context_buf_ = nullptr;
+
+    masked_output_buf_ = nullptr;
+    norm_masked_output_buf_ = nullptr;
+
+    cross_output_buf_ = nullptr;
+    norm_cross_output_buf_ = nullptr;
+    ffn_inner_buf_ = nullptr;
   }
 };
 } //namespace fastertransformer
