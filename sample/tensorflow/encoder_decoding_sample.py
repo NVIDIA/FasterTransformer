@@ -184,15 +184,15 @@ if __name__ == "__main__":
             op_sequence_lengths_result = sess.run(
                 [finalized_op_output_ids, op_output_ids, op_parent_ids, op_sequence_lengths])
 
-        int_result_cross_check("Output ids",
-                               tf_output_ids_result, op_output_ids_result, shape=[1 + max_seq_len, batch_size * beam_width])
-        int_result_cross_check("Parent ids",
-                               tf_parent_ids_result, op_parent_ids_result, shape=[1 + max_seq_len, batch_size * beam_width])
-        int_result_cross_check("Sequence lengths",
-                               tf_sequence_lengths_result, op_sequence_lengths_result, shape=[1, batch_size * beam_width])
-        int_result_cross_check("Finalized output ids",
-                               finalized_tf_output_ids_result.T, finalized_op_output_ids_result.T,
-                               shape=[1 + max_seq_len, batch_size * beam_width])
+        int_result_cross_check("Output ids", tf_output_ids_result, op_output_ids_result, 
+                                   shape=[batch_size, beam_width, max_seq_len])
+        int_result_cross_check("Parent ids", tf_parent_ids_result, op_parent_ids_result, 
+                                   shape=[batch_size, beam_width, max_seq_len])
+        int_result_cross_check("Sequence lengths", tf_sequence_lengths_result, 
+                                op_sequence_lengths_result, shape=[batch_size, beam_width, 1])
+        int_result_cross_check("Finalized output ids", finalized_tf_output_ids_result.T, 
+                                finalized_op_output_ids_result.T,
+                                shape=[batch_size, beam_width, max_seq_len])
 
         if args.test_time == 1:
             tf_time_result = time_test(

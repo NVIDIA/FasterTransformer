@@ -27,7 +27,10 @@ def checkpoint_dtype_cast(in_checkpoint_file, out_checkpoint_file):
     def init_graph():
         for name, shape in var_list:
             var = checkpoint_utils.load_variable(tf.flags.FLAGS.init_checkpoint, name)
-            recon_dtype = tf.float16 if var.dtype == np.float32 else var.dtype
+            if "quant" in name or "amaxList" in name:
+                recon_dtype = var.dtype
+            else:
+                recon_dtype = tf.float16 if var.dtype == np.float32 else var.dtype
             tf.get_variable(name, shape=shape, dtype=recon_dtype)
 
     init_graph()

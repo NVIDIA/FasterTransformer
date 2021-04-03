@@ -48,11 +48,15 @@ REGISTER_OP("BertTransformer")
     .Input("output_layernorm_beta: T")
     .Input("output_layernorm_gamma: T")
     .Input("sequence_id_offset: int32") // shape: [valid_word_num]
+    .Input("amax_list: float")
     .Output("output: T")
     .Attr("T: {float, half}")
     .Attr("head_num: int >= 1")
     .Attr("size_per_head: int >= 1")
     .Attr("remove_padding: bool = true")
+    .Attr("int8_mode: int = 0")
+    .Attr("layer_idx: int = 0")
+    .Attr("layer_num: int = 12")
     .SetShapeFn([](shape_inference::InferenceContext *c) {
       c->set_output(0, c->input(0));
       return Status::OK();
@@ -66,6 +70,11 @@ public:
     OP_REQUIRES_OK(context, context->GetAttr("head_num", &head_num_));
     OP_REQUIRES_OK(context, context->GetAttr("size_per_head", &size_per_head_));
     OP_REQUIRES_OK(context, context->GetAttr("remove_padding", &remove_padding_));
+    context->GetAttr("int8_mode", &int8_mode_);
+    if (int8_mode_ != 0){
+      context->GetAttr("layer_idx", &layer_idx_);
+      context->GetAttr("layer_num", &layer_num_);
+    }
   }
 
   void Compute(OpKernelContext *context) override
@@ -95,17 +104,19 @@ public:
                                                                         from_seq_len_, 
                                                                         to_seq_len_, 
                                                                         head_num_, 
-                                                                        size_per_head_);
+                                                                        size_per_head_,
+                                                                        int8_mode_);
     }
     catch (std::runtime_error &error)
     {
       OP_REQUIRES(context, false, errors::Internal(error.what()));
     }
-    OP_REQUIRES(context, context->num_inputs() == 20, errors::InvalidArgument("Less input arguments"));
+    OP_REQUIRES(context, context->num_inputs() == 21, errors::InvalidArgument("Less input arguments"));
     const int hidden_units = head_num_ * size_per_head_;
     EncoderInitParam<DataType_> param; //init param here
     param.stream = stream;
     param.cublas_handle = this->get_cublas_handler();
+    param.cublaslt_handle = this->get_cublaslt_handler();
     check_cuda_error(cublasSetStream(param.cublas_handle, param.stream));
     this->get_tensor(context, 0, &param.from_tensor);
     this->get_tensor(context, 1, &param.to_tensor);
@@ -140,6 +151,16 @@ public:
       valid_word_num = batch_size_ * from_seq_len_;
     }
     param.valid_word_num = valid_word_num;
+
+    if (int8_mode_ != 0){
+      param.amaxList = reinterpret_cast<const float *>(context->input(20).flat<float>().data());
+      OP_REQUIRES(context, param.amaxList != nullptr, errors::InvalidArgument("amaxList is null"));
+      param.layer_idx = layer_idx_;
+      param.layer_num = layer_num_;
+    }
+    else{
+      param.amaxList = nullptr;
+    }
     
     Tensor *output = nullptr;
     OP_REQUIRES_OK(
@@ -167,7 +188,7 @@ public:
   }
 
 private:
-  int batch_size_, from_seq_len_, to_seq_len_, head_num_, size_per_head_;
+  int batch_size_, from_seq_len_, to_seq_len_, head_num_, size_per_head_, int8_mode_, layer_idx_, layer_num_;
   bool remove_padding_;
   typedef TFTraits<T> traits_;
   typedef typename traits_::DataType DataType_;

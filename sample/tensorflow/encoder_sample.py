@@ -48,6 +48,8 @@ if __name__ == "__main__":
                         help='size per head (default: 64)')
     parser.add_argument('-d', '--data_type', type=str, default="fp32", metavar='STRING',
                         help='data type (default: fp32)', choices=['fp32', 'fp16'])
+    parser.add_argument('-int8_mode', '--int8_mode', type=int, default=0, metavar='NUMBER',
+                        help='int8 mode (default: 0)', choices=[0, 1, 2]) 
     parser.add_argument('-time', '--test_time', type=int, default=0, metavar='BOOL',
                         help='test the time or not. (default: False (0)), True is 1.',
                         choices=[0, 1])
@@ -79,6 +81,7 @@ if __name__ == "__main__":
     tf_datatype = tf.float32
     np_datatype = np.float32
     atol_threshold = 3e-5
+    int8_mode = args.int8_mode
     if args.data_type == "fp16":
         tf_datatype = tf.float16
         np_datatype = np.float16
@@ -102,7 +105,8 @@ if __name__ == "__main__":
                                        size_per_head=size_per_head,
                                        num_layer=num_layer,
                                        dtype=tf_datatype,
-                                       remove_padding=remove_padding)
+                                       remove_padding=remove_padding,
+                                       int8_mode=int8_mode)
 
     tf_encoder_result = tf_encoder(input_tensor=from_tensor,
                                    encoder_args=encoder_args,

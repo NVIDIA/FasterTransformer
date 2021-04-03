@@ -75,4 +75,5 @@ if __name__ == "__main__":
     flags.DEFINE_string("floatx", None, "float32 or float16")
     flags.mark_flag_as_required("floatx")
     flags.DEFINE_bool("remove_padding", False, "Remove padding or Not")
+    flags.DEFINE_integer("int8_mode", 0, "whether use int8 or not; and how to use int8")
     tf.app.run()

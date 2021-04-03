@@ -37,7 +37,7 @@ for batch_size in 1 8 32 64 128 ;
 do
 for seq_len in 32 64 128 ;
 do
-    ./bin/encoder_gemm ${batch_size} ${seq_len} 12 64 ${precision_num}
+    ./bin/encoder_gemm ${batch_size} ${seq_len} 12 64 ${precision_num} 0
 
     tmp_log_pt=${logdir}/batchsize-${batch_size}-seq-${seq_len}-${precision}-pt-log.log
     if [ "$precision" = "fp16" ]; then

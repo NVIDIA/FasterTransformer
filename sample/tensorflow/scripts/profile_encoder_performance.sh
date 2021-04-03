@@ -34,8 +34,8 @@ do
 for seq_len in 32 64 128 ;
 do
     tmp_log_cpp=${logdir}/batchsize-${batch_size}-seq-${seq_len}-${precision}-cpp-log.log
-    ./bin/encoder_gemm ${batch_size} ${seq_len} 12 64 ${precision_num}
-    ./bin/encoder_sample ${batch_size} 12 ${seq_len} 12 64 ${precision_num} 0 2>&1 | tee $tmp_log_cpp
+    ./bin/encoder_gemm ${batch_size} ${seq_len} 12 64 ${precision_num} 0
+    ./bin/encoder_sample ${batch_size} 12 ${seq_len} 12 64 ${precision_num} 0 0 2>&1 | tee $tmp_log_cpp
 
     tmp_log_tf=${logdir}/batchsize-${batch_size}-seq-${seq_len}-${precision}-tf-log.log
     python tensorflow/encoder_sample.py -batch ${batch_size} -s ${seq_len} -time 1 -d ${precision} 2>&1 | tee $tmp_log_tf

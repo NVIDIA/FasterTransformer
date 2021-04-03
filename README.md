@@ -63,23 +63,25 @@ In FasterTransformer 2.0, we have added a highly optimized decoder and decoding 
 
 In FasterTransformer 2.1, we add some important features. First one is the supporting on PyTorch. Recently, there are more and more PyTorch users. We hope the users of PyTorch can also use the FasterTransformer in their application and researches. The second feature is the supporting of [effective transformer](https://github.com/bytedance/effective_transformer). This idea is proposed by ByteDance. It removes the useless padding of encoder input to reduce the computing cost. Third, in addition to decoding with beam search, we also provide the decoding with sampling module. Finally, we optimize many kernels of encoder, decoder and beam search to improve the speed of FasterTransformer.
 
+In FasterTransformer 3.0, we implemented the INT8 quantization for encoder (supporting [effective transformer](https://github.com/bytedance/effective_transformer)). With INT8 quantization, we can take advantage of the powerful INT8 tensor core in Turing GPU to achieve better inference performance (INT8 quantization in FT 3.0 is only supported on device with SM >= 7.5). We also provide quantization tools of tensorflow.
+
 The following graph demonstrates the model architecture. 
 
 ![](images/encoder-decoding-2.png)
 
-FasterTransformer is built on top of CUDA and cuBLAS, providing the C++ API and TensorFlow/PyTorch OPs. Users can integrate them into TensorFlow, PyTorch, or other inference service codes that are built in native C++. We also provide some simple sample code to demonstrate how to use the encoder, decoder and to carry out decoding in C++, TensorFlow and PyTorch. 
+FasterTransformer is built on top of CUDA, cuBLAS and cuBLASLt, providing the C++ API and TensorFlow/PyTorch OPs. Users can integrate them into TensorFlow, PyTorch, or other inference service codes that are built in native C++. We also provide some simple sample code to demonstrate how to use the encoder, decoder and to carry out decoding in C++, TensorFlow and PyTorch. 
 
 ### Configuration support matrix
 
 The following configurations are supported in the FasterTransformer encoder. 
 - Batch size (B<sub>1</sub>): smaller or equal to 512
-- Sequence length (S): smaller or equal to 1024 
+- Sequence length (S): smaller or equal to 1024. For INT8 data type, sequence length should be a multiple of 32. 
 - Head number (H) and size per head (N): 
   - 16 heads * 64 per heads
   - 12 heads * 64 per heads
   - 4 heads * 32 per heads
   - 8 heads * 96 per heads
-- Data type: FP32 and FP16
+- Data type: FP32, FP16 and INT8
 - Any number layer (N<sub>1</sub>) if the memory is enough
 
 The following configurations are supported in the FasterTransformer decoder and decoding.
@@ -101,19 +103,23 @@ The arguments, inputs, and outputs of encoder:
   1. Head number (H)
   2. Size per head (N)
   3. Remove padding flag: A bool value to determine using the effective transformer or not. 
+  4. INT8 mode flag: An integer value to determine which INT8 mode is used.
+  5. Layer number: The number of layers.
+  6. Layer index: An integer value to determine which layer is.
 * Inputs:
   1. An input tensor. The shape is \[ B<sub>1</sub>, S, H x N\].
   2. An attention mask.
   3. The weights of all parameters.
-  4. Sequence id offset vector, using to compute the offset of sentence for effective transformer.  
+  4. Sequence id offset vector, using to compute the offset of sentence for effective transformer. 
+  5. Scales list, using to quantize and de-quantize activation in INT8 quantization.
 * Outputs:
   1. The encoder output feature. The shape is \[ B<sub>1</sub>, S, H x N \].
 
 #### Effective Transformer
 
-Effective Transformer is proposed by [here](https://github.com/bytedance/effective_transformer). It is based on the encoder of FasterTransformer. 
+Effective Transformer is proposed by [link](https://github.com/bytedance/effective_transformer). It is based on the encoder of FasterTransformer. 
 
-The main idea is: removing the padding of sentence to prevent computing the useless tokens. This method can save lots of time when the ratio of the average sequence length of one batch and the maximum sequence length. The smaller ratio, the higher speedup.
+The main idea is: removing the padding of sentence to prevent computing the useless tokens. This method can save lots of time when the average sequence length of one batch is much smaller than the maximum sequence length.
 
 Using the Effective Transformer requires to add some additional kernels, the details are demonstrated in the sample codes.
 
@@ -242,14 +248,14 @@ The following section shows how to use FasterTransformer on the NGC container.
     For example, running image `nvcr.io/nvidia/tensorflow:19.07-py2` by 
 
     ```bash
-    nvidia-docker run -ti nvcr.io/nvidia/tensorflow:19.07-py2 bash
+    nvidia-docker run -ti --rm nvcr.io/nvidia/tensorflow:19.07-py2 bash
     ```
 
 2. Clone the repository.
 
     ```bash
     git clone https://github.com/NVIDIA/DeepLearningExamples
-    cd DeepLearningExamples/FasterTransformer/v2.1
+    cd DeepLearningExamples/FasterTransformer/v3.0
     git submodule init
     git submodule update
     mkdir -p build
@@ -343,37 +349,60 @@ The following section shows how to use FasterTransformer on the NGC container.
 1. Run FasterTransformer encoder on c++
 
     ```bash
-    ./bin/encoder_gemm <batch_size> <sequence_length> <head_number> <size_per_head> <is_use_fp16>
-    ./bin/encoder_sample <batch_size> <num_layers> <sequence_length> <head_number> <size_per_head> <is_use_fp16> <is_remove_padding>
+    ./bin/encoder_gemm <batch_size> <sequence_length> <head_number> <size_per_head> <is_use_fp16> <int8_mode>
+    ./bin/encoder_sample <batch_size> <num_layers> <sequence_length> <head_number> <size_per_head> <is_use_fp16> <is_remove_padding> <int8_mode>
     ```
 
     1.1 Run FasterTransformer encoder under FP32 on c++
 
     ```bash
-    ./bin/encoder_gemm 32 32 12 64 0
-    ./bin/encoder_sample 32 12 32 12 64 0 0
+    ./bin/encoder_gemm 32 32 12 64 0 0
+    ./bin/encoder_sample 32 12 32 12 64 0 0 0
     ``` 
 
     1.2 Run FasterTransformer encoder under FP16 on c++
 
     ```bash
-    ./bin/encoder_gemm 32 32 12 64 1
-    ./bin/encoder_sample 32 12 32 12 64 1 0
+    ./bin/encoder_gemm 32 32 12 64 1 0
+    ./bin/encoder_sample 32 12 32 12 64 1 0 0
+    ```
+    
+    1.3 Run FasterTransformer encoder under INT8 on c++
+    
+     ```bash
+    #For INT8 without quantizing residual connection
+    ./bin/encoder_gemm 32 32 12 64 1 1
+    ./bin/encoder_sample 32 12 32 12 64 1 0 1
+    
+    #For INT8 with quantizing residual connection
+    ./bin/encoder_gemm 32 32 12 64 1 2
+    ./bin/encoder_sample 32 12 32 12 64 1 0 2
     ```
 
-    1.3 Run Effective Transformer under FP32 on c++
+    1.4 Run Effective Transformer under FP32 on c++
 
     ```bash
-    ./bin/encoder_gemm 32 32 12 64 0
-    ./bin/encoder_sample 32 12 32 12 64 0 1
+    ./bin/encoder_gemm 32 32 12 64 0 0
+    ./bin/encoder_sample 32 12 32 12 64 0 1 0
     ```
+    
+    1.5 Run Effective Transformer under INT8 on c++
+    
+     ```bash
+    #For INT8 without quantizing residual connection
+    ./bin/encoder_gemm 32 32 12 64 1 1
+    ./bin/encoder_sample 32 12 32 12 64 1 1 1
+    
+    #For INT8 with quantizing residual connection
+    ./bin/encoder_gemm 32 32 12 64 1 2
+    ./bin/encoder_sample 32 12 32 12 64 1 1 2
 
 2. Run FasterTransformer encoder on TensorFlow
 
     2.1 Run FasterTransformer encoder under FP32 on TensorFlow
 
     ```bash
-    ./bin/encoder_gemm 32 32 12 64 0
+    ./bin/encoder_gemm 32 32 12 64 0 0
     python tensorflow/encoder_sample.py \
             --batch_size 32 \
             --max_seq_len 32 \
@@ -387,7 +416,7 @@ The following section shows how to use FasterTransformer on the NGC container.
     2.2 Run FasterTransformer encoder under FP16 on TensorFlow
 
     ```bash
-    ./bin/encoder_gemm 32 32 12 64 1
+    ./bin/encoder_gemm 32 32 12 64 1 0
     python tensorflow/encoder_sample.py \
             --batch_size 32 \
             --max_seq_len 32 \
@@ -397,11 +426,38 @@ The following section shows how to use FasterTransformer on the NGC container.
             --data_type fp16 \
             --test_time 1
     ```
+    
+    2.3 Run FasterTransformer encoder under INT8 on TensorFlow
+    ```bash
+    #For INT8 without quantizing residual connection
+    ./bin/encoder_gemm 32 32 12 64 1 1
+    python tensorflow/encoder_sample.py \
+            --batch_size 32 \
+            --max_seq_len 32 \
+            --head_number 12 \
+            --size_per_head 64 \
+            --num_layer 12 \
+            --data_type fp16 \
+            --test_time 1 \
+            --int8_mode 1
+    
+    #For INT8 with quantizing residual connection
+    ./bin/encoder_gemm 32 32 12 64 1 2
+    python tensorflow/encoder_sample.py \
+            --batch_size 32 \
+            --max_seq_len 32 \
+            --head_number 12 \
+            --size_per_head 64 \
+            --num_layer 12 \
+            --data_type fp16 \
+            --test_time 1 \
+            --int8_mode 2
+    ```
 
-    2.3 Run Effective Transformer under FP32 on TensorFlow
+    2.4 Run Effective Transformer under FP32 on TensorFlow
 
     ```bash
-    ./bin/encoder_gemm 32 32 12 64 0
+    ./bin/encoder_gemm 32 32 12 64 0 0
     python tensorflow/encoder_sample.py \
             --batch_size 32 \
             --max_seq_len 32 \
@@ -410,7 +466,39 @@ The following section shows how to use FasterTransformer on the NGC container.
             --num_layer 12 \
             --data_type fp32 \
             --test_time 1 \
-            --remove_padding True
+            --remove_padding True \
+            --avg_seq_len 16
+    ```
+    
+    2.5 Run Effective Transformer under INT8 on TensorFlow
+    ```bash
+    #For INT8 without quantizing residual connection
+    ./bin/encoder_gemm 32 32 12 64 1 1
+    python tensorflow/encoder_sample.py \
+            --batch_size 32 \
+            --max_seq_len 32 \
+            --head_number 12 \
+            --size_per_head 64 \
+            --num_layer 12 \
+            --data_type fp16 \
+            --test_time 1 \
+            --remove_padding True \
+            --avg_seq_len 16 \
+            --int8_mode 1
+    
+    #For INT8 with quantizing residual connection
+    ./bin/encoder_gemm 32 32 12 64 1 2
+    python tensorflow/encoder_sample.py \
+            --batch_size 32 \
+            --max_seq_len 32 \
+            --head_number 12 \
+            --size_per_head 64 \
+            --num_layer 12 \
+            --data_type fp16 \
+            --test_time 1 \
+            --remove_padding True \
+            --avg_seq_len 16 \
+            --int8_mode 2
     ```
 
 3. Run FasterTransformer on PyTorch
@@ -423,21 +511,21 @@ The following section shows how to use FasterTransformer on the NGC container.
     3.1 Run FasterTransformer encoder under FP32 on PyTorch
 
     ```bash
-    ./bin/encoder_gemm 32 32 12 64 0
+    ./bin/encoder_gemm 32 32 12 64 0 0
     python pytorch/encoder_sample.py 32 12 32 12 64 --time
     ```
 
     3.2 Run FasterTransformer encoder under FP16 on PyTorch
 
     ```bash
-    ./bin/encoder_gemm 32 32 12 64 1
+    ./bin/encoder_gemm 32 32 12 64 1 0
     python pytorch/encoder_sample.py 32 12 32 12 64 --fp16 --time
     ```
 
     3.3 Run Effective Transformer under FP32 on PyTorch
 
     ```bash
-    ./bin/encoder_gemm 32 32 12 64 0
+    ./bin/encoder_gemm 32 32 12 64 0 0
     python pytorch/encoder_sample.py 32 12 32 12 64 --time --remove_padding
     ```
 
@@ -446,14 +534,14 @@ The following section shows how to use FasterTransformer on the NGC container.
     4.1 Run FasterTransformer under FP32 on TensorRT
 
     ```bash
-    ./bin/encoder_gemm 32 32 12 64 0
+    ./bin/encoder_gemm 32 32 12 64 0 0
     ./bin/transformer_trt 32 12 32 12 64 fp32
     ```
 
     4.2 Run FasterTransformer under FP16 on TensorRT
 
     ```bash
-    ./bin/encoder_gemm 32 32 12 64 1
+    ./bin/encoder_gemm 32 32 12 64 1 0
     ./bin/transformer_trt 32 12 32 12 64 fp16
     ```
 
@@ -722,7 +810,7 @@ The following code lists the directory structure of FasterTransformer:
 
 ```bash
 /fastertransformer: source code of transformer
-   |--/cuda: some CUDA kernels and multi-head attention implementation, both are compiled with cuda/cuBLAS. 
+   |--/cuda: some CUDA kernels and multi-head attention implementation, both are compiled with cuda/cuBLAS/cuBLASLt. 
    |--/tf_op: custom Tensorflow OP implementation
    |--/th_op: custom PyTorch OP implementation
    |--/trt_plugin: TensorRT plugin implementation
@@ -757,7 +845,8 @@ The `sample/` folder contains useful sample codes for FasterTransformer:
 * `sample/cpp/encoder_sample.cc` - C encoder sample codes 
 * `sample/cpp/decoding_beamsearch_sample.cc` - C decoding with beam search sample codes 
 * `sample/cpp/decoding_sampling_sample.cc` - C decoding with sampling sample codes 
-* `sample/tensorflow/encoder_sample.py` - TensorFlow encoder sample codes 
+* `sample/tensorflow/encoder_sample.py` - TensorFlow encoder sample codes
+* `sample/tensorflow/encoder_sample_int8.py` - TensorFlow encoder sample codes for INT8
 * `sample/tensorflow/decoder_sample.py` - TensorFlow decoder sample codes 
 * `sample/tensorflow/decoding_sample.py` - TensorFlow decoding sample codes 
 * `sample/tensorflow/tensorflow_bert/` - TensorFlow using FasterTransformer in BERT sample codes
@@ -777,6 +866,7 @@ To see the full list of available options and their descriptions, use the `-h` o
 
 ```bash
 python tensorflow/encoder_sample.py --help
+python tensorflow/encoder_sample_int8.py --help
 python tensorflow/decoder_sample.py --help
 python tensorflow/decoding_sample.py --help
 python tensorflow/encoder_decoder_sample.py --help
@@ -792,12 +882,12 @@ This subsection provides the details about how to use the encoder, the decoder a
 
 1. Run FasterTransformer encoder on c++
 
-    1.1 Generate the `gemm_config.in` file
+    1.1 Generate the `gemm_config.in` file for FP32/FP16 and the `igemm_config.in` file for INT8
 
     `./bin/encoder_gemm` can generate the best GEMM configuration. The arguments of `encoder_gemm` is: 
 
     ```bash
-    ./bin/encoder_gemm <batch_size> <sequence_length> <head_number> <size_per_head> <is_use_fp16>
+    ./bin/encoder_gemm <batch_size> <sequence_length> <head_number> <size_per_head> <is_use_fp16> <int8_mode>
     ```
 
     This step is necessary no matter what platform we use when we use FasterTransformer. If we do not generate the configure file, the FasterTransformer will use the default configuration and the inference speed may be slower. 
@@ -809,11 +899,12 @@ This subsection provides the details about how to use the encoder, the decoder a
     - `head_number`=12
     - `size_per_head`=64 
     - `data_type`=FP32
+    - `int8_mode`=0
 
-    Then the following scripts can generate the best GEMM configuration under such settings and record the configuration into the `gemm_config.in.in` file.
+    Then the following scripts can generate the best GEMM configuration under such settings and record the configuration into the `gemm_config.in` file.
 
     ```bash
-    ./bin/encoder_gemm 32 32 12 64 0
+    ./bin/encoder_gemm 32 32 12 64 0 0
     ``` 
 
     In the following subsection, we use the same settings and 12 transformer layers unless specified. 
@@ -823,13 +914,13 @@ This subsection provides the details about how to use the encoder, the decoder a
     `./bin/encoder_sample` runs the encoder in the `c++`. The arguments of `encoder_sample` is:
 
     ```bash
-    ./bin/encoder_sample <batch_size> <num_layers> <sequence_length> <head_number> <size_per_head> <is_use_fp16> <is_remove_padding>
+    ./bin/encoder_sample <batch_size> <num_layers> <sequence_length> <head_number> <size_per_head> <is_use_fp16> <is_remove_padding> <int8_mode>
     ```
 
     Then the following scripts can run the encoder under the above settings. 
 
     ```bash
-    ./bin/encoder_sample 32 12 32 12 64 0 0
+    ./bin/encoder_sample 32 12 32 12 64 0 0 0
     ```
 
     The outputs should be like to the following:  
@@ -848,8 +939,8 @@ This subsection provides the details about how to use the encoder, the decoder a
     To use the FP16, we only need to set the `<is_use_fp16>` flag to 1 like following:
 
     ```bash
-    ./bin/encoder_gemm 32 32 12 64 1
-    ./bin/encoder_sample 32 12 32 12 64 1 0
+    ./bin/encoder_gemm 32 32 12 64 1 0
+    ./bin/encoder_sample 32 12 32 12 64 1 0 0
     ```
 
     Note that the configuration of FP32 and FP16 are different, so we need to generate the configuration again. 
@@ -862,14 +953,48 @@ This subsection provides the details about how to use the encoder, the decoder a
     After allocate free 29.43 GB used 2.32 GB total 31.75 GB
     [INFO] batch_size 32 seq_len 32 layer 12 FT-CPP-time 4.00 ms 
     ```
+    
+    1.4 Run FasterTransformer encoder under INT8 on c++
 
-    1.4 Run Effective Transformer on c++
+    If we use the turing or newer NVIDIA gpu, we can use tensor core when we use the INT8. 
+
+    To use the INT8, we only need to set the `<int8_mode>` flag to 1 or 2 like following:
+
+    ```bash
+    #For INT8 without quantizing residual connection, <int8_mode> should be 1
+    ./bin/encoder_gemm 32 32 12 64 1 1
+    ./bin/encoder_sample 32 12 32 12 64 1 0 1
+    
+    #For INT8 with quantizing residual connection, <int8_mode> should be 2
+    ./bin/encoder_gemm 32 32 12 64 1 2
+    ./bin/encoder_sample 32 12 32 12 64 1 0 2
+    ```
+
+    Note that the configuration file of FP32/FP16 and INT8 are different, so we need to generate the configuration again. And the <is_use_fp16> is not necessarily 1, depending on what data type bias is.
+
+    The outputs should be like to the following:  
+
+    ```bash
+    #For INT8 without quantizing residual connection
+    Device Tesla T4
+    before allocate free 15.64 GB total 15.75 GB
+    After allocate free 15.62 GB used 0.13 GB total 15.75 GB
+    [INFO] batch_size 32 seq_len 32 layer 12 FT-CPP-time 7.59 ms 
+    
+    #For INT8 with quantizing residual connection
+    Device Tesla T4
+    before allocate free 15.64 GB total 15.75 GB
+    After allocate free 15.62 GB used 0.13 GB total 15.75 GB
+    [INFO] batch_size 32 seq_len 32 layer 12 FT-CPP-time 7.14 ms
+    ```
+
+    1.5 Run Effective Transformer under FP32 on c++
 
     To use the effective transformer, we only need to set the `<is_remove_padding>` flag to 1 like following:
 
     ```bash
-    ./bin/encoder_gemm 32 32 12 64 0
-    ./bin/encoder_sample 32 12 32 12 64 0 1 
+    ./bin/encoder_gemm 32 32 12 64 0 0
+    ./bin/encoder_sample 32 12 32 12 64 0 1 0
     ```
 
     The outputs should be like to the following:  
@@ -880,13 +1005,43 @@ This subsection provides the details about how to use the encoder, the decoder a
     After allocate free 29.40 GB used 2.35 GB total 31.75 GB
     [INFO] batch_size 32 seq_len 32 layer 12 FT-CPP-time 9.77 ms 
     ```
+    
+    1.6 Run Effective Transformer under INT8 on c++
+    
+    To use the effective transformer under INT8, we need to set the `<is_remove_padding>` flag to 1 and `<int8_mode>` flag to 1 or 2 like following. Since the sequence length in INT8 should be a multiple of 32, effective transformer could be a good choise for INT8.
+    
+    ```bash
+    #For INT8 without quantizing residual connection
+    ./bin/encoder_gemm 32 32 12 64 1 1
+    ./bin/encoder_sample 32 12 32 12 64 1 1 1
+    
+    #For INT8 with quantizing residual connection
+    ./bin/encoder_gemm 32 32 12 64 1 2
+    ./bin/encoder_sample 32 12 32 12 64 1 1 2
+    ```
+    
+    The outputs should be like to the following:
+    
+    ```bash 
+    #For INT8 without quantizing residual connection
+    Device Tesla T4
+    before allocate free 15.64 GB total 15.75 GB
+    After allocate free 15.61 GB used 0.13 GB total 15.75 GB
+    [INFO] batch_size 32 seq_len 32 layer 12 FT-CPP-time 4.92 ms
+    
+    #For INT8 with quantizing residual
+    Device Tesla T4
+    before allocate free 15.64 GB total 15.75 GB
+    After allocate free 15.61 GB used 0.13 GB total 15.75 GB
+    [INFO] batch_size 32 seq_len 32 layer 12 FT-CPP-time 4.70 ms
+    ```
 
 2. Run FasterTransformer on TensorFlow
 
     2.1 Run FasterTransformer encoder under FP32 on TensorFlow
 
     ```bash
-    ./bin/encoder_gemm 32 32 12 64 0
+    ./bin/encoder_gemm 32 32 12 64 0 0
     python tensorflow/encoder_sample.py \
             --batch_size 32 \
             --max_seq_len 32 \
@@ -912,7 +1067,7 @@ This subsection provides the details about how to use the encoder, the decoder a
     To use the FP16 in TensorFlow, we only need to set the `--data_type fp16` like following:
 
     ```bash
-    ./bin/encoder_gemm 32 32 12 64 1
+    ./bin/encoder_gemm 32 32 12 64 1 0
     python tensorflow/encoder_sample.py \
             --batch_size 32 \
             --max_seq_len 32 \
@@ -932,13 +1087,63 @@ This subsection provides the details about how to use the encoder, the decoder a
     [INFO] batch_size 32 max_seq_len 32 12 layer TF-time   8.19 ms
     [INFO] batch_size 32 max_seq_len 32 12 layer FT-OP-tensor-time   6.22 ms
     ```
+    
+    2.3 Run FasterTransformer encoder under INT8 on TensorFlow
 
-    2.3 Run Effective Transformer on TensorFlow
+    To use the INT8 in TensorFlow, we only need to set the `--int8_mode 1` or `--int8_mode 2` like following:
+
+    ```bash
+    #For INT8 without quantizing residual connection
+    ./bin/encoder_gemm 32 32 12 64 1 1
+    python tensorflow/encoder_sample.py \
+            --batch_size 32 \
+            --max_seq_len 32 \
+            --head_number 12 \
+            --size_per_head 64 \
+            --num_layer 12 \
+            --data_type fp16 \
+            --test_time 1 \
+            --int8_mode 1
+            
+    #For INT8 with quantizing residual connection
+    ./bin/encoder_gemm 32 32 12 64 1 2
+    python tensorflow/encoder_sample.py \
+            --batch_size 32 \
+            --max_seq_len 32 \
+            --head_number 12 \
+            --size_per_head 64 \
+            --num_layer 12 \
+            --data_type fp16 \
+            --test_time 1 \
+            --int8_mode 2
+    ```
+
+    The outputs should be like to the following:  
+
+    ```bash
+    #For INT8 without quantizing residual connection on T4 GPU
+    [INFO] Encoder TF v.s. FT with tensor input Cross check False
+    [INFO] Max diff 4.25390625
+    [INFO] min diff 0.0
+    [INFO] batch_size 32 max_seq_len 32 12 layer TF-time  12.88 ms
+    [INFO] batch_size 32 max_seq_len 32 12 layer FT-OP-tensor-time  11.46 ms
+    
+    #For INT8 with quantizing residual connection on T4 GPU
+    [INFO] Encoder TF v.s. FT with tensor input Cross check False
+    [INFO] Max diff 4.734375
+    [INFO] min diff 0.0
+    [INFO] batch_size 32 max_seq_len 32 12 layer TF-time  12.90 ms
+    [INFO] batch_size 32 max_seq_len 32 12 layer FT-OP-tensor-time  10.85 ms
+    ```
+    
+    Note: since we don't use the correct scales for quantization in this test, the Cross Check between TF and FT should fail.
+
+    2.4 Run Effective Transformer under FP32 on TensorFlow
 
     To use the Effective Transformer in TensorFlow, we only need to set the `--remove_padding True` like following:
 
     ```bash
-    ./bin/encoder_gemm 32 32 12 64 0
+    ./bin/encoder_gemm 32 32 12 64 0 0
     python tensorflow/encoder_sample.py \
             --batch_size 32 \
             --max_seq_len 32 \
@@ -947,7 +1152,8 @@ This subsection provides the details about how to use the encoder, the decoder a
             --num_layer 12 \
             --data_type fp32 \
             --test_time 1 \
-            --remove_padding True
+            --remove_padding True \
+            --avg_seq_len 16
     ```
 
     The outputs should be like to the following:  
@@ -959,12 +1165,65 @@ This subsection provides the details about how to use the encoder, the decoder a
     [INFO] batch_size 32 max_seq_len 32 12 layer TF-time  19.99 ms
     [INFO] batch_size 32 max_seq_len 32 12 layer FT-OP-tensor-time  11.49 ms
     ```
+    
+    2.5 Run Effective Transformer under INT8 on TensorFlow
 
-    2.4 Run FasterTransformer for GLUE dataset
+    To use the Effective Transformer under INT8, we only need to set the `--remove_padding True` and `--int8_mode 1`/`--int8_mode 2` like following:
+
+    ```bash
+    #For INT8 without quantizing residual connection on T4 GPU
+    ./bin/encoder_gemm 32 32 12 64 1 1
+    python tensorflow/encoder_sample.py \
+            --batch_size 32 \
+            --max_seq_len 32 \
+            --head_number 12 \
+            --size_per_head 64 \
+            --num_layer 12 \
+            --data_type fp16 \
+            --test_time 1 \
+            --remove_padding True \
+            --avg_seq_len 16 \
+            --int8_mode 1
+            
+    #For INT8 with quantizing residual connection on T4 GPU
+    ./bin/encoder_gemm 32 32 12 64 1 2
+    python tensorflow/encoder_sample.py \
+            --batch_size 32 \
+            --max_seq_len 32 \
+            --head_number 12 \
+            --size_per_head 64 \
+            --num_layer 12 \
+            --data_type fp16 \
+            --test_time 1 \
+            --remove_padding True \
+            --avg_seq_len 16 \
+            --int8_mode 2
+    ```
+
+    The outputs should be like to the following:  
+
+    ```bash
+    #For INT8 without quantizing residual connection on T4 GPU
+    [INFO] Encoder TF v.s. FT with tensor input Cross check False
+    [INFO] Max diff 4.13671875
+    [INFO] min diff 0.0
+    [INFO] batch_size 32 max_seq_len 32 12 layer TF-time  12.96 ms
+    [INFO] batch_size 32 max_seq_len 32 12 layer FT-OP-tensor-time   9.44 ms
+    
+    #For INT8 with quantizing residual connection on T4 GPU
+    [INFO] Encoder TF v.s. FT with tensor input Cross check False
+    [INFO] Max diff 4.63671875
+    [INFO] min diff 0.0
+    [INFO] batch_size 32 max_seq_len 32 12 layer TF-time  12.79 ms
+    [INFO] batch_size 32 max_seq_len 32 12 layer FT-OP-tensor-time   9.04 ms
+    ```
+    Note: since we don't use the correct scales for quantization in this test, the Cross Check between TF and FT should fail.
+
+    2.6 Run FasterTransformer for GLUE dataset
 
     This subsection demonstrates how to integrate the FasterTransformer in TensorFlow, and evaluate the accuracy of FasterTransformer on GLUE dataset. To evaluate on GLUE dataset, it requires the repo of [BERT](https://github.com/google-research/bert).
 
-    2.4.1	Prepare the BERT codes, Download the BERT pretrained model.
+    2.6.1	Prepare the BERT codes, Download the BERT pretrained model.
 
     ```bash
     git clone https://github.com/google-research/bert.git tensorflow/tensorflow_bert/bert
@@ -972,14 +1231,14 @@ This subsection provides the details about how to use the encoder, the decoder a
     unzip uncased_L-12_H-768_A-12.zip
     ```
 
-    2.4.2 Download the GLUE MRPC dataset. Note that the file `download_glue_data.py` can only executed under python3. 
+    2.6.2 Download the GLUE MRPC dataset. Note that the file `download_glue_data.py` can only executed under python3. 
 
     ```bash
     wget https://gist.githubusercontent.com/W4ngatang/60c2bdb54d156a41194446737ce03e2e/raw/17b8dd0d724281ed7c3b2aeeda662b92809aadd5/download_glue_data.py
     python download_glue_data.py --tasks MRPC
     ```
 
-    2.4.3 Finetune the pretrained model on MRPC datasets. This takes some minutes. 
+    2.6.3 Finetune the pretrained model on MRPC datasets. This takes some minutes. 
 
     ```bash
     export BERT_BASE_DIR=${PWD}/uncased_L-12_H-768_A-12
@@ -1015,12 +1274,12 @@ This subsection provides the details about how to use the encoder, the decoder a
     I0623 12:11:12.010224 140165910435648 run_classifier.py:925]   loss = 0.5118897
     ```
 
-    2.4.4 Evaluate the accuracy of FasterTransformer under FP32
+    2.6.4 Evaluate the accuracy of FasterTransformer under FP32
 
     To evaluate the accuracy of FasterTransformer, we can use `tensorflow/tensorflow_bert/run_classifier_wrap.py`. This file uses `run_classifier.py` of bert repo, replacing the transformer model by FasterTransformer and add some additional arguments like `--floatx`. 
 
     ```bash 
-    ../bin/encoder_gemm 8 128 12 64 0
+    ./bin/encoder_gemm 8 128 12 64 0 0
     python tensorflow/tensorflow_bert/run_classifier_wrap.py \
           --floatx=float32 \
           --task_name=MRPC \
@@ -1049,7 +1308,7 @@ This subsection provides the details about how to use the encoder, the decoder a
     I0623 12:12:20.932122 140250133423936 run_classifier.py:925]   loss = 0.5118897
     ```
 
-    2.4.5 Convert the finetuned checkpoint to FP16, and evaluate the accuracy of Fastertransformer under FP16. 
+    2.6.5 Convert the finetuned checkpoint to FP16, and evaluate the accuracy of Fastertransformer under FP16. 
 
     To convert the checkpoint from FP32 to FP16, we can use `tensorflow/tensorflow_bert/ckpt_type_convert.py` to convert the checkpoint. This file requires two arguments, the location of FP32 checkpoint, and the location putting the FP16 checkpoint.
 
@@ -1057,7 +1316,7 @@ This subsection provides the details about how to use the encoder, the decoder a
     python tensorflow/tensorflow_bert/ckpt_type_convert.py \
           --init_checkpoint=mrpc_output/model.ckpt-343 \
           --fp16_checkpoint=mrpc_output_fp16/fp16_model.ckpt
-    ./bin/encoder_gemm 8 128 12 64 1
+    ./bin/encoder_gemm 8 128 12 64 1 0
     python tensorflow/tensorflow_bert/run_classifier_wrap.py \
           --floatx=float16 \
           --task_name=MRPC \
@@ -1086,12 +1345,12 @@ This subsection provides the details about how to use the encoder, the decoder a
     I0623 12:14:45.002117 139685820454720 run_classifier.py:925]   loss = 0.5089728
     ```
 
-    2.4.6 Compare the speed of BERT of TensorFlow and FasterTransformer under both FP32 and FP16.
+    2.6.6 Compare the speed of BERT of TensorFlow and FasterTransformer under both FP32 and FP16.
 
     To compare the speed of TensorFlow and FasterTransformer on BERT model directly, we can use `tensorflow/tensorflow_bert/profile_transformer_inferece.py`. 
 
     ```bash
-    ./bin/encoder_gemm 8 128 12 64 0
+    ./bin/encoder_gemm 8 128 12 64 0 0
     python tensorflow/tensorflow_bert/profile_transformer_inference.py \
             --init_checkpoint=mrpc_output/model.ckpt-343 \
             --tf_profile=false \
@@ -1099,7 +1358,7 @@ This subsection provides the details about how to use the encoder, the decoder a
             --profiling_output_file=time_elapsed \
             --xla=false \
             --floatx=float32
-    ./bin/encoder_gemm 8 128 12 64 1
+    ./bin/encoder_gemm 8 128 12 64 1 0
     python tensorflow/tensorflow_bert/profile_transformer_inference.py \
             --init_checkpoint=mrpc_output_fp16/fp16_model.ckpt \
             --tf_profile=false \
@@ -1123,21 +1382,21 @@ This subsection provides the details about how to use the encoder, the decoder a
     average time (seconds) elapsed fast transformer: 0.005685007572174073
     ```
 
-    2.5 Run FasterTransformer for SQuAD 1.1 dataset
+    2.7 Run FasterTransformer for SQuAD 1.1 dataset
 
     This subsection demonstrates how to integrate the FasterTransformer in TensorFlow and evaluates the accuracy of FasterTransformer on SQuAD 1.1 dataset. To evaluate on SQuAD 1.1 dataset, it requires the repo of [BERT](https://github.com/google-research/bert).
 
-    2.5.1 Prepare the BERT codes and download the fine-tuned model of SQuAD 1.1 from NGC
+    2.7.1 Prepare the BERT codes and download the fine-tuned model of SQuAD 1.1 from NGC
 
     Because the training time of SQuAD is longer, and the NVIDIA NGC has provided the fine-tuned BERT model, we download the fine-tuned model directly.
 
     ```bash
     git clone https://github.com/google-research/bert.git tensorflow/tensorflow_bert/bert
-    wget --content-disposition https://api.ngc.nvidia.com/v2/models/nvidia/bert_tf_v1_1_base_fp32_128/versions/2/zip -O bert_tf_v1_1_base_fp32_128_2.zip
-    unzip bert_tf_v1_1_base_fp32_128_2.zip -d squad_model
+    wget --content-disposition https://api.ngc.nvidia.com/v2/models/nvidia/bert_tf_v1_1_base_fp32_384/versions/2/zip -O bert_tf_v1_1_base_fp32_384_2.zip
+    unzip bert_tf_v1_1_base_fp32_384_2.zip -d squad_model
     ```
 
-    2.5.2 Download the SQuAD dataset. 
+    2.7.2 Download the SQuAD dataset. 
 
     ```bash
     mkdir squad_data
@@ -1145,7 +1404,7 @@ This subsection provides the details about how to use the encoder, the decoder a
     wget -P squad_data https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v1.1.json
     ```
 
-    2.5.3 Evaluate the accuracy of TensorFlow under FP32
+    2.7.3 Evaluate the accuracy of TensorFlow under FP32
 
     ```bash
     python tensorflow/tensorflow_bert/bert/run_squad.py \
@@ -1165,15 +1424,15 @@ This subsection provides the details about how to use the encoder, the decoder a
     The results of TensorFlow would be like:
 
     ```bash
-    {"exact_match": 78.13623462630085, "f1": 85.84460577952547}
+    {"f1": 88.64773706330459, "exact_match": 81.53263954588458}
     ```
 
-    2.5.4 Evaluate the accuracy of FasterTransformer under FP32
+    2.7.4 Evaluate the accuracy of FasterTransformer under FP32
 
     To evaluate the accuracy of FasterTransformer, we can use `tensorflow/tensorflow_bert/run_squad_wrap.py`. This file uses `run_squad.py` of bert repo, replacing the transformer model by FasterTransformer, and add some additional arguments like `--floatx`. 
 
     ```bash
-    ../bin/encoder_gemm 8 384 12 64 0
+    ./bin/encoder_gemm 8 384 12 64 0 0
     python tensorflow/tensorflow_bert/run_squad_wrap.py \
           --floatx=float32 \
           --predict_batch_size=8 \
@@ -1192,17 +1451,17 @@ This subsection provides the details about how to use the encoder, the decoder a
     The results of TensorFlow would be like:
 
     ```bash
-    {"exact_match": 78.13623462630085, "f1": 85.84460577952547}
+    {"f1": 88.64773706330459, "exact_match": 81.53263954588458}
     ```
 
-    2.5.5 Convert the checkpoint to FP16 and evaluate the accuracy of TensorFlow and FasterTransformer under FP16
+    2.7.5 Convert the checkpoint to FP16 and evaluate the accuracy of TensorFlow and FasterTransformer under FP16
 
     To convert the checkpoint from FP32 to FP16, we can use `tensorflow/tensorflow_bert/ckpt_type_convert.py` to convert the checkpoint. This file requires two arguments, the location of FP32 checkpoint, and the location putting the FP16 checkpoint.
 
     ```bash
     python tensorflow/tensorflow_bert/ckpt_type_convert.py --init_checkpoint=squad_model/model.ckpt-5474 --fp16_checkpoint=squad_fp16_model/model.ckpt
 
-    ../bin/encoder_gemm 8 384 12 64 1
+    ./bin/encoder_gemm 8 384 12 64 1 0
     python tensorflow/tensorflow_bert/run_squad_wrap.py \
           --floatx=float16 \
           --predict_batch_size=8 \
@@ -1221,13 +1480,91 @@ This subsection provides the details about how to use the encoder, the decoder a
     The results of TensorFlow would be like:
 
     ```bash
-    {"exact_match": 78.0321665089877, "f1": 85.77861816524597}
+    {"f1": 88.5741007517305, "exact_match": 81.37180700094608}
     ```
 
-    2.5.6 Compare the speed of BERT of TensorFlow and FasterTransformer under both FP32 and FP16.
+    2.7.6 Evaluate the accuracy of FasterTransformer under INT8
+    
+    In `bert-tf-quantization`, we give detailed procedure of Post Training Quantization(PTQ) and Quantization Aware Training (QAT). Since PTQ and QAT have the same inference procedure, we use QAT checkpoint to show how to evaluate the accuracy of FasterTransformer under INT8.  
+    
+    Suppose we already fine-tuned a FP32 checkpoint using QAT and not quantizing residual connection as decribed in `bert-tf-quantization` (with <f1, exact_match> == <88.53, 81.05>). The path to checkpoint is `squad_model/QAT_noResidualQuant/`.
+
+    We also provide this pre-trained model for easy evaluation, which can be obtained by:
 
     ```bash
-    ./bin/encoder_gemm 8 128 12 64 0
+    mkdir -p squad_model/QAT_noResidualQuant/ && cd squad_model/QAT_noResidualQuant/
+
+    wget --content-disposition https://api.ngc.nvidia.com/v2/models/nvidia/fastertransformer_bert_base_squad_1_1_tf_qat_model/versions/3.0/zip -O fastertransformer_bert_base_squad_1_1_tf_qat_model_3.0.zip
+
+    unzip fastertransformer_bert_base_squad_1_1_tf_qat_model_3.0.zip
+
+    cd ../..
+
+    ```
+    
+    We first convert the checkpoint from FP32 to FP16 (this step is not nesseary) and then quantize the FP16 checkpoint using `tensorflow/tensorflow_bert/ckpt_type_convert.py`. This file requires two arguments, the location of init checkpoint, and the location putting the quantized checkpoint 
+    
+    ```bash
+    python tensorflow/tensorflow_bert/ckpt_type_convert.py --init_checkpoint=squad_model/QAT_noResidualQuant/model.ckpt-5474 --fp16_checkpoint=squad_model/QAT_noResidualQuant_fp16/model.ckpt
+    
+    python tensorflow/tensorflow_bert/ckpt_quantization.py --init_checkpoint=squad_model/QAT_noResidualQuant_fp16/model.ckpt --quantized_checkpoint=squad_model/QAT_noResidualQuant_fp16_quantized/model.ckpt
+
+    ./bin/encoder_gemm 8 384 12 64 1 1
+    python tensorflow/tensorflow_bert/run_squad_wrap.py \
+          --floatx=float16 \
+          --predict_batch_size=8 \
+          --vocab_file=squad_model/vocab.txt \
+          --bert_config_file=squad_model/bert_config.json \
+          --init_checkpoint=squad_model/QAT_noResidualQuant_fp16_quantized/model.ckpt \
+          --train_file=squad_data/train-v1.1.json \
+          --do_predict=True \
+          --predict_file=squad_data/dev-v1.1.json \
+          --max_seq_length=384 \
+          --output_dir=./squad_ft_output/int8_noResidualQuant/ \
+          --int8_mode=1
+
+    python tensorflow/tensorflow_bert/squad_evaluate-v1.1.py squad_data/dev-v1.1.json squad_ft_output/int8_noResidualQuant/predictions.json
+    ```
+    
+    The results of TensorFlow would be like:
+
+    ```bash
+    {"f1": 88.33325204203412, "exact_match": 80.64333017975402}
+    ```
+    
+    2.7.7 Evaluate the accuracy of Effective Transformer under INT8
+    
+    To evaluate the accuracy of Effective Transformer under INT8, we follow the steps decribed in above section to get the correct checkpoint, and then run `tensorflow/tensorflow_bert/run_squad_wrap.py` with `--remove_padding True` flag.
+    
+    ```bash
+    ./bin/encoder_gemm 8 384 12 64 1 1
+    python tensorflow/tensorflow_bert/run_squad_wrap.py \
+          --floatx=float16 \
+          --predict_batch_size=8 \
+          --vocab_file=squad_model/vocab.txt \
+          --bert_config_file=squad_model/bert_config.json \
+          --init_checkpoint=squad_model/QAT_noResidualQuant_fp16_quantized/model.ckpt \
+          --train_file=squad_data/train-v1.1.json \
+          --do_predict=True \
+          --predict_file=squad_data/dev-v1.1.json \
+          --max_seq_length=384 \
+          --output_dir=./squad_ft_output/int8_noResidualQuant_effectiveTransormer/ \
+          --remove_padding=True \
+          --int8_mode=1
+
+    python tensorflow/tensorflow_bert/squad_evaluate-v1.1.py squad_data/dev-v1.1.json squad_ft_output/int8_noResidualQuant_effectiveTransormer/predictions.json
+    ```
+    
+    The results of TensorFlow would be like:
+
+    ```bash
+    {"f1": 88.18483279072935, "exact_match": 80.53926206244087}
+    ```
+
+    2.7.8 Compare the speed of BERT of TensorFlow and FasterTransformer under both FP32 and FP16.
+
+    ```bash
+    ./bin/encoder_gemm 8 128 12 64 0 0
     python tensorflow/tensorflow_bert/profile_transformer_inference.py \
           --init_checkpoint=mrpc_output/model.ckpt-343 \
           --tf_profile=false \
@@ -1235,7 +1572,7 @@ This subsection provides the details about how to use the encoder, the decoder a
           --profiling_output_file=time_elapsed \
           --xla=false \
           --floatx=float32
-    ./bin/encoder_gemm 8 128 12 64 1
+    ./bin/encoder_gemm 8 128 12 64 1 0
     python tensorflow/tensorflow_bert/profile_transformer_inference.py \
           --init_checkpoint=mrpc_output_fp16/fp16_model.ckpt \
           --tf_profile=false \
@@ -1269,8 +1606,8 @@ This subsection provides the details about how to use the encoder, the decoder a
     3.1 Generate the `gemm_config.in` file:
 
     ```bash
-    ./bin/encoder_gemm <batch_size> <sequence_length> <head_number> <size_per_head> <is_use_fp16>
-    ./bin/encoder_gemm 1 32 12 64 1
+    ./bin/encoder_gemm <batch_size> <sequence_length> <head_number> <size_per_head> <is_use_fp16> <int8_mode>
+    ./bin/encoder_gemm 1 32 12 64 1 0
     ```
     If you want to use the library in other directory, please generate this file according to your setting and copy it to your working directory.
 
@@ -1298,8 +1635,8 @@ This subsection provides the details about how to use the encoder, the decoder a
     We have two BERT application code samples, SQuAD and MRPC, `thsext` of `run_squad.sh` uses the custom torchscript class (build with `-DBUILD_THS=ON`), and `thsext` of `run_mrpc.sh` uses the custom torchscript op (build with `-DBUILD_THSOP=ON`).
 
     ```bash
-    bash pytorch/script/run_squad.sh <model_type> <data_type>
-    bash pytorch/script/run_mrpc.sh <model_type> <data_type>
+    bash pytorch/scripts/run_squad.sh <model_type> <data_type>
+    bash pytorch/scripts/run_mrpc.sh <model_type> <data_type>
     ```
     the `<mode_type>` can be:
     - `ori`: original HuggingFace's BERT encoder
@@ -1721,7 +2058,7 @@ This subsection provides the details about how to use the encoder, the decoder a
     In this subsection, we demonstrate how to use the FasterTransformer encoder and decoder/decoding in the same time. 
 
     ```bash
-    ./bin/encoder_gemm 32 32 8 64 0
+    ./bin/encoder_gemm 32 32 8 64 0 0
     ./bin/decoding_gemm 32 4 8 64 30000 32 512 0
     python tensorflow/encoder_decoder_sample.py \
             --batch_size 32 \
@@ -1740,7 +2077,7 @@ This subsection provides the details about how to use the encoder, the decoder a
     The `encoder_decoder_sample.py` files show the results of "TensorFlow encoder + FasterTransformer decoder" and the results of "FasterTransformer encoder + FasterTransformer decoder. The usage is similar to `decoder_sample.py`. 
 
     ```bash
-    ./bin/encoder_gemm 32 32 8 64 0
+    ./bin/encoder_gemm 32 32 8 64 0 0
     ./bin/decoding_gemm 32 4 8 64 30000 32 512 0
     python tensorflow/encoder_decoding_sample.py \
             --batch_size 32 \
@@ -1965,7 +2302,9 @@ For the benchmark of TensorFlow, we compare the performance of TensorFlow with X
 
 For the benchmark of PyTorch, we compare the performance of PyTorch, and performance of TorchScript and the performance of PyTorch with FasterTransformer custom extension (CustomExt), and show the speedup of CustomExt compare to the PyTorch and TorchScript. Because CustomExt has no obvious overhead compare to the FasterTransformer on C++, we skip the comparison with the C++ implementation.  
 
-The results of c++ and TensorFlow were obtained by running the `sample/tensorflow/scripts/profile_encoder_performance.sh`.
+The FP32/FP16 results on V100 and the FP32 results on T4 of c++ and TensorFlow were obtained by running the `sample/tensorflow/scripts/profile_encoder_performance.sh`.
+
+The FP16/INT8 results on T4 of c++ and TensorFlow were obtained by running the `sample/tensorflow/scripts/profile_encoder_performance_int8.sh`.
 
 The results of PyTorch were obtained by running the `sample/pytorch/scripts/profile_encoder.sh`. 
 
@@ -2001,21 +2340,63 @@ In the experiments of encoder, we updated the following parameters:
 
 | <Batch_size, Seq_len> | TF (ms) | FT-OP (ms) | FT-OP Speedup | FT-CPP (ms) | FT-CPP Speedup | 
 |:---------------------:|:-------:|:----------:|:-------------:|:-----------:|:--------------:| 
-| <1, 32> | 6.53 | 4.19 | 1.55 | 1.72 | 3.79 | 
-| <1, 64> | 6.93 | 4.96 | 1.39 | 1.86 | 3.72 | 
-| <1, 128> | 6.32 | 4.12 | 1.53 | 2.12 | 2.98 | 
-| <8, 32> | 6.89 | 4.58 | 1.50 | 2.93 | 2.35 | 
-| <8, 64> | 8.33 | 6.43 | 1.29 | 4.80 | 1.73 | 
-| <8, 128> | 15.33 | 11.46 | 1.33 | 9.40 | 1.63 | 
-| <32, 32> | 14.64 | 11.45 | 1.27 | 9.20 | 1.59 | 
-| <32, 64> | 26.50 | 21.03 | 1.26 | 18.56 | 1.42 | 
-| <32, 128> | 54.28 | 41.44 | 1.30 | 38.23 | 1.41 | 
-| <64, 32> | 26.53 | 20.99 | 1.26 | 18.84 | 1.40 | 
-| <64, 64> | 49.99 | 40.41 | 1.23 | 36.99 | 1.35 | 
-| <64, 128> | 101.39 | 83.46 | 1.21 | 77.41 | 1.30 | 
-| <128, 32> | 51.67 | 40.58 | 1.27 | 37.39 | 1.38 | 
-| <128, 64> | 98.07 | 80.91 | 1.21 | 72.67 | 1.34 | 
-| <128, 128> | 202.76 | 166.32 | 1.21 | 153.19 | 1.32 | 
+| <1, 32> | 7.85 | 5.42 | 1.44 | 1.67 | 4.70 |
+| <1, 64> | 7.75 | 4.03 | 1.92 | 1.78 | 4.35 |
+| <1, 128> | 8.34 | 5.63 | 1.48 | 2.22 | 3.75 |
+| <8, 32> | 7.41 | 5.40 | 1.37 | 2.93 | 2.52 |
+| <8, 64> | 8.79 | 7.07 | 1.24 | 4.79 | 1.83 |
+| <8, 128> | 15.28 | 12.45 | 1.22 | 9.59 | 1.59 |
+| <32, 32> | 14.75 | 12.24 | 1.20 | 9.34 | 1.57 |
+| <32, 64> | 28.05 | 23.04 | 1.21 | 19.40 | 1.44 |
+| <32, 128> | 55.61 | 45.58 | 1.22 | 39.76 | 1.39 |
+| <64, 32> | 28.26 | 23.37 | 1.20 | 19.62 | 1.44 |
+| <64, 64> | 53.49 | 43.62 | 1.22 | 38.35 | 1.39 |
+| <64, 128> | 109.64 | 91.22 | 1.20 | 79.08 | 1.38 |
+| <128, 32> | 53.94 | 44.76 | 1.20 | 39.60 | 1.36 |
+| <128, 64> | 108.27 | 87.92 | 1.23 | 76.62 | 1.41 |
+| <128, 128> | 230.97 | 196.77 | 1.17 | 165.35 | 1.39 | 
+
+
+* Performance on INT8 without quantizing residual connection
+
+| <Batch_size, Seq_len> | TF (ms) | FT-OP (ms) | FT-OP Speedup | FT-CPP (ms) | FT-CPP Speedup | 
+|:---------------------:|:-------:|:----------:|:-------------:|:-----------:|:--------------:| 
+| <1, 32> | 7.85 | 4.06 | 1.93 | 1.56 | 5.03 |
+| <1, 64> | 7.75 | 6.25 | 1.24 | 1.75 | 4.42 |
+| <1, 128> | 8.34 | 6.40 | 1.30 | 2.03 | 4.10 |
+| <8, 32> | 7.41 | 6.42 | 1.15 | 2.71 | 2.73 |
+| <8, 64> | 8.79 | 8.28 | 1.06 | 4.42 | 1.98 |
+| <8, 128> | 15.28 | 13.88 | 1.10 | 8.90 | 1.71 |
+| <32, 32> | 14.75 | 13.51 | 1.09 | 8.70 | 1.69 |
+| <32, 64> | 28.05 | 23.73 | 1.18 | 16.66 | 1.68 |
+| <32, 128> | 55.61 | 47.99 | 1.15 | 35.51 | 1.56 |
+| <64, 32> | 28.26 | 24.43 | 1.15 | 17.51 | 1.61 |
+| <64, 64> | 53.49 | 44.18 | 1.21 | 34.38 | 1.55 |
+| <64, 128> | 109.64 | 94.17 | 1.16 | 67.66 | 1.62 |
+| <128, 32> | 53.94 | 45.45 | 1.18 | 34.28 | 1.57 |
+| <128, 64> | 108.27 | 87.63 | 1.23 | 64.07 | 1.68 |
+| <128, 128> | 230.97 | 184.21 | 1.25 | 142.19 | 1.62 |
+
+* Performance on INT8 with quantizing residual connection
+
+| <Batch_size, Seq_len> | TF (ms) | FT-OP (ms) | FT-OP Speedup | FT-CPP (ms) | FT-CPP Speedup | 
+|:---------------------:|:-------:|:----------:|:-------------:|:-----------:|:--------------:| 
+| <1, 32> | 7.85 | 5.96 | 1.31 | 1.62 | 4.84 |
+| <1, 64> | 7.75 | 5.71 | 1.35 | 1.64 | 4.72 |
+| <1, 128> | 8.34 | 4.97 | 1.67 | 1.95 | 4.27 |
+| <8, 32> | 7.41 | 6.26 | 1.18 | 2.61 | 2.83 |
+| <8, 64> | 8.79 | 8.03 | 1.09 | 4.28 | 2.05 |
+| <8, 128> | 15.28 | 13.64 | 1.12 | 8.50 | 1.79 |
+| <32, 32> | 14.75 | 13.11 | 1.12 | 8.29 | 1.77 |
+| <32, 64> | 28.05 | 22.82 | 1.22 | 16.34 | 1.71 |
+| <32, 128> | 55.61 | 46.33 | 1.20 | 34.05 | 1.63 |
+| <64, 32> | 28.26 | 23.46 | 1.20 | 16.67 | 1.69 |
+| <64, 64> | 53.49 | 42.61 | 1.25 | 33.11 | 1.61 |
+| <64, 128> | 109.64 | 91.21 | 1.20 | 67.19 | 1.63 |
+| <128, 32> | 53.94 | 43.89 | 1.22 | 33.94 | 1.58 |
+| <128, 64> | 108.27 | 84.42 | 1.28 | 64.53 | 1.67 |
+| <128, 128> | 230.97 | 178.11 | 1.29 | 136.45 | 1.69 |
+
 
 #### Encoder performance on V100 and TensorFlow
 
@@ -2203,14 +2584,14 @@ In the experiments of encoder, we updated the following parameters:
 
 #### Performance on application codes of TensorFlow
 
-* [BERT-base-SQUAD-1.1 model](https://api.ngc.nvidia.com/v2/models/nvidia/bert_tf_v1_1_base_fp32_128/versions/2/zip), batch size 8, seq len 384, on V100
+* [BERT-base-SQUAD-1.1 model](https://api.ngc.nvidia.com/v2/models/nvidia/bert_tf_v1_1_base_fp32_384/versions/2/zip), batch size 8, seq len 384, on V100
 
 | Type | Exact match | F1 score | inference time (ms/example) | 
 |:----:|:-----------:|:--------:|:---------------------------:|
-| TensorFlow FP32           | 78.13% | 85.84% | 25.53 | 
-| FasterTransformer OP FP32 | 78.13% | 85.84% | 18.30 | 
+| TensorFlow FP32           | 81.53% | 88.64% | 25.53 | 
+| FasterTransformer OP FP32 | 81.53% | 88.64% | 18.30 | 
 | TensorFlow FP16           | x | x | 12.21 | 
-| FasterTransformer OP FP16 | 78.03% | 85.77% | 5.6   | 
+| FasterTransformer OP FP16 | 81.37% | 88.57% | 5.6   | 
 
 #### Performance on application codes of PyTorch
 
@@ -2750,10 +3131,20 @@ We test with batch_size 128, beam width 4, beam search algorithm on V100.
 
 ### Changelog
 
+Sep 2020
+- **Release the FasterTransformer 3.0**
+  - Support INT8 quantization of encoder of cpp and TensorFlow op.
+  - Add bert-tf-quantization tool.
+  - Fix the issue that Cmake 15 or Cmake 16 fail to build this project.
+
+Aug 2020
+- Fix the bug of trt plugin.
+
 June 2020
-- Add [effective transformer](https://github.com/bytedance/effective_transformer) idea into encoder.
-- Optimize the beam search kernels.
-- Add PyTorch op supporting
+- **Release the FasterTransformer 2.1**
+  - Add [effective transformer](https://github.com/bytedance/effective_transformer) idea into encoder.
+  - Optimize the beam search kernels.
+  - Add PyTorch op supporting
 
 May 2020
 - Fix the bug that seq_len of encoder must be larger than 3.
@@ -2804,8 +3195,9 @@ July 2019
 - batch_size should be smaller or equal to 1024 in Decoder.
 - batch_size x beam_width should be smaller or equal to 1024 in Decoding.
 - Results of TensorFlow and OP would be different in decoding. This problem is caused by the accumulated log probability, and we do not avoid this problem. 
-- Cmake 15 or Cmake 16 fail to build this project. Cmake 14 is no problem. 
 - If encounter some problem in the custom environment, try to use the gcc/g++ 4.8 to build the project of TensorFlow op, especially for TensorFlow 1.14. 
+- Effective Transformer's f1-score of SQuAD is slightly worse than normal FasterTransformer is because Effective Transformer set the output of padding to 0, which are not excat 0 in BERT.
+- FasterTransformer 3.0 runs slower in INT8 precision than in FP16 precision on A100, we will solve this issue in future version.
 
 ### TODO
 

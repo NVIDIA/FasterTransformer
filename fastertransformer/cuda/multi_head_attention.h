@@ -29,6 +29,7 @@ template<typename T>
 class MultiHeadInitParam{
  public:
    const T* from_tensor;
+   const int8_t* int8_from_tensor;
    const T* to_tensor;
    AttentionWeight<T> self_attention;
    const T* attr_mask;
@@ -37,7 +38,14 @@ class MultiHeadInitParam{
    const int* sequence_id_offset;
    int valid_word_num;
    cublasHandle_t cublas_handle;
+   cublasLtHandle_t cublaslt_handle;
    cudaStream_t stream;
+
+  //First 80 are for activation amaxs.
+  //For each activation amax, there are 4 values: amax, amax/127.0f, amax/127.0f/127.0f, 127.0f/amax -- input_amax 0-3 , Qbias_amax 4-7, Kbias_amax 8-11, Vbias_amax 12-15, Softmax_amax 16-19, bmm2_amax 20-23, ProjBiasNorm_amax 24-27, F1Bias_amax 28-31, F2BiasNorm_amax 32-35, reserve 36-80
+  //following by kernel amaxs : query_weight_amax_list, key_weight_amax_list, value_weight_amax_list, proj_weight_amax_list, FC1_weight_amax_list, FC2_weight_amax_list
+   const float *amaxList;
+
    MultiHeadInitParam(){
      from_tensor = nullptr;
      to_tensor = nullptr;
@@ -45,6 +53,9 @@ class MultiHeadInitParam{
      attr_out = nullptr;
      cublas_handle = nullptr;
      sequence_id_offset = nullptr;
+     cublaslt_handle = nullptr;
+     int8_from_tensor = nullptr;
+     amaxList = nullptr;
      stream = 0;
    }
 };

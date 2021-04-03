@@ -242,6 +242,10 @@ def tf_encoder(input_tensor,
                 layer_output = layer_norm(layer_output + attention_output)
                 prev_output = layer_output
 
+            # amaxList for int8 quantization
+            if encoder_args.int8_mode != 0:
+                amaxList = tf.get_variable(name="amaxList", shape=[80 + 9*encoder_args.hidden_dim], dtype=tf.float32)
+
     prev_output = tf.reshape(prev_output, shape=tf.shape(input_tensor))
     return prev_output
 
@@ -454,6 +458,10 @@ def op_encoder(inputs,
     else:
         sequence_id_offset = []
     for layer_idx in range(encoder_args.num_layer):
+        if encoder_args.int8_mode != 0:
+            amaxList = encoder_vars_dict['layer_%d/amaxList:0' % layer_idx]
+        else:
+            amaxList = []
         outputs = transformer_op_module.bert_transformer(
             inputs,
             inputs,
@@ -475,8 +483,10 @@ def op_encoder(inputs,
             encoder_vars_dict['layer_%d/output/LayerNorm/beta:0' % layer_idx],
             encoder_vars_dict['layer_%d/output/LayerNorm/gamma:0' % layer_idx],
             sequence_id_offset,
+            amaxList,
             head_num=encoder_args.head_num, size_per_head=encoder_args.size_per_head,
-            remove_padding=remove_padding)
+            remove_padding=remove_padding,
+            int8_mode=encoder_args.int8_mode, layer_idx=layer_idx, layer_num=encoder_args.num_layer)
         inputs = outputs
     
     if remove_padding == True:

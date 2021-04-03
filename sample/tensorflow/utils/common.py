@@ -29,7 +29,8 @@ class TransformerArgument:
                 kernel_init_range=0.02,
                 bias_init_range=0.02,
                 fuse_qkv=True,
-                remove_padding=False):
+                remove_padding=False,
+                int8_mode=0):
     '''
     The arguments of Transformer layer (for both encoder and decoder).
     
@@ -42,7 +43,8 @@ class TransformerArgument:
         kernel_init_range: The initializer range of kernel for all convolution layer and fully-connected layer. 
         kernel_init_range: The initializer range of bias for all convolution layer and fully-connected layer. 
         fuse_qkv: bool. Wether fuse the q, k, v gemm or not.
-        remove_padding: bool. Remove the padding of sentences of encoder. 
+        remove_padding: bool. Remove the padding of sentences of encoder.
+        int8_mode: Mode of int8 quantization. 0 means not using int8 quantization, 1 means using int8 quantization without quantizing residuals, 2 means using int8 quantization with quantizing residuals.
     '''
     
     self.beam_width = beam_width
@@ -53,6 +55,7 @@ class TransformerArgument:
     self.hidden_dim = self.head_num * self.size_per_head
     self.kernel_init_range = kernel_init_range
     self.bias_init_range = bias_init_range
+    self.int8_mode = int8_mode
     if self.dtype == tf.float32:
       self.check_threshold = 2e-5
     elif self.dtype == tf.float16:

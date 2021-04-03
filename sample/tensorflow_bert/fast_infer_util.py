@@ -302,10 +302,14 @@ def fast_transformer_model_trans(input_tensor,
                     kernel_initializer=create_initializer(initializer_range))
                 layer_output = dropout(layer_output, hidden_dropout_prob)
                 layer_output = layer_norm(layer_output + attention_output)
+            # amaxList
+            if tf.flags.FLAGS.int8_mode != 0:
+                amaxList = tf.get_variable(name="amaxList", shape=[80 + 9*hidden_size], dtype=tf.float32)
 
             
     # FASTINFER: fast transformer encoder inference
     inputs = input_tensor
+    int8_mode = tf.flags.FLAGS.int8_mode
     remove_padding = tf.flags.FLAGS.remove_padding
     if remove_padding == True:
         inputs, sequence_id_offset = transformer_op_module.build_mask_remove_padding(inputs, sequence_length)
@@ -313,6 +317,10 @@ def fast_transformer_model_trans(input_tensor,
         sequence_id_offset = []
     graph = tf.get_default_graph()
     for layer_idx in range(num_hidden_layers):
+        if int8_mode != 0:
+            amaxL = graph.get_tensor_by_name('bert/encoder/layer_%d/amaxList:0' % layer_idx)
+        else:
+            amaxL = []
         layer_output = transformer_op_module.bert_transformer(
             inputs,
             inputs,
@@ -334,7 +342,9 @@ def fast_transformer_model_trans(input_tensor,
             graph.get_tensor_by_name('bert/encoder/layer_%d/output/LayerNorm/beta:0' % layer_idx),
             graph.get_tensor_by_name('bert/encoder/layer_%d/output/LayerNorm/gamma:0' % layer_idx),
             sequence_id_offset,
+            amaxL,
             head_num=num_attention_heads, size_per_head=attention_head_size,
+            int8_mode=int8_mode, layer_idx=layer_idx, layer_num = num_hidden_layers,
             remove_padding=remove_padding)
 
         if remove_padding == True:
