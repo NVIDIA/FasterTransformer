@@ -15,7 +15,7 @@
  */
 
 #include "encoder_igemm_func.h"
-#include "fastertransformer/common.h"
+#include "fastertransformer/utils/common.h"
 #include <vector>
 
 namespace fastertransformer{
@@ -90,10 +90,10 @@ int printPerfStructure(int m, int n, int k, const customMatmulPerf_t &perf, FILE
         (int)perf.workspaceSize,
         (int)perf.mathMode,
         perf.wavesCount);
-    
+     
     //chose the fastest algo that does not need workspace 
     if ((int)perf.workspaceSize == 0 && hasPrint == 0){
-      fprintf(fout, "%d %d %d %d ### 1 %d %d %d %d %d %d %d %d %d %d %d\n", batch_size_, seq_len_, head_num_, size_per_head_, m, n, k, algoId, customOption, tile, numSplitsK, swizzle, reductionScheme, (int)perf.workspaceSize, stages);
+      fprintf(fout, "%d %d %d %d %d ### 1 %d %d %d %d %d %d %d %d %d %d %d %f\n", batch_size_, seq_len_, head_num_, size_per_head_, INT8_DATATYPE, m, n, k, algoId, customOption, tile, numSplitsK, swizzle, reductionScheme, (int)perf.workspaceSize, stages, perf.time);
       return 1;
     }
     else{
@@ -128,9 +128,9 @@ int printBatchPerfStructure(int batchCount, int m, int n, int k, const customMat
         (int)perf.mathMode,
         perf.wavesCount);
     
-    //chose the fastest algo that does not need workspace
+    //chose the fastest algo that does not need workspace 
     if ((int)perf.workspaceSize == 0 && hasPrint == 0){
-      fprintf(fout, "%d %d %d %d ### %d %d %d %d %d %d %d %d %d %d %d %d\n",batch_size_, seq_len_, head_num_, size_per_head_, batchCount, m, n, k, algoId, customOption, tile, numSplitsK, swizzle, reductionScheme, (int)perf.workspaceSize, stages);
+      fprintf(fout, "%d %d %d %d %d ### %d %d %d %d %d %d %d %d %d %d %d %d %f\n",batch_size_, seq_len_, head_num_, size_per_head_, INT8_DATATYPE, batchCount, m, n, k, algoId, customOption, tile, numSplitsK, swizzle, reductionScheme, (int)perf.workspaceSize, stages, perf.time);
       return 1;
     }
     else{
@@ -209,7 +209,7 @@ customMatmulRun(cublasLtHandle_t ltHandle,  // to get the capabilities (required
           }
         }
         else {
-          printf("not enough workspace! %ld\n", heurResult.workspaceSize);
+          //printf("not enough workspace! %ld\n", heurResult.workspaceSize);
           algoStatus = CUBLAS_STATUS_NOT_SUPPORTED; //Not enough workspace
         }        
     }
@@ -732,6 +732,7 @@ int batch_igemm_config(int batchCount, int m, int n, int k, FILE* fout, void* bu
                   fout);
     //free memory
     cublasLtDestroy(ltHandle);
+    return 0;
 }
 
 int igemm_config(int m, int n, int k, FILE* fout, void* buffer){   
@@ -760,6 +761,7 @@ int igemm_config(int m, int n, int k, FILE* fout, void* buffer){
                   fout);
 
     cublasLtDestroy(ltHandle);
+    return 0;
 }
 
 int generate_encoder_igemm_config(int batch_size, int seq_len, int head_num, int size_per_head, void *buffer, bool isAppend)
@@ -780,6 +782,7 @@ int generate_encoder_igemm_config(int batch_size, int seq_len, int head_num, int
     if (!isAppend)
     {
       fout = fopen(IGEMM_CONFIG, "w+");
+      fprintf(fout, "batch_size seq_len head_num size_per_head dataType ### batchCount m n k algoId customOption tile splitK_val swizzle reductionScheme workspaceSize stages exec_time\n");
     }
     else
     {
@@ -817,14 +820,28 @@ int generate_encoder_igemm_config(int batch_size, int seq_len, int head_num, int
     m = batch_size*seq_len;
     k = head_num*size_per_head;
     n = k;
-    batch_igemm_config(batchCount,m,n,k,fout,buffer);
+    if (n%32 != 0 || k%32 != 0)
+    {
+      printf("[WARNING] For INT8 gemm test, n, k should be multiples of 32 (n = %d, k = %d)\n", n, k);
+    } 
+    else
+    {
+      batch_igemm_config(batchCount,m,n,k,fout,buffer);
+    }
  
     printf("\n-----------------------------\n");
     m = seq_len;
     n = seq_len;
     k = size_per_head;
     batchCount = batch_size*head_num;
-    batch_igemm_config(batchCount,m,n,k,fout,buffer);
+    if (n%32 != 0 || k%32 != 0)
+    {
+      printf("[WARNING] For INT8 gemm test, n, k should be multiples of 32 (n = %d, k = %d)\n", n, k);
+    }
+    else
+    {
+      batch_igemm_config(batchCount,m,n,k,fout,buffer);
+    }
 
 
     printf("\n-----------------------------\n");
@@ -832,30 +849,58 @@ int generate_encoder_igemm_config(int batch_size, int seq_len, int head_num, int
     n = size_per_head;
     k = seq_len;
     batchCount = batch_size*head_num;
-    batch_igemm_config(batchCount,m,n,k,fout,buffer);
+    if (n%32 != 0 || k%32 != 0)
+    {
+      printf("[WARNING] For INT8 gemm test, n, k should be multiples of 32 (n = %d, k = %d)\n", n, k);
+    }
+    else
+    {
+      batch_igemm_config(batchCount,m,n,k,fout,buffer);
+    }
 
 
     printf("\n-----------------------------\n");
     m = batch_size*seq_len;
     n = head_num*size_per_head;
     k = head_num*size_per_head;
-    
-    igemm_config(m,n,k,fout,buffer);
+    if (n%32 != 0 || k%32 != 0)
+    {
+      printf("[WARNING] For INT8 gemm test, n, k should be multiples of 32 (n = %d, k = %d)\n", n, k);
+    }
+    else
+    {
+      igemm_config(m,n,k,fout,buffer);
+    }
 
 
     printf("\n-----------------------------\n");
     n = 4*n;
-    igemm_config(m,n,k,fout,buffer);
+    if (n%32 != 0 || k%32 != 0)
+    {
+      printf("[WARNING] For INT8 gemm test, n, k should be multiples of 32 (n = %d, k = %d)\n", n, k);
+    }
+    else
+    {
+      igemm_config(m,n,k,fout,buffer);
+    }      
 
 
     printf("\n-----------------------------\n");
     n = k;
     k = 4*n;
-    igemm_config(m,n,k,fout,buffer);
+    if (n%32 != 0 || k%32 != 0)
+    {
+      printf("[WARNING] For INT8 gemm test, n, k should be multiples of 32 (n = %d, k = %d)\n", n, k);
+    }
+    else
+    {
+      igemm_config(m,n,k,fout,buffer);
+    }
 
     fclose(fout);
     printf("\n-----------------------------\n");
     printf("***Encoder IGemm Testing End***\n");
+    return 0;
 }
 
 }

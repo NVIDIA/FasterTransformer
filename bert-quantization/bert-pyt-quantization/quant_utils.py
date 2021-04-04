@@ -58,31 +58,48 @@ def add_arguments(parser):
                        help='percentile for PercentileCalibrator')
     group.add_argument('--fuse-qkv', action='store_true',
                        help='use the same scale factor for qkv')
-    group.add_argument('--quant-asymmetric', action='store_true',
-                        help='use an asymmetric integer range for quantization')
-    group.add_argument('--ft_mode', type=int, default=None,
-                        help='int8 mode in FasterTransformer')
+    group.add_argument('--narrow_range', action='store_true',
+                        help='use [-127, 127] range for activations rather than [-128, 127]')
+    group.add_argument('--quant_mode', type=str, default=None,
+                        help='predefined quantization mode, choices: ["ft1", "ft2", "ft3", "trt"]')
 
 
 def set_args(args):
-    if args.ft_mode == 1:
+    if args.quant_mode == 'ft1':
         args.wprec = 8
         args.aprec = 8
         args.quant_per_tensor = False
         args.quant_disable = False
         args.quant_disable_keyword = ['final_input', 'layernorm_input', 'softmax_input', 'residual_input', 'local_input', 'aftergemm']
         args.fuse_qkv = False
-        args.quant_asymmetric = False
-    elif args.ft_mode == 2:
+        args.narrow_range = False
+    elif args.quant_mode == 'ft2':
+        args.wprec = 8
+        args.aprec = 8
+        args.quant_per_tensor = True
+        args.quant_disable = False
+        args.quant_disable_keyword = ['final_input', 'layernorm_input', 'softmax_input', 'local_input']
+        args.fuse_qkv = True
+        args.narrow_range = False
+    elif args.quant_mode == 'ft3':
         args.wprec = 8
         args.aprec = 8
         args.quant_per_tensor = True
         args.quant_disable = False
         args.quant_disable_keyword = ['final_input', 'layernorm_input', 'local_input']
         args.fuse_qkv = True
-        args.quant_asymmetric = False
+        args.narrow_range = False
+    elif args.quant_mode == 'trt':
+        # for demobert
+        args.wprec = 8
+        args.aprec = 8
+        args.quant_per_tensor = True
+        args.quant_disable = False
+        args.quant_disable_keyword = ['layernorm_input', 'softmax_input', 'aftergemm']
+        args.fuse_qkv = True
+        args.narrow_range = False
     else:
-        raise ValueError("wrong argument value for 'ft_mode'")
+        raise ValueError("wrong argument value for 'quant_mode'")
     return args
 
 def set_default_quantizers(args):
@@ -103,7 +120,7 @@ def set_default_quantizers(args):
 
     input_desc = QuantDescriptor(num_bits=args.aprec,
                                  calib_method=calib_method,
-                                 narrow_range=not args.quant_asymmetric,
+                                 narrow_range=args.narrow_range,
                                  )
     weight_desc = QuantDescriptor(num_bits=args.wprec,
                                   axis=(None if args.quant_per_tensor else (0,)),

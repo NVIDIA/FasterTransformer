@@ -7,6 +7,7 @@ This repository provides a script and recipe to run the highly optimized transfo
 - [FasterTransformer](#fastertransformer)
   - [Table Of Contents](#table-of-contents)
   - [Model overview](#model-overview)
+    - [Architecture matrix](#architecture-matrix)
     - [Configuration support matrix](#configuration-support-matrix)
   - [Setup](#setup)
     - [Requirements](#requirements)
@@ -15,53 +16,69 @@ This repository provides a script and recipe to run the highly optimized transfo
     - [Execute the encoder demos](#execute-the-encoder-demos)
     - [Execute the decoder/decoding demos](#execute-the-decoderdecoding-demos)
     - [Translation demos](#translation-demos)
+    - [GPT demo](#gpt-demo)
   - [Advanced](#advanced)
     - [Scripts and sample codes](#scripts-and-sample-codes)
     - [Command-line options](#command-line-options)
     - [Inference process](#inference-process)
   - [Performance](#performance)
     - [Encoder performance](#encoder-performance)
-      - [Encoder performances of FasterTransformer new features on cpp](#encoder-performances-of-fastertransformer-new-features-on-cpp)
+      - [Encoder performances of FasterTransformer new features](#encoder-performances-of-fastertransformer-new-features)
       - [Encoder performance on TensorFlow](#encoder-performance-on-tensorflow)
       - [Encoder performance on PyTorch](#encoder-performance-on-pytorch)
     - [Decoding and Decoder performance](#decoding-and-decoder-performance)
-      - [Decoder and Decoding performance on TensorFlow](#decoder-and-decoding-performance-on-tensorflow)
-      - [Decoder and decoding performance on PyTorch](#decoder-and-decoding-performance-on-pytorch)
-      - [TensorFlow performance on translation](#tensorflow-performance-on-translation)
-      - [PyTorch performance on translation](#pytorch-performance-on-translation)
+      - [Decoder and Decoding end-to-end translation performance on TensorFlow](#decoder-and-decoding-end-to-end-translation-performance-on-tensorflow)
+      - [Decoder and Decoding end-to-end translation performance on PyTorch](#decoder-and-decoding-end-to-end-translation-performance-on-pytorch)
+    - [GPT performance](#gpt-performance)
   - [Release notes](#release-notes)
     - [Changelog](#changelog)
     - [Known issues](#known-issues)
+    - [TODO](#todo)
 
 ## Model overview
 
-
 In NLP, encoder and decoder are two important components, with the transformer layer becoming a popular architecture for both components. FasterTransformer implements a highly optimized transformer layer for both the encoder and decoder for inference. On Volta, Turing and Ampere GPUs, the computing power of Tensor Cores are used automatically when the precision of the data and weights are FP16. 
 
-In FasterTransformer 1.0, we implemented a highly optimized BERT transformer layer, which is used in the encoder.
+FasterTransformer v1.0 provides a highly optimized BERT equivalent Transformer layer for inference, including C++ API, TensorFlow op and TensorRT plugin. The experiments show that FasterTransformer v1 can provide 1.3 ~ 2 times speedup on NVIDIA Tesla T4 and NVIDIA Tesla V100 for inference.
 
-In FasterTransformer 2.0, we have added a highly optimized decoder and decoding models based on OpenNMT-TF, an open-source library. Here, the decoder is the model that contains some transformer layers. On the other hand, decoding refers to the whole translating process, including the lookup embedding table, position encoding, a decoder and beam search. 
+In FasterTransformer v2.0, we have added a highly optimized decoder and decoding models based on OpenNMT-TF, an open-source library. Here, the decoder is the model that contains some transformer layers. On the other hand, decoding refers to the whole translating process, including the lookup embedding table, position encoding, a decoder and beam search.
 
-In FasterTransformer 2.1, we add some important features. First one is the supporting on PyTorch. Recently, there are more and more PyTorch users. We hope the users of PyTorch can also use the FasterTransformer in their application and research. The second feature is the supporting of [Effective Transformer](https://github.com/bytedance/effective_transformer). This idea is proposed by ByteDance. We call this feature as Effective FasterTransformer It removes the useless padding of encoder input to reduce the computing cost. Third, in addition to decoding with beam search, we also provide the decoding with sampling module. Finally, we optimize many kernels of encoder, decoder and beam search to improve the speed of FasterTransformer.
+In FasterTransformer v2.1, we add some important features. First one is the supporting on PyTorch. Recently, there are more and more PyTorch users. We hope the users of PyTorch can also use the FasterTransformer in their application and research. The second feature is the supporting of [Effective Transformer](https://github.com/bytedance/effective_transformer). This idea is proposed by ByteDance. We call this feature as Effective FasterTransformer It removes the useless padding of encoder input to reduce the computing cost. Third, in addition to decoding with beam search, we also provide the decoding with sampling module. Finally, we optimize many kernels of encoder, decoder and beam search to improve the speed of FasterTransformer.
 
-In FasterTransformer 3.0, we implemented the INT8 quantization for encoder (also supporting Effective FasterTransformer). With INT8 quantization, we can take advantage of the powerful INT8 tensor core in Turing GPU to achieve better inference performance (INT8 quantization in FT 3.0 is only supported on device with SM >= 7.5). We also provide quantization tools of tensorflow. 
+In FasterTransformer v3.0, we implemented the INT8 quantization for encoder (also supporting Effective FasterTransformer). With INT8 quantization, we can take advantage of the powerful INT8 tensor core in Turing GPU to achieve better inference performance (INT8 quantization in FT 3.0 is only supported on device with SM >= 7.5). We also provide quantization tools of tensorflow.
 
-In FasterTransformer 3.1, we provide following new features and enhancements. First, we optimize the INT8 kernel of encoder to achieve better performance. Compare to FasterTransformer 3.0, the performance of INT8 quantization brings at most 1.75x speedup. Second, we provide a PyTorch tool to let user be able to train a INT8 quantized model on PyTorch. Besides, FasterTransformer also starts to support the INT8 inference with PyTorch op. So, the users of PyTorch can leverage the INT8 inference. Third, we integrate the fused multi-head attention kernel of TensorRT plugin into FasterTransformer to improve the speed of encoder on Turing and new GPUs. This optimization can bring about 10% ~ 20% speedup compare to original implementation. Finally, we add the supporting of GPT-2 model, which is an important and popular model for decoder.
+In FasterTransformer v3.1, we provide following new features and enhancements. First, we optimize the INT8 kernel of encoder to achieve better performance. Compare to FasterTransformer v3.0, the performance of INT8 quantization brings at most 1.75x speedup. Second, we provide a PyTorch tool to let user be able to train a INT8 quantized model on PyTorch. Besides, FasterTransformer also starts to support the INT8 inference with PyTorch op. So, the users of PyTorch can leverage the INT8 inference. Third, we integrate the fused multi-head attention kernel of TensorRT plugin into FasterTransformer to improve the speed of encoder on Turing and new GPUs. This optimization can bring about 10% ~ 20% speedup compare to original implementation. Finally, we add the supporting of GPT-2 model, which is an important and popular model for decoder.
+
+In FasterTransformer v4.0, we provide the multi-nodes multi-gpu inference for GPT model. Compare to usual framework to train giant model like Megatron, FasterTransformer provides 1.2x ~ 3x speedup. Besides, integrating the INT8 fused multi-head attention kernel of TensorRT plugin to further improve the performance of FasterTransformer encoder on INT8. We also add supporting of FP16 fused multi-head attention kernel for V100. Finally, we optimize the decoding module. Compare to v3.1, v4.0 provides at most 2x speedup.
 
 The following graph demonstrates the model architecture. 
 
 <div align=center><img  width='864' height='1067' src ="docs/images/encoder-decoding-2.png"/></div>
 <div align=center>Fig. 1 Encoder-Decoding model architecture.</div>
 
+
 FasterTransformer is built on top of CUDA, cuBLAS and cuBLASLt, providing the C++ API and TensorFlow/PyTorch OPs. Users can integrate them into TensorFlow, PyTorch, or other inference service codes that are built in native C++. We also provide some simple sample code to demonstrate how to use the encoder, decoder and to carry out decoding in C++, TensorFlow and PyTorch. 
 
-More details are in [`docs/encoder_guide.md`](docs/encoder_guide.md) and [`docs/decoder_guide.md`](docs/decoder_guide.md). Some common questions and the respective answers are put in [`docs/QAList.md`](docs/QAList.md)
+More details are in [`docs/encoder_guide.md`](docs/encoder_guide.md), [`docs/decoder_guide.md`](docs/decoder_guide.md) and [`docs/gpt_guide.md`](docs/gpt_guide.md). Some common questions and the respective answers are put in [`docs/QAList.md`](docs/QAList.md)
+
+### Architecture matrix
+
+The following matrix shows the architecture differences between the model.
+
+| Architecure | Encoder | Encoder INT8 <br/> quantization | Decoder | Decoding with <br/> beam search | Decoding with <br/> sampling | GPT-2 | GPT-3 |
+|-------------|---------|---------------------------------|---------|---------------------------------|------------------------------|-------|-------|
+| v1   | Yes | No  | No  | No  | No  | No  | No  |
+| v2   | Yes | No  | Yes | Yes | No  | No  | No  |
+| v2.1 | Yes | No  | Yes | Yes | Yes | No  | No  |
+| v3.0 | Yes | Yes | Yes | Yes | Yes | No  | No  |
+| v3.1 | Yes | Yes | Yes | Yes | Yes | Yes | No  |
+| v4.0 | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
 
 ### Configuration support matrix
 
-The following configurations are supported in the FasterTransformer encoder. 
+The following configurations are supported in the FasterTransformer encoder.
 - Batch size (B<sub>1</sub>): smaller or equal to 4096
-- Sequence length (S): smaller or equal to 1024. For INT8 data type, sequence length should be a multiple of 32. 
+- Sequence length (S): smaller or equal to 1024.
 - Head number (H) and size per head (N): 
   - 16 heads * 64 per heads
   - 12 heads * 64 per heads
@@ -90,8 +107,7 @@ The following section lists the requirements to use FasterTransformer.
 - CUDA 10.1 or newer version
 - Python 3 is recommended because some features are not supported in python 2
 - Tensorflow 1.13 or 1.14 or 1.15
-- PyTorch >= 1.4.0
-- TensorRT 5 or newer version
+- PyTorch >= 1.5.0
 
 These components are readily available within the NGC TensorFlow/PyTorch Docker image below.
 
@@ -118,25 +134,22 @@ The following section shows how to use FasterTransformer on the NGC container.
 
     You can choose the tensorflow version and python version you want. Here, we list some possible images:
 
-    - `nvcr.io/nvidia/tensorflow:19.06-py3` contains the TensorFlow 1.13 and python 3.5.
     - `nvcr.io/nvidia/tensorflow:19.07-py2` contains the TensorFlow 1.14 and python 2.7. 
-    - `nvcr.io/nvidia/tensorflow:20.07-tf1-py3` contains the TensorFlow 1.15 and python 3.6. 
-    - `nvcr.io/nvidia/tensorrt:20.03-py3` contains the TensorRT 7.0.0 and python 3.6.
-    - `nvcr.io/nvidia/pytorch:20.01-py3` contains the PyTorch 1.4.0 and python 3.6
+    - `nvcr.io/nvidia/tensorflow:20.12-tf1-py3` contains the TensorFlow 1.15 and python 3.8. 
     - `nvcr.io/nvidia/pytorch:20.03-py3` contains the PyTorch 1.5.0 and python 3.6
     - `nvcr.io/nvidia/pytorch:20.07-py3` contains the PyTorch 1.6.0 and python 3.6
+    - `nvcr.io/nvidia/pytorch:20.12-py3` contains the PyTorch 1.8.0 and python 3.8
 
-    For example, running image `nvcr.io/nvidia/tensorflow:19.07-py2` by 
+    To achieve best performance, we recommand to use the latest image. For example, running image `nvcr.io/nvidia/tensorflow:20.12-tf1-py3` by 
 
     ```bash
-    nvidia-docker run -ti --rm nvcr.io/nvidia/tensorflow:19.07-py2 bash
+    nvidia-docker run -ti --rm nvcr.io/nvidia/tensorflow:20.12-tf1-py3 bash
     ```
 
 2. Clone the repository.
 
     ```bash
-    git clone https://github.com/NVIDIA/DeepLearningExamples
-    cd DeepLearningExamples/FasterTransformer/v3.1
+    git clone https://github.com/NVIDIA/FasterTransformer.git
     mkdir -p build
     cd build
     ```
@@ -150,91 +163,35 @@ The following section shows how to use FasterTransformer on the NGC container.
     make
     ```
 
-    Note: `xx` is the compute capability of your GPU. For example, 60 (P40) or 61 (P4) or 70 (V100) or 75(T4).
+    Note: `xx` is the compute capability of your GPU. For example, 60 (P40) or 61 (P4) or 70 (V100) or 75(T4) or 80 (A100).
 
     3.2 build with TensorFlow 
 
-    * `nvcr.io/nvidia/tensorflow:19.06-py3` 
-
-    First, update the cmake to cmake 3.8 or later version, and then build the project by the following scripts.
+    Uses need to set the path of TensorFlow. For example, if we use `nvcr.io/nvidia/tensorflow:20.12-tf1-py3`, then
 
     ```bash
-    cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_TF=ON -DTF_PATH=/usr/local/lib/python3.5/dist-packages/tensorflow .. 
-    make
-    ```
-
-    Note: `xx` is the compute capability of your GPU. For example, 60 (P40) or 61 (P4) or 70 (V100) or 75(T4).
-
-    * `nvcr.io/nvidia/tensorflow:19.07-py2` 
-
-    First, link the `libtensorflow_framework.so`, and then build the project by the following scripts.
-
-    ```bash
-    ln -s /usr/local/lib/python2.7/dist-packages/tensorflow/libtensorflow_framework.so.1 /usr/local/lib/python2.7/dist-packages/tensorflow/libtensorflow_framework.so
-    cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_TF=ON -DTF_PATH=/usr/local/lib/python2.7/dist-packages/tensorflow ..
+    cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_TF=ON -DTF_PATH=/usr/local/lib/python3.8/dist-packages/tensorflow_core/ ..
     make 
     ```
 
-    Note: `xx` is the compute capability of your GPU. For example, 60 (P40) or 61 (P4) or 70 (V100) or 75(T4).
+    Note: `xx` is the compute capability of your GPU. For example, 60 (P40) or 61 (P4) or 70 (V100) or 75(T4) or 80 (A100).
 
-    * `nvcr.io/nvidia/tensorflow:20.07-tf1-py3`
-
-    First, link the `libtensorflow_framework.so`, and then build the project by the following scripts.
+    3.3 build with PyTorch
 
     ```bash
-    ln -s /usr/local/lib/python3.6/dist-packages/tensorflow_core/libtensorflow_framework.so.1 /usr/local/lib/python3.6/dist-packages/tensorflow_core/libtensorflow_framework.so
-    cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_TF=ON -DTF_PATH=/usr/local/lib/python3.6/dist-packages/tensorflow_core/ ..
-    make 
-    ```
-
-    Note: `xx` is the compute capability of your GPU. For example, 60 (P40) or 61 (P4) or 70 (V100) or 75(T4).
-
-    3.3 build with TensorRT
-
-    * `nvcr.io/nvidia/tensorrt:20.03-py3`
-
-    ```bash
-    cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_TRT=ON -DTRT_PATH=/opt/tensorrt/ ..
+    cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON ..
     make
     ```
 
-    Note: `xx` is the compute capability of your GPU. For example, 60 (P40) or 61 (P4) or 70 (V100) or 75(T4).
+    Note: `xx` is the compute capability of your GPU. For example, 60 (P40) or 61 (P4) or 70 (V100) or 75(T4) or 80 (A100).
 
-    3.4 build with PyTorch
+    This will build the TorchScript custom class. Please make sure that the `PyTorch >= 1.5.0`.
 
-    * `nvcr.io/nvidia/pytorch:20.01-py3`
-
-    ```bash
-    cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_THE=ON ..
-    make
-    ```
-
-    * `nvcr.io/nvidia/pytorch:20.03-py3` or later
-
-    ```bash
-    cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_THE=ON -DBUILD_THS=ON -DCXX_STD=14 ..
-    make
-    ```
-
-    Note: `xx` is the compute capability of your GPU. For example, 60 (P40) or 61 (P4) or 70 (V100) or 75(T4). (You can ignore this variable.)
-
-    `-DBUILD_THE=ON` is to build the regular PyTorch extension for eager mode. It is not compatible with TorchScript, but it may be compatible with more PyTorch versions.
-
-    `-DBUILD_THS=ON` is to build the TorchScript custom class. If you want to use this custom class, please make sure that the `PyTorch >= 1.5.0`.
-
-    ***You can choose one of them or all. No need to add all options.***
-
-    For `PyTorch == 1.4.0`, please use C++11, that is, `-DCXX_STD=11` or just ignore this variable.
-
-    For `PyTorch >= 1.5.0`, please use C++14, that is, `-DCXX_STD=14`.
-
-    Note: From `FasterTransformer 3.1`, TorchScript custom op (function type) is deprecated.
+    Note: From `FasterTransformer 3.1`, TorchScript custom op (function type) is deprecated. From `FasterTransformer 4.0`, Eager mode PyTorch extension is deprecated.
 
 ### Execute the encoder demos
 
 1. Run FasterTransformer encoder on C++
-
-    
 
     ```bash
     ./bin/encoder_gemm <batch_size> <sequence_length> <head_number> <size_per_head> <is_use_fp16> <int8_mode>
@@ -261,10 +218,10 @@ The following section shows how to use FasterTransformer on the NGC container.
 
     
     | feature | int8_mode == 1 | int8_mode == 2 | 
-    |:-------:|:-------------:|:-------------:| 
-    | quantize residual | No | Yes |
-    | int8 output gemm | No | Yes |
-    | per-channel quantiztion for weights | Yes | No |
+    |:-------:|:--------------:|:--------------:|
+    | quantize residual                   | No  | Yes |
+    | int8 output gemm                    | No  | Yes |
+    | per-channel quantiztion for weights | Yes | No  |
 
     ```bash
     #For int8_mode == 1
@@ -311,6 +268,8 @@ The following section shows how to use FasterTransformer on the NGC container.
             --allow_gemm_test False
     ```
 
+    If use sets `--test_time 1`, the program will show the performance of TensorFlow, FasterTransformer and FasterTransformer with removing padding.
+
     2.2 Run FasterTransformer encoder under FP16 on TensorFlow
 
     ```bash
@@ -355,56 +314,6 @@ The following section shows how to use FasterTransformer on the NGC container.
             --allow_gemm_test False
     ```
 
-    2.4 Run Effective FasterTransformer under FP32 on TensorFlow
-
-    ```bash
-    ./bin/encoder_gemm 32 32 12 64 0 0
-    python tensorflow/encoder_sample.py \
-            --batch_size 32 \
-            --max_seq_len 32 \
-            --head_number 12 \
-            --size_per_head 64 \
-            --num_layer 12 \
-            --data_type fp32 \
-            --test_time 1 \
-            --remove_padding True \
-            --avg_seq_len 16 \
-            --allow_gemm_test False
-    ```
-    
-    2.5 Run Effective FasterTransformer under INT8 on TensorFlow
-    ```bash
-    #For int8_mode == 1
-    ./bin/encoder_gemm 32 32 12 64 1 1
-    python tensorflow/encoder_sample.py \
-            --batch_size 32 \
-            --max_seq_len 32 \
-            --head_number 12 \
-            --size_per_head 64 \
-            --num_layer 12 \
-            --data_type fp16 \
-            --test_time 1 \
-            --remove_padding True \
-            --avg_seq_len 16 \
-            --int8_mode 1 \
-            --allow_gemm_test False
-    
-    #For int8_mode == 2
-    ./bin/encoder_gemm 32 32 12 64 1 2
-    python tensorflow/encoder_sample.py \
-            --batch_size 32 \
-            --max_seq_len 32 \
-            --head_number 12 \
-            --size_per_head 64 \
-            --num_layer 12 \
-            --data_type fp16 \
-            --test_time 1 \
-            --remove_padding True \
-            --avg_seq_len 16 \
-            --int8_mode 2 \
-            --allow_gemm_test False
-    ```
-
 3. Run FasterTransformer on PyTorch
 
     Please install HuggingFace's `transformers` first before run the demos by
@@ -436,29 +345,6 @@ The following section shows how to use FasterTransformer on the NGC container.
     #For int8_mode == 2
     ./bin/encoder_gemm 32 32 12 64 1 2
     python pytorch/encoder_sample.py 32 12 32 12 64 --int8_mode 2 --time
-    ```
-
-    3.4 Run Effective FasterTransformer under FP32 on PyTorch
-
-    ```bash
-    ./bin/encoder_gemm 32 32 12 64 0 0
-    python pytorch/encoder_sample.py 32 12 32 12 64 --time --remove_padding
-    ```
-
-4. Run FasterTransformer on TensorRT
-
-    4.1 Run FasterTransformer under FP32 on TensorRT
-
-    ```bash
-    ./bin/encoder_gemm 32 32 12 64 0 0
-    ./bin/transformer_trt 32 12 32 12 64 fp32
-    ```
-
-    4.2 Run FasterTransformer under FP16 on TensorRT
-
-    ```bash
-    ./bin/encoder_gemm 32 32 12 64 1 0
-    ./bin/transformer_trt 32 12 32 12 64 fp16
     ```
 
 ### Execute the decoder/decoding demos
@@ -716,6 +602,54 @@ The following section shows how to use FasterTransformer on the NGC container.
     python pytorch/run_translation.py --batch_size 128 --beam_size 4 --model_type decoding_ext --data_type fp16
     ```
 
+### GPT demo
+
+Here, we demonstrate how to run Fastertransformer on Megatron model with C++ and PyTorch api. More details are in [`docs/gpt_guide.md`](docs/gpt_guide.md).
+
+1. Prepare
+
+```bash
+pip install -r ../requirement.txt
+wget https://s3.amazonaws.com/models.huggingface.co/bert/gpt2-vocab.json -P models
+wget https://s3.amazonaws.com/models.huggingface.co/bert/gpt2-merges.txt -P models
+wget --content-disposition https://api.ngc.nvidia.com/v2/models/nvidia/megatron_lm_345m/versions/v0.0/zip -O megatron_lm_345m_v0.0.zip
+mkdir -p models/megatron-models/345m
+unzip megatron_lm_345m_v0.0.zip -d models/megatron-models/345m
+git clone https://github.com/NVIDIA/Megatron-LM.git
+python ../sample/pytorch/utils/megatron_ckpt_convert.py -i ./models/megatron-models/345m/release/ -o ./models/megatron-models/c-model/345m/ -t_g 1 -i_g 1
+```
+
+Note that there are different checkpoint version of Megatron. The version of the checkpoint above is 0. If users have trained a model by themselves, the default version of latest Megatron is 3. To convert the checkpoint with version 3, please add `-checkpoint_version 3`.
+
+2. Run GPT
+
+    2.1 Run on C++
+
+    Users can see the details of arguments in `sample/cpp/gpt_config.ini`. It controls the model path, model size, tensor parallelism size, and some hyper-parameters. And then run gpt by following script:
+
+    ```bash
+    ./bin/gpt_sample
+    python ../sample/pytorch/utils/convert_gpt_token.py --vocab_file=./models/gpt2-vocab.json  --bpe_file=./models/gpt2-merges.txt
+    ```
+
+    The following script run multi-gpus (Note that users need to modify the `gpt_config.ini`. For example, set `tensor_para_size` to 8.)
+
+    ```bash
+    mpirun -n 8 ./bin/gpt_sample
+    python ../sample/pytorch/utils/convert_gpt_token.py --vocab_file=./models/gpt2-vocab.json  --bpe_file=./models/gpt2-merges.txt
+    ```
+
+    2.2 Run on Pytorch
+
+    ```bash
+    # No parallelism (tensor_para_size=1, layer_para_size=1)
+    mpirun -n 1 --allow-run-as-root python ./pytorch/gpt_sample.py
+
+    # TP (tensor_para_size=8, layer_para_size=1)
+    mpirun -n 8 --allow-run-as-root python ./pytorch/gpt_sample.py --tensor_para_size=8 --layer_para_size=1 --ckpt_path="/workspace/fastertransformer/models/megatron-models/c-model/345m/8-gpu"
+    ```
+
+
 ## Advanced
 
 The following sections provide greater details.
@@ -729,13 +663,13 @@ The following code lists the directory structure of FasterTransformer:
     |--/cuda: some CUDA kernels and multi-head attention implementation, both are compiled with cuda/cuBLAS/cuBLASLt. 
     |--/tf_op: custom Tensorflow OP implementation
     |--/th_op: custom PyTorch OP implementation
-    |--/trt_plugin: TensorRT plugin implementation
+    |--/triton_backend: custom triton backend implementation
+    |--/trt_fused_multihead_attention: fused multihead attention kernels of TensorRT
 /sample: C++ and tensorflow transformer interface samples
     |--/cpp: C++ interface samples
     |--/pytorch: PyTorch OP samples
     |--/tensorflow: TensorFlow OP samples
         |--/tensorflow_bert: samples that show of how to integrate our Tensorflow OP into the open source BERT model for sentence (and sentence-pair) classification tasks (GLUE), the samples support both FP16 and FP32, see readme file within this folder more details
-    |--/tensorRT: both FP16 and FP32 tensorRT plugin samples
 /tools/gemm_test: loop over all GEMM algorithms to pick the best one
 /bert-quantization/
     |--bert-tf-quantization: TensorFlow quantization tool and sample codes
@@ -758,7 +692,7 @@ The `fastertransformer/` folder encapsulates all the source codes of FasterTrans
 * `open_decoder.h` - Contains the decoder transformer layer
 * `decoding_beamsearch.h` - Contains the progress of decoding with beam search
 * `decoding_sampling.h` - Contains the progress of decoding with beam search
-* `gpt2.h` - Contains the progress of GPT-2
+* `gpt.h` - Contains the progress of GPT
 
 The `tools/` folder contains the tools to generate the GEMM configuration of FasterTransformer for different settings: 
 * `tools/gemm_test/encoder_gemm.cc` - Encoder GEMM config
@@ -768,16 +702,13 @@ The `sample/` folder contains useful sample codes for FasterTransformer:
 * `sample/cpp/encoder_sample.cc` - C encoder sample codes 
 * `sample/cpp/decoding_beamsearch_sample.cc` - C decoding with beam search sample codes 
 * `sample/cpp/decoding_sampling_sample.cc` - C decoding with sampling sample codes 
-* `sample/cpp/gpt2_sample.cc` - C GPT-2 codes
+* `sample/cpp/gpt_sample.cc` - C GPT codes
 * `sample/tensorflow/encoder_sample.py` - TensorFlow encoder sample codes
-* `sample/tensorflow/encoder_sample_int8.py` - TensorFlow encoder sample codes for INT8
 * `sample/tensorflow/decoder_sample.py` - TensorFlow decoder sample codes 
 * `sample/tensorflow/decoding_sample.py` - TensorFlow decoding sample codes 
 * `sample/tensorflow/tensorflow_bert/` - TensorFlow using FasterTransformer in BERT sample codes
-* `sample/tensorflow/encoder_decoder_sample.py` - TensorFlow `encoder_decoder` sample codes 
-* `sample/tensorflow/encoder_decoding_sample.py` - TensorFlow `encoder_decoding` sample codes 
 * `sample/tensorflow/translate_sample.py` - TensorFlow translation sample codes
-* `sample/tensorflow/gpt2_sample.py` - TensorFlow GPT-2 sample codes
+* `sample/tensorflow/gpt_sample.py` - TensorFlow GPT sample codes
 * `sample/pytorch/encoder_sample.py` - PyTorch encoder sample codes 
 * `sample/pytorch/decoder_sample.py` - PyTorch decoder sample codes 
 * `sample/pytorch/decoding_sample.py` - PyTorch decoding sample codes 
@@ -791,11 +722,8 @@ To see the full list of available options and their descriptions, use the `-h` o
 
 ```bash
 python tensorflow/encoder_sample.py --help
-python tensorflow/encoder_sample_int8.py --help
 python tensorflow/decoder_sample.py --help
 python tensorflow/decoding_sample.py --help
-python tensorflow/encoder_decoder_sample.py --help
-python tensorflow/encoder_decoding_sample.py --help
 python tensorflow/translate_sample.py --help
 ```
 
@@ -805,9 +733,10 @@ This subsection provides the details about how to use the encoder, the decoder a
 
 ## Performance 
 
-Hardware settings: 
+Hardware settings:
+
+* 8xA100-80GBs (with mclk 1593MHz, pclk 1410MHz) with AMD EPYC 7742 64-Core Processor
 * T4 (with mclk 5000MHz, pclk 1590MHz) with Intel(R) Xeon(R) CPU E5-2670 0 @ 2.60GHz
-* V100 (with mclk 877MHz, pclk 1380MHz) with Intel(R) Xeon(R) CPU E5-2698 v4 @ 2.20GHz (dgx-1 server)
 
 In order to run the following benchmark, we need to install the unix computing tool "bc" by
 
@@ -817,19 +746,13 @@ apt-get install bc
 
 ### Encoder performance
 
-We demonstrate the inference time of FasterTransformer in C++, TensorFlow and PyTorch, and compare to the performance of pure TensorFlow and PyTorch on T4 with FP16 and INT8. Besides, we also show the performance of Effective FasterTransformer on T4 with FP16. Note that the total sequence length of Effective FasterTransformer is not fixed, so we use the default gemm configuration to run the benchmark.
+The FP16 results of TensorFlow were obtained by running the `sample/tensorflow/scripts/profile_encoder_performance.sh`.
 
-For the benchmark of TensorFlow, we compare the performance of TensorFlow with XLA (TF), the performance of TensorFlow with FasterTransformer OP (FT-OP) and the performance of FasterTransformer on C++ (TF-CPP), and show the speedup of FT-OP and FT-CPP compare to the TensorFlow. 
+The INT8 results of TensorFlow were obtained by running the `sample/tensorflow/scripts/profile_encoder_performance_int8.sh`.
 
-For the benchmark of PyTorch, we compare the performance of PyTorch, and performance of TorchScript and the performance of PyTorch with FasterTransformer custom extension (CustomExt) and show the speedup of CustomExt compare to the PyTorch and TorchScript. Because CustomExt has no obvious overhead compare to the FasterTransformer on C++, we skip the comparison with the C++ implementation.
+The FP16 results of PyTorch were obtained by running the `sample/pytorch/scripts/profile_encoder.sh`. 
 
-The FP16 results of C++ and TensorFlow were obtained by running the `sample/tensorflow/scripts/profile_encoder_performance.sh` and `sample/tensorflow/scripts/profile_effective_transformer_performance.sh`.
-
-The INT8 results of C++ and TensorFlow were obtained by running the `sample/tensorflow/scripts/profile_encoder_performance_int8.sh` and `sample/tensorflow/scripts/profile_effective_transformer_performance_int8.sh`.
-
-The FP16 results of PyTorch were obtained by running the `sample/pytorch/scripts/profile_encoder.sh` and `sample/pytorch/scripts/profile_encoder_effective_transformer.sh`. 
-
-The INT8 results of PyTorch were obtained by running the `sample/pytorch/scripts/profile_encoder_int8.sh` and `sample/pytorch/scripts/profile_encoder_effective_transformer_int8.sh`.
+The INT8 results of PyTorch were obtained by running the `sample/pytorch/scripts/profile_encoder_int8.sh`.
 
 In the experiments of encoder, we updated the following parameters:
 
@@ -839,11 +762,11 @@ In the experiments of encoder, we updated the following parameters:
 
 More benchmarks are put in [`docs/encoder_guide.md`](docs/encoder_guide.md#encoder-performance).
 
-#### Encoder performances of FasterTransformer new features on cpp
+#### Encoder performances of FasterTransformer new features
 
 The following figure compares the performances of different features of FasterTransformer and FasterTransformer under FP16 on T4.
 
-For large batch size and sequence length, Effective FasterTransformer brings about 2x speedup and int8v2 brings about 1.75x speedup. Using Effective FasterTransformer and int8v2 at the same time can bring more than 3x speedup compared to FasterTransformer FP16.
+For large batch size and sequence length, both EFF-FT and FT-INT8-v2 bring about 2x speedup. Using Effective FasterTransformer and int8v2 at the same time can bring about 3.5x speedup compared to FasterTransformer FP16 for large case.
 
 <div align=center><img  width=80% src ="docs/images/FT_Encoder_T4.png"/></div>
 
@@ -851,103 +774,86 @@ For large batch size and sequence length, Effective FasterTransformer brings abo
 
 The following figure compares the performances of different features of FasterTransformer and TensorFlow XLA under FP16 on T4.
 
-For small batch size and sequence length, using FasterTransformer CPP can bring about 3x ~ 6.5x speedup. 
+For small batch size and sequence length, using FasterTransformer can bring about 3x speedup. 
 
-For large batch size and sequence length, using Effective FasterTransformer with INT8 quantization can bring about 4x speedup.
+For large batch size and sequence length, using Effective FasterTransformer with INT8-v2 quantization can bring about 5x speedup.
 
-<div align=center><img  width=80% src ="docs/images/TF_cpp_Encoder_T4.png"/></div>
+<div align=center><img  width=80% src ="docs/images/TF_Encoder_T4.png"/></div>
 
 #### Encoder performance on PyTorch
 
 The following figure compares the performances of different features of FasterTransformer and PyTorch TorchScript under FP16 on T4.
 
-For small batch size and sequence length, using FasterTransformer CustomExt can bring about 4x ~ 6x speedup. 
+For small batch size and sequence length, using FasterTransformer CustomExt can bring about 4x ~ 6x speedup.
 
-For large batch size and sequence length, using Effective FasterTransformer with INT8 quantization can bring about 4x speedup.
+For large batch size and sequence length, using Effective FasterTransformer with INT8-v2 quantization can bring about 5x speedup.
 
-<div align=center><img  width=80% src ="docs/images/PyTorch_Encoder_T4.png"/></div>
+<div align=center><img  width=80% src ="docs/images/Py_Encoder_T4.png"/></div>
 
 ### Decoding and Decoder performance
 
-We demonstrate the inference time of FasterTransformer in C++, TensorFlow and PyTorch, and compare to the performance of pure TensorFlow and PyTorch on T4 with FP16.
+The results of TensorFlow were obtained by running the `profile_decoding_beamsearch_performance.sh` and `profile_decoding_sampling_performance.sh`
 
-For the benchmark of TensorFlow, we compare the performance of TensorFlow (TF), the performance of FasterTransformer OP Decoder, FasterTransformer OP Decoding and the FasterTransformer CPP Decoding.
-
-We do not demonstrate the performance of TensorFlow with XLA since we did not find that using XLA has obvious speedup. 
-
-For the benchmark of PyTorch, we compare the performance of PyTorch, the performance of FasterTransformer OP Decoder and FasterTransformer OP Decoding. Due to the dynamic property, it is hard to trace/script the PyTorch decoder/decoding model, so we only test on plain PyTorch.
-
-The results of C++ and TensorFlow were obtained by running the `sample/tensorflow/scripts/profile_decoder_performance.sh` and `sample/tensorflow/scripts/profile_decoding_performance.sh`.
-
-The results of PyTorch were obtained by running the `../sample/pytorch/scripts/profile_decoder_decoding.sh`. 
+The results of PyTorch were obtained by running the `profile_decoder_decoding.sh`. 
 
 In the experiments of decoding, we updated the following parameters:
 
 * head_num = 8
 * size_per_head = 64 
-* num_layers = 6
+* num_layers = 6 for both encoder and decoder
 * vocabulary_size = 30000 for TensorFlow sample codes, 31538 for PyTorch sample codes
 * memory_hidden_dim = 512
+* max sequenc elength = 128
 
 More benchmarks are put in [`docs/decoder_guide.md`](docs/decoder_guide.md#decoding-performance).
 
-#### Decoder and Decoding performance on TensorFlow
+#### Decoder and Decoding end-to-end translation performance on TensorFlow
 
-<div align=center><img  width=80% src ="docs/images/TF_Decoder_T4_fp16.png"/></div>
+The following figure shows the speedup of of FT-Decoder op and FT-Decoding op compared to TensorFlow under FP16 with T4. Here, we use the throughput of translating a test set to prevent the total tokens of each methods may be different. Compared to TensorFlow, FT-Decoder provides 1.5x ~ 3x speedup; while FT-Decoding provides 4x ~ 18x speedup.
 
-#### Decoder and decoding performance on PyTorch
+<div align=center><img  width=80% src ="docs/images/TF_Decoder_T4.png"/></div>
 
-<div align=center><img  width=80% src ="docs/images/PyTorch_Decoder_T4_fp16.png"/></div>
+#### Decoder and Decoding end-to-end translation performance on PyTorch
 
-#### TensorFlow performance on translation
+The following figure shows the speedup of of FT-Decoder op and FT-Decoding op compared to PyTorch under FP16 with T4. Here, we use the throughput of translating a test set to prevent the total tokens of each methods may be different. Compared to PyTorch, FT-Decoder provides 1.2x ~ 3x speedup; while FT-Decoding provides 3.8x ~ 13x speedup.
 
-We test with batch size 128, beam width 4 on V100.
+<div align=center><img  width=80% src ="docs/images/Py_Decoder_T4.png"/></div>
 
-| Type | tokens per seconds | BLEU |
-|:----:|:------------------:|:----:|
-| TensorFlow, beam search, FP32 | 2137  | BLEU 26.29 |
-| Decoder, beam search, FP32    | 6473  | BLEU 26.29 |
-| Decoding, beam search, FP32   | 8513  | BLEU 26.31 |
-| TensorFlow, sampling, FP32    | 4178  | BLEU 25.79 |
-| Decoder, sampling, FP32       | 10781 | BLEU 25.79 |
-| Decoding, sampling, FP32      | 16524 | BLEU 25.79 |
-| TensorFlow, beam search, FP16 | 2949  | BLEU 26.31 |
-| Decoder, beam search, FP16    | 8682  | BLEU 26.30 |
-| Decoding, beam search, FP16   | 12746 | BLEU 26.33 |
-| TensorFlow, sampling, FP16    | 6968  | BLEU 25.83 |
-| Decoder, sampling, FP16       | 13773 | BLEU 25.80 |
-| Decoding, sampling, FP16      | 26718 | BLEU 25.82 |
+### GPT performance
 
-#### PyTorch performance on translation
+The following figure compares the performances of Megatron and FasterTransformer under FP16 on A100.
 
-batch size 128, beam width 4, max_seq_len 32, beam search algorithm on V100:
+In the experiments of decoding, we updated the following parameters:
 
-| Type | tokens per seconds | BLEU |
-|:----:|:------------------:|:----:|
-| PyTorch, FP32  | 2462  | BLEU 24.1 |
-| Decoder, FP32  | 3358  | BLEU 24.1 |
-| Decoding, FP32 | 8959  | BLEU 24.1 |
-| PyTorch, FP16  | 4019  | BLEU 24.1 |
-| Decoder, FP16  | 4377  | BLEU 24.1 |
-| Decoding, FP16 | 15048  | BLEU 24.1 |
+* head_num = 96
+* size_per_head = 128
+* num_layers = 48 for GPT-89B model, 96 for GPT-175B model
+* data_type = FP16
+* vocab_size = 51200
+* top_p = 0.9
+* tensor parallel size = 8
+* input sequence length = 512
+* ouptut sequence length = 32
 
-
-<!-- batch size 128, beam width 4, max_seq_len 100, beam search algorithm on V100:
-
-| Type | tokens per seconds | BLEU |
-|:----:|:------------------:|:----:|
-| PyTorch, FP32  | 2616  | BLEU 28.0 |
-| Decoder, FP32  | 2804  | BLEU 28.0 |
-| Decoding, FP32 | 4638  | BLEU 28.0 |
-| PyTorch, FP16  | 2754  | BLEU 28.0 |
-| Decoder, FP16  | 3848  | BLEU 28.0 |
-| Decoding, FP16 | 7984  | BLEU 28.0 | -->
+<div align=center><img  width=80% src ="docs/images/FT_GPT_A100.png"/></div>
 
 ## Release notes
 
 ### Changelog
 
+April 2021
+- Support multi-gpus and multi-nodes inference for GPT model on C++ and PyTorch.
+- Support single node, multi-gpus inference for GPT model on triton.
+- Add the int8 fused multi-head attention kernel for bert.
+- Add the FP16 fused multi-head attention kernel of V100 for bert.
+- Optimize the kernel of decoder.
+- Move to independent repo.
+- **Release the FasterTransformer 4.0**
+
 Dec 2020
+- Optimize the decoding by adding the finisehd mask to prevent useless computing.
+- Support opennmt encoder.
+- Remove the TensorRT plugin supporting.
 - **Release the FasterTransformer 3.1**
 
 Nov 2020
@@ -1020,7 +926,9 @@ July 2019
 
 - Undefined symbol errors when import the extension
   - Please `import torch` first. If this has been done, it is due to the incompatible C++ ABI. You may need to check the PyTorch used during compilation and execution are the same, or you need to check how your PyTorch is compiled, or the version of your GCC, etc.
-- batch_size should be smaller or equal to 1024 in Decoder.
-- batch_size x beam_width should be smaller or equal to 1024 in Decoding.
 - Results of TensorFlow and OP would be different in decoding. This problem is caused by the accumulated log probability, and we do not avoid this problem. 
 - If encounter some problem in the custom environment, try to use the gcc/g++ 4.8 to build the project of TensorFlow op, especially for TensorFlow 1.14. 
+
+### TODO
+
+- Support the decoding sampling in PyTorch.

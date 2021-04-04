@@ -14,8 +14,7 @@
  * limitations under the License.
  */
 
-#include "fastertransformer/common.h"
-
+#include "fastertransformer/utils/common.h"
 #include "cuda_kernels.h"
 #include "cuda_int8_kernels.h"
 #include <assert.h>
@@ -23,6 +22,7 @@
 #include <cstdlib>
 #include <climits>
 #include <cfloat>
+
 namespace fastertransformer{
 
 template <typename T>
@@ -46,7 +46,6 @@ half2 gelu(half2 val)
   return __hmul2(val, __float22half2_rn(tmp));
 
 }
-
 
 template <typename T>
 __inline__ __device__
@@ -166,6 +165,7 @@ template void transposeMatrix_COL32ToColMajor_kernelLauncher<half>(half *dst, co
 
 template void transposeMatrix_COL32ToColMajor_kernelLauncher<int8_t>(int8_t* dst, const int8_t* src, const int m, const int n, cudaStream_t stream);
 
+
 //transpose matrix & transfrom col-major to COL32 & quantize
 //input matrix is (m, n) col-major 
 //output matrix is (n, m) COL32, using char4 to write out
@@ -263,7 +263,7 @@ void transposeMatrix_colMajorToCOL32_kernel(half2*dst, const half2* src, const i
   }
 }
 
-//transpose matrix & transfrom col-major to COL32 & quantize
+//transpose matrix & transfrom col-major to COL32
 //input matrix is (m, n) col-major 
 //output matrix is (n, m) COL32, using char4 to write out
 //m should be a mutiple of 32
@@ -282,6 +282,41 @@ void transposeMatrix_colMajorToCOL32_kernelLauncher(T* dst, const T* src, const 
 template void transposeMatrix_colMajorToCOL32_kernelLauncher<float>(float* dst, const float* src, const int m, const int n, cudaStream_t stream);
 
 template void transposeMatrix_colMajorToCOL32_kernelLauncher<half>(half *dst, const half* src, const int m, const int n, cudaStream_t stream);
+
+//transfrom row-major to COL32
+//input matrix is (m, n) row-major 
+//output matrix is (m, n) COL32
+//n should be a mutiple of 32
+//grid((n+31)/32, (m+31)/32)
+//block(8, 32)
+__global__
+void rowMajorToCOL32_kernel(char4*dst, const char4* src, const int m, const int n)
+{
+
+  int n_id = (blockIdx.x*blockDim.x + threadIdx.x) << 2;
+  int m_id = blockIdx.y*blockDim.y + threadIdx.y;
+
+  bool check = ((m_id < m) && (n_id < n));
+  if (check)
+  {
+  
+    // COL32_col = n_id >> 5 ; COL32_row = (m_id << 5) + (n_id & 31); 
+    // COL32_idx = (COL32_col << 5) * m + COL32_row = (n_id & 0xffffffe0)*m + (m_id << 5) + (n_id & 31)
+    dst[((n_id & 0xffffffe0)*m + (m_id << 5) + (n_id & 31)) >> 2] = __ldg(src+((m_id*n+n_id) >> 2));   
+  }
+}
+
+//transfrom row-major to COL32
+//input matrix is (m, n) row-major 
+//output matrix is (m, n) COL32
+//n should be a mutiple of 32
+//grid((n+31)/32, (m+31)/32)
+//block(8, 32)
+void rowMajorToCOL32_kernelLauncher(int8_t* dst, const int8_t* src, const int m, const int n, cudaStream_t stream)
+{
+  assert(n%32 == 0);
+  rowMajorToCOL32_kernel<<<dim3((n+31)/32, (m+31)/32), dim3(8, 32), 0, stream>>>((char4*)dst, (const char4*)src, m, n);
+}
 
 
 //add bias to matrix of m * n, CUBLASLT_ORDER_COL32
@@ -939,7 +974,6 @@ void transpose_COL32_kernel(int8_t* dst, const int8_t* src, const int batch_size
                             const int size_per_head, const float *bmm2_deQFactor, const float* out_scale_ptr, 
                             const int batch_size_x_seq_len, const int seq_len_x_size_per_head)
 {
-  const float scale = __ldg(bmm2_deQFactor) * __ldg(out_scale_ptr);
   int threadIdx4 = threadIdx.x << 2;
   int batch_id = blockIdx.y;
   int seq_id = blockIdx.x;
@@ -964,15 +998,9 @@ void transpose_COL32_kernel(int8_t* dst, const int8_t* src, const int batch_size
   COL32_col = mk_col >> 5;
 
   int inIdx = ((batch_id*head_num + head_id)*seq_len_x_size_per_head + (COL32_col << 5 )*seq_len + COL32_row) >> 2;
-  char4 tmp;
   const char4* src_ptr4 = (const char4*)src;
-  tmp = __ldg(src_ptr4 + inIdx);
-  tmp.x = float_to_int8_rn(tmp.x*scale);
-  tmp.y = float_to_int8_rn(tmp.y*scale);
-  tmp.z = float_to_int8_rn(tmp.z*scale);
-  tmp.w = float_to_int8_rn(tmp.w*scale);
   char4 *dst_ptr4 = (char4 *)dst;
-  dst_ptr4[outIdx] = tmp;
+  dst_ptr4[outIdx] = __ldg(src_ptr4 + inIdx);
 }
 
 void transpose_COL32_kernelLauncher(int8_t* dst, const int8_t* src, const int batch_size, const int seq_len, const int head_num, 
@@ -1046,7 +1074,6 @@ __global__
 void transpose_COL32_rebuild_padding_kernel(int8_t* dst, const int8_t* src, const int* sequence_id_map, const int valid_word_num, const int batch_size, 
                                             const int seq_len, const int head_num, const int size_per_head, const float *bmm2_deQFactor, const float* out_scale_ptr, const int seq_len_x_size_per_head)
 {
-  const float scale = __ldg(bmm2_deQFactor) * __ldg(out_scale_ptr);
   int threadIdx4 = threadIdx.x << 2;
   int batch_id = blockIdx.y;
   int seq_id = blockIdx.x;
@@ -1072,17 +1099,11 @@ void transpose_COL32_rebuild_padding_kernel(int8_t* dst, const int8_t* src, cons
     COL32_col = mk_col >> 5;
 
     int inIdx = ((batch_id*head_num + head_id)*seq_len_x_size_per_head + (COL32_col << 5 )*seq_len + COL32_row) >> 2;
-    char4 tmp;
     
     const char4* src_ptr4 = (const char4*)src;
-    tmp = __ldg(src_ptr4 + inIdx);
     
-    tmp.x = float_to_int8_rn(tmp.x*scale);
-    tmp.y = float_to_int8_rn(tmp.y*scale);
-    tmp.z = float_to_int8_rn(tmp.z*scale);
-    tmp.w = float_to_int8_rn(tmp.w*scale);
     char4 *dst_ptr4 = (char4 *)dst;
-    dst_ptr4[outIdx] = tmp;
+    dst_ptr4[outIdx] = __ldg(src_ptr4 + inIdx);
   }
 }
 

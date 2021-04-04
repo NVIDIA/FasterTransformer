@@ -42,12 +42,8 @@ def main():
                         help='is fp16')
     parser.add_argument('--time', action='store_true',
                         help='test the time or not.')
-    parser.add_argument('--module_path', type=str, default='./',
-                        help='directory containing the th_fastertransformer dynamic lib')
-    parser.add_argument('--ths', action='store_true',
-                        help='use TorchScript mode')
-    parser.add_argument('--ths_path', type=str, default='./lib/libths_fastertransformer.so',
-                        help='path of the ths_fastertransformer dynamic lib file')
+    parser.add_argument('--ths_path', type=str, default='./lib/libpyt_fastertransformer.so',
+                        help='path of the pyt_fastertransformer dynamic lib file')
 
     args = parser.parse_args()
 
@@ -67,12 +63,11 @@ def main():
     print('hidden_dim: ' + str(hidden_dim))
     print('step: ' + str(step))
     print('use_fp16: ' + str(args.fp16))
-    print('TorchScript mode: ' + str(args.ths))
     print('test_time: ' + str(args.time))
     print("========================================\n")
 
     inp = torch.empty(args.batch_size, 1, hidden_dim).cuda()
-    mem = torch.empty(args.batch_size, args.seq_len, hidden_dim).cuda()
+    mem = torch.empty(args.batch_size, args.seq_len, hidden_dim).cuda() # We assume mem_hidden_dim = hidden_dim
     torch.nn.init.uniform_(inp, -1, 1)
     torch.nn.init.uniform_(mem, -1, 1)
     if args.fp16:
@@ -91,20 +86,18 @@ def main():
     weights.to_cuda()
     if args.fp16:
         weights.to_half()
-    if args.ths:
-        custom_decoder = CustomDecoder(args.layer_num, args.head_num, args.head_size, weights, args.fp16, os.path.abspath(args.ths_path), args.ths)
-    else:
-        custom_decoder = CustomDecoder(args.layer_num, args.head_num, args.head_size, weights, args.fp16, os.path.abspath(args.module_path))
+    custom_decoder = CustomDecoder(args.layer_num, args.head_num, args.head_size, hidden_dim, weights, args.fp16, os.path.abspath(args.ths_path))
 
     with torch.no_grad():
-        self_cache, mem_cache = init_op_cache(args.layer_num, args.batch_size, 1, args.seq_len, hidden_dim, args.fp16)
+        self_cache, mem_cache = init_op_cache(args.layer_num, args.batch_size, 1, args.seq_len, \
+                                              args.seq_len, args.head_num, args.head_size, hidden_dim, args.fp16)
         cache = init_onmt_cache(args.layer_num, mem)
         output1 = inp
         output2 = inp
 
         for i in range(step):
             output1 = onmt_decoder(output1, mem, src_pad_mask, cache, 0)
-            output2, self_cache, mem_cache = custom_decoder(output2, mem, mem_seq_lens, self_cache, mem_cache)
+            output2, self_cache, mem_cache = custom_decoder(output2, mem, mem_seq_lens, self_cache, mem_cache, i)
             diff = torch.abs((output1 - output2) / output1)
             print('step: {}     Mean relative diff: {}     Max relative diff: {}     Min relative diff: {}'.format(
                 i, torch.mean(diff), torch.max(diff), torch.min(diff)))
@@ -126,16 +119,18 @@ def main():
             t1 = timeit.default_timer() - t10
 
             for i in range(iterations):
-                self_cache, mem_cache = init_op_cache(args.layer_num, args.batch_size, 1, args.seq_len, hidden_dim, args.fp16)
+                self_cache, mem_cache = init_op_cache(args.layer_num, args.batch_size, 1, args.seq_len, \
+                                                      args.seq_len, args.head_num, args.head_size, hidden_dim, args.fp16)
                 output2 = inp
                 for i in range(step):
-                    output2, self_cache, mem_cache = custom_decoder(output2, mem, mem_seq_lens, self_cache, mem_cache)
+                    output2, self_cache, mem_cache = custom_decoder(output2, mem, mem_seq_lens, self_cache, mem_cache, i)
             t20 = timeit.default_timer()
             for i in range(iterations):
-                self_cache, mem_cache = init_op_cache(args.layer_num, args.batch_size, 1, args.seq_len, hidden_dim, args.fp16)
+                self_cache, mem_cache = init_op_cache(args.layer_num, args.batch_size, 1, args.seq_len, \
+                                                      args.seq_len, args.head_num, args.head_size, hidden_dim, args.fp16)
                 output2 = inp
                 for i in range(step):
-                    output2, self_cache, mem_cache = custom_decoder(output2, mem, mem_seq_lens, self_cache, mem_cache)
+                    output2, self_cache, mem_cache = custom_decoder(output2, mem, mem_seq_lens, self_cache, mem_cache, i)
             t2 = timeit.default_timer() - t20
             print("[INFO] ONMTDecoder time costs: {:.2f} ms".format(t1*1000/iterations))
             print("[INFO] FTDecoder time costs: {:.2f} ms".format(t2*1000/iterations))

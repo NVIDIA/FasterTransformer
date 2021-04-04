@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "fastertransformer/faster_transformer.h"
+#include "fastertransformer/bert_encoder_transformer.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cuda_profiler_api.h>
@@ -150,7 +150,10 @@ void encoder_sample(int batch_size,
   int* h_sequence_length = new int[batch_size];
   for(int i = 0; i < batch_size; i++)
   {
-    h_sequence_length[i] = from_seq_len/2;
+    if (is_remove_padding)
+      h_sequence_length[i] = from_seq_len/2;
+    else
+      h_sequence_length[i] = from_seq_len;
   }
 
   int h_trt_seqlen_size = 0;
@@ -216,7 +219,7 @@ void encoder_sample(int batch_size,
   device_malloc(&d_output_bias, hidden_dim);
   device_malloc(&d_output_layernorm_beta, hidden_dim);
   device_malloc(&d_output_layernorm_gamma, hidden_dim);
-  device_malloc(&amaxList, ACTIVATION_AMAX_NUM + 9*hidden_dim + INT8O_GEMM_NUM);
+  device_malloc(&amaxList, ACTIVATION_AMAX_NUM + 9*hidden_dim + INT8O_GEMM_NUM + TRT_FUSED_MHA_AMAX_NUM);
 
   if(is_remove_padding == true)
   {
@@ -245,7 +248,7 @@ void encoder_sample(int batch_size,
   const fastertransformer::OperationType type = sizeof(T) == sizeof(float) ? OperationType::FP32 : OperationType::FP16;
   typedef BertEncoderTransformerTraits<type, cuda::OpenMultiHeadAttention> EncoderTraits_;
   fastertransformer::Allocator<AllocatorType::CUDA> allocator(0);
-  EncoderInitParam<T> encoder_param; //init param here
+  BertInitParam<T> encoder_param; //init param here
 
   encoder_param.from_tensor = d_from_tensor;
   encoder_param.to_tensor = d_from_tensor;
@@ -285,7 +288,7 @@ void encoder_sample(int batch_size,
   cudaDeviceSynchronize();
   check_cuda_error(cudaGetLastError());
   const int ite = 50;
-  for (int i = 0; i < 2; ++i)
+  for (int i = 0; i < ite; ++i)
   {
     if(is_remove_padding == true)
     {
@@ -325,7 +328,7 @@ void encoder_sample(int batch_size,
                                                       encoder_param.stream);
     }
   }
-
+  
   struct timeval start, end;
   cudaDeviceSynchronize();
   cudaProfilerStart();
@@ -378,8 +381,8 @@ void encoder_sample(int batch_size,
   gettimeofday(&end, NULL);
   cudaProfilerStop();
 
-  printf("[INFO] batch_size %d seq_len %d layer %d FT-CPP-time %.2f ms \n", batch_size, seq_len, num_layers, 
-          ((end.tv_sec - start.tv_sec) * 1000 + (end.tv_usec - start.tv_usec) * 0.001) / ite);
+  printf("[INFO] batch_size %d seq_len %d layer %d FT-CPP-time %.2f ms ( %d iterations) \n", batch_size, seq_len, num_layers, 
+          ((end.tv_sec - start.tv_sec) * 1000 + (end.tv_usec - start.tv_usec) * 0.001) / ite, ite);
 
   delete encoder_transformer_;
   return;

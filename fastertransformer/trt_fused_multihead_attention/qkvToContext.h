@@ -23,7 +23,7 @@
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 
-#include "fastertransformer/common.h"
+#include "fastertransformer/utils/common.h"
 #include "fused_multihead_attention_v2.h"
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
@@ -74,10 +74,13 @@ public:
     virtual void run(const void* input, const void* mask, void* workspace, void* output, cudaStream_t stream) = 0; 
     virtual void run(const void* input, const void* mask, const void* seqlen, void* workspace, void* output, cudaStream_t stream) = 0; 
 
+    virtual void setScaleList(const float scaleQkv, const float dqProbs, const float scaleCtx) = 0;
+
     virtual size_t getWorkspaceSize() const = 0;
 
     virtual bool isValid(int s) const = 0;
 
+    virtual int getSFromMaxSeqLen(const int max_seq_len) = 0;
 protected:
 
     int mS;
@@ -104,13 +107,43 @@ public:
     virtual void setup(const int S, const int B) override;
 
     void run(const void* input, const void* mask, void* workspace, void* output, cudaStream_t stream);
-    void run(const void* input, const void* mask, const void* seqlen, void* workspace, void* output, cudaStream_t stream) override; 
+    void run(const void* input, const void* mask, const void* seqlen, void* workspace, void* output, cudaStream_t stream) override;
+
+    void setScaleList(const float scaleQkv, const float dqProbs, const float scaleCtx) override; 
 
     size_t getWorkspaceSize() const override;
 
     bool isValid(int s) const override;
 
+    int getSFromMaxSeqLen(const int max_seq_len) override;
+
 private:
+    int mSm;
+    class mhaImpl;
+    std::unique_ptr<mhaImpl> pimpl;
+};
+
+class FusedMHARunnerInt8v2 : public MHARunner
+{
+public:
+    FusedMHARunnerInt8v2(const int numHeads, const int headSize, const int sm);
+    ~FusedMHARunnerInt8v2() = default; // for pimpl
+
+    void setScaleList(const float scaleQkv, const float dqProbs, const float scaleCtx);
+
+    virtual void setup(const int S, const int B) override;
+
+    void run(const void* input, const void* mask, void* workspace, void* output, cudaStream_t stream);
+    void run(const void* input, const void* mask, const void* seqlen, void* workspace, void* output, cudaStream_t stream) override;
+
+    size_t getWorkspaceSize() const override;
+
+    bool isValid(int s) const override;
+
+    int getSFromMaxSeqLen(const int max_seq_len) override;
+
+private:
+    float mDqProbs, mScaleQkv, mScaleCtx;
     int mSm;
     class mhaImpl;
     std::unique_ptr<mhaImpl> pimpl;

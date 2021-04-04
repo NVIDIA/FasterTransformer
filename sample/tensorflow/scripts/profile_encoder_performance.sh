@@ -1,4 +1,4 @@
-# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-for precision in fp32 fp16;
+export NVIDIA_TF32_OVERRIDE=0
+
+for precision in fp16 fp32;
 do
 
 if [ "$precision" = "fp16" ]; then
@@ -24,31 +26,42 @@ else
 fi
 
 logdir="bert-base-log-${precision}"
-mkdir ${logdir}
-all_log="${logdir}/all-log.log"
-echo -e "| <Batch_size, Seq_len> | TF (ms) | FT-OP (ms) | FT-OP Speedup | FT-CPP (ms) | FT-CPP Speedup | " > $all_log
-echo -e "|:---------------------:|:-------:|:----------:|:-------------:|:-----------:|:--------------:| " >> $all_log
+if [ ! -f ${logdir} ] ; then
+    mkdir ${logdir} -p
+fi
 
-for batch_size in 1 8 32 64 128 ;
+all_log="${logdir}/all-log.log"
+echo -e "| Batch_size | Seq_len | Precision | TF <br/> Latency (ms) | FT <br/> Latency (ms) | EFF-FT <br/> Latency (ms) | FT <br/> Speedup | EFF-FT <br/> Speedup | " > $all_log
+echo -e "|:----------:|:-------:|:---------:|:---------------------:|:---------------------:|:-------------------------:|:----------------:|:--------------------:| " >> $all_log
+
+cat /proc/cpuinfo > ${logdir}/cpuinfo.txt
+nvidia-smi > ${logdir}/gpuinfo.txt
+
+for batch_size in 1 8 32 ;
 do
-for seq_len in 32 64 128 ;
+for seq_len in 32 128 384 ;
 do
-    tmp_log_cpp=${logdir}/batchsize-${batch_size}-seq-${seq_len}-${precision}-cpp-log.log
+    if [ -f "gemm_config.in" ] ; then
+        rm gemm_config.in
+    fi
     ./bin/encoder_gemm ${batch_size} ${seq_len} 12 64 ${precision_num} 0
-    ./bin/encoder_sample ${batch_size} 12 ${seq_len} 12 64 ${precision_num} 0 0 2>&1 | tee $tmp_log_cpp
 
     tmp_log_tf=${logdir}/batchsize-${batch_size}-seq-${seq_len}-${precision}-tf-log.log
     python tensorflow/encoder_sample.py -batch ${batch_size} -s ${seq_len} -time 1 -d ${precision} 2>&1 | tee $tmp_log_tf
     
-    ft_c_time=`tail -n 1 ${tmp_log_cpp} | awk '{print $9}'`
-    ft_o_time=`tail -n 1 ${tmp_log_tf} | awk '{print $9}'`
-    tf_time=`tail -n 2 ${tmp_log_tf} | head -n 1 | awk '{print $9}'`
-    ft_o_speedup=$(echo "scale=2; $tf_time / $ft_o_time" | bc)
-    ft_c_speedup=$(echo "scale=2; $tf_time / $ft_c_time" | bc)
-    tail -n 1 ${tmp_log_cpp} | awk -v tf_time=$tf_time -v ft_o_time=$ft_o_time \
-                        -v ft_c_time=$ft_c_time -v ft_o_speedup=$ft_o_speedup -v ft_c_speedup=$ft_c_speedup \
-                        '{print "| <" $3 ", " $5 "> | " tf_time " | " \
-                        ft_o_time " | " ft_o_speedup " | " ft_c_time " | " ft_c_speedup " | "  }' >> $all_log
+    tf_time=`tail -n 3 ${tmp_log_tf} | head -n 1 | awk '{print $11}'`
+    ft_time=`tail -n 2 ${tmp_log_tf} | head -n 1 | awk '{print $11}'`
+    eff_ft_time=`tail -n 1 ${tmp_log_tf} | head -n 1 | awk '{print $11}'`
+    precision_type=`tail -n 1 ${tmp_log_tf} | head -n 1 | awk '{print $7}'`
+
+    ft_speedup=$(echo "scale=2; $tf_time / $ft_time" | bc)
+    eff_ft_speedup=$(echo "scale=2; $tf_time / $eff_ft_time" | bc)
+
+    echo "" | awk -v tf_time=$tf_time -v ft_time=$ft_time \
+                        -v eff_ft_time=$eff_ft_time -v ft_speedup=$ft_speedup -v eff_ft_speedup=$eff_ft_speedup \
+                        -v batch_size=$batch_size -v seq_len=$seq_len -v precision_type=$precision_type \
+                        '{printf "| %3d | %3d | %s | %5.2f | %5.2f | %5.2f | %4.2f | %4.2f | \n", batch_size, seq_len,
+                        precision_type, tf_time, ft_time, eff_ft_time, ft_speedup, eff_ft_speedup }' >> $all_log
 done
 done 
 done

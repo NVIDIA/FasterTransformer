@@ -20,7 +20,7 @@ Another method is using multi-threading on the same TensorFlow graph and session
 
 ### 5. Which GPUs are supported in FasterTransformer? ###
 
-We have verified the correctness and performance for GPUs with Compute Compatibility >= 7.0 such as V100 and T4. A100 also works, but still have some performance issue for small batch size.
+We have verified the correctness and performance for GPUs with Compute Compatibility >= 7.0 such as V100, T4 and A100.
 
 ### 6. Do the users only be able to use the docker image we recommend? ###
 
@@ -36,4 +36,4 @@ In C, users need to load the model by themselves and copy into GPU memory.
 
 In TensorFlow or PyTorch, users can load the checkpoint and put the weight tensor into FasterTransformer directly. Users can also load the model in other formats, like numpy, and put them into FasterTransformer directly like the weight tensor. 
 
-
+The multi-gpu inference of GPT is special. FasterTransformer provides a tool to convert the checkpoint of OpenAI and Megatron, and then load the converted model by FasterTransformer directly.

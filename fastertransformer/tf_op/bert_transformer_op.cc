@@ -16,7 +16,8 @@
 
 #define EIGEN_USE_GPU
 
-#include "fastertransformer/faster_transformer.h"
+#include "fastertransformer/bert_encoder_transformer.h"
+#include "fastertransformer/standard_encoder.h"
 #include "fastertransformer/tf_op/common_op.h"
 #include "fastertransformer/cuda/cuda_kernels.h"
 
@@ -99,6 +100,9 @@ public:
 
   void Compute(OpKernelContext *context) override
   {
+    // Prevent the overhead of read config from file, use the copy constructor
+    BertEncoderTransformer<EncoderTraits_> *encoder_transformer_tmp = new BertEncoderTransformer<EncoderTraits_>(encoder_transformer_);
+
     int rank = (int)context->input(0).dims();
     OP_REQUIRES(context, rank==3 || rank == 2,
                 errors::InvalidArgument("Invalid rank. The rank of from tensor should be 3 or 2 \
@@ -115,8 +119,7 @@ public:
 
     const cudaStream_t &stream = context->eigen_device<Device>().stream();
     OP_REQUIRES(context, context->num_inputs() == 22, errors::InvalidArgument("BertTransformerOp requires 22 inputs, but only receives ", context->num_inputs(), " inputs."));
-    const int hidden_units = head_num_ * size_per_head_;
-    EncoderInitParam<DataType_> param; //init param here
+    BertInitParam<DataType_> param; //init param here
     param.stream = stream;
     param.cublas_handle = this->get_cublas_handler();
     param.cublaslt_handle = this->get_cublaslt_handler();
@@ -164,7 +167,7 @@ public:
     else{
       param.amaxList = nullptr;
     }
-    
+
     param.trt_seqlen_offset = reinterpret_cast<const int *>(context->input(21).flat<int>().data());
     OP_REQUIRES(context, param.trt_seqlen_offset != nullptr, errors::InvalidArgument("trt_seqlen_offset is null"));
     param.trt_seqlen_size = (int)context->input(21).dim_size(0);
@@ -178,17 +181,19 @@ public:
     try
     {
       fastertransformer::Allocator<AllocatorType::TF> * allocator = new fastertransformer::Allocator<AllocatorType::TF>(context, stream);
-      encoder_transformer_->allocateBuffer(allocator,
+      encoder_transformer_tmp->allocateBuffer(allocator,
                                            batch_size_,
                                            from_seq_len_,
                                            to_seq_len_,
                                            head_num_,
                                            size_per_head_
                                            );
-      encoder_transformer_->initialize(param);
-      encoder_transformer_->forward();
-      encoder_transformer_->freeBuffer();
+      encoder_transformer_tmp->initialize(param);
+      encoder_transformer_tmp->forward();
+      encoder_transformer_tmp->freeBuffer();
       delete allocator;
+      if (encoder_transformer_tmp != NULL)
+        delete encoder_transformer_tmp;
     }
     catch(std::runtime_error& error)
     {
@@ -200,7 +205,6 @@ public:
       std::cout << errors::Internal("Runtime error");
       exit(-1);
     }
-
   }
 
 private:
@@ -459,6 +463,203 @@ private:
   REGISTER_KERNEL_BUILDER(                                               \
       Name("RebuildPadding").Device(DEVICE_GPU).TypeConstraint<T>("T"), \
       RebuildPaddingOp<GPUDevice, T>)
+REGISTER_GPU(float);
+REGISTER_GPU(Eigen::half);
+#undef REGISTER_GPU
+
+#endif
+
+
+REGISTER_OP("OpenEncoder")
+    .Input("from_tensor: T")
+    .Input("to_tensor: T")
+    .Input("input_layernorm_beta: T")
+    .Input("input_layernorm_gamma: T")
+    .Input("attr_q_kernel: T")
+    .Input("attr_q_bias: T")
+    .Input("attr_k_kernel: T")
+    .Input("attr_k_bias: T")
+    .Input("attr_v_kernel: T")
+    .Input("attr_v_bias: T")
+    .Input("attr_mask: T")
+    .Input("attr_output_kernel: T")
+    .Input("attr_output_bias: T")
+    .Input("attr_output_layernorm_beta: T")
+    .Input("attr_output_layernorm_gamma: T")
+    .Input("inter_kernel: T")
+    .Input("inter_bias: T")
+    .Input("output_kernel: T")
+    .Input("output_bias: T")
+    .Input("sequence_id_offset: int32") // shape: [valid_word_num]
+    .Input("amax_list: float")
+    .Input("trt_seqlen_offset: int32") // shape: [batch + 1] or [batch * 2 + 1] (view the padding like other batch). (like [0, seq_1, seq_1 + seq_2, ...])
+    .Output("output: T")
+    .Attr("T: {float, half}")
+    .Attr("head_num: int >= 1")
+    .Attr("size_per_head: int >= 1")
+    .Attr("remove_padding: bool = true")
+    .Attr("int8_mode: int = 0")
+    .Attr("layer_idx: int = 0")
+    .Attr("layer_num: int = 12") 
+    .Attr("allow_gemm_test: bool = false")
+    .SetShapeFn([](shape_inference::InferenceContext *c) {
+      c->set_output(0, c->input(0));
+      return Status::OK();
+    });
+template <typename Device, typename T>
+class OpenEncoderOp : public CommonOp<T>
+{
+public:
+  explicit OpenEncoderOp(OpKernelConstruction *context) : CommonOp<T>(context)
+  {
+    OP_REQUIRES_OK(context, context->GetAttr("head_num", &head_num_));
+    OP_REQUIRES_OK(context, context->GetAttr("size_per_head", &size_per_head_));
+    OP_REQUIRES_OK(context, context->GetAttr("remove_padding", &remove_padding_));
+
+    context->GetAttr("int8_mode", &int8_mode_);
+    if (int8_mode_ != 0){
+      context->GetAttr("layer_idx", &layer_idx_);
+      context->GetAttr("layer_num", &layer_num_);
+    }
+    context->GetAttr("allow_gemm_test", &allow_gemm_test_);
+    try
+    {
+      encoder_transformer_ = new OpenEncoder<EncoderTraits>(int8_mode_, 
+                                                            allow_gemm_test_);
+    }
+    catch (std::runtime_error &error)
+    {
+      OP_REQUIRES(context, false, errors::Internal(error.what()));
+    }
+  }
+
+  ~OpenEncoderOp()
+  {
+    if (encoder_transformer_ != NULL)
+      delete encoder_transformer_;
+  }
+
+  void Compute(OpKernelContext *context) override
+  {
+    int rank = (int)context->input(0).dims();
+    OP_REQUIRES(context, rank==3 || rank == 2,
+                errors::InvalidArgument("Invalid rank. The rank of from tensor should be 3 or 2 \
+                                        ([batch size, sequence length, hidden dimension] or [valid_word_num, hidden_dimension])"));
+    OP_REQUIRES(context, context->input(10).dims() == 4,
+                errors::InvalidArgument("Invalid rank. The rank of attention mask should be 4 " \
+                                        "([batch_size, 1, seq_len, seq_len])"));
+
+    batch_size_ = (int)context->input(10).dim_size(0);
+    from_seq_len_ = (int)context->input(10).dim_size(2);
+    to_seq_len_ = (int)context->input(10).dim_size(3);
+    OP_REQUIRES(context, (from_seq_len_ == to_seq_len_),
+                errors::InvalidArgument("Only support from_seq_len == to_seq_len"));
+
+    const cudaStream_t &stream = context->eigen_device<Device>().stream();
+    OP_REQUIRES(context, context->num_inputs() == 22, errors::InvalidArgument("OpenEncoderOp requires 22 inputs, but only receives ", context->num_inputs(), " inputs."));
+    EncoderInitParam<DataType_> param; //init param here
+    param.stream = stream;
+    param.cublas_handle = this->get_cublas_handler();
+    param.cublaslt_handle = this->get_cublaslt_handler();
+    check_cuda_error(cublasSetStream(param.cublas_handle, param.stream));
+    this->get_tensor(context, 0, &param.from_tensor);
+    this->get_tensor(context, 1, &param.to_tensor);
+    this->get_tensor(context, 2, &param.input_layernorm.beta);
+    this->get_tensor(context, 3, &param.input_layernorm.gamma);
+    this->get_tensor(context, 4, &param.self_attention.query_weight.kernel);
+    this->get_tensor(context, 5, &param.self_attention.query_weight.bias);
+    this->get_tensor(context, 6, &param.self_attention.key_weight.kernel);
+    this->get_tensor(context, 7, &param.self_attention.key_weight.bias);
+    this->get_tensor(context, 8, &param.self_attention.value_weight.kernel);
+    this->get_tensor(context, 9, &param.self_attention.value_weight.bias);
+    this->get_tensor(context, 10, &param.attr_mask);
+    this->get_tensor(context, 11, &param.self_attention.attention_output_weight.kernel);
+    this->get_tensor(context, 12, &param.self_attention.attention_output_weight.bias);
+    this->get_tensor(context, 13, &param.self_layernorm.beta);
+    this->get_tensor(context, 14, &param.self_layernorm.gamma);
+    this->get_tensor(context, 15, &param.ffn.intermediate_weight.kernel);
+    this->get_tensor(context, 16, &param.ffn.intermediate_weight.bias);
+    this->get_tensor(context, 17, &param.ffn.output_weight.kernel);
+    this->get_tensor(context, 18, &param.ffn.output_weight.bias);
+
+    int valid_word_num;
+    if(remove_padding_ == true)
+    {
+      valid_word_num = (int)context->input(19).dim_size(0);
+      param.sequence_id_offset = reinterpret_cast<const int *>(context->input(19).flat<int>().data());
+      OP_REQUIRES(context, param.sequence_id_offset != nullptr, errors::InvalidArgument("sequence_id_offset is null"));
+    }
+    else
+    {
+      param.sequence_id_offset = nullptr;
+      valid_word_num = batch_size_ * from_seq_len_;
+    }
+    param.valid_word_num = valid_word_num;
+
+    if (int8_mode_ != 0){
+      param.amaxList = reinterpret_cast<const float *>(context->input(20).flat<float>().data());
+      OP_REQUIRES(context, param.amaxList != nullptr, errors::InvalidArgument("amaxList is null"));
+      param.layer_idx = layer_idx_;
+      param.layer_num = layer_num_;
+    }
+    else{
+      param.amaxList = nullptr;
+    }
+    
+    param.trt_seqlen_offset = reinterpret_cast<const int *>(context->input(21).flat<int>().data());
+    OP_REQUIRES(context, param.trt_seqlen_offset != nullptr, errors::InvalidArgument("trt_seqlen_offset is null"));
+    param.trt_seqlen_size = (int)context->input(21).dim_size(0);
+    
+    Tensor *output = nullptr;
+    OP_REQUIRES_OK(
+        context,
+        context->allocate_output(0, context->input(0).shape(), &output));
+    param.transformer_out = reinterpret_cast<DataType_ *>(output->flat<T>().data());
+
+    try
+    {
+      fastertransformer::Allocator<AllocatorType::TF> * allocator = new fastertransformer::Allocator<AllocatorType::TF>(context, stream);
+      encoder_transformer_->allocateBuffer(allocator,
+                                           batch_size_,
+                                           from_seq_len_,
+                                           to_seq_len_,
+                                           head_num_,
+                                           size_per_head_
+                                           );
+      encoder_transformer_->initialize(param);
+      encoder_transformer_->forward();
+      encoder_transformer_->freeBuffer();
+      delete allocator;
+    }
+    catch(std::runtime_error& error)
+    {
+      std::cout << errors::Internal(error.what());
+      exit(-1);
+    }
+    catch(...)
+    {
+      std::cout << errors::Internal("Runtime error");
+      exit(-1);
+    }
+
+  }
+
+private:
+  int batch_size_ = 0, from_seq_len_ = 0, to_seq_len_ = 0, head_num_ = 0, size_per_head_ = 0, int8_mode_, layer_idx_, layer_num_;
+  bool remove_padding_;
+  bool allow_gemm_test_;
+  typedef TFTraits<T> traits_;
+  typedef typename traits_::DataType DataType_;
+  typedef OpenEncoderTraits<traits_::OpType, cuda::OpenMultiHeadAttention> EncoderTraits;
+  OpenEncoder<EncoderTraits> *encoder_transformer_ = NULL;
+};
+
+#ifdef GOOGLE_CUDA
+
+#define REGISTER_GPU(T)                                                  \
+  REGISTER_KERNEL_BUILDER(                                               \
+      Name("OpenEncoder").Device(DEVICE_GPU).TypeConstraint<T>("T"), \
+      OpenEncoderOp<GPUDevice, T>)
 REGISTER_GPU(float);
 REGISTER_GPU(Eigen::half);
 #undef REGISTER_GPU

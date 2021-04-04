@@ -41,8 +41,8 @@ set(tf_decoding_sampling_files
   decoding_sampling_op.cc
 )
 
-set(tf_gpt2_files
-  gpt2_op.cc
+set(tf_gpt_files
+  gpt_op.cc
 )
 
 if(EXISTS ${TF_PATH}/libtensorflow_framework.so)
@@ -58,6 +58,16 @@ endif()
 add_definitions(-D_GLIBCXX_USE_CXX11_ABI=0)
 add_definitions(-DGOOGLE_CUDA=1)
 
+if(EXISTS ${TF_PATH}libtensorflow_framework.so)
+  set(tf_link
+    -ltensorflow_framework
+  )
+elseif(EXISTS ${TF_PATH}libtensorflow_framework.so.1)
+  set(tf_link
+    -l:libtensorflow_framework.so.1
+  )
+endif()
+
 add_library(tf_weight_quantize SHARED ${tf_weight_quantize_files})
 target_link_libraries(tf_weight_quantize PRIVATE ${tf_link} encoder)
 
@@ -65,7 +75,7 @@ add_library(tf_fastertransformer SHARED ${tf_bert_transformer_files})
 target_link_libraries(tf_fastertransformer PRIVATE -lcublas -lcudart ${tf_link} encoder)
 
 add_library(tf_fused_multihead_attention SHARED ${tf_fused_multihead_attention_files})
-target_link_libraries(tf_fused_multihead_attention PRIVATE -lcublas -lcudart ${tf_link} trt_fused_multi_head_attention)
+target_link_libraries(tf_fused_multihead_attention PRIVATE -lcublas -lcudart ${tf_link} trt_fused_multi_head_attention decoder)
 
 add_library(tf_add_bias_transpose SHARED ${tf_add_bias_transpose_files})
 target_link_libraries(tf_add_bias_transpose PRIVATE -lcublas -lcudart ${tf_link} encoder)
@@ -78,5 +88,8 @@ target_link_libraries(tf_decoding_beamsearch PRIVATE -lcublas -lcudart ${tf_link
 
 add_library(tf_decoding_sampling SHARED ${tf_decoding_sampling_files})
 target_link_libraries(tf_decoding_sampling PRIVATE -lcublas -lcudart ${tf_link} decoder decoding)
-add_library(tf_gpt2 SHARED ${tf_gpt2_files})
-target_link_libraries(tf_gpt2 PRIVATE -lcublas -lcudart ${tf_link} decoder decoding)
+
+if(BUILD_GPT)
+  add_library(tf_gpt SHARED ${tf_gpt_files})
+  target_link_libraries(tf_gpt PRIVATE -lcublas -lcudart ${tf_link} decoder decoding)
+endif()

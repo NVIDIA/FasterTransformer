@@ -13,9 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-if [ "$1" != "ori" ] && [ "$1" != "ths" ] && [ "$1" != "ext" ] && [ "$1" != "thsext" ]; then
+if [ "$1" != "ori" ] && [ "$1" != "ths" ] && [ "$1" != "thsext" ]; then
     echo "wrong model type"
-    echo "[Usage]: bash PATH_TO_THIS_SCRIPT model_type[ori, ths, ext, thsext] data_type[fp32, fp16]"
+    echo "[Usage]: bash PATH_TO_THIS_SCRIPT model_type[ori, ths, thsext] data_type[fp32, fp16]"
     exit 1
 fi
 if [ "$2" != "fp32" ] && [ "$2" != "fp16" ]; then
@@ -52,7 +52,7 @@ if [ ! -f "vocab.txt" ]; then
 fi
 cd $MAIN_PATH
 
-if [ "$1" == "ext" ] || [ "$1" == "thsext" ]; then
+if [ "$1" == "thsext" ]; then
     if [ "$2" == "fp32" ]; then
         $MAIN_PATH/bin/encoder_gemm ${batch_size} ${seq_len} 16 64 0 0
     else

@@ -168,21 +168,36 @@ flags.DEFINE_integer("calib_batch", 4, "Number of batches for calibration.")
 flags.DEFINE_string("calib_method", "percentile", "calibration method [percentile, mse, max, entropy]")
 flags.DEFINE_float("percentile", 99.99, "percentile for percentile calibrator")
 flags.DEFINE_string("calibrator_file", "calibrators.pkl", "pickle file for calibrators")
-flags.DEFINE_integer("ft_mode", 1, "int8 mode in FasterTransformer.")
+flags.DEFINE_string("quant_mode", 'ft2', "predefined quantization mode, choices: ['ft1', 'ft2', 'ft3', 'trt']")
 
 flags.DEFINE_bool("distillation", False, "Whether or not to use the techer-student model for finetuning (Knowledge distillation)")
 flags.DEFINE_string("teacher", None, "teacher checkpoint file for distillation")
 flags.DEFINE_float("distillation_loss_scale", 10000., "scale applied to distillation component of loss")
 
-if FLAGS.ft_mode == 1:
+if FLAGS.quant_mode == 'ft1':
   KERNEL_AXIS = 1
-  DISABLE_LIST = ['aftergemm', 'softmax_input', 'residual_input', 'local_input']
-elif FLAGS.ft_mode == 2:
+  ACTIVATION_NARROW_RANGE = False
+  DISABLE_LIST = ['aftergemm', 'softmax_input', 'residual_input', 'local_input', 'final_input']
+  FUSE_QKV = False
+elif FLAGS.quant_mode == 'ft2':
   KERNEL_AXIS = None
-  DISABLE_LIST = ['local_input']
+  ACTIVATION_NARROW_RANGE = False
+  DISABLE_LIST = ['local_input', 'softmax_input', 'final_input']
+  FUSE_QKV = True
+elif FLAGS.quant_mode == 'ft3':
+  KERNEL_AXIS = None
+  ACTIVATION_NARROW_RANGE = False
+  DISABLE_LIST = ['local_input', 'final_input']
+  FUSE_QKV = True
+elif FLAGS.quant_mode == 'trt':
+  # for demobert
+  KERNEL_AXIS = None
+  ACTIVATION_NARROW_RANGE = False
+  DISABLE_LIST = ['aftergemm', 'softmax_input']
+  FUSE_QKV = True
 else:
-  raise ValueError("wrong argument value for 'ft_mode'")
-input_desc = QuantDescriptor('input', disable_key_words=DISABLE_LIST)
+  raise ValueError("wrong argument value for 'quant_mode'")
+input_desc = QuantDescriptor('input', narrow_range=ACTIVATION_NARROW_RANGE, disable_key_words=DISABLE_LIST)
 kernel_desc = QuantDescriptor('kernel', axis=KERNEL_AXIS, disable_key_words=DISABLE_LIST)
 QuantDense.set_default_quant_desc_input(input_desc)
 QuantDense.set_default_quant_desc_kernel(kernel_desc)
@@ -248,7 +263,7 @@ class CalibrationHook(tf.train.SessionRunHook):
     for calibrator in self.calibrator_lists['kernel']:
       calibrator.compute_range('max')
 
-    if FLAGS.ft_mode == 2:
+    if FUSE_QKV:
       tf.compat.v1.logging.info("fusing QKV")
       for i in range(self.layer_num):
         prefix = f"bert/encoder/layer_{i}/attention/self"

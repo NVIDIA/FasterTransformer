@@ -22,7 +22,7 @@ import tensorflow as tf
 __all__ = ["fake_quantize"]
 
 
-def fake_quantize(inputs, quant_min=None, quant_max=None, num_bits=8, axis=None, unsigned=False, affine=False):
+def fake_quantize(inputs, quant_min=None, quant_max=None, num_bits=8, axis=None, unsigned=False, affine=False, narrow_range=True):
   """Universal tensor fake quantization function
 
   Args:
@@ -35,6 +35,7 @@ def fake_quantize(inputs, quant_min=None, quant_max=None, num_bits=8, axis=None,
         Default None, indicates per tensor quantization.
     unsigned: A boolean. If True, use unsigned int8. Default False.
     affine: A boolean. If True, use affine quantization. Default False.
+    narrow_range: A boolean. If True, use narrow range. Default False.
 
   Returns:
     outputs: A Tensor with same type as inputs
@@ -89,6 +90,12 @@ def fake_quantize(inputs, quant_min=None, quant_max=None, num_bits=8, axis=None,
     def _scaled_fake_quantize(inputs, quant_min, quant_max):
       # TODO(haow): Add check for negative values in inputs if unsigned
       bound = 2.0**(num_bits - 1 + int(unsigned)) - 1.0
+      if unsigned:
+        min_bound = 0
+      elif narrow_range:
+        min_bound = -bound
+      else:
+        min_bound = -bound - 1
       quant_amax = tf.maximum(tf.abs(quant_min), tf.abs(quant_max))
       scale = bound / quant_amax
 
@@ -96,7 +103,7 @@ def fake_quantize(inputs, quant_min=None, quant_max=None, num_bits=8, axis=None,
       # Value quantized with quant_amax=0 should all be 0, thus set scale to 1
       scale = tf.compat.v2.where(tf.math.less_equal(quant_amax, epsilon), tf.constant(1.), scale)
 
-      quantized = tf.clip_by_value(tf.math.round(inputs * scale), -bound, bound)
+      quantized = tf.clip_by_value(tf.math.round(inputs * scale), min_bound, bound)
       outputs = quantized / scale
       return outputs
 

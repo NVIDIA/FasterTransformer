@@ -304,7 +304,7 @@ def fast_transformer_model_trans(input_tensor,
                 layer_output = layer_norm(layer_output + attention_output)
             # amaxList
             if tf.flags.FLAGS.int8_mode != 0:
-                amaxList = tf.get_variable(name="amaxList", shape=[80 + 9*hidden_size + 8], dtype=tf.float32)
+                amaxList = tf.get_variable(name="amaxList", shape=[80 + 9*hidden_size + 8 + 3], dtype=tf.float32)
 
             
     # FASTINFER: fast transformer encoder inference

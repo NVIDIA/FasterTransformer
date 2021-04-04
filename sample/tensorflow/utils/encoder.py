@@ -244,7 +244,7 @@ def tf_encoder(input_tensor,
 
             # amaxList for int8 quantization
             if encoder_args.int8_mode != 0:
-                amaxList = tf.get_variable(name="amaxList", shape=[80 + 9*encoder_args.hidden_dim + 8], dtype=tf.float32)
+                amaxList = tf.get_variable(name="amaxList", shape=[80 + 9*encoder_args.hidden_dim + 8 + 3], dtype=tf.float32)
 
     prev_output = tf.reshape(prev_output, shape=tf.shape(input_tensor))
     return prev_output
@@ -356,6 +356,7 @@ def tf_encoder_opennmt(input_tensor,
                 
     layer_input = tf.cast(layer_input, tf.float32)
     output = layer_norm(layer_input, name="LayerNorm")
+    output = tf.cast(output, encoder_args.dtype)
     return output
 
 
@@ -503,4 +504,100 @@ def op_encoder(inputs,
         inputs = outputs
     if remove_padding == True:
         outputs = transformer_op_module.rebuild_padding(outputs, sequence_id_offset, attention_mask)
+    return outputs
+
+def ft_encoder_opennmt(inputs,
+                       encoder_args,
+                       encoder_vars_dict,
+                       sequence_length):
+
+    '''
+    Run the bert transformer layer by FasterTransformer.
+
+    Args:
+        inputs: A tf.Tensor with shape [batch_size, seq_len, hidden_dimension].
+                The inputs tensor of encoder. The rank must be 3. 
+        encoder_args: The arguments for encoder. The details are in the class "TransformerArgument" of common.py
+        attention_mask: A tf.Tensor. The attention mask for self attention.
+        encoder_vars_dict: A dict of tf.Tensor or numpy array. 
+                            The variables for encoder. They can be either some tensor or some numpy array. 
+                            The key is the name of the tensor, like 'layer_0/attention/self/query/kernel:0'.
+                            Teh value is the corresponding tensor or numpy array
+        sequence_length: A tf.Tensor or numpy array with shape [batch_size].
+                        The sequence length of the sentences
+    Outputs:
+        outputs: A tensor with shape [batch_size, seq_len, hidden_dimension].
+                 The results of encoder.
+    '''
+    
+    attention_mask = build_sequence_mask(
+        sequence_length,
+        encoder_args.head_num,
+        maximum_length=tf.shape(inputs)[1],
+        dtype=encoder_args.dtype)
+
+    inputs *= encoder_args.hidden_dim**0.5
+    position_encoder = SinusoidalPositionEncoder()
+    inputs = position_encoder(inputs, position=tf.range(tf.shape(inputs)[1]))
+    
+    remove_padding = encoder_args.remove_padding
+    transformer_op_module = tf.load_op_library(os.path.join('./lib/libtf_fastertransformer.so'))
+    if remove_padding == True:
+        inputs, sequence_id_offset = transformer_op_module.build_mask_remove_padding(inputs, sequence_length)
+        trt_seq_len = tf.cumsum(tf.concat([[0], sequence_length], axis=0), axis=0)
+    else:
+        sequence_id_offset = []
+        batch = tf.shape(inputs)[0]
+        max_seq_len = tf.shape(inputs)[1]
+        padding_offset = tf.range(0, batch*max_seq_len, max_seq_len)
+        squence_offset_with_padding = sequence_length + padding_offset
+        c = tf.concat([padding_offset, squence_offset_with_padding], axis=0)
+        c_r = tf.reshape(c, [2, -1])
+        t = tf.transpose(c_r)
+        trt_seq_len = tf.reshape(t, [-1])
+        trt_seq_len = tf.concat([trt_seq_len, [batch*max_seq_len]], axis=0)
+        
+    for layer_idx in range(encoder_args.num_layer):
+        if encoder_args.int8_mode != 0:
+            amaxList = encoder_vars_dict['layer_%d/amaxList:0' % layer_idx]
+        else:
+            amaxList = []
+
+        if tf.is_tensor(encoder_vars_dict['transformer/encoder/layer_%d/multi_head/conv1d/kernel:0' % layer_idx]) == True:
+            q_w, k_w, v_w = tf.split(encoder_vars_dict['transformer/encoder/layer_%d/multi_head/conv1d/kernel:0' % layer_idx], 3, axis=-1)
+            q_b, k_b, v_b = tf.split(encoder_vars_dict['transformer/encoder/layer_%d/multi_head/conv1d/bias:0' % layer_idx], 3, axis=-1)
+        else:
+            q_w, k_w, v_w = np.split(encoder_vars_dict['transformer/encoder/layer_%d/multi_head/conv1d/kernel:0' % layer_idx], 3, axis=-1)
+            q_b, k_b, v_b = np.split(encoder_vars_dict['transformer/encoder/layer_%d/multi_head/conv1d/bias:0' % layer_idx], 3, axis=-1)
+        outputs = transformer_op_module.open_encoder(
+            inputs,
+            inputs,
+            tf.cast(encoder_vars_dict['transformer/encoder/layer_%d/multi_head/LayerNorm/beta:0' % layer_idx], encoder_args.dtype),
+            tf.cast(encoder_vars_dict['transformer/encoder/layer_%d/multi_head/LayerNorm/gamma:0' % layer_idx], encoder_args.dtype),
+            q_w, q_b,
+            k_w, k_b,
+            v_w, v_b,
+            attention_mask,
+            encoder_vars_dict['transformer/encoder/layer_%d/multi_head/conv1d_1/kernel:0' % layer_idx],
+            encoder_vars_dict['transformer/encoder/layer_%d/multi_head/conv1d_1/bias:0' % layer_idx],
+            tf.cast(encoder_vars_dict['transformer/encoder/layer_%d/ffn/LayerNorm/beta:0' % layer_idx], encoder_args.dtype),
+            tf.cast(encoder_vars_dict['transformer/encoder/layer_%d/ffn/LayerNorm/gamma:0' % layer_idx], encoder_args.dtype),
+            encoder_vars_dict['transformer/encoder/layer_%d/ffn/conv1d/kernel:0' % layer_idx],
+            encoder_vars_dict['transformer/encoder/layer_%d/ffn/conv1d/bias:0' % layer_idx],
+            encoder_vars_dict['transformer/encoder/layer_%d/ffn/conv1d_1/kernel:0' % layer_idx],
+            encoder_vars_dict['transformer/encoder/layer_%d/ffn/conv1d_1/bias:0' % layer_idx],
+            sequence_id_offset,
+            amaxList,
+            trt_seq_len,
+            head_num=encoder_args.head_num, size_per_head=encoder_args.size_per_head,
+            remove_padding=remove_padding,
+            int8_mode=encoder_args.int8_mode, layer_idx=layer_idx, layer_num=encoder_args.num_layer,
+            allow_gemm_test=encoder_args.allow_gemm_test)
+        inputs = outputs
+    if remove_padding == True:
+        outputs = transformer_op_module.rebuild_padding(outputs, sequence_id_offset, attention_mask)
+
+    outputs = tf.cast(outputs, tf.float32)
+    outputs = layer_norm(outputs, name="LayerNorm")
+    outputs = tf.cast(outputs, encoder_args.dtype)
     return outputs

@@ -18,7 +18,7 @@
 
 #include "fastertransformer/open_decoder.h"
 #include "fastertransformer/decoding_beamsearch.h"
-#include "fastertransformer/common.h"
+#include "fastertransformer/utils/common.h"
 
 #include "fastertransformer/tf_op/common_op.h"
 #include "fastertransformer/tf_op/tf_traits.h"
@@ -72,7 +72,7 @@ REGISTER_OP("Decoding")
     .Input("decoding_gamma: T") // 29
     .Input("embedding_table: T") // 30
     .Input("embedding_kernel: T") // 31
-    .Input("embedding_bias: float32") // 32
+    .Input("embedding_bias: T") // 32
     .Input("position_encoding_table: T") // 33
     .Output("output_ids: int32")
     .Output("parent_ids: int32")
@@ -86,6 +86,7 @@ REGISTER_OP("Decoding")
     .Attr("start_id: int >= 0")
     .Attr("end_id: int >= 0")
     .Attr("beam_search_diversity_rate: float = 0.0")
+    .Attr("is_fuse_qkv: bool")
     .SetShapeFn([](shape_inference::InferenceContext *c) {
         int beam_width, max_seq_len;
         c->GetAttr("beam_width", &beam_width);
@@ -121,6 +122,7 @@ public:
         OP_REQUIRES_OK(context, context->GetAttr("start_id", &start_id_));
         OP_REQUIRES_OK(context, context->GetAttr("end_id", &end_id_));
         OP_REQUIRES_OK(context, context->GetAttr("beam_search_diversity_rate", &beam_search_diversity_rate_));
+        OP_REQUIRES_OK(context, context->GetAttr("is_fuse_qkv", &is_fuse_qkv_));
     }
 
   void Compute(OpKernelContext *context) override
@@ -133,6 +135,7 @@ public:
 
         DecodingInitParam<DataType_> decoding_params;
         decoding_params.cublas_handle = this->get_cublas_handler();
+        decoding_params.cublaslt_handle = this->get_cublaslt_handler();
         Tensor *output_ids = nullptr;
         OP_REQUIRES_OK(
             context,
@@ -169,7 +172,9 @@ public:
                 vocab_size, num_layer_,
                 memory_hidden_dim, memory_max_seq_len,
                 start_id_, end_id_, 
-                beam_search_diversity_rate_);
+                beam_search_diversity_rate_,
+                true,
+                is_fuse_qkv_);
         }
         catch (std::runtime_error &error)
         {
@@ -186,19 +191,30 @@ public:
         const int hidden_unit = size_per_head_ * head_num_;
         for (int i = 0; i < num_layer_; i++)
         {
+            params[i].request_batch_size = batch_size_ * beam_width_;
+            params[i].request_max_mem_seq_len = memory_max_seq_len;
             params[i].stream = stream;
             params[i].cublas_handle = this->get_cublas_handler();
+            params[i].cublaslt_handle = this->get_cublaslt_handler();
             check_cuda_error(cublasSetStream(params[i].cublas_handle, params[i].stream));
 
             this->get_tensor(context, 2, &params[i].self_layernorm.beta, i * hidden_unit);
             this->get_tensor(context, 3, &params[i].self_layernorm.gamma, i * hidden_unit);
-            
-            this->get_tensor(context, 4, &params[i].self_attention.query_weight.kernel, i * hidden_unit * hidden_unit);
-            this->get_tensor(context, 5, &params[i].self_attention.query_weight.bias, i * hidden_unit);
-            this->get_tensor(context, 6, &params[i].self_attention.key_weight.kernel, i * hidden_unit * hidden_unit);
-            this->get_tensor(context, 7, &params[i].self_attention.key_weight.bias, i * hidden_unit);
-            this->get_tensor(context, 8, &params[i].self_attention.value_weight.kernel, i * hidden_unit * hidden_unit);
-            this->get_tensor(context, 9, &params[i].self_attention.value_weight.bias, i * hidden_unit);
+
+            if(is_fuse_qkv_)
+            {
+                this->get_tensor(context, 4, &params[i].self_attention.query_weight.kernel, i * hidden_unit * hidden_unit * 3);
+                this->get_tensor(context, 5, &params[i].self_attention.query_weight.bias, i * hidden_unit * 3);
+            }
+            else
+            {
+                this->get_tensor(context, 4, &params[i].self_attention.query_weight.kernel, i * hidden_unit * hidden_unit);
+                this->get_tensor(context, 5, &params[i].self_attention.query_weight.bias, i * hidden_unit);
+                this->get_tensor(context, 6, &params[i].self_attention.key_weight.kernel, i * hidden_unit * hidden_unit);
+                this->get_tensor(context, 7, &params[i].self_attention.key_weight.bias, i * hidden_unit);
+                this->get_tensor(context, 8, &params[i].self_attention.value_weight.kernel, i * hidden_unit * hidden_unit);
+                this->get_tensor(context, 9, &params[i].self_attention.value_weight.bias, i * hidden_unit);
+            }
 
             this->get_tensor(context, 10, &params[i].self_attention.attention_output_weight.kernel, i * hidden_unit * hidden_unit);
             this->get_tensor(context, 11, &params[i].self_attention.attention_output_weight.bias, i * hidden_unit);
@@ -224,10 +240,7 @@ public:
         this->get_tensor(context, 29, &decoding_params.layernorm.gamma);
         this->get_tensor(context, 30, &decoding_params.embedding_table);
         this->get_tensor(context, 31, &decoding_params.embedding_kernel);
-        
-
-        decoding_params.embedding_bias = reinterpret_cast<const float *>(context->input(32).flat<float>().data());
-        OP_REQUIRES(context, decoding_params.embedding_bias != nullptr, errors::InvalidArgument("embedding_bias"));
+        this->get_tensor(context, 32, &decoding_params.embedding_bias);
         this->get_tensor(context, 33, &decoding_params.position_encoding_table);
 
         try
@@ -254,6 +267,7 @@ private:
     int head_num_, size_per_head_, num_layer_;
     int start_id_, end_id_;
     float beam_search_diversity_rate_;
+    bool is_fuse_qkv_;
     typedef TFTraits<T> traits_;
     typedef typename traits_::DataType DataType_;
 };

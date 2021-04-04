@@ -14,38 +14,15 @@
  * limitations under the License.
  */
 
-#include "fastertransformer/common.h"
-
+#include "fastertransformer/utils/common.h"
 #include "cuda_kernels.h"
 #include <assert.h>
 #include <cstdio>
 #include <cstdlib>
 #include <climits>
 #include <cfloat>
+
 namespace fastertransformer{
-
-template <typename T>
-__inline__ __device__
-T gelu(T x)
-{
-  float cdf = 0.5f * (1.0f + tanhf((0.7978845608028654f * (x + 0.044715f * x * x * x))));
-  return x * cdf;
-}
-
-template <>
-__inline__ __device__
-half2 gelu(half2 val)
-{
-  half2 val_pow3 = __hmul2(val, __hmul2(val, val));
-  float2 tmp_pow = __half22float2(val_pow3);
-  float2 tmp =  __half22float2(val);
-
-  tmp.x = 0.5f * (1.0f + tanhf((0.7978845608028654f * (tmp.x + 0.044715f * tmp_pow.x))));
-  tmp.y = 0.5f * (1.0f + tanhf((0.7978845608028654f * (tmp.y + 0.044715f * tmp_pow.y))));
-  return __hmul2(val, __float22half2_rn(tmp));
-
-}
-
 
 template <typename T>
 __inline__ __device__
@@ -74,7 +51,6 @@ T blockReduceSum(T val)
   val = warpReduceSum(val);
   return val;
 }
-
 
 template <typename T>
   __inline__ __device__
@@ -107,278 +83,7 @@ T blockReduceMax(T val)
 }
 
 template <typename T>
-__global__ 
-void add_bias_act(T* out, const T* bias, int m, int n)
-{
-  T val, reg_bias;
-
-  int row_id = blockIdx.x;
-  int ite = n / blockDim.x;
-  int tid = threadIdx.x;
-
-  for(int i = 0; i < ite; ++i)
-  {
-    reg_bias = __ldg(&bias[i * blockDim.x + tid]);
-    row_id = blockIdx.x;
-
-    while(row_id < m){
-      val = out[tid + i * blockDim.x + row_id * n]+ reg_bias;
-      out[tid + i * blockDim.x + row_id * n] = gelu<T>(val);
-      row_id += gridDim.x;
-    }
-  }
-}
-
-template <>
-__global__ 
-void add_bias_act(half* out, const half* bias, int m, int n)
-{
-  half2 val, reg_bias;
-  int row_id = blockIdx.x;
-  int ite = n / blockDim.x / 2;
-  int tid = threadIdx.x;
-
-  half2* out_ptr = (half2*) out;
-  const half2* bias_ptr = (half2*) bias;
-  for(int i = 0; i < ite; ++i)
-  {
-    reg_bias = __ldg(&bias_ptr[i * blockDim.x + tid]);
-    row_id = blockIdx.x;
-
-    while(row_id < m){
-      val = out_ptr[tid + i * blockDim.x + row_id * n / 2];
-      val = __hadd2(val, reg_bias);
-      out_ptr[tid + i * blockDim.x + row_id * n / 2] = gelu<half2>(val);
-      row_id += gridDim.x;
-    }
-  }
-}
-
-template <typename T>
-__global__ 
-void add_bias_input_layernorm(T* out, const T* input, const T* bias, const T* gamma, const T* beta, int m, int n)
-{
-  int tid = threadIdx.x;
-
-  __shared__ float s_mean;
-  __shared__ float s_variance;
-  float mean =  0.0f;
-  float variance = 0.0f;
-
-  float local_out = 0.0f;
-  local_out += (float)(out[blockIdx.x * n + tid] + input[blockIdx.x * n + tid] + __ldg(&bias[tid]));
-
-  mean = blockReduceSum<float>(local_out);
-  if(threadIdx.x == 0)
-    s_mean = mean / n;
-  __syncthreads();
-
-  variance = blockReduceSum<float>((local_out - s_mean) * (local_out - s_mean));
-  if(threadIdx.x == 0)
-    s_variance = variance / n + 1e-6f;
-  __syncthreads();
-
-  out[blockIdx.x * n + tid] = 
-        (T)(((local_out - s_mean) * rsqrtf(s_variance)) * (float)(__ldg(&gamma[tid])) + (float)(__ldg(&beta[tid])));
-}
-
-template <>
-__global__ 
-void add_bias_input_layernorm(half* out, const half* input, const half* bias, 
-  const half* gamma, const half* beta, int m, int n)
-{
-
-  int tid = threadIdx.x;
-  __shared__ float s_mean;
-  __shared__ float s_variance;
-  float mean =  0.0f;
-  float variance = 0.0f;
-  float2 local_out_fp2;
-
-  half2* out_ptr = (half2*)out;
-  const half2* input_ptr = (const half2*)input;
-  const half2* bias_ptr = (const half2*)bias;
-  const half2* gamma_ptr = (const half2*)gamma;
-  const half2* beta_ptr = (const half2*)beta;
-
-  float local_out = 0.0f;
-  int id = blockIdx.x * n / 2 + tid; 
-  local_out_fp2 = __half22float2(__hadd2(__hadd2(out_ptr[id], input_ptr[id]), __ldg(&bias_ptr[tid])));
-  local_out += local_out_fp2.x;
-  local_out += local_out_fp2.y;
-
-  mean = blockReduceSum<float>(local_out);
-  if(threadIdx.x == 0)
-    s_mean = mean / n;
-  __syncthreads();
-
-  variance = (local_out_fp2.x - s_mean) * (local_out_fp2.x - s_mean);
-  variance += (local_out_fp2.y - s_mean) * (local_out_fp2.y - s_mean);
-  variance = blockReduceSum<float>(variance);
-  if(threadIdx.x == 0)
-    s_variance = rsqrtf(variance / n + 1e-6f);
-  __syncthreads();
-
-  float2 gamma_val = __half22float2(__ldg(&gamma_ptr[tid]));
-  float2 beta_val = __half22float2(__ldg(&beta_ptr[tid]));
-  local_out_fp2.x = (local_out_fp2.x - s_mean) * s_variance * gamma_val.x + beta_val.x;
-  local_out_fp2.y = (local_out_fp2.y - s_mean) * s_variance * gamma_val.y + beta_val.y;
-  out_ptr[id] = __float22half2_rn(local_out_fp2);
-}
-
-
-template <typename T>
-__global__ 
-void add_bias_input_layernorm_v2(T* out, const T* __restrict input, const T* __restrict bias, 
-                                const T* __restrict gamma, const T* __restrict beta, int n)
-{
-  const int ite = 4;
-  const int tid = threadIdx.x;
-  const int bid = blockIdx.x;
-
-  __shared__ float s_mean;
-  __shared__ float s_variance;
-  float mean =  0.0f;
-  float variance = 0.0f;
-  float local_out[ite];
-
-  float sum = 0.0f;
-  #pragma unroll
-  for(int i = 0; i < ite; i++)
-  {
-    int col_id = i * blockDim.x + tid; 
-    int id = bid * n + col_id; 
-    local_out[i] = (float)(out[id] + __ldg(&input[id]) + __ldg(&bias[col_id]));
-    sum += local_out[i];
-  }
-
-  mean = blockReduceSum<float>(sum);
-  if(tid == 0)
-    s_mean = mean / n;
-  __syncthreads();
-
-  float var = 0.0f;
-  #pragma unroll
-  for(int i = 0; i < ite; i++)
-  {
-    float diff = local_out[i] - s_mean;
-    var += diff * diff;
-  }
-
-  variance = blockReduceSum<float>(var);
-  if(tid == 0)
-    s_variance = rsqrtf(variance / n + 1e-6f);
-  __syncthreads();
-
-  #pragma unroll
-  for(int i = 0; i < ite; i++)
-  {
-    int col_id = i * blockDim.x + tid; 
-    int id = bid * n + col_id; 
-    out[id] = (T)((local_out[i] - s_mean) * s_variance * (float)__ldg(&gamma[col_id]) + (float)__ldg(&beta[col_id]));
-  }
-}
-
-template <>
-__global__ 
-void add_bias_input_layernorm_v2(half* out, const half* __restrict input, const half* __restrict bias, 
-  const half* __restrict gamma, const half* __restrict beta, int n)
-{
-  const int ite = 4;
-  const int tid = threadIdx.x;
-  const int bid = blockIdx.x;
-  __shared__ float s_mean;
-  __shared__ float s_variance;
-  float mean =  0.0f;
-  float variance = 0.0f;
-  half2 local_out_half2[ite];
-
-  half2* out_ptr = (half2*)out;
-  const half2* input_ptr = (const half2*)input;
-  const half2* bias_ptr = (const half2*)bias;
-  const half2* gamma_ptr = (const half2*)gamma;
-  const half2* beta_ptr = (const half2*)beta;
-
-  // float sum = 0.0f;
-  half2 sum = __float2half2_rn(0.0f);
-  #pragma unroll
-  for(int i = 0; i < ite; i++)
-  {
-    int col_id = i * blockDim.x + tid; 
-    int id = bid * n / 2 + col_id; 
-    local_out_half2[i] = out_ptr[id] + __ldg(&input_ptr[id]) + __ldg(&bias_ptr[col_id]);
-    sum += local_out_half2[i];
-  }
-
-  mean = blockReduceSum<float>((float)(sum.x + sum.y));
-  if(threadIdx.x == 0)
-    s_mean = mean / n;
-  __syncthreads();
-
-  float var = 0.0f;
-  half2 s_mean_2 = __float2half2_rn(s_mean);
-  #pragma unroll
-  for(int i = 0; i < ite; i++)
-  {
-    local_out_half2[i] = local_out_half2[i] - s_mean_2;
-    float v1 = (float)local_out_half2[i].x;
-    float v2 = (float)local_out_half2[i].y;
-    var += v1 * v1 + v2 * v2;
-  }
-
-  variance = blockReduceSum<float>(var);
-  if(threadIdx.x == 0)
-    s_variance = rsqrtf(variance / n + 1e-6f);
-  __syncthreads();
-
-  half2 s_var_2 = __float2half2_rn(s_variance);
-  #pragma unroll
-  for(int i = 0; i < ite; i++)
-  {
-    int col_id = i * blockDim.x + tid; 
-    int id = bid * n / 2 + col_id; 
-    out_ptr[id] = local_out_half2[i] * s_var_2 * __ldg(&gamma_ptr[col_id]) + __ldg(&beta_ptr[col_id]);
-  }
-}
-
-template <typename T>
-void add_bias_act_kernelLauncher(T* out, const T* bias, int m, int n, cudaStream_t stream)
-{
-  dim3 grid(ceil(m / 4.));
-  dim3 block(n / 4);
-  assert(block.x <= 1024);
-  add_bias_act<T><<<grid, block, 0, stream>>>(out, bias, m, n);
-}
-
-template<typename T>
-void add_bias_input_layernorm_kernelLauncher(T* out, const T* input, const T* bias, 
-  const T* gamma, const T* beta, int m, int n, cudaStream_t stream)
-{
-  dim3 grid(m);
-  dim3 block(n);
-  assert(n <= 1024);
-  if(n == 768 || n == 1024)
-    add_bias_input_layernorm_v2<T><<<grid, n / 4, 0, stream>>>(out, input, bias, gamma, beta, n);
-  else
-    add_bias_input_layernorm<T><<<grid, block, 0, stream>>>(out, input, bias, gamma, beta, m, n);
-}
-
-template <>
-void add_bias_input_layernorm_kernelLauncher(half* out, const half* input, const half* bias, 
-  const half* gamma, const half* beta, int m, int n, cudaStream_t stream)
-{
-  dim3 grid(m);
-  dim3 block(n / 2);
-  assert(n / 2 <= 1024);
-  
-  if(m >= 512 && (n == 768 || n == 1024))
-    add_bias_input_layernorm_v2<half><<<grid, n / 8, 0, stream>>>(out, input, bias, gamma, beta, n);
-  else
-    add_bias_input_layernorm<half><<<grid, block, 0, stream>>>(out, input, bias, gamma, beta, m, n);
-}
-
-template <typename T>
-__global__ void update_logits_kernel(T* logits, const T* bias, const int end_id, const bool* finished, const int n)
+__global__ void update_logits_kernel(float* logits, const T* tmp_logits, const T* bias, const int end_id, const bool* finished, const int n)
 {
   int bid = blockIdx.x;
   bool finish = finished[bid];
@@ -388,35 +93,45 @@ __global__ void update_logits_kernel(T* logits, const T* bias, const int end_id,
   __shared__ float s_max_val;
   __shared__ float s_sum_val;
 
-  for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
+  if(finish)
   {
-    if(finish)
-      logits[offset + tid] = (tid == end_id) ? FLT_MAX : -1 * FLT_MAX;
-    else
-      logits[offset + tid] += bias[tid];
-    max_val = max(max_val, logits[offset + tid]);
+    for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
+    {
+      logits[offset + tid] = (tid == end_id) ? 0 : -FLT_MAX;
+    }
   }
-
-  max_val = blockReduceMax<float>((float)max_val);
-  if(threadIdx.x == 0)
-    s_max_val = max_val;
-  __syncthreads();
-
-  float sum_val = 0.0f;
-  for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
+  else
   {
-    logits[offset + tid] = __expf((float)logits[offset + tid] - s_max_val);
-    sum_val += (float)logits[offset + tid];
-  }
+    for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
+    {
+      if(finish)
+        logits[offset + tid] = (tid == end_id) ? FLT_MAX : -1 * FLT_MAX;
+      else
+        logits[offset + tid] = (float)(tmp_logits[offset + tid] + bias[tid]);
+      max_val = max(max_val, logits[offset + tid]);
+    }
 
-  sum_val = blockReduceSum<float>(sum_val);
-  if(threadIdx.x == 0)
-    s_sum_val = sum_val;
-  __syncthreads();
+    max_val = blockReduceMax<float>((float)max_val);
+    if(threadIdx.x == 0)
+      s_max_val = max_val;
+    __syncthreads();
 
-  for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
-  {
-    logits[offset + tid] = logf((float)logits[offset + tid] / s_sum_val);
+    float sum_val = 0.0f;
+    for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
+    {
+      logits[offset + tid] = __expf((float)logits[offset + tid] - s_max_val);
+      sum_val += (float)logits[offset + tid];
+    }
+
+    sum_val = blockReduceSum<float>(sum_val);
+    if(threadIdx.x == 0)
+      s_sum_val = sum_val;
+    __syncthreads();
+
+    for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
+    {
+      logits[offset + tid] = logf((float)logits[offset + tid] / s_sum_val);
+    }
   }
 }
 
@@ -445,11 +160,11 @@ __global__ void update_logits_kernel_without_softmax(T* logits, const T* bias, c
 template <typename T>
 __global__ void softmax_kernel(T* logits, const T* bias,
                                const int end_id, const bool* finished,
-                               const int n)
+                               const int n_padded, const int n)
 {
   int bid = blockIdx.x;
   bool finish = (finished != nullptr) ? finished[bid] : false;
-  int offset = bid * n;
+  int offset = bid * n_padded;
 
   float max_val = -1 * FLT_MAX;
   const bool IS_FP16 = std::is_same<T, half>::value;
@@ -457,14 +172,21 @@ __global__ void softmax_kernel(T* logits, const T* bias,
   __shared__ float s_max_val;
   __shared__ float s_sum_val;
 
-  for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
+  for(int tid = threadIdx.x; tid < n_padded; tid += blockDim.x)
   {
-    if(finish)
-      logits[offset + tid] = (tid == end_id) ? MAX_T_VAL : -MAX_T_VAL;
+    if(tid < n)
+    {
+      if(finish)
+        logits[offset + tid] = (tid == end_id) ? MAX_T_VAL : -MAX_T_VAL;
+      else
+      {
+        T bias_val = (bias != nullptr) ? bias[tid] : (T)0.0f;
+        logits[offset + tid] += bias_val;
+      }
+    }
     else
     {
-      T bias_val = (bias != nullptr) ? bias[tid] : (T)0.0f;
-      logits[offset + tid] += bias_val;
+      logits[offset + tid] = -MAX_T_VAL;
     }
     max_val = max(max_val, (float)logits[offset + tid]);
   }
@@ -475,7 +197,7 @@ __global__ void softmax_kernel(T* logits, const T* bias,
   __syncthreads();
 
   float sum_val = 0.0f;
-  for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
+  for(int tid = threadIdx.x; tid < n_padded; tid += blockDim.x)
   {
     logits[offset + tid] = __expf((float)logits[offset + tid] - s_max_val);
     sum_val += (float)logits[offset + tid];
@@ -486,7 +208,7 @@ __global__ void softmax_kernel(T* logits, const T* bias,
     s_sum_val = sum_val;
   __syncthreads();
 
-  for(int tid = threadIdx.x; tid < n; tid += blockDim.x)
+  for(int tid = threadIdx.x; tid < n_padded; tid += blockDim.x)
   {
     logits[offset + tid] = ((float)logits[offset + tid] / s_sum_val);
   }
@@ -596,14 +318,42 @@ template void remove_sequence_length_padding_kernelLauncher(const half* src, hal
   int* mask_offset, const int m, 
   const int n, cudaStream_t stream);
 
-void update_logits(float* logits, const float* bias, const int end_id, const bool* finished, 
+template <typename T>
+__global__ void cuda_random_uniform_kernel(T* buffer, const int size)
+{
+  const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+  curandState_t local_state;
+  curand_init((T)1337.f, idx, 0, &local_state);
+  for(int index = idx; index < size; index += blockDim.x * gridDim.x)
+  {
+    buffer[index] = (T)(curand_uniform(&local_state) * 0.2f - 0.1f);
+  }
+}
+
+template <typename T>
+void cuda_random_uniform_kernelLauncher(T *buffer, const int size)
+{
+  cuda_random_uniform_kernel<<<256, 256>>>(buffer, size);
+}
+
+template void cuda_random_uniform_kernelLauncher(float *buffer, const int size);
+template void cuda_random_uniform_kernelLauncher(half *buffer, const int size);
+
+template <typename T>
+void update_logits(float* logits, const T* tmp_logits, const T* bias, const int end_id, const bool* finished, 
   const int m, const int n, cudaStream_t stream)
 {
   dim3 grid(m);
   dim3 block(min(n, 1024));
   /*n is the vocab_size, e.g., 30000, 7000.... vocab_size is usually very big. */
-  update_logits_kernel<float><<<grid, block, 0, stream>>>(logits, bias, end_id, finished, n);
+  update_logits_kernel<<<grid, block, 0, stream>>>(logits, tmp_logits, bias, end_id, finished, n);
 }
+
+template void update_logits(float* logits, const float* tmp_logits, const float* bias, const int end_id,
+  const bool* finished, const int m, const int n, cudaStream_t stream);
+
+template void update_logits(float* logits, const half* tmp_logits, const half* bias, const int end_id,
+  const bool* finished, const int m, const int n, cudaStream_t stream);
 
 template<typename T>
 void update_logits_without_softmax(T* logits, const T* bias, const int end_id, const bool* finished, 
@@ -623,33 +373,19 @@ template void update_logits_without_softmax(half* logits, const half* bias, cons
   
 template<typename T>
 void softmax_kernelLauncher(T* logits, const T* bias, const int end_id, const bool* finished,
-                            const int m, const int n, cudaStream_t stream)
+                            const int m, const int n_padded, const int n, cudaStream_t stream)
 {
   dim3 grid(m);
   dim3 block(min(n, 1024));
   /*n is the vocab_size, e.g., 30000, 7000.... vocab_size is usually very big. */
-  softmax_kernel<<<grid, block, 0, stream>>>(logits, bias, end_id, finished, n);
+  softmax_kernel<<<grid, block, 0, stream>>>(logits, bias, end_id, finished, n_padded, n);
 }
 
 template void softmax_kernelLauncher(float* logits, const float* bias, const int end_id, const bool* finished,
-                                     const int m, const int n, cudaStream_t stream);
+                                     const int m, const int n_padded, const int n, cudaStream_t stream);
 
 template void softmax_kernelLauncher(half* logits, const half* bias, const int end_id, const bool* finished,
-                                     const int m, const int n, cudaStream_t stream);
-
-template void add_bias_act_kernelLauncher<float>(
-  float* out, const float* bias, int m, int n, cudaStream_t stream);
-
-template void add_bias_input_layernorm_kernelLauncher<float>(
-  float* out, const float* input, const float* bias, const float* gamma, const float* beta, 
-  int m, int n, cudaStream_t stream);
-
-template void add_bias_act_kernelLauncher<half>(
-  half* out, const half* bias, int m, int n, cudaStream_t stream);
-
-template void add_bias_input_layernorm_kernelLauncher<half>(
-  half* out, const half* input, const half* bias, const half* gamma, const half* beta, 
-  int m, int n, cudaStream_t stream);
+                                     const int m, const int n_padded, const int n, cudaStream_t stream);
 
 /* *********************************** Debug tools *********************************** */
 
@@ -678,6 +414,17 @@ void print_kernel(const T* buf, uint size)
   printf("\n");
 }
 
+template <>
+__global__
+void print_kernel(const int* buf, uint size)
+{
+  for(int i = 0; i < size; i++)
+  {
+    printf("%d ", buf[i]);
+  }
+  printf("\n");
+}
+
 template <typename T>
 void print_first_k(const T* buf, uint size, cudaStream_t stream)
 {
@@ -701,6 +448,7 @@ void print_abs_mean(const T* buf, uint size, cudaStream_t stream)
 template void print_first_k(const float*, uint size, cudaStream_t);
 template void print_first_k(const half*, uint size, cudaStream_t);
 template void print_first_k(const int*, uint size, cudaStream_t);
+template void print_first_k(const bool*, uint size, cudaStream_t);
 
 template void print_abs_mean(const float* buf, uint size, cudaStream_t stream);
 template void print_abs_mean(const half* buf, uint size, cudaStream_t stream);
@@ -708,6 +456,7 @@ template void print_abs_mean(const int* buf, uint size, cudaStream_t stream);
 
 /* **************************** end of Debug tools *********************************** */
 
+// TODO remove in v4.1
 /* *************************** depreciated kernels *********************************** */
 
 template <typename T>

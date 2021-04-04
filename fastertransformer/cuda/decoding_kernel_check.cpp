@@ -93,7 +93,7 @@ void init_kernel_check(bool *d_finished, int *d_sequence_length, int *d_word_ids
     printf("[INFO] decoding init check Finish. \n");
 }
 
-void update_logits_kernel_check(float *logits, const float *bias, const int end_id, const bool *finished, const int m, const int n, cudaStream_t stream)
+void update_logits_kernel_check(float *logits, const float *tmp_logits, const float *bias, const int end_id, const bool *finished, const int m, const int n, cudaStream_t stream)
 {
     // m: batch_size * beam_width
     // n: vocab size
@@ -109,7 +109,7 @@ void update_logits_kernel_check(float *logits, const float *bias, const int end_
     check_cuda_error(cudaMemcpy(h_logits, logits, sizeof(float) * m * n, cudaMemcpyDeviceToHost));
     check_cuda_error(cudaMemcpy(h_bias, bias, sizeof(float) * n, cudaMemcpyDeviceToHost));
     check_cuda_error(cudaMemcpy(h_finished, finished, sizeof(bool) * m, cudaMemcpyDeviceToHost));
-    update_logits(logits, bias, end_id, finished, m, n, stream);
+    update_logits(logits, tmp_logits, bias, end_id, finished, m, n, stream);
     cudaDeviceSynchronize();
     check_cuda_error(cudaGetLastError());
     check_cuda_error(cudaMemcpy(h_logits_after_update, logits, sizeof(float) * m * n, cudaMemcpyDeviceToHost));

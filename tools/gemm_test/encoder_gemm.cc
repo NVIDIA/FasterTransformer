@@ -17,6 +17,7 @@
 #include "fastertransformer/gemm_test/encoder_gemm_func.h"
 #include "fastertransformer/gemm_test/encoder_igemm_func.h"
 #include "common.h"
+using namespace fastertransformer;
 
 int main(int argc, char* argv[])
 {

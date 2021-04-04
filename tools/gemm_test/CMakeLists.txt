@@ -1,4 +1,4 @@
-# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,8 +21,15 @@ set(decoding_gemm_files
   decoding_gemm.cc
 )
 
+set(gpt_gemm_files
+  gpt_gemm.cc
+)
+
 add_executable(encoder_gemm ${encoder_gemm_files})
 target_link_libraries(encoder_gemm PUBLIC -lcublas -lcublasLt -lcudart encoder_gemm_func encoder_igemm_func)
 
 add_executable(decoding_gemm ${decoding_gemm_files})
-target_link_libraries(decoding_gemm PUBLIC -lcublas -lcudart)
+target_link_libraries(decoding_gemm PUBLIC -lcublas -lcublasLt -lcudart)
+
+add_executable(gpt_gemm ${gpt_gemm_files})
+target_link_libraries(gpt_gemm PUBLIC -lcublas -lcublasLt -lcudart)

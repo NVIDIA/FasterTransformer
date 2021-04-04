@@ -95,7 +95,7 @@ class Translator(object):
             fields,
             src_reader,
             tgt_reader,
-            model_type='ori',
+            model_type='torch_decoding',
             gpu=-1,
             n_best=1,
             min_length=0,

@@ -16,6 +16,15 @@ import os
 import tensorflow as tf
 from utils.common import create_initializer
 
+USE_CACHE_BATCH_MAJOR_ATTENTION = False
+
+def get_op_cache_config(size_per_head, dtype):
+    x = 4 if dtype == tf.float32 else 8
+    use_batch_major_op_cache = True if USE_CACHE_BATCH_MAJOR_ATTENTION == True and \
+                                       size_per_head % x == 0 \
+                                    else False
+    return use_batch_major_op_cache, x
+
 def norm(inputs):
     """Layer normalizes :obj:`inputs`."""
     return tf.contrib.layers.layer_norm(inputs, begin_norm_axis=-1)
@@ -292,11 +301,23 @@ def init_tf_cache(batch_size,
     return cache
 
 
-def init_op_cache(decoder_args, batchxbeam, memory_max_seq_len):
-    self_cache = tf.zeros([decoder_args.num_layer, 2, 0, batchxbeam,
-                           decoder_args.hidden_dim], dtype=decoder_args.dtype, name="op_self_caches")
-    mem_cache = tf.zeros([decoder_args.num_layer, 2, batchxbeam,
-                          memory_max_seq_len, decoder_args.hidden_dim], dtype=decoder_args.dtype, name="op_memory_caches")
+def init_op_cache(decoder_args, batchxbeam, memory_max_seq_len, decoding_max_seq_len):
+    use_batch_major_op_cache, x = get_op_cache_config(decoder_args.size_per_head, decoder_args.dtype)
+    if use_batch_major_op_cache == True:
+        self_cache = ( tf.zeros([decoder_args.num_layer, batchxbeam, decoder_args.head_num, decoder_args.size_per_head // x,
+                               decoding_max_seq_len, x], dtype=decoder_args.dtype, name="op_self_cache_keys"),
+                       tf.zeros([decoder_args.num_layer, batchxbeam, decoder_args.head_num, decoding_max_seq_len,
+                               decoder_args.size_per_head], dtype=decoder_args.dtype, name="op_self_cache_values") )
+        # use old format for now
+        mem_cache = tf.zeros([decoder_args.num_layer, 2, batchxbeam, memory_max_seq_len,
+                              decoder_args.hidden_dim], dtype=decoder_args.dtype, name="op_memory_caches")
+    else :
+        self_cache = ( tf.zeros([decoder_args.num_layer, 0, batchxbeam,
+                               decoder_args.hidden_dim], dtype=decoder_args.dtype, name="op_self_cache_keys"),
+                       tf.zeros([decoder_args.num_layer, 0, batchxbeam,
+                               decoder_args.hidden_dim], dtype=decoder_args.dtype, name="op_self_cache_values") )
+        mem_cache = tf.zeros([decoder_args.num_layer, 2, batchxbeam,
+                              memory_max_seq_len, decoder_args.hidden_dim], dtype=decoder_args.dtype, name="op_memory_caches")
 
     return self_cache, mem_cache
 
@@ -307,7 +328,8 @@ def op_decoder(inputs,
                op_mem_cache,
                psuedo_input,
                var_dict,
-               decoder_args):
+               decoder_args,
+               step):
     '''
     Run the decoder transformer layer by FasterTransformer.
     
@@ -349,10 +371,15 @@ def op_decoder(inputs,
 
     decoder_op_module = tf.load_op_library(
         os.path.join('./lib/libtf_decoder.so'))
-    
-    op_self_cache = tf.concat([op_self_cache, tf.zeros([decoder_args.num_layer, 2, 1,
-                                                        tf.shape(memory_tensor)[0],
-                                                        decoder_args.hidden_dim], dtype=decoder_args.dtype)], axis=2)
+
+    use_batch_major_op_cache, _ = get_op_cache_config(decoder_args.size_per_head, decoder_args.dtype)
+    if use_batch_major_op_cache == False:
+        op_self_cache = tf.contrib.framework.nest.map_structure(
+                                                    lambda s: tf.concat([s, tf.zeros([decoder_args.num_layer, 1,
+                                                                    tf.shape(memory_tensor)[0],
+                                                                    decoder_args.hidden_dim], dtype=decoder_args.dtype)], axis=1),
+                                                    op_self_cache )
+
     fuse_qkv = decoder_args.fuse_qkv
     
     for i in range(decoder_args.num_layer):
@@ -410,15 +437,28 @@ def op_decoder(inputs,
                 var_dict[layer_prefix_name + 'multi_head/value/kernel:0']
             var_dict[layer_prefix_name + 'multi_head/value/bias:0'] = \
                 var_dict[layer_prefix_name + 'multi_head/value/bias:0']
-                
+
+        if decoder_args.fuse_qkv == True: # This flag means that TF fuses qkv or not
+            # FasterTransformer uses "transformer/decoder/layer/masked_multi_head/conv1d/kernel" and
+            # "transformer/decoder/layer/masked_multi_head/conv1d/bias" directly, and
+            # kernels, bias of query, key and values are useless.
+            masked_multi_head_first_kernel = var_dict[layer_prefix_name + 'masked_multi_head/conv1d/kernel:0']
+            masked_multi_head_first_bias = var_dict[layer_prefix_name + 'masked_multi_head/conv1d/bias:0']
+        else:
+            masked_multi_head_first_kernel = var_dict[layer_prefix_name + 'masked_multi_head/query/kernel:0'], # 4
+            masked_multi_head_first_bias = var_dict[layer_prefix_name + 'masked_multi_head/query/bias:0'], # 5
+
+        op_layer_self_cache = (op_self_cache[0][i], op_self_cache[1][i])
         op_result, _, _ = decoder_op_module.decoder(
             inputs,  # 0
             memory_tensor, # 1
             memory_sequence_length, # 2
             var_dict[layer_prefix_name + 'masked_multi_head/LayerNorm/beta:0'], # 3
             var_dict[layer_prefix_name + 'masked_multi_head/LayerNorm/gamma:0'], # 4
-            var_dict[layer_prefix_name + 'masked_multi_head/query/kernel:0'], # 5
-            var_dict[layer_prefix_name + 'masked_multi_head/query/bias:0'], # 6
+            masked_multi_head_first_kernel, # 5
+            masked_multi_head_first_bias, # 6
+            # var_dict[layer_prefix_name + 'masked_multi_head/query/kernel:0'], # 5
+            # var_dict[layer_prefix_name + 'masked_multi_head/query/bias:0'], # 6
             var_dict[layer_prefix_name + 'masked_multi_head/key/kernel:0'], # 7
             var_dict[layer_prefix_name + 'masked_multi_head/key/bias:0'], # 8
             var_dict[layer_prefix_name + 'masked_multi_head/value/kernel:0'], # 9
@@ -441,11 +481,14 @@ def op_decoder(inputs,
             var_dict[layer_prefix_name + 'ffn/conv1d/bias:0'], # 26
             var_dict[layer_prefix_name + 'ffn/conv1d_1/kernel:0'], # 27
             var_dict[layer_prefix_name + 'ffn/conv1d_1/bias:0'], # 28
-            op_self_cache[i], # 29
-            op_mem_cache[i], # 30
-            psuedo_input,  # 31, add tf_result as input to prevent the OP and TF from parallel execution and lead to error result
+            op_layer_self_cache, # 29, 30
+            op_mem_cache[i], # 31
+            psuedo_input,  # 32, add tf_result as input to prevent the OP and TF from parallel execution and lead to error result
+            step, # 33
             head_num=decoder_args.head_num, 
-            size_per_head=decoder_args.size_per_head)
+            size_per_head=decoder_args.size_per_head,
+            memory_hidden_dim=decoder_args.memory_hidden_dim,
+            is_fuse_qkv=decoder_args.fuse_qkv)
         inputs = op_result
     
     return op_result, op_self_cache, op_mem_cache

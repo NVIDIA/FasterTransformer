@@ -16,7 +16,7 @@ limitations under the License.
 
 #pragma once
 #include "cuda_kernels.h"
-#include "fastertransformer/common.h"
+#include "fastertransformer/utils/common.h"
 #include <cuda_runtime.h>
 #include <math.h>
 #include <cfloat>
@@ -41,9 +41,11 @@ void update_kernel_check(float* log_probs, float* cum_log_probs, int* ids, bool*
   const int end_id, int* finished_count);
 
 template <typename T>
-void update_KV_cache_kernel_check(T** key_cache, T** value_cache, const int* beam_ids, const int batch_size, const int beam_width, const int hidden_dim,
-  const int step, const int cache_size, const int decoder_layers, cudaStream_t stream){
+void update_KV_cache_kernel_check(T** key_cache, T** value_cache, const int* beam_ids, const int batch_size, const int beam_width,
+  const int head_num, const int size_per_head, const int step, const int cache_size, const int decoder_layers, cudaStream_t stream){
     
+    const int hidden_dim = head_num * size_per_head;
+
     printf("[INFO] decoding update KV cache check for step %d. \n", step);
     const int src_id = step & 0x1;
     const int tgt_id = 1 - src_id;
@@ -67,7 +69,8 @@ void update_KV_cache_kernel_check(T** key_cache, T** value_cache, const int* bea
     check_cuda_error(cudaMemcpy(h_beam_ids, beam_ids, sizeof(int) * batch_size * beam_width, cudaMemcpyDeviceToHost));
 
     // compute on GPU and copy the result to CPU
-    update_KV_cache_kernelLauncher<T>(key_cache, value_cache, beam_ids, batch_size, beam_width, hidden_dim, step, cache_size, decoder_layers, stream);
+    // we use sequence major cache format here
+    update_KV_cache_kernelLauncher<T>(key_cache, value_cache, beam_ids, nullptr, batch_size, beam_width, head_num, size_per_head, step, -1, cache_size, decoder_layers, stream);
     cudaDeviceSynchronize();
     check_cuda_error(cudaGetLastError());
     check_cuda_error(cudaMemcpy(h_key_cache_tgt_after_update, key_cache[tgt_id], sizeof(T) * cache_size * decoder_layers, cudaMemcpyDeviceToHost));
