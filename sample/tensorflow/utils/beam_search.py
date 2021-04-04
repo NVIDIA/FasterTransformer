@@ -57,8 +57,13 @@ def search_word(beam_width,
     cache = tf.contrib.framework.nest.map_structure(
         lambda s: tf.gather(s, beam_indices), cache)
     if op_self_cache != None:
+        # a workaround to check if we have batch major self caches
+        # ideally we should pass a config parameter :
+        op_self_cache_keys_rank = tf.shape(op_self_cache[0]).get_shape()[0].value
+        axis = 1 if op_self_cache_keys_rank == 6 else 2
+
         op_self_cache = tf.contrib.framework.nest.map_structure(
-            lambda s: tf.gather(s, beam_indices, axis=3), op_self_cache)
+            lambda s: tf.gather(s, beam_indices, axis=axis), op_self_cache)
 
     parent_ids = parent_ids.write(step, beam_ids)
     extra_vars = [parent_ids, sequence_lengths]

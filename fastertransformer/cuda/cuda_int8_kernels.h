@@ -117,4 +117,7 @@ void rebuild_sequence_length_padding_COL32_kernelLauncher(const T* src, T* tgt,
                                                           const int* mask_offset, const int m,
                                                           const int n, const int tgt_m, cudaStream_t stream);
 
+void rowMajorToCOL32_kernelLauncher(int8_t* dst, const int8_t* src, 
+                                    const int m, const int n, cudaStream_t stream);
+
 } //namespace fastertransformer

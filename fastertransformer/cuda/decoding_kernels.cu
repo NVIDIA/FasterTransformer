@@ -14,7 +14,7 @@
 * limitations under the License.
 */
 
-#include "fastertransformer/common.h"
+#include "fastertransformer/utils/common.h"
 
 #include "cuda_kernels.h"
 #include "cub/cub.cuh"
@@ -36,15 +36,18 @@ namespace fastertransformer
                               int* word_ids, 
                               T* cum_log_probs, 
                               const int sentence_id, 
-                              const int beam_width)
+                              const int beam_width,
+                              const int batch_size)
   {
     const bool IS_FP16 = std::is_same<T, half>::value;
     const T MAX_T_VAL = (IS_FP16)? HALF_FLT_MAX : 1e20f;
-    int tid = threadIdx.x;
-    finished[tid] = false;
-    sequence_length[tid] = 0;
-    word_ids[tid] = sentence_id;
-    cum_log_probs[tid] = (tid % beam_width == 0) ? (T)0.0f: -MAX_T_VAL;
+    for(int index = blockIdx.x * blockDim.x + threadIdx.x; index < batch_size * beam_width; index += blockDim.x * gridDim.x)
+    {
+      finished[index] = false;
+      sequence_length[index] = 0;
+      word_ids[index] = sentence_id;
+      cum_log_probs[index] = (index % beam_width == 0) ? (T)0.0f: -MAX_T_VAL;
+    }
   }
 
   template <typename T>
@@ -57,27 +60,30 @@ namespace fastertransformer
             const int beam_width, 
             cudaStream_t stream)
   {
-    dim3 grid(1);
-    dim3 block(min(1024, batch_size * beam_width));
-    assert(batch_size * beam_width <= 1024);
+    dim3 grid((int)ceil(batch_size * beam_width * 1.0 / 256));
+    dim3 block(256);
     
     init_kernel<T><<<grid, block, 0, stream>>>(finished,
                                                sequence_length,
                                                word_ids,
                                                cum_log_probs,
                                                sentence_id,
-                                               beam_width);
+                                               beam_width,
+                                               batch_size);
   }
 
   __global__ void sampling_init_kernel(bool* finished, 
                                        int* sequence_length, 
                                        int* word_ids, 
-                                       const int start_id)
+                                       const int start_id,
+                                       const int batch_size)
   {
-    const int tid = threadIdx.x;
-    finished[tid] = false;
-    sequence_length[tid] = 0;
-    word_ids[tid] = start_id;
+    for(int index = blockIdx.x * blockDim.x + threadIdx.x; index < batch_size; index += blockDim.x * gridDim.x)
+    {
+      finished[index] = false;
+      sequence_length[index] = 0;
+      word_ids[index] = start_id;
+    }
   }
 
   void sampling_init_kernelLauncher(bool* finished, 
@@ -87,14 +93,15 @@ namespace fastertransformer
                                     const int batch_size, 
                                     cudaStream_t stream)
   {
-    dim3 grid(1);
-    dim3 block(min(1024, batch_size));
-    assert(batch_size <= 1024);
+    dim3 grid((int)ceil(batch_size * 1.0 / 256));
+    dim3 block(256);
+
     
     sampling_init_kernel<<<grid, block, 0, stream>>>(finished,
                                                      sequence_length,
                                                      word_ids,
-                                                     start_id);
+                                                     start_id,
+                                                     batch_size);
   }
 
   template <typename T>
@@ -136,8 +143,7 @@ namespace fastertransformer
                                                                                   hidden_units);
   }
 
-
-
+  // TODO Add half2 implementation
   template <typename T>
   __global__ void embedding_position_lookups_kernel(T* from_tensor,
                                                     const T* embedding_table,
@@ -179,14 +185,83 @@ namespace fastertransformer
   }
 
   template <typename T>
+  __global__ void start_id_embedding_position_lookups_kernel(T* from_tensor,
+                                                             int* output_ids,
+                                                             const T* embedding_table,
+                                                             const T* pos_table,
+                                                             const int* word_ids,
+                                                             const int start_step,
+                                                             const int length,
+                                                             const int max_length,
+                                                             const int batch_size,
+                                                             const int hidden_units)
+  {
+      for(int index = blockIdx.x * blockDim.x + threadIdx.x; index < batch_size * length * hidden_units; index += blockDim.x * gridDim.x)
+      {
+          // transpose the word_ids [batch, length] (part of [batch, max_length]) to output_ids [length, batch]
+          if(index < batch_size * max_length)
+          {
+            const int seq_id = index % max_length;
+            const int batch_id = index / max_length;
+            if(seq_id < length)
+              output_ids[seq_id * batch_size + batch_id] = word_ids[index];
+            // output_ids[index] = word_ids[index];
+          }
+        
+          // embedding lookup from word ids [batch, length] (part of [batch, max_length]) and [vocab, hidden] to generate embedding [batch, length, hidden]
+          const int word_index = index / hidden_units;
+          const int word_index_row = word_index / length;
+          const int word_index_col = word_index % length;
+          const int real_word_index = word_index_row * max_length + word_index_col;
+          const int step = start_step + word_index % length;
+          const int col_index = index % hidden_units;
+          from_tensor[index] = embedding_table[word_ids[real_word_index] * hidden_units + col_index] 
+                              + pos_table[(step - 1) * hidden_units + col_index];
+      }
+  }
+
+
+  template <typename T>
+  void start_id_embedding_position_lookups_kernel_launcher(T* from_tensor,
+                                                           int *output_ids,
+                                                           const T* embedding_table, 
+                                                           const T* pos_table, 
+                                                           const int* word_ids,
+                                                           const int start_step,
+                                                           const int length,
+                                                           const int max_length,
+                                                           const int batch_size,
+                                                           const int hidden_units, 
+                                                           cudaStream_t stream)
+  {
+      dim3 grid(min(batch_size * length, 65536));
+      dim3 block(min(hidden_units, 1024));
+      start_id_embedding_position_lookups_kernel<T><<<grid, block, 0, stream>>>(from_tensor,
+                                                                                output_ids,
+                                                                                embedding_table,
+                                                                                pos_table,
+                                                                                word_ids,
+                                                                                start_step,
+                                                                                length,
+                                                                                max_length,
+                                                                                batch_size,
+                                                                                hidden_units);
+  }
+
+  // TODO Add half2 implementation
+  template <typename T>
   __global__ void apply_temperature_penalty_kernel(T* logits,
                                                    const T temperature_inverse,
                                                    const int m,
-                                                   const int n)
+                                                   const int vocab_size,
+                                                   const int vocab_size_padd)
   {
-      for(int index = blockIdx.x * blockDim.x + threadIdx.x; index < m * n; index += blockDim.x * gridDim.x)
+      const bool IS_FP16 = std::is_same<T, half>::value;
+      const T MAX_T_VAL = (IS_FP16)? HALF_FLT_MAX : FLT_MAX;
+      for(int index = blockIdx.x * blockDim.x + threadIdx.x; index < m * vocab_size_padd; index += blockDim.x * gridDim.x)
       {
-          logits[index] = logits[index] * temperature_inverse;
+          if(index % vocab_size_padd < vocab_size) logits[index] = logits[index] * temperature_inverse;
+          else logits[index] = -MAX_T_VAL;
       }
   }
 
@@ -194,16 +269,112 @@ namespace fastertransformer
   void apply_temperature_penalty_kernelLauncher(T* logits,
                                                 const T temperature,
                                                 const int m,
-                                                const int n,
+                                                const int vocab_size,
+                                                const int vocab_size_padd,
                                                 cudaStream_t stream)
   {
       dim3 grid(min(m, 65536));
-      dim3 block(min(n, 1024));
+      dim3 block(min(vocab_size_padd, 1024));
       const T temperature_inverse = (T)(1.f / (float) temperature);
       apply_temperature_penalty_kernel<T><<<grid, block, 0, stream>>>(logits,
                                                                       temperature_inverse,
                                                                       m,
-                                                                      n);
+                                                                      vocab_size,
+                                                                      vocab_size_padd);
+  }
+
+  __global__ void set_start_ids_kernel(int* out_ids,
+                                       const int* in_ids, 
+                                       const int max_start_len, 
+                                       const int step, 
+                                       const int ite,
+                                       const int batch_size,
+                                       const int local_batch_size,
+                                       const int end_id)
+  {
+      const int id = blockIdx.x * blockDim.x + threadIdx.x;
+      if(id < local_batch_size)
+      {
+        int in_id = in_ids[(ite * local_batch_size + id) * max_start_len + step];
+        if(in_id != end_id)
+          out_ids[step * batch_size + ite * local_batch_size + id] = in_ids[(ite * local_batch_size + id) * max_start_len + step];
+      }
+  }
+
+  void set_start_ids_kernelLauncher(int* out_ids,
+                                    const int* in_ids,
+                                    const int max_start_len,
+                                    const int step,
+                                    const int ite,
+                                    const int batch_size,
+                                    const int local_batch_size,
+                                    const int end_id,
+                                    cudaStream_t stream)
+  {
+      dim3 grid((int)(ceil(local_batch_size / 512.)));
+      set_start_ids_kernel<<<grid, 512, 0, stream>>>(out_ids,
+                                                     in_ids,
+                                                     max_start_len,
+                                                     step,
+                                                     ite,
+                                                     batch_size,
+                                                     local_batch_size,
+                                                     end_id);
+  }
+
+  template <typename T>
+  __global__ void kernel_padding_kernel(T *padded_kernel, const T *kernel,
+                                      const int row_dim, const int col_dim, const int padded_col_dim)
+  {
+    for(int id = threadIdx.x + blockIdx.x * blockDim.x; id < row_dim * padded_col_dim; id += blockDim.x * gridDim.x)
+    {
+      int row_id = id / padded_col_dim;
+      int col_id = id % padded_col_dim;
+      if(col_id < col_dim)
+      {
+        padded_kernel[id] = kernel[row_id * col_dim + col_id];
+      }
+      else
+      {
+        padded_kernel[id] = (T)(0.0f);
+      }
+    }
+  }
+
+  template <typename T>
+  void kernel_padding_kernelLauncher(T *padded_kernel, const T *kernel,
+                                     const int row_dim, const int col_dim, const int padded_col_dim, cudaStream_t stream)
+  {
+    // pad 0 into the kernel from shape [row_dim, col_dim] to [row_dim, padded_col_dim]
+    dim3 block(512);
+    dim3 grid(min(65536, (int)(ceil(row_dim * padded_col_dim / 512.)) ));
+    kernel_padding_kernel<<<grid, block, 0, stream>>>(padded_kernel, kernel, row_dim, col_dim, padded_col_dim);
+  }
+
+  template <typename T1, typename T2>
+  __global__ void bias_padding_kernel(T1 *padded_bias, const T2 *bias,
+                                      const int col_dim, const int padded_col_dim)
+  {
+      const int index = blockIdx.x * blockDim.x + threadIdx.x;
+      if(index < col_dim)
+      {
+        padded_bias[index] = (T1)bias[index];
+      }
+      else if(index >= col_dim && index < padded_col_dim)
+      {
+        padded_bias[index] = (T1)(std::is_same<T1, half>::value ? -60000 : -1e20f);
+      }
+  }
+
+  template <typename T1, typename T2>
+  void bias_padding_kernelLauncher(T1 *padded_bias, const T2 *bias,
+                                   const int col_dim, const int padded_col_dim, cudaStream_t stream)
+  {
+    // pad -max into the bias from shape [col_dim] to [padded_col_dim]
+    dim3 block(512);
+    dim3 grid( (int)(ceil(padded_col_dim / 512.)) );
+    assert(grid.x < 65536);
+    bias_padding_kernel<<<grid, block, 0, stream>>>(padded_bias, bias, col_dim, padded_col_dim);
   }
 
   /* *************************** end of common kernel *********************************** */
@@ -289,19 +460,22 @@ namespace fastertransformer
                         int* sequence_length, 
                         int* word_ids, int* output_ids, 
                         const int vocab_size, const int end_id, 
+                        const int batch_size, const int beam_width,
                         int* finished_count)
   {
-    int tid = threadIdx.x;
-    sequence_length[tid] = finished[tid] ? sequence_length[tid] : sequence_length[tid] + 1;
-
-    int beam_id = word_ids[tid] / vocab_size;
-    int word_id = word_ids[tid] % vocab_size;
-
-    sequence_length[tid] = sequence_length[beam_id];
-    finished[tid] = word_id == end_id ? 1 : 0;
-    parent_ids[tid] = beam_id;
-    word_ids[tid] = word_id;
-    output_ids[tid] = word_id;
+    for(int index = blockIdx.x * blockDim.x + threadIdx.x; index < batch_size * beam_width; index += blockDim.x * gridDim.x)
+    {
+      sequence_length[index] = finished[index] ? sequence_length[index] : sequence_length[index] + 1;
+  
+      int beam_id = word_ids[index] / vocab_size;
+      int word_id = word_ids[index] % vocab_size;
+  
+      sequence_length[index] = sequence_length[beam_id];
+      finished[index] = word_id == end_id ? 1 : 0;
+      parent_ids[index] = beam_id;
+      word_ids[index] = word_id;
+      output_ids[index] = word_id;
+    }
   }
 
   void update_kernelLauncher_v2(bool* finished, int* parent_ids, 
@@ -311,14 +485,15 @@ namespace fastertransformer
                                 DecodingBeamsearchArguments args,
                                 cudaStream_t stream)
   {
-    dim3 grid(1);
-    dim3 block(args.batch_size_ * args.beam_width_);
-    assert(block.x <= 1024);
+    dim3 grid((int)ceil(args.batch_size_ * args.beam_width_ * 1.0 / 256));
+    dim3 block(256);
 
     update_kernel_v2<float><<<grid, block, 0, stream>>>(finished, parent_ids, 
                                                         sequence_length, word_ids, 
-                                                        output_ids, args.vocab_size_, 
-                                                        args.end_id_, finished_count);
+                                                        output_ids, args.vocab_size_padded_, 
+                                                        args.end_id_, 
+                                                        args.batch_size_, args.beam_width_,
+                                                        finished_count);
   }
 
   template <typename T>
@@ -326,7 +501,8 @@ namespace fastertransformer
                                         T* key_tgt_cache,
                                         const T* __restrict value_src_cache, 
                                         T* value_tgt_cache,
-                                        const int* beam_ids, 
+                                        const int* beam_ids,
+                                        const bool* finished, 
                                         const int batch_size, 
                                         const int beam_width, 
                                         const int hidden_dim, 
@@ -337,6 +513,7 @@ namespace fastertransformer
     int layer_id = blockIdx.x / batch_size / beam_width / step;
     int batch_id = (blockIdx.x % (batch_size * beam_width * step)) / (beam_width * step);
     int beam_id = (blockIdx.x % (beam_width * step)) / step;
+    if(finished[batch_id * beam_width + beam_id]) return;
     int step_id = blockIdx.x % step;
 
     int hidden_id = step_id * batch_size * beam_width * hidden_dim + 
@@ -365,6 +542,7 @@ namespace fastertransformer
                                         const half* __restrict value_src_cache, 
                                         half* value_tgt_cache,
                                         const int* beam_ids, 
+                                        const bool* finished,
                                         const int batch_size, 
                                         const int beam_width, 
                                         const int hidden_dim, 
@@ -375,6 +553,7 @@ namespace fastertransformer
     int layer_id = blockIdx.x / batch_size / beam_width / step;
     int batch_id = (blockIdx.x % (batch_size * beam_width * step)) / (beam_width * step);
     int beam_id = (blockIdx.x % (beam_width * step)) / step;
+    if(finished[batch_id * beam_width + beam_id]) return;
     int step_id = blockIdx.x % step;
 
     int hidden_id = (step_id * batch_size * beam_width * hidden_dim + 
@@ -397,28 +576,120 @@ namespace fastertransformer
   }
 
   template <typename T>
+  __global__ void update_KV_batch_major_cache_kernel(const T* __restrict key_src_cache, 
+                                        T* key_tgt_cache,
+                                        const T* __restrict value_src_cache, 
+                                        T* value_tgt_cache,
+                                        const int* beam_ids,
+                                        const bool* finished, 
+                                        const int batch_size, 
+                                        const int beam_width,
+                                        const int size_per_head, 
+                                        const int cache_size, 
+                                        const int step,
+                                        const int max_seq_len,
+                                        const int decoder_layers)
+  {
+    int layer_id = blockIdx.z;
+    int head_id = blockIdx.y;
+    int bb_id = blockIdx.x;
+    int batch_id = bb_id / beam_width;
+    int beam_id = bb_id % beam_width;
+
+    if(finished[batch_id * beam_width + beam_id]) return;
+
+    const int hidden_dim = size_per_head * gridDim.y;
+
+    int src_offset = layer_id * cache_size + 
+                      (beam_ids[batch_id * beam_width + beam_id] * hidden_dim + 
+                                                         head_id * size_per_head) * max_seq_len;
+    int tgt_offset = layer_id * cache_size + 
+                      ((batch_id * beam_width + beam_id) * hidden_dim + 
+                                                         head_id * size_per_head) * max_seq_len;
+
+    // for better memory access always do 16 byte loads.
+    // [B, H, Dh/x, L, x]  and [B, H, L, Dh/x, x] (i.e. [B, H, L, Dh])
+    auto key_src_ptr = reinterpret_cast<const uint4*>(key_src_cache + src_offset);
+    auto value_src_ptr = reinterpret_cast<const uint4*>(value_src_cache + src_offset);
+    auto key_tgt_ptr = reinterpret_cast<uint4*>(key_tgt_cache + tgt_offset);
+    auto value_tgt_ptr = reinterpret_cast<uint4*>(value_tgt_cache + tgt_offset);
+    constexpr int x = (sizeof(T) == 4)? 4 : 8;
+
+    // step starts from 1
+    #if 0
+    constexpr int WARP_SIZE = 32;
+    const int num_warps = blockDim.x / WARP_SIZE;
+    const int warp_id = threadIdx.x / WARP_SIZE;
+    const int lane_id = threadIdx.x % WARP_SIZE;
+    for (int dhx = warp_id; dhx < size_per_head/x; dhx += num_warps)
+    {
+      for (int tid = lane_id; tid < step; tid += WARP_SIZE)
+      {
+        key_tgt_ptr[dhx * max_seq_len + tid] = key_src_ptr[dhx * max_seq_len + tid];
+      }
+    }
+    #else
+    // seems to be a bit faster
+    for (int tid = threadIdx.x; tid < max_seq_len * size_per_head/x; tid += blockDim.x)
+    {
+      // could consider fast int division here
+      if (tid % max_seq_len < step)
+      {
+        key_tgt_ptr[tid] = key_src_ptr[tid];
+      }
+    }
+    #endif
+
+    for (int tid = threadIdx.x; tid < step * size_per_head/x; tid += blockDim.x)
+    {
+      value_tgt_ptr[tid] = value_src_ptr[tid];
+    }
+  }
+
+  template <typename T>
   void update_KV_cache_kernelLauncher(T** key_cache, 
                                       T** value_cache, 
                                       const int* beam_ids, 
+                                      const bool* finished,
                                       const int batch_size, 
-                                      const int beam_width, 
-                                      const int hidden_dim,
-                                      const int step, 
+                                      const int beam_width,
+                                      const int head_num, 
+                                      const int size_per_head,
+                                      const int step,
+                                      const int decoder_max_seq_len,
                                       const int cache_size, 
                                       const int decoder_layers, 
                                       cudaStream_t stream)
   {
-    dim3 grid(decoder_layers * batch_size * beam_width * step);
-    dim3 block(min(1024, hidden_dim));
-    block.x = block.x / (4 / sizeof(T));
-
     int src_id = step & 0x1;
     int tgt_id = 1 - src_id;
 
-    update_KV_cache_kernel<<<grid, block, 0, stream>>>(
-      key_cache[src_id], key_cache[tgt_id],
-      value_cache[src_id], value_cache[tgt_id],
-      beam_ids, batch_size, beam_width, hidden_dim, cache_size, step, decoder_layers);
+    if (decoder_max_seq_len < 0)
+    {
+      int hidden_dim = head_num * size_per_head;
+      dim3 grid(decoder_layers * batch_size * beam_width * step);
+      dim3 block(min(1024, hidden_dim));
+      block.x = block.x / (4 / sizeof(T));
+  
+      update_KV_cache_kernel<<<grid, block, 0, stream>>>(
+        key_cache[src_id], key_cache[tgt_id],
+        value_cache[src_id], value_cache[tgt_id],
+        beam_ids, finished,
+        batch_size, beam_width, hidden_dim, cache_size, step, decoder_layers);
+    }
+    else
+    {
+      dim3 grid(batch_size * beam_width, head_num, decoder_layers);
+      constexpr int block_sz = 128;
+
+      update_KV_batch_major_cache_kernel<<<grid, block_sz, 0, stream>>>(
+        key_cache[src_id], key_cache[tgt_id],
+        value_cache[src_id], value_cache[tgt_id],
+        beam_ids, finished,
+        batch_size, beam_width, size_per_head, cache_size, step, 
+        decoder_max_seq_len, decoder_layers);
+    }
+
   }
 
   template <typename T>
@@ -488,10 +759,10 @@ namespace fastertransformer
                             int* current_ids,
                             int* previous_ids, 
                             int* parent_ids,
-                            Gpt2Arguments args,
+                            GptArguments args,
                             cudaStream_t stream) {
 
-    int vocab_size = args.vocab_size_;
+    int vocab_size = args.vocab_size_padded_;
     int beam_width = 1;
     int batch_size = args.batch_size_;
     dim3 block(256);
@@ -573,6 +844,36 @@ namespace fastertransformer
       transpose_kernel<data_type><<<grid, tW * tH, tH * tW * sizeof(data_type), stream>>>(out, in, height, width, tH, tW, stride);
   }
 
+  // TODO Add half2 implementation
+  template <typename DataType_>
+  __global__ void transpose_axis_01_kernel(DataType_ *out, DataType_ *in, const int dim0, const int dim1, const int dim2)
+  {
+    int index = threadIdx.x + blockIdx.x * blockDim.x;
+    if(index < dim0 * dim1 * dim2)
+    {
+      const int input_dim2_index = index % dim2;
+      index = (index - input_dim2_index) / dim2;
+      const int input_dim1_index = index % dim1;
+      index = (index - input_dim1_index) / dim1;
+      const int input_dim0_index = index % dim0;
+
+      out[input_dim1_index * dim0 * dim2 + 
+          input_dim0_index * dim2 + 
+          input_dim2_index] = in[input_dim0_index * dim1 * dim2 + 
+                                 input_dim1_index * dim2 + 
+                                 input_dim2_index];
+    }
+  }
+
+  template <typename DataType_>
+  void transpose_axis_01_kernelLauncher(DataType_ *out, DataType_ *in, const int dim0, 
+                                        const int dim1, const int dim2, cudaStream_t stream)
+  {
+    dim3 block(512);
+    dim3 grid((int)(ceil(dim0 * dim1 * dim2 / 512.)));
+    transpose_axis_01_kernel<<<grid, block, 0, stream>>>(out, in, dim0, dim1, dim2);
+  }
+
   /* *************************** end of BeamSearch kernel *********************************** */
 
   /* ********************************** Sampling kernel *********************************** */
@@ -611,6 +912,45 @@ namespace fastertransformer
       }
   }
 
+  __global__ void topp_initialization_kernel_v2(bool* finished,
+                                            int* sequence_length, 
+                                            int* word_ids,
+                                            int* topp_id_val_buf,
+                                            int* topp_offset_buf,
+                                            int* begin_topp_offset_buf_,
+                                            const int batch_size, 
+                                            const int n,
+                                            const int start_id)
+  {
+      int tid = threadIdx.x;
+      int bid = blockIdx.x;
+  
+      if(bid == 0)
+      {
+          for(int i = tid; i < batch_size + 1; i+= blockDim.x)
+          {
+              topp_offset_buf[i] = i * n;
+              begin_topp_offset_buf_[i] = topp_offset_buf[i];
+          }
+          
+          for(int i = tid; i < batch_size; i+= blockDim.x)
+          {
+              if(finished != nullptr) finished[i] = false;
+              if(sequence_length != nullptr) sequence_length[i] = 0;
+              if(word_ids != nullptr) word_ids[i] = start_id; 
+          }
+      }
+  
+      int index = tid + bid * blockDim.x;
+      while(index < batch_size * n)
+      {
+          topp_id_val_buf[index] = index % n;
+          index += blockDim.x * gridDim.x;
+      }
+  }
+
+
+
   void topp_initialization_kernelLauncher(bool* finished,
                                           int* sequence_length, 
                                           int* word_ids,
@@ -630,6 +970,28 @@ namespace fastertransformer
                                                          n,
                                                          args.start_id_);
   }
+
+  void topp_initialization_kernelLauncher_v2(bool* finished,
+    int* sequence_length, 
+    int* word_ids,
+    int* topp_id_val_buf,
+    int* topp_offset_buf,
+    int* begin_topp_offset_buf_,
+    const int n,
+    DecodingSamplingArguments args,
+    cudaStream_t stream)
+{
+    // n: the coloumn number of logits_buffer for top_p sampling
+    topp_initialization_kernel_v2<<<32, 512, 0, stream>>>(finished,
+                        sequence_length,
+                        word_ids,
+                        topp_id_val_buf,
+                        topp_offset_buf,
+                        begin_topp_offset_buf_,
+                        args.batch_size_, 
+                        n,
+                        args.start_id_);
+}
 
   template <typename T>
   size_t get_topp_sort_temp_storage_size(const T* log_probs,
@@ -720,8 +1082,6 @@ namespace fastertransformer
                                                   step_ids, parent_ids, max_sequence_lengths, beams);
   }
 
-
-
   /* ********************************** Instantiation *********************************** */
   template 
   void embedding_lookup_sine_position_encoding_kernel_launcher(float* from_tensor,
@@ -761,25 +1121,73 @@ namespace fastertransformer
                                                   int step,
                                                   cudaStream_t stream);
 
+  template
+  void start_id_embedding_position_lookups_kernel_launcher(float* from_tensor,
+                                                           int* output_ids,
+                                                           const float* embedding_table,
+                                                           const float* pos_table, 
+                                                           const int* word_ids,
+                                                           const int start_step,
+                                                           const int length,
+                                                           const int max_length,
+                                                           const int batch_size,
+                                                           const int hidden_units, 
+                                                           cudaStream_t stream);
+
+  template
+  void start_id_embedding_position_lookups_kernel_launcher(half* from_tensor,
+                                                           int* output_ids,
+                                                           const half* embedding_table,
+                                                           const half* pos_table, 
+                                                           const int* word_ids,
+                                                           const int start_step,
+                                                           const int length,
+                                                           const int max_length,
+                                                           const int batch_size,
+                                                           const int hidden_units, 
+                                                           cudaStream_t stream);
+
   template void apply_temperature_penalty_kernelLauncher(float* logits,
                                                          const float temperature,
                                                          const int m,
-                                                         const int n,
+                                                         const int vocab_size,
+                                                         const int vocab_size_padd,
                                                          cudaStream_t stream);
 
   template void apply_temperature_penalty_kernelLauncher(half* logits,
                                                          const half temperature,
                                                          const int m,
-                                                         const int n,
+                                                         const int vocab_size,
+                                                         const int vocab_size_padd,
                                                          cudaStream_t stream);
+
+  template void kernel_padding_kernelLauncher(float *padded_kernel, const float *kernel,
+                                           const int row_dim, const int col_dim,
+                                           const int padded_col_dim, cudaStream_t stream);
+
+  template void kernel_padding_kernelLauncher(half *padded_kernel, const half *kernel,
+                                           const int row_dim, const int col_dim,
+                                           const int padded_col_dim, cudaStream_t stream);
+  
+  template void bias_padding_kernelLauncher(float *padded_bias, const float *bias, const int col_dim,
+                                            const int padded_col_dim, cudaStream_t stream);
+
+  template void bias_padding_kernelLauncher(float *padded_bias, const half *bias, const int col_dim,
+                                            const int padded_col_dim, cudaStream_t stream);
+
+  template void bias_padding_kernelLauncher(half *padded_bias, const half *bias, const int col_dim,
+                                            const int padded_col_dim, cudaStream_t stream);
 
   template void update_KV_cache_kernelLauncher(float** key_cache,
                                                float** value_cache,
                                                const int* beam_ids,
+                                               const bool* finished,
                                                const int batch_size,
                                                const int beam_width,
-                                               const int hidden_dim,
+                                               const int head_num, 
+                                               const int size_per_head,
                                                const int step,
+                                               const int decoder_max_seq_len,
                                                const int cache_size,
                                                const int decoder_layers,
                                                cudaStream_t stream);
@@ -787,10 +1195,13 @@ namespace fastertransformer
   template void update_KV_cache_kernelLauncher(half** key_cache,
                                                half** value_cache,
                                                const int* beam_ids,
+                                               const bool* finished,
                                                const int batch_size,
                                                const int beam_width,
-                                               const int hidden_dim,
+                                               const int head_num, 
+                                               const int size_per_head,
                                                const int step,
+                                               const int decoder_max_seq_len,
                                                const int cache_size,
                                                const int decoder_layers,
                                                cudaStream_t stream);
@@ -800,7 +1211,7 @@ namespace fastertransformer
                                       int* current_ids,
                                       int* previous_ids,
                                       int* parent_ids,
-                                      Gpt2Arguments args,
+                                      GptArguments args,
                                       cudaStream_t stream);
 
   template void apply_logit_penalties(int step,
@@ -808,7 +1219,7 @@ namespace fastertransformer
                                       int* current_ids,
                                       int* previous_ids,
                                       int* parent_ids,
-                                      Gpt2Arguments args,
+                                      GptArguments args,
                                       cudaStream_t stream);
 
   template size_t get_topp_sort_temp_storage_size(const float* log_probs,
@@ -838,6 +1249,20 @@ namespace fastertransformer
                           int width,int stride,
                           cudaStream_t stream);
 
+  template void transpose_axis_01_kernelLauncher(float *out,
+                                                 float *in,
+                                                 const int dim0,
+                                                 const int dim1,
+                                                 const int dim2,
+                                                 cudaStream_t stream);
+
+  template void transpose_axis_01_kernelLauncher(half *out,
+                                                 half *in,
+                                                 const int dim0,
+                                                 const int dim1,
+                                                 const int dim2,
+                                                 cudaStream_t stream);
+ 
   template void init_kernelLauncher(bool* finished,
                                     int* sequence_length,
                                     int* word_ids,
@@ -855,6 +1280,7 @@ namespace fastertransformer
                                    const int batch_size,
                                    const int beam_width,
                                    cudaStream_t stream);
+
   /* *************************** end of Instantiation *********************************** */
 
 } // end of name space fastertransformer

@@ -9,7 +9,7 @@ Modified the following files:
  * run_squad.py
 
 Hardware settings:
- * 8 x Tesla V100-SXM2-16GB (with mclk 877MHz, pclk 1530MHz)
+ * 4 x Tesla V100-SXM2-16GB (with mclk 877MHz, pclk 1530MHz)
 
 ## Setup
 
@@ -27,8 +27,7 @@ Download pretrained bert checkpoint.
 
 ```bash
 wget https://storage.googleapis.com/bert_models/2020_02_20/uncased_L-12_H-768_A-12.zip -O uncased_L-12_H-768_A-12.zip
-unzip uncased_L-12_H-768_A-12.zip
-mv uncased_L-12_H-768_A-12 squad_model
+unzip uncased_L-12_H-768_A-12.zip -d squad_model
 ```
 
 Download SQuAD dataset
@@ -44,7 +43,7 @@ wget -P squad_data https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v1.1.j
 ### Finetune a high precision model with:
 
 ```bash
-mpirun -np 8 -H localhost:8 \
+mpirun -np 4 -H localhost:4 \
     --allow-run-as-root -bind-to none -map-by slot \
     -x NCCL_DEBUG=INFO \
     -x LD_LIBRARY_PATH \
@@ -59,24 +58,24 @@ mpirun -np 8 -H localhost:8 \
     --do_train=True \
     --do_predict=True \
     --if_quant=False \
-    --train_batch_size=4 \
+    --train_batch_size=8 \
     --learning_rate=1e-5 \
     --num_train_epochs=2.0 \
     --save_checkpoints_steps 1000 \
     --horovod
 
-python ../sample/tensorflow_bert/squad_evaluate_v1_1.py squad_data/dev-v1.1.json squad_model/finetuned_base/predictions.json
+python ../../sample/tensorflow/tensorflow_bert/squad_evaluate_v1_1.py squad_data/dev-v1.1.json squad_model/finetuned_base/predictions.json
 ```
 
 The results would be like:
 
 ```bash
-{"exact_match": 82.03, "f1": 89.55}
+{"exact_match": 82.44, "f1": 89.57}
 ```
 
 ### PTQ by calibrating:
 
-`ft_mode` is unified with int8_mode in FasterTransformer, can be one of `1` or `2`.
+`quant_mode` is unified with int8_mode in FasterTransformer, can be one of `ft1` or `ft2` or `ft3`.
 
 ```bash
 python run_squad.py \
@@ -94,16 +93,16 @@ python run_squad.py \
     --calib_batch=16 \
     --calib_method=percentile \
     --percentile=99.999 \
-    --ft_mode=2
+    --quant_mode=ft2
 
-python ../sample/tensorflow_bert/squad_evaluate-v1.1.py squad_data/dev-v1.1.json squad_model/PTQ_mode_2/predictions.json
+python ../../sample/tensorflow/tensorflow_bert/squad_evaluate_v1_1.py squad_data/dev-v1.1.json squad_model/PTQ_mode_2/predictions.json
 ```
 
 The results would be like:
 
 ```bash
-{"exact_match": 81.68, "f1": 88.97}     # for mode 1
-{"exact_match": 80.65, "f1": 88.31}     # for mode 2
+{"exact_match": 81.67, "f1": 88.94}     # for mode 1
+{"exact_match": 80.44, "f1": 88.30}     # for mode 2
 ```
 
 
@@ -112,7 +111,7 @@ The results would be like:
 If PTQ does not yield an acceptable result you can finetune with quantization to recover accuracy.
 We recommend to calibrate the pretrained model and finetune to avoid overfitting:
 
-`ft_mode` is unified with int8_mode in FasterTransformer, can be one of `1` or `2`.
+`quant_mode` is unified with int8_mode in FasterTransformer, can be one of `ft1` or `ft2` or `ft3`.
 
 ```bash
 python run_squad.py \
@@ -128,10 +127,10 @@ python run_squad.py \
     --calib_batch=16 \
     --calib_method=percentile \
     --percentile=99.99 \
-    --ft_mode=2
+    --quant_mode=ft2
 
 
-mpirun -np 8 -H localhost:8 \
+mpirun -np 4 -H localhost:4 \
     --allow-run-as-root -bind-to none -map-by slot \
     -x NCCL_DEBUG=INFO \
     -x LD_LIBRARY_PATH \
@@ -146,21 +145,21 @@ mpirun -np 8 -H localhost:8 \
     --do_train=True \
     --do_predict=True \
     --if_quant=True \
-    --train_batch_size=4 \
-    --learning_rate=5e-6 \
+    --train_batch_size=8 \
+    --learning_rate=1e-5 \
     --num_train_epochs=2.0 \
     --save_checkpoints_steps 1000 \
-    --ft_mode=2
+    --quant_mode=ft2 \
     --horovod
 
-python ../sample/tensorflow_bert/squad_evaluate-v1.1.py squad_data/dev-v1.1.json squad_model/QAT_mode_2/predictions.json
+python ../../sample/tensorflow/tensorflow_bert/squad_evaluate_v1_1.py squad_data/dev-v1.1.json squad_model/QAT_mode_2/predictions.json
 ```
 
 The results would be like:
 
 ```bash
-{"exact_match": 82.17, "f1": 89.34}     # for mode 1
-{"exact_match": 81.99, "f1": 89.14}     # for mode 2
+{"exact_match": 82.11, "f1": 89.39}     # for mode 1
+{"exact_match": 81.74, "f1": 89.12}     # for mode 2
 ```
 
 
@@ -187,9 +186,9 @@ python run_squad.py \
     --calib_batch=16 \
     --calib_method=percentile \
     --percentile=99.99 \
-    --ft_mode=2
+    --quant_mode=ft2
 
-mpirun -np 8 -H localhost:8 \
+mpirun -np 4 -H localhost:4 \
     --allow-run-as-root -bind-to none -map-by slot \
     -x NCCL_DEBUG=INFO \
     -x LD_LIBRARY_PATH \
@@ -204,20 +203,21 @@ mpirun -np 8 -H localhost:8 \
     --do_train=True \
     --do_predict=True \
     --if_quant=True \
-    --train_batch_size=4 \
-    --learning_rate=5e-6 \
+    --train_batch_size=8 \
+    --learning_rate=2e-5 \
     --num_train_epochs=10.0 \
     --save_checkpoints_steps 1000 \
-    --ft_mode=2
-    --horovod
+    --quant_mode=ft2 \
+    --horovod \
     --distillation=True \
     --teacher=squad_model/finetuned_base/model.ckpt-5474
 
-python ../sample/tensorflow_bert/squad_evaluate-v1.1.py squad_data/dev-v1.1.json squad_model/QAT_KD_mode_2/predictions.json
+python ../../sample/tensorflow/tensorflow_bert/squad_evaluate_v1_1.py squad_data/dev-v1.1.json squad_model/QAT_KD_mode_2/predictions.json
 ```
 
 The results would be like:
 
 ```bash
-{"exact_match": 83.56, "f1": 90.22}
+{"exact_match": 84.06, "f1": 90.63}     # for mode 1
+{"exact_match": 84.02, "f1": 90.56}     # for mode 2
 ```

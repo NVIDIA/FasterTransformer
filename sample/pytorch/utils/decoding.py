@@ -19,12 +19,14 @@ import os
 import math
 import torch
 import torch.nn as nn
+import torch.cuda.nvtx as nvtx
 
 from onmt.modules import Embeddings, AverageAttention
 from onmt.decoders.decoder import DecoderBase
 from onmt.decoders.transformer import TransformerDecoderLayer
 from onmt.utils.misc import tile, sequence_mask
 
+from utils.decoder import get_op_cache_config
 
 class DecodingWeights(object):
     def __init__(self, layer_num, hidden_dim, vocab_size, onmtcheckpoint=None, max_step_for_pe=2048):
@@ -157,7 +159,7 @@ class DecodingWeights(object):
             self.w[i] = self.w[i].cuda()
 
     def to_half(self):
-        for i in range(len(self.w) - 1):    # embedding_bias is float32
+        for i in range(len(self.w)):
             self.w[i] = self.w[i].half()
 
     def _get_position_encoding(self):
@@ -223,13 +225,8 @@ def finalize(beam_size, output_ids, parent_ids, out_seq_lens, end_id, max_seq_le
     output_ids = torch.reshape(output_ids, shape)
     parent_ids = torch.reshape(parent_ids, shape)
     if output_ids.is_cuda:
-        if args.ths:
-            torch.classes.load_library(args.ths_path)
-            ids = torch.ops.fastertransformer.gather_tree(output_ids.to(torch.int32), parent_ids.to(torch.int32), max_lens.to(torch.int32), end_id)
-        else:
-            sys.path.insert(0, os.path.abspath(args.module_path))
-            from th_fastertransformer import gather_tree as gather_tree_cuda
-            ids = gather_tree_cuda(output_ids.to(torch.int32), parent_ids.to(torch.int32), max_lens.to(torch.int32), end_id)
+        torch.classes.load_library(args.ths_path)
+        ids = torch.ops.fastertransformer.gather_tree(output_ids.to(torch.int32), parent_ids.to(torch.int32), max_lens.to(torch.int32), end_id)
     else:
         ids = gather_tree(output_ids, parent_ids, max_lens, end_id)
     ids = torch.einsum('ijk->jki', ids)    # batch_size, beam_size, max_seq_len
@@ -240,28 +237,34 @@ def finalize(beam_size, output_ids, parent_ids, out_seq_lens, end_id, max_seq_le
 
 
 class FTDecoderLayer(nn.Module):
-    def __init__(self, head_num, head_size, weights, args):
+    def __init__(self, head_num, head_size, mem_hidden_dim, weights, args):
         super().__init__()
         self.args = args
-        if args.ths:
-            torch.classes.load_library(args.ths_path)
-            try:
-                self.dec_layer = torch.classes.FasterTransformer.Decoder(head_num, head_size, *weights)
-            except:
-                # legacy ths for 20.03 image
-                self.dec_layer = torch.classes.FasterTransformerDecoder(head_num, head_size, *weights)
-        else:
-            sys.path.insert(0, os.path.abspath(args.module_path))
-            from th_fastertransformer import FasterTransformerDecoder
-            self.dec_layer = FasterTransformerDecoder(head_num, head_size, *weights)
+        self.is_fp16 = True if self.args.data_type == 'fp16' else False
+        # self.use_batch_major_op_cache = False
+        # get_op_cache_config(head_size, self.is_fp16)
+        self.use_batch_major_op_cache, self.op_cache_dim_x = get_op_cache_config(head_size, self.is_fp16)
+        torch.classes.load_library(args.ths_path)
+        try:
+            self.dec_layer = torch.classes.FasterTransformer.Decoder(head_num, head_size, mem_hidden_dim, *weights)
+        except:
+            # legacy ths for 20.03 image
+            self.dec_layer = torch.classes.FasterTransformerDecoder(head_num, head_size, mem_hidden_dim, *weights)
     
-    def forward(self, inputs, memory, memory_seq_lens, self_cache, mem_cache):
-        if self.args.data_type == 'fp16':
-            self_cache_tmp = torch.zeros(2, 1, self_cache.size(2), self_cache.size(3), dtype=torch.half).cuda()
+    def forward(self, inputs, memory, memory_seq_lens, self_cache, mem_cache, step):
+        # nvtx.range_push("decoder_pre")
+        dtype = torch.half if self.is_fp16 else torch.float32
+        if self.use_batch_major_op_cache == False:
+            self_cache_tmp = [ torch.zeros(1, self_cache[0].size(1), self_cache[0].size(2), dtype=dtype, device='cuda'),
+                               torch.zeros(1, self_cache[1].size(1), self_cache[1].size(2), dtype=dtype, device='cuda') ]
+            self_cache[0] = torch.cat([self_cache[0], self_cache_tmp[0]], 0)
+            self_cache[1] = torch.cat([self_cache[1], self_cache_tmp[1]], 0)
         else:
-            self_cache_tmp = torch.zeros(2, 1, self_cache.size(2), self_cache.size(3)).cuda()
-        self_cache = torch.cat([self_cache, self_cache_tmp], 1)
-        output = self.dec_layer.forward(inputs, memory, memory_seq_lens, self_cache, mem_cache)
+            self_cache_tmp = [ torch.zeros(self_cache[0].size(0), self_cache[0].size(1), self_cache[0].size(2), 1, self_cache[0].size(4), dtype=dtype, device='cuda'),
+                               torch.zeros(self_cache[1].size(0), self_cache[1].size(1), 1, self_cache[1].size(3), dtype=dtype, device='cuda') ]
+            self_cache[0] = torch.cat([self_cache[0], self_cache_tmp[0]], 3)
+            self_cache[1] = torch.cat([self_cache[1], self_cache_tmp[1]], 2)
+        output = self.dec_layer.forward(inputs, memory, memory_seq_lens, (self_cache[0], self_cache[1]), mem_cache, step)
         return output, self_cache, mem_cache
 
 
@@ -288,7 +291,7 @@ class TransformerDecoder(DecoderBase):
             N. of cross attention heads to use for alignment guiding
     """
 
-    def __init__(self, num_layers, d_model, heads, d_ff,
+    def __init__(self, num_layers, d_model, heads, head_size, d_ff,
                  copy_attn, self_attn_type, dropout, attention_dropout,
                  embeddings, max_relative_positions, aan_useffn,
                  full_context_alignment, alignment_layer,
@@ -299,6 +302,14 @@ class TransformerDecoder(DecoderBase):
         if not self.args.model_type:
             raise ValueError("no model_type is supplied.")
         self.embeddings = embeddings
+
+        # relevant to custom cache config
+        # self.use_batch_major_op_cache = False
+        # self.op_cache_dim_x = 1
+        self.is_fp16 = True if self.args.data_type == 'fp16' else False
+        self.use_batch_major_op_cache, self.op_cache_dim_x = get_op_cache_config(head_size, self.is_fp16)
+        self.head_num = heads
+        self.size_per_head = head_size
 
         # Decoder State
         self.state = {}
@@ -327,6 +338,7 @@ class TransformerDecoder(DecoderBase):
             opt.dec_layers,
             opt.dec_rnn_size,
             opt.heads,
+            opt.dec_rnn_size // opt.heads,
             opt.transformer_ff,
             opt.copy_attn,
             opt.self_attn_type,
@@ -347,29 +359,35 @@ class TransformerDecoder(DecoderBase):
         self.state["cache"] = None
 
     def map_state(self, fn):
-        def _recursive_map(struct, batch_dim=0):
+        def _recursive_map(struct, batch_dim=0, use_batch_major_op_cache=False):
             for k, v in struct.items():
                 if v is not None:
                     if isinstance(v, dict):
-                        _recursive_map(v, batch_dim)
+                        _recursive_map(v, batch_dim, use_batch_major_op_cache)
                     else:
-                        struct[k] = fn(v, batch_dim)
-
+                        if isinstance(v, list):
+                            # only custom cache is passed as a list, so we know its batch dim == 0 or 1
+                            batch_dim_ = 0 if use_batch_major_op_cache else 1
+                            struct[k] = [fn(vv, batch_dim_) for vv in struct[k]]
+                        else:
+                            struct[k] = fn(v, batch_dim)
         self.state["src"] = fn(self.state["src"], 1)
         if self.args.model_type == 'ori' or self.args.model_type == 'torch_decoding':
             if self.state["cache"] is not None:
-                _recursive_map(self.state["cache"])
+                _recursive_map(self.state["cache"], 0)
         if self.args.model_type == 'decoder_ext' or self.args.model_type == 'torch_decoding_with_decoder_ext':
             if self.state["cache"] is not None:
-                _recursive_map(self.state["cache"], 2)
+                _recursive_map(self.state["cache"], 2, self.use_batch_major_op_cache)
+                #_recursive_map(self.state["cache"], 2)
 
     def detach_state(self):
         self.state["src"] = self.state["src"].detach()
 
     def forward(self, tgt, memory_bank, step=None, **kwargs):
         """Decode, possibly stepwise."""
+        decoding_max_seq_len = kwargs["decoding_max_seq_len"]
         if step == 0:
-            self._init_cache(memory_bank)
+            self._init_cache(memory_bank, decoding_max_seq_len)
 
         tgt_words = tgt[:, :, 0].transpose(0, 1)
 
@@ -407,7 +425,7 @@ class TransformerDecoder(DecoderBase):
             src_lens_ = src_lens.to(torch.int)
             for i, layer in enumerate(self.transformer_layers):
                 layer_cache = self.state["cache"]["layer_{}".format(i)]
-                output, self_cache_, mem_cache_ = layer(output, src_memory_bank, src_lens_, layer_cache['self'], layer_cache['mem'])
+                output, self_cache_, mem_cache_ = layer(output, src_memory_bank, src_lens_, layer_cache['self'], layer_cache['mem'], step)
                 layer_cache['self'] = self_cache_
                 layer_cache['mem'] = mem_cache_
 
@@ -426,7 +444,7 @@ class TransformerDecoder(DecoderBase):
         # TODO change the way attns is returned dict => list or tuple (onnx)
         return dec_outs, attns
 
-    def _init_cache(self, memory_bank):
+    def _init_cache(self, memory_bank, decoding_max_seq_len):
         self.state["cache"] = {}
         batch_size = memory_bank.size(1)
         depth = memory_bank.size(-1)
@@ -443,14 +461,18 @@ class TransformerDecoder(DecoderBase):
                 self.state["cache"]["layer_{}".format(i)] = layer_cache
         elif self.args.model_type == 'decoder_ext' or self.args.model_type == 'torch_decoding_with_decoder_ext':
             max_seq_len = memory_bank.size(0)
-            for i in range(len(self.transformer_layers)):
+            dtype = torch.half if self.args.data_type == 'fp16' else torch.float32
+            for i, layer in enumerate(self.transformer_layers):
                 layer_cache = {}
-                if self.args.data_type == 'fp16':
-                    layer_cache['self'] = torch.zeros(2, 0, batch_size, depth, dtype=torch.half).cuda()
-                    layer_cache['mem'] = torch.zeros(1, 2, batch_size, max_seq_len, depth, dtype=torch.half).cuda()
+                if self.use_batch_major_op_cache:
+                    layer_cache['self'] = [ torch.zeros(batch_size, self.head_num, self.size_per_head // self.op_cache_dim_x, 
+                                   decoding_max_seq_len, self.op_cache_dim_x, dtype=dtype, device='cuda'),
+                       torch.zeros(batch_size, self.head_num, 
+                                   decoding_max_seq_len, self.size_per_head, dtype=dtype, device='cuda') ]
                 else:
-                    layer_cache['self'] = torch.zeros(2, 0, batch_size, depth).cuda()
-                    layer_cache['mem'] = torch.zeros(1, 2, batch_size, max_seq_len, depth).cuda()
+                    layer_cache['self'] = [ torch.zeros(0, batch_size, depth, dtype=dtype, device='cuda'),
+                                            torch.zeros(0, batch_size, depth, dtype=dtype, device='cuda') ]
+                layer_cache['mem'] = torch.zeros(1, 2, batch_size, max_seq_len, depth, dtype=dtype, device='cuda')
                 self.state["cache"]["layer_{}".format(i)] = layer_cache
 
     def update_dropout(self, dropout, attention_dropout):
@@ -465,17 +487,12 @@ class CustomDecoding(nn.Module):
         hidden_dim = head_num * head_size
         self.end_id = end_id
         self.args = args
-        if args.ths:
-            torch.classes.load_library(os.path.abspath(args.ths_path))
-            try:
-                self.decoding = torch.classes.FasterTransformer.Decoding(head_num, head_size, hidden_dim, layer_num, vocab_size, start_id, end_id, beam_search_diversity_rate, *weights.w)
-            except:
-                # legacy ths for 20.03 image
-                self.decoding = torch.classes.FasterTransformerDecoding(head_num, head_size, hidden_dim, layer_num, vocab_size, start_id, end_id, beam_search_diversity_rate, *weights.w)
-        else:
-            sys.path.insert(0, os.path.abspath(args.module_path))
-            from th_fastertransformer import FasterTransformerDecoding
-            self.decoding = FasterTransformerDecoding(head_num, head_size, hidden_dim, layer_num, vocab_size, start_id, end_id, beam_search_diversity_rate, *weights.w)
+        torch.classes.load_library(os.path.abspath(args.ths_path))
+        try:
+            self.decoding = torch.classes.FasterTransformer.Decoding(head_num, head_size, hidden_dim, layer_num, vocab_size, start_id, end_id, beam_search_diversity_rate, *weights.w)
+        except:
+            # legacy ths for 20.03 image
+            self.decoding = torch.classes.FasterTransformerDecoding(head_num, head_size, hidden_dim, layer_num, vocab_size, start_id, end_id, beam_search_diversity_rate, *weights.w)
     
     def forward(self, batch_size, beam_size, max_seq_len, memory, memory_seq_lens):
         extended_memory = tile(memory, beam_size)
@@ -487,11 +504,9 @@ class CustomDecoding(nn.Module):
 
 
 class ArgHelper(object):
-    def __init__(self, model_type=None, data_type=None, module_path=None, ths=False, ths_path=None):
+    def __init__(self, model_type=None, data_type=None, ths_path=None):
         self.model_type = model_type
         self.data_type = data_type
-        self.module_path = module_path
-        self.ths = ths
         self.ths_path = ths_path
 
 
@@ -507,11 +522,10 @@ class TorchDecoding(nn.Module):
         self.diversity_rate = beam_search_diversity_rate
         self.args = args
         emb = Embeddings(self.hidden_dim, vocab_size, 1, position_encoding=True)
-        self.decoder = TransformerDecoder(layer_num, self.hidden_dim, head_num, 4*self.hidden_dim,
+        self.decoder = TransformerDecoder(layer_num, self.hidden_dim, head_num, head_size, 4*self.hidden_dim,
                                           False, 'scaled-dot', 0, 0, emb, 0, False, False, -3, 0, args)
         self.generator = nn.Linear(self.hidden_dim, vocab_size)
         self.logsoftmax = nn.LogSoftmax(dim=-1)
-        self.module_path = args.module_path
         if args.model_type == 'torch_decoding':
             for i in range(layer_num):
                 self.decoder.transformer_layers[i].layer_norm_1.weight.data = weights.w[0][i]
@@ -550,7 +564,7 @@ class TorchDecoding(nn.Module):
                     for i in range(len(w[-1])):
                         w[-1][i] = w[-1][i].half()
             decoder_layers = nn.ModuleList(
-                [FTDecoderLayer(head_num, head_size, w[i], args) for i in range(layer_num)])
+                [FTDecoderLayer(head_num, head_size, head_num * head_size, w[i], args) for i in range(layer_num)])
             self.decoder.transformer_layers = decoder_layers
         else:
             raise ValueError('wrong model_type')
@@ -561,6 +575,7 @@ class TorchDecoding(nn.Module):
         self.generator.bias.data = weights.w[31]
 
     def forward(self, batch_size, beam_size, max_seq_len, memory, memory_seq_lens):
+        # nvtx.range_push("torch_decoding")
         extended_memory = tile(memory, beam_size)
         batchxbeam = extended_memory.size(0)
         extended_memory = extended_memory.transpose(0, 1).contiguous()
@@ -586,7 +601,7 @@ class TorchDecoding(nn.Module):
             if not torch.bitwise_not(finished).any():
                 break
             word_ids = word_ids.view(1, -1, 1)
-            dec_out, dec_attn = self.decoder(word_ids, extended_memory, memory_lengths=extended_memory_seq_lens, step=step)
+            dec_out, dec_attn = self.decoder(word_ids, extended_memory, memory_lengths=extended_memory_seq_lens, step=step, decoding_max_seq_len=max_seq_len)
             logits = self.generator(dec_out.squeeze(0))
             logits = torch.where(finished.view(-1, 1), eos_max_prob, logits).to(torch.float32)
             log_probs = self.logsoftmax(logits.to(torch.float32))
@@ -632,5 +647,8 @@ class TorchDecoding(nn.Module):
             cum_log_probs = torch.where(finished, cum_log_probs, next_cum_log_probs)
             finished = torch.bitwise_or(finished, torch.eq(word_ids, self.end_id))
         
+        # nvtx.range_push("finalize")
         beams, lengths = finalize(beam_size, output_ids, parent_ids, sequence_lengths, self.end_id, args=self.args)
+        # nvtx.range_pop()
+        # nvtx.range_pop()
         return beams, lengths

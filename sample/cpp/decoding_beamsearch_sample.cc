@@ -26,6 +26,10 @@
 
 #include <fstream>
 
+#ifdef USE_NVTX
+  bool NVTX_ON = true;
+#endif
+
 using namespace fastertransformer;
 
 template<typename T>
@@ -50,8 +54,8 @@ int main(int argc, char* argv[])
   
   if(argc != 10)
   {
-    printf("[ERROR] decoding_sample batch_size beam_width head_num size_per_head vocab_size seq_len num_layer memory_hidden_units is_fp16\n");
-    printf("e.g. ./bin/decoding_sample 32 4 8 64 30000 32 6 768 0\n");
+    printf("[ERROR] decoding_beamsearch_sample batch_size beam_width head_num size_per_head vocab_size seq_len num_layer memory_hidden_units is_fp16\n");
+    printf("e.g. ./bin/decoding_beamsearch_sample 32 4 8 64 30000 32 6 768 0\n");
     return 0;
   }
 
@@ -98,14 +102,16 @@ void decoding_sample(int batch_size,
                     int memory_hidden_units)
 {
   const int max_seq_len = seq_len;
-  const int memory_seq_len = seq_len; 
+  const int memory_max_seq_len = seq_len; 
   const int start_id = 1;
   const int end_id = 2;
   const int hidden_units = head_num * size_per_head;
   const int inner_size = 4 * hidden_units;
 
   cublasHandle_t cublasHandle;
+  cublasLtHandle_t cublasLtHandle;
   check_cuda_error(cublasCreate(&cublasHandle));
+  check_cuda_error(cublasLtCreate(&cublasLtHandle));
 
   cudaStream_t stream;
   check_cuda_error(cudaStreamCreate(&stream));
@@ -115,11 +121,14 @@ void decoding_sample(int batch_size,
   DecoderInitParam<T> *param = new DecoderInitParam<T>[decoder_layers];
 
   for(int i = 0; i < decoder_layers; i++){
+    param[i].request_batch_size = batch_size;
+    param[i].request_max_mem_seq_len = memory_max_seq_len;
     param[i].stream = stream;
     param[i].cublas_handle = cublasHandle;
+    param[i].cublaslt_handle = cublasLtHandle;
 
-    T *d_self_Q_kernel, *d_self_K_kernel, *d_self_V_kernel, *d_self_output_kernel;
-    T *d_self_Q_bias, *d_self_K_bias, *d_self_V_bias, *d_self_output_bias;
+    T *d_self_Q_kernel, /**d_self_K_kernel, *d_self_V_kernel,*/ *d_self_output_kernel;
+    T *d_self_Q_bias, /**d_self_K_bias, *d_self_V_bias,*/ *d_self_output_bias;
     T *d_cross_Q_kernel, *d_cross_K_kernel, *d_cross_V_kernel, *d_cross_output_kernel;
     T *d_cross_Q_bias, *d_cross_K_bias, *d_cross_V_bias, *d_cross_output_bias;
     T *d_ffn_kernel1, *d_ffn_bias1, *d_ffn_kernel2, *d_ffn_bias2;
@@ -127,13 +136,15 @@ void decoding_sample(int batch_size,
     T *d_cross_gamma, *d_cross_beta;
     T *d_ffn_gamma, *d_ffn_beta;
     
-    device_malloc(&d_self_Q_kernel, hidden_units * hidden_units);
-    device_malloc(&d_self_K_kernel, hidden_units * hidden_units);
-    device_malloc(&d_self_V_kernel, hidden_units * hidden_units);
+    device_malloc(&d_self_Q_kernel, hidden_units * hidden_units * 3); // fuse qkv
+    // device_malloc(&d_self_Q_kernel, hidden_units * hidden_units);
+    // device_malloc(&d_self_K_kernel, hidden_units * hidden_units);
+    // device_malloc(&d_self_V_kernel, hidden_units * hidden_units);
     device_malloc(&d_self_output_kernel, hidden_units * hidden_units);
-    device_malloc(&d_self_Q_bias, hidden_units);
-    device_malloc(&d_self_K_bias, hidden_units);
-    device_malloc(&d_self_V_bias, hidden_units);
+    device_malloc(&d_self_Q_bias, hidden_units * 3); // fuse qkv
+    // device_malloc(&d_self_Q_bias, hidden_units);
+    // device_malloc(&d_self_K_bias, hidden_units);
+    // device_malloc(&d_self_V_bias, hidden_units);
     device_malloc(&d_self_output_bias, hidden_units);
 
     device_malloc(&d_cross_Q_kernel, hidden_units * hidden_units);
@@ -158,12 +169,12 @@ void decoding_sample(int batch_size,
     device_malloc(&d_ffn_beta, hidden_units);
 
     param[i].self_attention.query_weight.kernel = d_self_Q_kernel;
-    param[i].self_attention.key_weight.kernel = d_self_K_kernel;
-    param[i].self_attention.value_weight.kernel = d_self_V_kernel;
+    // param[i].self_attention.key_weight.kernel = d_self_K_kernel;
+    // param[i].self_attention.value_weight.kernel = d_self_V_kernel;
     param[i].self_attention.attention_output_weight.kernel = d_self_output_kernel;
     param[i].self_attention.query_weight.bias = d_self_Q_bias;
-    param[i].self_attention.key_weight.bias = d_self_K_bias;
-    param[i].self_attention.value_weight.bias = d_self_V_bias;
+    // param[i].self_attention.key_weight.bias = d_self_K_bias;
+    // param[i].self_attention.value_weight.bias = d_self_V_bias;
     param[i].self_attention.attention_output_weight.bias = d_self_output_bias;
 
     param[i].cross_attention.query_weight.kernel = d_cross_Q_kernel;
@@ -192,7 +203,7 @@ void decoding_sample(int batch_size,
   T *d_memory_tensor;
   T *d_embedding_table;
   T* d_embedding_kernel;
-  float* d_embedding_bias;
+  T* d_embedding_bias;
   T* d_position_encoding_table;
   int* d_output_ids;
   int* d_parent_ids;
@@ -200,7 +211,7 @@ void decoding_sample(int batch_size,
   int* d_memory_sequence_lengths;
   T *d_gamma, *d_beta;    
 
-  device_malloc(&d_memory_tensor, memory_hidden_units * memory_seq_len * batch_size * beam_width);
+  device_malloc(&d_memory_tensor, memory_hidden_units * memory_max_seq_len * batch_size * beam_width);
   device_malloc(&d_embedding_table, hidden_units * vocab_size);
   device_malloc(&d_embedding_kernel, vocab_size * hidden_units);
   device_malloc(&d_embedding_bias, vocab_size);
@@ -213,10 +224,11 @@ void decoding_sample(int batch_size,
   device_malloc(&d_beta, hidden_units);
 
   int *h_memory_sequence_lengths = new int[batch_size * beam_width];
-  for(int i = 0; i < batch_size * beam_width; i++) h_memory_sequence_lengths[i] = memory_seq_len;
+  for(int i = 0; i < batch_size * beam_width; i++) h_memory_sequence_lengths[i] = memory_max_seq_len;
   check_cuda_error(cudaMemcpy(d_memory_sequence_lengths, h_memory_sequence_lengths, sizeof(int) * batch_size * beam_width, cudaMemcpyHostToDevice));
 
   decoding_params.cublas_handle = cublasHandle;
+  decoding_params.cublaslt_handle = cublasLtHandle;
   decoding_params.stream = stream;
   decoding_params.memory_tensor = d_memory_tensor;
   decoding_params.embedding_table = d_embedding_table;
@@ -236,8 +248,8 @@ void decoding_sample(int batch_size,
     DecodingBeamsearch<type>(allocator, batch_size, beam_width,
                                          max_seq_len, head_num, size_per_head, 
                                          vocab_size, decoder_layers,
-                                         memory_hidden_units, memory_seq_len, 
-                                         start_id, end_id);
+                                         memory_hidden_units, memory_max_seq_len, 
+                                         start_id, end_id, -0.0f, true, true);
  
   //warm up
   int ite = 50;

@@ -29,6 +29,7 @@ transformer_op_module = tf.load_op_library(
 
 ACTIVATION_AMAX_NUM = 80
 INT8O_GEMM_NUM = 8
+TRT_FUSED_MHA_AMAX_NUM = 3
 
 def checkpoint_quantization(in_checkpoint_file, out_checkpoint_file, per_channel_quantization):
     var_list = checkpoint_utils.list_variables(tf.flags.FLAGS.init_checkpoint)
@@ -40,7 +41,7 @@ def checkpoint_quantization(in_checkpoint_file, out_checkpoint_file, per_channel
         for name, shape in var_list:
             var = checkpoint_utils.load_variable(tf.flags.FLAGS.init_checkpoint, name)
             if "intermediate/dense/kernel" in name and amaxTotalNum == 0:
-                amaxTotalNum = ACTIVATION_AMAX_NUM + 9*shape[0] + INT8O_GEMM_NUM
+                amaxTotalNum = ACTIVATION_AMAX_NUM + 9*shape[0] + INT8O_GEMM_NUM + TRT_FUSED_MHA_AMAX_NUM
                 print(amaxTotalNum, shape[0])
             recon_dtype = var.dtype
             restore_vars.append(tf.get_variable(name, shape=shape, dtype=var.dtype))
@@ -236,10 +237,22 @@ def checkpoint_quantization(in_checkpoint_file, out_checkpoint_file, per_channel
                 for e in quant_max_processed_:
                     amaxList[amax_id] = e
                     amax_id += 1
+
             #for int8O gemm deQuant
             for j in range(INT8O_GEMM_NUM):
                 amaxList[amax_id] = (int8O_gemm_input_amax_list[j]*int8O_gemm_weight_amax_list[j])/(127.0*int8O_gemm_output_amax_list[j])
                 amax_id += 1
+
+            #for trt fused MHA amax 
+            #### QKV_addBias_amax
+            amaxList[amax_id] = np.maximum(np.maximum(amaxList[8],amaxList[16]), amaxList[24])
+            amax_id += 1
+            #### softmax amax
+            amaxList[amax_id] = amaxList[32]
+            amax_id += 1
+            #### bmm2 amax
+            amaxList[amax_id] = amaxList[36]
+            amax_id += 1
             amaxL = tf.get_default_graph().get_tensor_by_name("bert/encoder/layer_{}/amaxList:0".format(i))
             sess.run(tf.assign(amaxL, amaxList))
             
@@ -253,7 +266,7 @@ if __name__ == '__main__':
     tf.flags.DEFINE_integer("int8_mode", 1, "int8 mode in FasterTransformer, default as 1")
     if tf.flags.FLAGS.int8_mode == 1:
         per_channel_quantization = True
-    elif tf.flags.FLAGS.int8_mode == 2:
+    elif tf.flags.FLAGS.int8_mode == 2 or tf.flags.FLAGS.int8_mode == 3:
         per_channel_quantization = False
     else:
         raise ValueError("wrong int8_mode argument")

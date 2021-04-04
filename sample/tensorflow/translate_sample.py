@@ -1,4 +1,4 @@
-# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,13 +30,17 @@ from __future__ import print_function
 import copy
 from datetime import datetime
 import tensorflow as tf
+import random
 import numpy as np
 import argparse
+import time
 import os
 from utils.common import TransformerArgument
 from utils.common import DecodingSamplingArgument
 from utils.common import DecodingBeamsearchArgument
+from utils.common import cudaProfiler
 from utils.encoder import tf_encoder_opennmt
+from utils.encoder import ft_encoder_opennmt
 from utils.decoding import tf_beamsearch_decoding
 from utils.decoding import tf_sampling_decoding
 from utils.decoding import op_beamsearch_decoding
@@ -50,6 +54,10 @@ def translate_sample(args_dict):
     for key in args_dict:
         print("{}: {}".format(key, args_dict[key]))
     print("========================================")
+    
+    np.random.seed(1)
+    tf.set_random_seed(1)
+    random.seed(1)
 
     start_of_sentence_id = 1
     end_of_sentence_id = 2
@@ -84,6 +92,7 @@ def translate_sample(args_dict):
         })
     vocab_size = target_inputter.vocabulary_size
     source_file = args_dict['source']
+    is_remove_padding = True if args_dict['remove_padding'].lower() == "true" else False
     
     encoder_args = TransformerArgument(beam_width=1,
                                         head_num=encoder_head_num,
@@ -91,7 +100,8 @@ def translate_sample(args_dict):
                                         num_layer=encoder_num_layer,
                                         dtype=tf_datatype,
                                         kernel_init_range=kernel_initializer_range,
-                                        bias_init_range=bias_initializer_range)
+                                        bias_init_range=bias_initializer_range,
+                                        remove_padding=is_remove_padding)
     
     decoder_args = TransformerArgument(beam_width=beam_width,
                                         head_num=decoder_head_num,
@@ -99,7 +109,8 @@ def translate_sample(args_dict):
                                         num_layer=decoder_num_layer,
                                         dtype=tf_datatype,
                                         kernel_init_range=kernel_initializer_range,
-                                        bias_init_range=bias_initializer_range)
+                                        bias_init_range=bias_initializer_range,
+                                        memory_hidden_dim=encoder_head_num * encoder_size_per_head)
     
     decoder_args_2 = copy.deepcopy(decoder_args) # for beam search
     decoder_args_2.__dict__ = copy.deepcopy(decoder_args.__dict__)
@@ -129,9 +140,19 @@ def translate_sample(args_dict):
         memory_sequence_length = source["length"]
 
         tf_encoder_result = tf_encoder_opennmt(source_embedding, encoder_args, sequence_length=memory_sequence_length)
-        tf_encoder_result = tf.cast(tf_encoder_result, tf_datatype) 
+        
+        encoder_vars = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES)
+        encoder_variables_dict = {}
+        for v in encoder_vars:
+            encoder_variables_dict[v.name] = v
+        
+        ft_encoder_result = ft_encoder_opennmt(inputs=source_embedding,
+                                               encoder_args=encoder_args,
+                                               encoder_vars_dict=encoder_variables_dict,
+                                               sequence_length=memory_sequence_length)
         
     tf_encoder_result = tf.reshape(tf_encoder_result, tf.shape(source_embedding))
+    ft_encoder_result = tf.reshape(ft_encoder_result, tf.shape(source_embedding))
 
     with tf.variable_scope("transformer/decoder", reuse=tf.AUTO_REUSE):
         target_inputter.build()
@@ -193,7 +214,7 @@ def translate_sample(args_dict):
     decoder_variables = all_vars[decoder_var_start_id + 1:] # decoder_var_start_id + 1 means skip the embedding table
     
     ### OP BeamSearch Decoding ###
-    op_beamsearch_target_ids, op_beamsearch_target_length, _, _, _ = op_beamsearch_decoding(tf_encoder_result,
+    op_beamsearch_target_ids, op_beamsearch_target_length, _, _, _ = op_beamsearch_decoding(ft_encoder_result,
                                                                                             memory_sequence_length,
                                                                                             target_inputter.embedding,
                                                                                             decoder_variables,
@@ -204,7 +225,7 @@ def translate_sample(args_dict):
     ### end of OP BeamSearch Decoding ###
 
     ### OP Sampling Decoding ###
-    op_sampling_target_ids, op_sampling_target_length = op_sampling_decoding(tf_encoder_result,
+    op_sampling_target_ids, op_sampling_target_length = op_sampling_decoding(ft_encoder_result,
                                                                             memory_sequence_length,
                                                                             target_inputter.embedding,
                                                                             decoder_variables,
@@ -262,6 +283,11 @@ def translate_sample(args_dict):
         elif var.dtype.base_dtype == tf.float16:
             half_var_list.append(var)
     
+    if(len(translation_result_list) == 0):
+        print("[WARNING] No put any test cases.")
+    
+    cuda_profiler = cudaProfiler()
+    cuda_profiler.start()
     for i in range(len(translation_result_list)):
         with tf.Session(config=config) as sess:
             sess.run(tf.global_variables_initializer())        
@@ -301,6 +327,9 @@ def translate_sample(args_dict):
             os.system("head -n %d %s > %s" % (len(translation_result_list[i].token_list), args_dict['target'], ref_file_path))
             translation_result_list[i].bleu_score = bleu_score(translation_result_list[i].file_name, ref_file_path)
             os.system("rm {}".format(ref_file_path))
+            
+            time.sleep(60)
+    cuda_profiler.stop()
 
     for t in translation_result_list:
         print("[INFO] {} translates {} batches taking {:.2f} sec to translate {} tokens, BLEU score: {:.2f}, {:.0f} tokens/sec.".format(
@@ -358,6 +387,8 @@ if __name__ == "__main__":
                         help='Source file path. Default is ./tensorflow/utils/translation/test.en ')
     parser.add_argument('--target', type=str, default="./tensorflow/utils/translation/test.de", metavar='STRING',
                         help='Target file path. Default is ./tensorflow/utils/translation/test.de ')
+    parser.add_argument('--remove_padding', type=str, default="True", metavar='BOOL',
+                        help='Remove padding of encoder or not. Default is True.', choices=["True", "False"])
 
     args = parser.parse_args()
     translate_sample(vars(args))

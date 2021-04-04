@@ -354,14 +354,12 @@ def main():
 
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for distributed training on gpus")
     parser.add_argument("--threads", type=int, default=1, help="multiple threads for converting example to features")
-    parser.add_argument("--model_type", type=str, help="ori, ths, ext, thsext")
+    parser.add_argument("--model_type", type=str, help="ori, ths, thsext")
     parser.add_argument("--data_type", type=str, help="fp32, fp16")
-    parser.add_argument('--module_path', type=str, default='./',
-                        help='path containing the th_fastertransformer dynamic lib')
-    parser.add_argument('--ths_path', type=str, default='./lib/libths_fastertransformer.so',
-                        help='path of the ths_fastertransformer dynamic lib file')
+    parser.add_argument('--ths_path', type=str, default='./lib/libpyt_fastertransformer.so',
+                        help='path of the pyt_fastertransformer dynamic lib file')
     parser.add_argument('--int8_mode', type=int, default=0, metavar='NUMBER',
-                        help='int8 mode (default: 0)', choices=[0, 1, 2])
+                        help='int8 mode (default: 0)', choices=[0, 1, 2, 3])
     parser.add_argument('--remove_padding', action='store_true',
                         help='Remove the padding of sentences of encoder.')
     parser.add_argument('--allow_gemm_test', action='store_true',
@@ -443,33 +441,13 @@ def main():
                 model.half()
                 if args.int8_mode == 1:
                     per_channel = True
-                elif args.int8_mode == 2:
+                elif args.int8_mode == 2 or args.int8_mode == 3:
                     per_channel = False
                 else:
                     raise ValueError("wrong int8_mode argument")
             elif args.data_type == 'fp16':
                 logger.info("Use fp16")
                 model.half()
-            if args.model_type == 'ext':
-                logger.info("Use custom BERT encoder")
-                from utils.encoder import EncoderWeights, CustomEncoder
-                weights = EncoderWeights(
-                    model.config.num_hidden_layers, model.config.hidden_size,
-                    torch.load(os.path.join(checkpoint, 'pytorch_model.bin'), map_location='cpu'))
-                if args.int8_mode != 0:
-                    weights.to_int8(per_channel, args.module_path, args.ths_path)
-                elif args.data_type == 'fp16':
-                    weights.to_half()
-                weights.to_cuda()
-                enc = CustomEncoder(model.config.num_hidden_layers,
-                                    model.config.num_attention_heads,
-                                    model.config.hidden_size//model.config.num_attention_heads,
-                                    weights,
-                                    int8_mode=args.int8_mode,
-                                    remove_padding=args.remove_padding,
-                                    allow_gemm_test=(args.allow_gemm_test),
-                                    use_ths=False, path=os.path.abspath(args.module_path))
-                model.replace_encoder(enc)
             if args.model_type == 'thsext':
                 logger.info("Use custom BERT encoder for TorchScript")
                 from utils.encoder import EncoderWeights, CustomEncoder
@@ -477,7 +455,7 @@ def main():
                     model.config.num_hidden_layers, model.config.hidden_size,
                     torch.load(os.path.join(checkpoint, 'pytorch_model.bin'), map_location='cpu'))
                 if args.int8_mode != 0:
-                    weights.to_int8(per_channel, args.module_path, args.ths_path)
+                    weights.to_int8(per_channel, args.ths_path)
                 elif args.data_type == 'fp16':
                     weights.to_half()
                 weights.to_cuda()
@@ -488,7 +466,7 @@ def main():
                                     int8_mode=args.int8_mode,
                                     remove_padding=args.remove_padding,
                                     allow_gemm_test=(args.allow_gemm_test),
-                                    use_ths=True, path=os.path.abspath(args.ths_path))
+                                    path=os.path.abspath(args.ths_path))
                 enc_ = torch.jit.script(enc)
                 model.replace_encoder(enc_)
             if use_ths:

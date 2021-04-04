@@ -1,4 +1,4 @@
-# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,8 +21,12 @@ set(decoding_beamsearch_sample_files
   decoding_beamsearch_sample.cc
 )
 
-set(gpt2_sample_files
-  gpt2_sample.cc
+set(gpt_sample_files
+  gpt_sample.cc
+)
+
+set(gpt_triton_sample_files
+  gpt_triton_sample.cc
 )
 
 set(decoding_sampling_sample_files
@@ -33,10 +37,16 @@ add_executable(encoder_sample ${encoder_sample_files})
 target_link_libraries(encoder_sample PUBLIC -lcublas -lcudart encoder)
 
 add_executable(decoding_beamsearch_sample ${decoding_beamsearch_sample_files})
-target_link_libraries(decoding_beamsearch_sample PUBLIC -lcublas -lcudart decoder decoding)
+target_link_libraries(decoding_beamsearch_sample PUBLIC -lcublas -lcublasLt -lcudart decoder decoding)
 
-add_executable(gpt2_sample ${gpt2_sample_files})
-target_link_libraries(gpt2_sample PUBLIC -lcublas -lcudart decoder decoding)
+if(BUILD_GPT)
+  add_executable(gpt_sample ${gpt_sample_files})
+  target_link_libraries(gpt_sample PUBLIC -lcublas -lcublasLt -lcudart decoder decoding)
+  add_executable(gpt_triton_sample ${gpt_triton_sample_files})
+  target_link_libraries(gpt_triton_sample PUBLIC -lcublas -lcudart gpt_triton_backend -lmpi nvtx_utils)
+  add_executable(gpt_thread_sample gpt_thread_sample.cc)
+  target_link_libraries(gpt_thread_sample PUBLIC -lcublas -lcudart gpt_triton_backend -lpthread -lnccl nvtx_utils)
+endif()
 
 add_executable(decoding_sampling_sample ${decoding_sampling_sample_files})
-target_link_libraries(decoding_sampling_sample PUBLIC -lcublas -lcudart -lcurand decoder decoding)
+target_link_libraries(decoding_sampling_sample PUBLIC -lcublasLt -lcublas -lcudart -lcurand decoder decoding)

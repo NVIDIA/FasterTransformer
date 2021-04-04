@@ -113,7 +113,8 @@ if __name__ == "__main__":
                                         dtype=tf_datatype,
                                         kernel_init_range=kernel_initializer_range,
                                         bias_init_range=bias_initializer_range,
-                                        fuse_qkv=False)
+                                        fuse_qkv=True,
+                                        memory_hidden_dim=memory_hidden_dim)
     
     decoding_args = DecodingBeamsearchArgument(vocab_size,
                                                 start_of_sentence_id,

@@ -19,9 +19,10 @@ import argparse
 import timeit
 import torch
 import torch.cuda.nvtx as nvtx
+import time
 
 from utils.encoder import EncoderWeights, CustomEncoder, HuggingFaceEncoder
-
+import threading
 
 def sequence_mask(lengths, max_len=None, is_2d=True):
     batch_size = lengths.numel()
@@ -53,7 +54,7 @@ def main():
     parser.add_argument('--fp16', action='store_true',
                         help='is fp16')
     parser.add_argument('--int8_mode', type=int, default=0, metavar='NUMBER',
-                        help='int8 mode (default: 0)', choices=[0, 1, 2])
+                        help='int8 mode (default: 0)', choices=[0, 1, 2, 3])
     parser.add_argument('--time', action='store_true',
                         help='test the time or not.')
     parser.add_argument('--avg_seq_len', type=int, default=-1, metavar='NUMBER',
@@ -65,12 +66,10 @@ def main():
     parser.add_argument('--weight_path', type=str,
                         default=None,
                         help='path containing the pretrained weights')
-    parser.add_argument('--module_path', type=str, default='./',
-                        help='directory containing the th_fastertransformer dynamic lib')
-    parser.add_argument('--ths', action='store_true',
-                        help='use TorchScript mode')
-    parser.add_argument('--ths_path', type=str, default='./lib/libths_fastertransformer.so',
-                        help='path of the ths_fastertransformer dynamic lib file')
+    parser.add_argument('--ths_path', type=str, default='./lib/libpyt_fastertransformer.so',
+                        help='path of the pyt_fastertransformer dynamic lib file')
+    parser.add_argument('-thread_num', '--thread_num', type=int, default=1, metavar='int',
+                        help='Testing multithread if thread_num > 1.')
     args = parser.parse_args()
 
     batch_size = args.batch_size
@@ -96,7 +95,7 @@ def main():
 
     if args.int8_mode == 1:
         per_channel = True
-    elif args.int8_mode == 2:
+    elif args.int8_mode == 2 or args.int8_mode == 3:
         per_channel = False
     elif args.int8_mode != 0:
         raise ValueError("wrong int8_mode argument")
@@ -112,7 +111,6 @@ def main():
     print('use_fp16: ' + str(args.fp16))
     print('int8_mode: ' + str(args.int8_mode))
     print('avg_seq_len: ' + str(args.avg_seq_len))
-    print('TorchScript mode: ' + str(args.ths))
     print('test_time: ' + str(args.time))
     print('remove_padding: ' + str(args.remove_padding))
     print('allow_gemm_test: ' + str(args.allow_gemm_test))
@@ -145,36 +143,48 @@ def main():
     if args.fp16 or args.int8_mode != 0:
         hf_encoder.half()
     hf_encoder.eval()
-    if args.ths:
-        hf_encoder = torch.jit.trace(hf_encoder, (inp, mask))
+    hf_encoder = torch.jit.trace(hf_encoder, (inp, mask))
 
     if args.int8_mode != 0:
-        weights.to_int8(per_channel, args.module_path, args.ths_path)
+        weights.to_int8(per_channel, args.ths_path)
     elif args.fp16:
         weights.to_half()
     weights.to_cuda()
-    module_path = args.ths_path if args.ths else args.module_path
     custom_encoder = CustomEncoder(layer_num, head_num, head_size, weights,
                                     int8_mode=args.int8_mode,
-                                    remove_padding=args.remove_padding, allow_gemm_test=args.allow_gemm_test,
-                                    use_ths=args.ths, path=module_path)
-    if args.ths:
-        custom_encoder = torch.jit.script(custom_encoder)
+                                    remove_padding=False, allow_gemm_test=args.allow_gemm_test,
+                                    path=args.ths_path)
+
+    eff_custom_encoder = CustomEncoder(layer_num, head_num, head_size, weights,
+                                    int8_mode=args.int8_mode,
+                                    remove_padding=True, allow_gemm_test=args.allow_gemm_test,
+                                    path=args.ths_path)
+    custom_encoder = torch.jit.script(custom_encoder)
+    eff_custom_encoder = torch.jit.script(eff_custom_encoder)
 
     with torch.no_grad():
         output_mask = sequence_mask(mem_seq_lens, args.seq_len).to(mask.dtype).unsqueeze(-1)
-        output1 = hf_encoder(inp, mask)[0] * output_mask
-        print(output1)
-        print(output1.size())
+        hf_output = hf_encoder(inp, mask)[0] * output_mask
+        print(hf_output)
+        print(hf_output.size())
 
-        output2 = custom_encoder(inp, mask, mem_seq_lens)[0] * output_mask
-        print(output2)
-        print(output2.size())
+        ft_output = custom_encoder(inp, mask, mem_seq_lens)[0] * output_mask
+        print(ft_output)
+        print(ft_output.size())
 
-        diff = torch.abs(output1 - output2)
-        print('Mean diff: {}'.format(torch.mean(diff)))
-        print('Max diff: {}'.format(torch.max(diff)))
-        print('Min diff: {}'.format(torch.min(diff)))
+        eff_ft_output = eff_custom_encoder(inp, mask, mem_seq_lens)[0] * output_mask
+        print(eff_ft_output)
+        print(eff_ft_output.size())
+
+        diff = torch.abs(hf_output - ft_output)
+        print('FT Mean diff: {}'.format(torch.mean(diff)))
+        print('FT Max diff:  {}'.format(torch.max(diff)))
+        print('FT Min diff:  {}'.format(torch.min(diff)))
+
+        diff = torch.abs(hf_output - eff_ft_output)
+        print('EFF-FT Mean diff: {}'.format(torch.mean(diff)))
+        print('EFF-FT Max diff:  {}'.format(torch.max(diff)))
+        print('EFF-FT Min diff:  {}'.format(torch.min(diff)))
 
         if args.time:
             iterations = 100
@@ -189,6 +199,7 @@ def main():
                 # nvtx.range_pop()
             # nvtx.range_pop()
             t1 = timeit.default_timer() - t10
+            time.sleep(60)
 
             for i in range(iterations):
                 output = custom_encoder(inp, mask, mem_seq_lens)
@@ -200,8 +211,46 @@ def main():
                 # nvtx.range_pop()
             # nvtx.range_pop()
             t2 = timeit.default_timer() - t20
-            print("[INFO] HuggingFaceEnocder time costs: {:.2f} ms".format(t1*1000/iterations))
-            print("[INFO] FasterTransformer time costs: {:.2f} ms".format(t2*1000/iterations))
+            time.sleep(60)
+
+            for i in range(iterations):
+                output = eff_custom_encoder(inp, mask, mem_seq_lens)
+            t30 = timeit.default_timer()
+            # nvtx.range_push("eff_ext")
+            for i in range(iterations):
+                # nvtx.range_push("eff_ext"+str(i))
+                output = eff_custom_encoder(inp, mask, mem_seq_lens)
+                # nvtx.range_pop()
+            # nvtx.range_pop()
+            t3 = timeit.default_timer() - t30
+            time.sleep(60)
+            print("[INFO] HuggingFaceEnocder time costs:    {:.2f} ms".format(t1*1000/iterations))
+            print("[INFO] FasterTransformer time costs:     {:.2f} ms".format(t2*1000/iterations))
+            print("[INFO] EFF-FasterTransformer time costs: {:.2f} ms".format(t3*1000/iterations))
+
+        if args.thread_num > 1:
+            # Multi-threading demonstration
+            thread_list = []
+            thread_num = args.thread_num
+            iterations = 100
+            def run():
+                t40 = timeit.default_timer()
+                for i in range(iterations):
+                    output = custom_encoder(inp, mask, mem_seq_lens)
+                t4 = timeit.default_timer() - t40
+                diff = torch.abs(hf_output - ft_output)
+                print('FT Mean diff: {}'.format(torch.mean(diff)))
+                print('FT Max diff:  {}'.format(torch.max(diff)))
+                print('FT Min diff:  {}'.format(torch.min(diff)))
+                print("[INFO] batch_size {} max_seq_len {} {} layer FT-OP-time {:6.2f} ms with {} threads".format(batch_size,
+                    seq_len, layer_num, t4, thread_num))
+
+            for i in range(thread_num):
+                thread_list.append(threading.Thread(target=run, name="RunFT"))
+            for t in thread_list:
+                t.start()
+            for t in thread_list:
+                t.join()
 
 
 if __name__ == '__main__':

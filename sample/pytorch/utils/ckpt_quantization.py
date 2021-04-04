@@ -20,16 +20,13 @@ import torch
 
 ACTIVATION_AMAX_NUM = 80
 INT8O_GEMM_NUM = 8
+TRT_FUSED_MHA_AMAX_NUM = 3
 
 
-def checkpoint_quantization(init_dict, is_per_channel, module_path='./', ths_path='./lib/libths_fastertransformer.so', verbose=True):
+def checkpoint_quantization(init_dict, is_per_channel, ths_path='./lib/libpyt_fastertransformer.so', verbose=True):
     print("Quantizing checkpoint ...")
-    try:
-        sys.path.insert(0, module_path)
-        from th_fastertransformer import weight_quantize
-    except:
-        torch.classes.load_library(ths_path)
-        weight_quantize = torch.ops.fastertransformer.weight_quantize
+    torch.classes.load_library(ths_path)
+    weight_quantize = torch.ops.fastertransformer.weight_quantize
 
     def init_graph():
         layer_num = 0
@@ -37,7 +34,7 @@ def checkpoint_quantization(init_dict, is_per_channel, module_path='./', ths_pat
         amaxTotalNum = 0
         for name, tensor_value in init_dict.items():
             if "intermediate.dense.weight" in name and amaxTotalNum == 0:
-                amaxTotalNum = ACTIVATION_AMAX_NUM + 9 * tensor_value.size(1) + INT8O_GEMM_NUM
+                amaxTotalNum = ACTIVATION_AMAX_NUM + 9 * tensor_value.size(1) + INT8O_GEMM_NUM + TRT_FUSED_MHA_AMAX_NUM
                 if verbose:
                     print("amaxTotalNum", amaxTotalNum)
                     print("Hidden size:", tensor_value.size(1))
@@ -196,6 +193,17 @@ def checkpoint_quantization(init_dict, is_per_channel, module_path='./', ths_pat
             amaxList[amax_id] = (int8O_gemm_input_amax_list[j]*int8O_gemm_weight_amax_list[j])/(127.0*int8O_gemm_output_amax_list[j])
             amax_id += 1
 
+        #for trt fused MHA amax 
+        #### QKV_addBias_amax
+        amaxList[amax_id] = np.maximum(np.maximum(amaxList[8],amaxList[16]), amaxList[24])
+        amax_id += 1
+        #### softmax amax
+        amaxList[amax_id] = amaxList[32]
+        amax_id += 1
+        #### bmm2 amax
+        amaxList[amax_id] = amaxList[36]
+        amax_id += 1
+
         init_dict["bert.encoder.layer.{}.amaxList".format(i)] = torch.tensor(amaxList, dtype=torch.float32)
         if verbose:
             print("done process layer_{} kernel weight".format(i))
@@ -206,10 +214,8 @@ def checkpoint_quantization(init_dict, is_per_channel, module_path='./', ths_pat
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--module_path', type=str, default='./',
-                        help='directory containing the th_fastertransformer dynamic lib')
-    parser.add_argument('--ths_path', type=str, default='./lib/libths_fastertransformer.so',
-                        help='path of the ths_fastertransformer dynamic lib file')
+    parser.add_argument('--ths_path', type=str, default='./lib/libpyt_fastertransformer.so',
+                        help='path of the pyt_fastertransformer dynamic lib file')
     parser.add_argument('--init_ckpt', type=str,
                         help='checkpoint to be processed')
     parser.add_argument('--quantized_ckpt', type=str,
@@ -219,11 +225,11 @@ if __name__ == '__main__':
     args = parser.parse_args()
     if args.int8_mode == 1:
         per_channel_quantization = True
-    elif args.int8_mode == 2:
+    elif args.int8_mode == 2 or args.int8_mode == 3:
         per_channel_quantization = False
     else:
         raise ValueError("wrong int8_mode argument")
     init_dict = torch.load(args.init_ckpt, map_location='cpu')
-    init_dict = checkpoint_quantization(init_dict, per_channel_quantization, args.module_path, args.ths_path)
+    init_dict = checkpoint_quantization(init_dict, per_channel_quantization, args.ths_path)
     torch.save(init_dict, args.quantized_ckpt)
     print("Saving quantized checkpoint done.")

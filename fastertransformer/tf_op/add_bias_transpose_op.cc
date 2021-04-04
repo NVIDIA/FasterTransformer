@@ -16,7 +16,7 @@
 
 #define EIGEN_USE_GPU
 
-#include "fastertransformer/faster_transformer.h"
+#include "fastertransformer/bert_encoder_transformer.h"
 #include "fastertransformer/tf_op/common_op.h"
 #include "fastertransformer/cuda/open_attention.h"
 
@@ -84,13 +84,13 @@ public:
 
     try
     {
-        cuda::add_QKV_bias_transpose_kernelLauncher((const half*)q, (const half*)q_b, 
-                                                    (const half*)k, (const half*)k_b, 
-                                                    (const half*)v, (const half*)v_b, 
-                                                    (half*)output_ptr, 
-                                                    valid_word_num_, 
-                                                    head_num_, size_per_head_, 
-                                                    stream);
+        cuda::trt_add_QKV_bias_transpose_debug_kernelLauncher((const half*)q, (const half*)q_b, 
+                                                              (const half*)k, (const half*)k_b, 
+                                                              (const half*)v, (const half*)v_b, 
+                                                              (half*)output_ptr, 
+                                                              valid_word_num_, 
+                                                              head_num_, size_per_head_, 
+                                                              stream);
 
         cudaDeviceSynchronize();
         check_cuda_error(cudaGetLastError());

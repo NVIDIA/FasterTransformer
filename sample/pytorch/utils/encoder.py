@@ -104,7 +104,7 @@ class EncoderWeights(object):
         for k, v in self.weights.items():
             self.weights[k] = v.half()
 
-    def to_int8(self, is_per_channel, module_path='./', ths_path='./lib/libths_fastertransformer.so'):
+    def to_int8(self, is_per_channel, ths_path='./lib/libpyt_fastertransformer.so'):
         if self._generated_weights:
             if is_per_channel:
                 amax_tensor_1 = torch.Tensor(self.hidden_dim).fill_(127.)
@@ -151,63 +151,51 @@ class EncoderWeights(object):
                 self.weights[k] = v.half()
             else:
                 self.weights[k] = v.float().cpu()
-        self.weights = checkpoint_quantization(self.weights, is_per_channel, module_path, ths_path, verbose=False)
+        self.weights = checkpoint_quantization(self.weights, is_per_channel, ths_path, verbose=False)
 
 
 class CustomEncoder(torch.nn.Module):
     def __init__(self, layer_num, head_num, head_size, weights,
                  int8_mode=0, remove_padding=False, allow_gemm_test=False,
-                 use_ths=False, path='./'):
+                 path='./lib/libpyt_fastertransformer.so'):
         super().__init__()
         self.layer_num = layer_num
         self.remove_padding = remove_padding
         self.int8_mode = int8_mode
         self.encoders = []
         use_trt_kernel = True
-        if use_ths:
-            torch.classes.load_library(path)
-            for i in range(layer_num):
-                assert len(weights.listed_weights(i)) == 17
-                try:
-                    self.encoders.append(
-                        torch.classes.FasterTransformer.Encoder(
-                            *weights.listed_weights(i),
-                            head_num, head_size, remove_padding, int8_mode, layer_num, i, allow_gemm_test, use_trt_kernel))
-                except:
-                    # legacy ths for 20.03 image
-                    self.encoders.append(
-                        torch.classes.FasterTransformerEncoder(
-                            *weights.listed_weights(i),
-                            head_num, head_size, remove_padding, int8_mode, layer_num, i, allow_gemm_test, use_trt_kernel))
-            self.build_mask_remove_padding = torch.ops.fastertransformer.build_mask_remove_padding
-            self.rebuild_padding = torch.ops.fastertransformer.rebuild_padding
-        else:
-            sys.path.insert(0, path)
-            from th_fastertransformer import FasterTransformerEncoder, build_mask_remove_padding, rebuild_padding
-            for i in range(layer_num):
-                assert len(weights.listed_weights(i)) == 17
+        torch.classes.load_library(path)
+        for i in range(layer_num):
+            assert len(weights.listed_weights(i)) == 17
+            try:
                 self.encoders.append(
-                    FasterTransformerEncoder(
+                    torch.classes.FasterTransformer.Encoder(
                         *weights.listed_weights(i),
                         head_num, head_size, remove_padding, int8_mode, layer_num, i, allow_gemm_test, use_trt_kernel))
-            self.build_mask_remove_padding = build_mask_remove_padding
-            self.rebuild_padding = rebuild_padding
+            except:
+                # legacy ths for 20.03 image
+                self.encoders.append(
+                    torch.classes.FasterTransformerEncoder(
+                        *weights.listed_weights(i),
+                        head_num, head_size, remove_padding, int8_mode, layer_num, i, allow_gemm_test, use_trt_kernel))
+        self.build_mask_remove_padding = torch.ops.fastertransformer.build_mask_remove_padding
+        self.rebuild_padding = torch.ops.fastertransformer.rebuild_padding
 
     def forward(self, hidden_states, attention_mask, sequence_lengths):
         if self.remove_padding:
             hidden_states, sequence_id_offset = self.build_mask_remove_padding(hidden_states, sequence_lengths)
-            trt_seq_len = torch.cumsum(torch.cat([torch.tensor([0]).to(sequence_lengths).cuda(), sequence_lengths], dim=0), dim=0).to(torch.int32).cuda()
+            trt_seq_len = torch.cumsum(torch.cat([torch.tensor([0], device='cuda').to(sequence_lengths), sequence_lengths], dim=0), dim=0).to(torch.int32)
         else:
-            sequence_id_offset = torch.tensor(0).to(torch.int32).cuda()
+            sequence_id_offset = torch.tensor(0, device='cuda').to(torch.int32)
             batch = hidden_states.size(0)
             max_seq_len = hidden_states.size(1)
-            padding_offset = torch.arange(0, batch*max_seq_len, max_seq_len).cuda()
+            padding_offset = torch.arange(0, batch*max_seq_len, max_seq_len, device='cuda')
             squence_offset_with_padding = sequence_lengths + padding_offset
             c = torch.cat([padding_offset, squence_offset_with_padding], dim=0)
             c_r = torch.reshape(c, [2, -1])
             t = torch.transpose(c_r, 0, 1)
             trt_seq_len = torch.reshape(t, [-1])
-            trt_seq_len = torch.cat([trt_seq_len, torch.tensor([batch * max_seq_len]).to(trt_seq_len.dtype).cuda()], dim=0).to(torch.int32)
+            trt_seq_len = torch.cat([trt_seq_len, torch.tensor([batch * max_seq_len], device='cuda').to(trt_seq_len.dtype)], dim=0).to(torch.int32)
         for i in range(self.layer_num):
             hidden_states = self.encoders[i].forward(hidden_states, attention_mask, trt_seq_len, sequence_id_offset)
         if self.remove_padding:

@@ -17,7 +17,7 @@
 #include <vector>
 #include <cuda_fp16.h>
 #include "fastertransformer/th_op/utils.h"
-#include "fastertransformer/faster_transformer.h"
+#include "fastertransformer/bert_encoder_transformer.h"
 
 
 namespace torch_ext

@@ -68,6 +68,7 @@ def generate_encoder_result(batch_size,
             data[j] = outter_embbeding
         memory.append(data)
     memory = np.asarray(memory)
+
     memory = tf.convert_to_tensor(memory, dtype=dtype)
 
     return memory, memory_sequence_length
@@ -155,7 +156,8 @@ def decoding_body(word_ids,
                                                                 op_mem_cache,
                                                                 psuedo_input,
                                                                 decoder_var_dict,
-                                                                decoder_args)
+                                                                decoder_args,
+                                                                step)
 
         result = None
         if decoder_type == 0:
@@ -170,7 +172,7 @@ def decoding_body(word_ids,
             flatten_result_2 = tf.reshape(result_2, [-1])
             abs_diff = tf.math.abs(flatten_result - flatten_result_2)
             abs_argmax = tf.math.argmax(abs_diff)
-            result = tf.Print(result, ["[INFO][PYTHON] step:", step, 
+            result = tf.Print(result, ["[INFO][PYTHON] step:", step,
                                         tf.cond(abs_diff[abs_argmax] / (tf.math.abs(flatten_result[abs_argmax]) + 1e-6) < decoder_args.check_threshold, 
                                                 lambda: "True", lambda: "False"),
                                         "max abs diff: ", abs_diff[abs_argmax],
@@ -287,7 +289,7 @@ def tf_beamsearch_decoding(memory_tensor,
         word_ids = tf.identity(start_ids, name="word_ids")
         cum_log_probs = tf.identity(initial_log_probs, name="cum_log_probs")
         # if use_op == False, these two caches are useless
-        op_self_cache, op_mem_cache = init_op_cache(decoder_args, batchxbeam, tf.reduce_max(memory_sequence_length))
+        op_self_cache, op_mem_cache = init_op_cache(decoder_args, batchxbeam, tf.reduce_max(memory_sequence_length), decoding_args.max_seq_len)
 
         _, _, _, _, outputs, _, extra_vars, _, _ = tf.while_loop(
             _cond,
@@ -409,7 +411,7 @@ def tf_sampling_decoding(memory_tensor,
         sequence_lengths = extra_vars[1]
         word_ids = tf.identity(start_ids, name="word_ids")
         # if use_op == False, these two caches are useless
-        op_self_cache, op_mem_cache = init_op_cache(decoder_args, batch_size, tf.reduce_max(memory_sequence_length))
+        op_self_cache, op_mem_cache = init_op_cache(decoder_args, batch_size, tf.reduce_max(memory_sequence_length), decoding_args.max_seq_len)
 
         _, _, _, outputs, _, sequence_lengths, _, _ = tf.while_loop(
             _cond,
@@ -509,7 +511,7 @@ def preprocess_decoder_var(decoding_vars,
     vars_in_diff_layers_dict["transformer/decoder/LayerNorm/beta:0"] = var_dict["transformer/decoder/LayerNorm/beta:0"]
     vars_in_diff_layers_dict["transformer/decoder/LayerNorm/gamma:0"] = var_dict["transformer/decoder/LayerNorm/gamma:0"]
     vars_in_diff_layers_dict["transformer/decoder/dense/kernel:0"] = var_dict["transformer/decoder/dense/kernel:0"]
-    vars_in_diff_layers_dict["transformer/decoder/dense/bias:0"] = tf.cast(var_dict["transformer/decoder/dense/bias:0"], dtype=tf.float32)
+    vars_in_diff_layers_dict["transformer/decoder/dense/bias:0"] = var_dict["transformer/decoder/dense/bias:0"]
 
     for i in range(num_layer):
         ''' 
@@ -518,7 +520,7 @@ def preprocess_decoder_var(decoding_vars,
         '''
         
         layer_prefix_name = "transformer/decoder/layer_%d/" % i
-        if fuse_qkv == True:
+        if fuse_qkv == True: # This flag means that TF fuses qkv or not
             var_dict[layer_prefix_name + 'masked_multi_head/query/kernel:0'], \
             var_dict[layer_prefix_name + 'masked_multi_head/key/kernel:0'], \
             var_dict[layer_prefix_name + 'masked_multi_head/value/kernel:0'] = \
@@ -572,6 +574,10 @@ def preprocess_decoder_var(decoding_vars,
         tf.cast(tf.concat([ var_dict[layer_prefix_name + '_%d/masked_multi_head/LayerNorm/beta:0' % i] for i in range(num_layer) ], axis=0), dtype=data_type)
     vars_in_diff_layers_dict[layer_prefix_name + '/masked_multi_head/LayerNorm/gamma:0'] = \
         tf.cast(tf.concat([ var_dict[layer_prefix_name + '_%d/masked_multi_head/LayerNorm/gamma:0' % i] for i in range(num_layer) ], axis=0), dtype=data_type)
+    vars_in_diff_layers_dict[layer_prefix_name + '/masked_multi_head/conv1d/kernel:0'] = \
+        tf.cast(tf.concat([ var_dict[layer_prefix_name + '_%d/masked_multi_head/conv1d/kernel:0' % i] for i in range(num_layer) ], axis=0), dtype=data_type)
+    vars_in_diff_layers_dict[layer_prefix_name + '/masked_multi_head/conv1d/bias:0'] = \
+        tf.cast(tf.concat([ var_dict[layer_prefix_name + '_%d/masked_multi_head/conv1d/bias:0' % i] for i in range(num_layer) ], axis=0), dtype=data_type)
     vars_in_diff_layers_dict[layer_prefix_name + '/masked_multi_head/query/kernel:0'] = \
         tf.cast(tf.concat([ var_dict[layer_prefix_name + '_%d/masked_multi_head/query/kernel:0' % i] for i in range(num_layer) ], axis=0), dtype=data_type)
     vars_in_diff_layers_dict[layer_prefix_name + '/masked_multi_head/query/bias:0'] = \
@@ -682,13 +688,23 @@ def op_beamsearch_decoding(memory_tensor,
         decoding_args.max_seq_len, decoder_args.head_num * decoder_args.size_per_head, decoder_args.dtype)
     # shape of position_encoding_table: [max_seq_len, hidden_dim]
 
+    if decoder_args.fuse_qkv == True:
+        # FasterTransformer uses "transformer/decoder/layer/masked_multi_head/conv1d/kernel" and
+        # "transformer/decoder/layer/masked_multi_head/conv1d/bias" directly, and
+        # kernels, bias of query, key and values are useless.
+        masked_multi_head_first_kernel = vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/conv1d/kernel:0']
+        masked_multi_head_first_bias = vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/conv1d/bias:0']
+    else:
+        masked_multi_head_first_kernel = vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/query/kernel:0'], # 4
+        masked_multi_head_first_bias = vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/query/bias:0'], # 5
+
     output_ids, parent_ids, sequence_lengths = decoding_op_module.decoding(
         extended_memory, # 0
         extended_memory_sequence_length, # 1
         vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/LayerNorm/beta:0'], # 2
         vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/LayerNorm/gamma:0'], # 3
-        vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/query/kernel:0'], # 4
-        vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/query/bias:0'], # 5
+        masked_multi_head_first_kernel, #4
+        masked_multi_head_first_bias, #5
         vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/key/kernel:0'], # 6
         vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/key/bias:0'], # 7
         vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/value/kernel:0'], # 8
@@ -724,7 +740,8 @@ def op_beamsearch_decoding(memory_tensor,
         num_layer=decoder_args.num_layer,
         start_id=decoding_args.start_id, 
         end_id=decoding_args.end_id,
-        beam_search_diversity_rate=decoding_args.beam_search_diversity_rate
+        beam_search_diversity_rate=decoding_args.beam_search_diversity_rate,
+        is_fuse_qkv=decoder_args.fuse_qkv,
     )
     parent_ids = parent_ids % decoder_args.beam_width
     
@@ -784,13 +801,20 @@ def op_sampling_decoding(memory_tensor,
         decoding_args.max_seq_len, decoder_args.head_num * decoder_args.size_per_head, decoder_args.dtype)
     # shape of position_encoding_table: [max_seq_len, hidden_dim]
     
+    if decoder_args.fuse_qkv == True:
+        masked_multi_head_first_kernel = vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/conv1d/kernel:0']
+        masked_multi_head_first_bias = vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/conv1d/bias:0']
+    else:
+        masked_multi_head_first_kernel = vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/query/kernel:0'], # 4
+        masked_multi_head_first_bias = vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/query/bias:0'], # 5
+
     output_ids, sequence_lengths = decoding_op_module.decoding_sampling(
         memory_tensor, # 0
         memory_sequence_length, # 1
         vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/LayerNorm/beta:0'], # 2
         vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/LayerNorm/gamma:0'], # 3
-        vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/query/kernel:0'], # 4
-        vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/query/bias:0'], # 5
+        masked_multi_head_first_kernel, # 4
+        masked_multi_head_first_bias, # 5
         vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/key/kernel:0'], # 6
         vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/key/bias:0'], # 7
         vars_dict_in_differ_layers['transformer/decoder/layer/masked_multi_head/value/kernel:0'], # 8
@@ -826,7 +850,8 @@ def op_sampling_decoding(memory_tensor,
         size_per_head=decoder_args.size_per_head,
         num_layer=decoder_args.num_layer,
         start_id=decoding_args.start_id, 
-        end_id=decoding_args.end_id
+        end_id=decoding_args.end_id,
+        is_fuse_qkv=decoder_args.fuse_qkv
     )
     batch_size = tf.shape(memory_tensor)[0]
     output_ids = tf.reshape(output_ids, [-1, batch_size])

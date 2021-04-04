@@ -17,7 +17,7 @@
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <curand_kernel.h>
-#include "fastertransformer/arguments.h"
+#include "fastertransformer/utils/arguments.h"
 #include "fastertransformer/cuda/topk_kernels.cuh"
 
 namespace fastertransformer
@@ -32,15 +32,6 @@ template <typename T>
 void init_kernelLauncher(bool* finished, int* sequence_length, int* word_ids, 
                         T* cum_log_probs, const int sentence_id, 
                         const int batch_size, const int beam_width, cudaStream_t stream);
-
-template <typename T>
-void add_bias_act_kernelLauncher(T* out, const T* bias, int m, int n, cudaStream_t stream);
-
-template <typename T>
-void add_bias_input_layernorm_kernelLauncher(T *out, const T *input_tensor,
-                                             const T *bias, const T *gamma,
-                                             const T *beta, int m, int n,
-                                             cudaStream_t stream);
 
 template <typename T>
 void embedding_lookup_sine_position_encoding_kernel_launcher(T *from_tensor,
@@ -73,20 +64,61 @@ void embedding_position_lookups_kernel_launcher(T* from_tensor,
                                                 cudaStream_t stream);
 
 template <typename T>
+void start_id_embedding_position_lookups_kernel_launcher(T* from_tensor,
+                                                         int* output_ids,
+                                                         const T* embedding_table, 
+                                                         const T* pos_table, 
+                                                         const int* word_ids,
+                                                         const int start_step,
+                                                         const int length,
+                                                         const int max_length,
+                                                         const int batch_size,
+                                                         const int hidden_units, 
+                                                         cudaStream_t stream);
+
+template <typename T>
 void apply_temperature_penalty_kernelLauncher(T* logits,
                                               const T temperature,
                                               const int m,
-                                              const int n,
+                                              const int vocab_size,
+                                              const int vocab_size_padd,
                                               cudaStream_t stream);
 
+void set_start_ids_kernelLauncher(int* out_ids,
+                                  const int* in_ids,
+                                  const int max_start_len,
+                                  const int step,
+                                  const int ite,
+                                  const int batch_size,
+                                  const int local_batch_size,
+                                  const int end_id,
+                                  cudaStream_t stream);
+
 template <typename T>
-void transpose(T *out, const T *in, int batch, 
+void kernel_padding_kernelLauncher(T *padded_kernel, const T *kernel,
+                                   const int row_dim, const int col_dim,
+                                   const int padded_col_dim, cudaStream_t stream);
+
+template <typename T1, typename T2>
+void bias_padding_kernelLauncher(T1 *padded_bias, const T2 *bias,
+                                 const int col_dim, const int padded_col_dim, 
+                                 cudaStream_t stream);
+
+template <typename T>
+void transpose(T *out, const T *in, int batch,
                int height, int width, int stride, cudaStream_t stream);
-/* *************************** end of common kernel *********************************** */
+
+template <typename DataType_>
+void transpose_axis_01_kernelLauncher(DataType_ *out, DataType_ *in, const int dim0, 
+                                    const int dim1, const int dim2, cudaStream_t stream);
+
 void build_sequence_length_padding_offset_kernelLauncher(const int *sequence_length,
                                                          const int batch_size, const int max_seq_len,
                                                          int *valid_word_num, int *tmp_mask_offset,
                                                          cudaStream_t stream);
+
+template <typename T>
+void cuda_random_uniform_kernelLauncher(T *buffer, const int size);
 
 /* *************************** end of common kernel *********************************** */
 
@@ -96,7 +128,8 @@ void broadcast_kernelLauncher(float *log_probs, float *cum_log_probs,
                               const int batch_size, const int beam_width,
                               const int vocab_size, cudaStream_t stream);
 
-void update_logits(float* logits, const float* bias, const int end_ids, 
+template<typename T>
+void update_logits(float* logits, const T *tmp_logits, const T* bias, const int end_ids, 
                    const bool* finished, const int m, const int n, 
                    cudaStream_t stream);
 
@@ -106,9 +139,9 @@ void apply_logit_penalties(int step,
                            int* current_ids, 
                            int* previous_ids, 
                            int* parent_ids, 
-                           Gpt2Arguments args,
+                           GptArguments args,
                            cudaStream_t stream);
-                  
+
 void update_kernelLauncher(float* log_probs, float* cum_log_probs,
                            bool* finished, int* parent_ids, int* sequence_length, 
                            int* word_ids, int* output_ids,
@@ -126,8 +159,10 @@ void update_kernelLauncher_v2(bool* finished, int* parent_ids,
 
 template <typename T>
 void update_KV_cache_kernelLauncher(T **key_cache, T **value_cache, const int *beam_ids,
+                                    const bool* finished,
                                     const int batch_size, const int beam_width,
-                                    const int hidden_dim, const int step,
+                                    const int head_num, const int size_per_head,
+                                    const int step, const int decoder_max_seq_len,
                                     const int cache_size, const int decoder_layers,
                                     cudaStream_t stream);
 
@@ -163,6 +198,16 @@ void topp_initialization_kernelLauncher(bool* finished,
                                         const int logits_buf_size,
                                         DecodingSamplingArguments args,
                                         cudaStream_t stream);
+                        
+void topp_initialization_kernelLauncher_v2(bool* finished,
+                                        int* sequence_length, 
+                                        int* word_ids,
+                                        int* topp_id_val_buf,
+                                        int* topp_offset_buf,
+                                        int* begin_topp_offset_buf_,
+                                        const int logits_buf_size,
+                                        DecodingSamplingArguments args,
+                                        cudaStream_t stream);
 
 void init_topp_id_val_kernel_kernelLauncher(int *topp_id_val_buf,
                                             int *topp_offset_buf,
@@ -177,7 +222,7 @@ void update_logits_without_softmax(T* logits, const T* bias, const int end_ids,
 
 template <typename T>
 void softmax_kernelLauncher(T* logits, const T* bias, const int end_ids,
-                            const bool* finished, const int m, const int n,
+                            const bool* finished, const int m, const int n_padded, const int n,
                             cudaStream_t stream);
 
 /* *************************** end of Sampling kernel *********************************** */

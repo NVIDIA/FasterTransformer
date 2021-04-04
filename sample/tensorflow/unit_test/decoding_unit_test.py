@@ -20,13 +20,15 @@ import copy
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
 import tensorflow as tf
 import sys
+import time
 sys.path.append("./tensorflow")
 from translate_sample import translate_sample
+from multiprocessing import Process, Value
 
 class TestDecoding(unittest.TestCase):
     
     common_args_dict = {'batch_size' : 128,
-                        'max_seq_len': 200,
+                        'max_seq_len': 128,
                         'encoder_head_number': 8,
                         'encoder_size_per_head': 64,
                         'decoder_head_number': 8,
@@ -39,49 +41,87 @@ class TestDecoding(unittest.TestCase):
                         'source_vocabulary': "./tensorflow/utils/translation/wmtende.vocab",
                         'target_vocabulary': "./tensorflow/utils/translation/wmtende.vocab",
                         'source': "./tensorflow/utils/translation/test.en",
-                        'target': "./tensorflow/utils/translation/test.de"
+                        'target': "./tensorflow/utils/translation/test.de",
+                        "remove_padding": "True"
                         }
+
+    def check_result(self, beam_width, datatype, test_time, topk=4, topp=0.0, batch_size=-1):
+        result = Value('i', -1)
+        p = Process(target=self.run_translate, args=(beam_width, datatype, test_time, topk, topp, batch_size, result))
+        p.start()
+        p.join()
+        self.assertTrue(result.value == 1)
     
-    def run_translate(self, beam_width, datatype, test_time, topk=4, topp=0.0):
+    def run_translate(self, beam_width, datatype, test_time, topk=4, topp=0.0, batch_size=-1, result=None):
         args_dict = copy.deepcopy(self.common_args_dict)
         args_dict['beam_width'] = beam_width
         args_dict['data_type'] = datatype
         args_dict['test_time'] = test_time
         args_dict['sampling_topk'] = topk
         args_dict['sampling_topp'] = topp
-        
+        if batch_size != -1:
+            args_dict['batch_size'] = batch_size
+
+        tf.reset_default_graph()
+
         translation_result_list = translate_sample(args_dict)
         tf_bleu_score = translation_result_list[0].bleu_score.score
         op_decoder_bleu_score = translation_result_list[1].bleu_score.score
         op_decoding_bleu_score = translation_result_list[2].bleu_score.score
-        tf.reset_default_graph()
+
+        sys.stdout.flush()
+        if op_decoder_bleu_score >= tf_bleu_score - 1.0 and op_decoding_bleu_score >= tf_bleu_score - 1.0:
+            result.value = 1
+        else:
+            result.value = 0
         
-        self.assertTrue(op_decoder_bleu_score >= tf_bleu_score - 1.0)
-        self.assertTrue(op_decoding_bleu_score >= tf_bleu_score - 1.0)
-    
     def test_decoding_beamsearch_fp32(self):
-        os.system("./bin/decoding_gemm 128 4 8 64 32001 200 512 0")
-        self.run_translate(4, 'fp32', '012')
+        os.system("./bin/decoding_gemm 32 4 8 64 32001 128 512 0")
+        self.check_result(4, 'fp32', '012', batch_size=32)
         
     def test_decoding_beamsearch_fp16(self):
-        os.system("./bin/decoding_gemm 128 4 8 64 32001 200 512 1")
-        self.run_translate(4, 'fp16', '012')
+        os.system("./bin/decoding_gemm 32 4 8 64 32001 128 512 1")
+        self.check_result(4, 'fp16', '012', batch_size=32)
+        
+    def test_decoding_beamsearch_fp32_2(self):
+        os.system("./bin/decoding_gemm 16 32 8 64 32001 128 512 0")
+        self.check_result(32, 'fp32', '012', batch_size=16)
+        
+    def test_decoding_beamsearch_fp16_2(self):
+        os.system("./bin/decoding_gemm 16 32 8 64 32001 128 512 1")
+        self.check_result(32, 'fp16', '012', batch_size=16)
     
     def test_decoding_topk_sampling_fp32(self):
-        os.system("./bin/decoding_gemm 128 1 8 64 32001 200 512 0")
-        self.run_translate(1, 'fp32', '345', 4, 0.0)
+        os.system("./bin/decoding_gemm 128 1 8 64 32001 128 512 0")
+        self.check_result(1, 'fp32', '345', 4, 0.0)
         
     def test_decoding_topk_sampling_fp16(self):
-        os.system("./bin/decoding_gemm 128 1 8 64 32001 200 512 1")
-        self.run_translate(1, 'fp16', '345', 4, 0.0)
-    
+        os.system("./bin/decoding_gemm 128 1 8 64 32001 128 512 1")
+        self.check_result(1, 'fp16', '345', 4, 0.0)
+
+    def test_decoding_topk_sampling_fp32_2(self):
+        os.system("./bin/decoding_gemm 128 1 8 64 32001 128 512 0")
+        self.check_result(1, 'fp32', '345', 64, 0.0)
+
+    def test_decoding_topk_sampling_fp16_2(self):
+        os.system("./bin/decoding_gemm 128 1 8 64 32001 128 512 1")
+        self.check_result(1, 'fp16', '345', 64, 0.0)
+
     def test_decoding_topp_sampling_fp32(self):
-        os.system("./bin/decoding_gemm 128 1 8 64 32001 200 512 0")
-        self.run_translate(1, 'fp32', '345', 0, 0.5)
+        os.system("./bin/decoding_gemm 128 1 8 64 32001 128 512 0")
+        self.check_result(1, 'fp32', '345', 0, 0.5)
         
     def test_decoding_topp_sampling_fp16(self):
-        os.system("./bin/decoding_gemm 128 1 8 64 32001 200 512 1")
-        self.run_translate(1, 'fp16', '345', 0, 0.5)
+        os.system("./bin/decoding_gemm 128 1 8 64 32001 128 512 1")
+        self.check_result(1, 'fp16', '345', 0, 0.5)
+
+    def test_decoding_topp_sampling_fp32_2(self):
+        os.system("./bin/decoding_gemm 128 1 8 64 32001 128 512 0")
+        self.check_result(1, 'fp32', '345', 0, 0.9)
+
+    def test_decoding_topp_sampling_fp16_2(self):
+        os.system("./bin/decoding_gemm 128 1 8 64 32001 128 512 1")
+        self.check_result(1, 'fp16', '345', 0, 0.9)
 
 if __name__ == "__main__":
     unittest.main()

@@ -19,7 +19,7 @@
 #ifndef TENSORFLOW_COMMON_OP_H
 #define TENSORFLOW_COMMON_OP_H
 
-#include "fastertransformer/common.h"
+#include "fastertransformer/utils/common.h"
 #include "fastertransformer/tf_op/tf_traits.h"
 
 #include "tensorflow/core/framework/op.h"
@@ -52,7 +52,7 @@ public:
     }
     catch(std::runtime_error& error)
     {
-    OP_REQUIRES(context, false, errors::Internal(error.what()));
+      OP_REQUIRES(context, false, errors::Internal(error.what()));
     }
   };
 

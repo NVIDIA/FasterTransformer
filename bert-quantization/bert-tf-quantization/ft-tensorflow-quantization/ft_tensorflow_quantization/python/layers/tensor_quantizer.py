@@ -40,6 +40,7 @@ class QuantDescriptor():
         Default None.
     unsigned: A Boolean. If True, use unsigned. Default False.
     affine: A Boolean. If True, use affine quantization. Default False.
+    narrow_range: A Boolean. If True, use narrow range. Default True.
     disable_key_words: A list of string, indicates disabled quantizer.
 
   Raises:
@@ -51,6 +52,7 @@ class QuantDescriptor():
     - num_bits: read-only property.
     - unsigned: read-only property.
     - affine: read-only property.
+    - narrow_range: read-only property.
     - axis: read-only property.
     - disable_key_words: read-only property.
   """
@@ -64,6 +66,7 @@ class QuantDescriptor():
 
     self._unsigned = kwargs.pop('unsigned', False)
     self._affine = kwargs.pop('affine', False)
+    self._narrow_range = kwargs.pop('narrow_range', True)
     self._axis = kwargs.pop('axis', None)
 
     self._collection_name_prefix = collection_name_prefix
@@ -91,6 +94,10 @@ class QuantDescriptor():
   @property
   def affine(self):
     return self._affine
+
+  @property
+  def narrow_range(self):
+    return self._narrow_range
 
   @property
   def axis(self):
@@ -140,6 +147,7 @@ class FakeQuantizer():
     self._axis = quant_desc.axis
     self._unsigned = quant_desc.unsigned
     self._affine = quant_desc.affine
+    self._narrow_range = quant_desc.narrow_range
     self._collection_name_prefix = quant_desc.collection_name_prefix
     self._scope_name = scope_name
     self._disable_key_words = quant_desc._disable_key_words
@@ -189,7 +197,7 @@ class FakeQuantizer():
 
       if self._if_quant:
         outputs = fake_quantize(inputs, self._quant_min, self._quant_max, self._num_bits, self._axis, self._unsigned,
-                                self._affine)
+                                self._affine, self._narrow_range)
       else:
         outputs = inputs
 

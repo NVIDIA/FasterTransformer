@@ -119,6 +119,14 @@ extern unsigned char fused_multihead_attention_v2_fp16_64_64_kernel_sm75_cubin[]
 extern unsigned char fused_multihead_attention_v2_fp16_64_64_kernel_sm80_cubin[];
 extern unsigned char fused_multihead_attention_v2_fp16_96_64_kernel_sm75_cubin[];
 extern unsigned char fused_multihead_attention_v2_fp16_96_64_kernel_sm80_cubin[];
+extern unsigned char fused_multihead_attention_v2_fp16_64_64_kernel_sm70_cubin[];
+extern unsigned char fused_multihead_attention_v2_fp16_96_64_kernel_sm70_cubin[];
+extern unsigned char fused_multihead_attention_v2_fp16_128_64_kernel_sm70_cubin[];
+extern unsigned char fused_multihead_attention_v2_fp16_256_64_kernel_sm70_cubin[];
+extern unsigned char fused_multihead_attention_v2_fp16_384_64_kernel_sm70_cubin[];
+
+extern unsigned char fused_multihead_attention_v2_int8_64_64_kernel_sm75_cubin[];
+extern unsigned char fused_multihead_attention_v2_int8_64_64_kernel_sm80_cubin[];
 extern unsigned char fused_multihead_attention_v2_int8_128_64_kernel_cubin[];
 extern unsigned char fused_multihead_attention_v2_int8_128_64_kernel_sm75_cubin[];
 extern unsigned char fused_multihead_attention_v2_int8_128_64_kernel_sm80_cubin[];
@@ -142,6 +150,13 @@ extern unsigned int fused_multihead_attention_v2_fp16_64_64_kernel_sm75_cubin_le
 extern unsigned int fused_multihead_attention_v2_fp16_64_64_kernel_sm80_cubin_len;
 extern unsigned int fused_multihead_attention_v2_fp16_96_64_kernel_sm75_cubin_len;
 extern unsigned int fused_multihead_attention_v2_fp16_96_64_kernel_sm80_cubin_len;
+extern unsigned int fused_multihead_attention_v2_fp16_96_64_kernel_sm70_cubin_len;
+extern unsigned int fused_multihead_attention_v2_fp16_64_64_kernel_sm70_cubin_len;
+extern unsigned int fused_multihead_attention_v2_fp16_128_64_kernel_sm70_cubin_len;
+extern unsigned int fused_multihead_attention_v2_fp16_256_64_kernel_sm70_cubin_len;
+extern unsigned int fused_multihead_attention_v2_fp16_384_64_kernel_sm70_cubin_len;
+extern unsigned int fused_multihead_attention_v2_int8_64_64_kernel_sm75_cubin_len;
+extern unsigned int fused_multihead_attention_v2_int8_64_64_kernel_sm80_cubin_len;;
 extern unsigned int fused_multihead_attention_v2_int8_128_64_kernel_cubin_len;
 extern unsigned int fused_multihead_attention_v2_int8_128_64_kernel_sm75_cubin_len;
 extern unsigned int fused_multihead_attention_v2_int8_128_64_kernel_sm80_cubin_len;
@@ -194,6 +209,37 @@ static const struct FusedMultiHeadAttentionKernelMetaInfoV2
     {DATA_TYPE_INT8, 384, 64, kSM_72, fused_multihead_attention_v2_int8_384_64_kernel_cubin,
         fused_multihead_attention_v2_int8_384_64_kernel_cubin_len,
         "fused_multihead_attention_v2_int8_384_64_kernel_sm72", 77824, 128, 0, false},
+    //Volta
+    {DATA_TYPE_FP16, 64, 64, kSM_70, fused_multihead_attention_v2_fp16_64_64_kernel_sm70_cubin,
+        fused_multihead_attention_v2_fp16_64_64_kernel_sm70_cubin_len,
+        "fused_multihead_attention_v2_fp16_64_64_kernel_sm70", 32768, 128, 0, false},
+    {DATA_TYPE_FP16, 64, 64, kSM_70, fused_multihead_attention_v2_fp16_64_64_kernel_sm70_cubin,
+        fused_multihead_attention_v2_fp16_64_64_kernel_sm70_cubin_len,
+        "fused_multihead_attention_v2_fp16_64_64_kernel_sm70_noloop", 36864, 128, 32, false},
+    {DATA_TYPE_FP16, 96, 64, kSM_70, fused_multihead_attention_v2_fp16_96_64_kernel_sm70_cubin,
+        fused_multihead_attention_v2_fp16_96_64_kernel_sm70_cubin_len,
+        "fused_multihead_attention_v2_fp16_96_64_kernel_sm70", 32768, 128, 0, false},
+    {DATA_TYPE_FP16, 96, 64, kSM_70, fused_multihead_attention_v2_fp16_96_64_kernel_sm70_cubin,
+        fused_multihead_attention_v2_fp16_96_64_kernel_sm70_cubin_len,
+        "fused_multihead_attention_v2_fp16_96_64_kernel_sm70_noloop", 36864, 128, 32, false},
+    {DATA_TYPE_FP16, 128, 64, kSM_70, fused_multihead_attention_v2_fp16_128_64_kernel_sm70_cubin,
+        fused_multihead_attention_v2_fp16_128_64_kernel_sm70_cubin_len,
+        "fused_multihead_attention_v2_fp16_128_64_kernel_sm70", 36864, 128, 0, false},
+    {DATA_TYPE_FP16, 128, 64, kSM_70, fused_multihead_attention_v2_fp16_128_64_kernel_sm70_cubin,
+        fused_multihead_attention_v2_fp16_128_64_kernel_sm70_cubin_len,
+        "fused_multihead_attention_v2_fp16_128_64_kernel_sm70_noloop", 36864, 128, 32, false},
+    {DATA_TYPE_FP16, 256, 64, kSM_70, fused_multihead_attention_v2_fp16_256_64_kernel_sm70_cubin,
+        fused_multihead_attention_v2_fp16_256_64_kernel_sm70_cubin_len,
+        "fused_multihead_attention_v2_fp16_256_64_kernel_sm70", 69632, 256, 0, false},
+    {DATA_TYPE_FP16, 256, 64, kSM_70, fused_multihead_attention_v2_fp16_256_64_kernel_sm70_cubin,
+        fused_multihead_attention_v2_fp16_256_64_kernel_sm70_cubin_len,
+        "fused_multihead_attention_v2_fp16_256_64_kernel_sm70_noloop", 69632, 256, 32, false},
+    {DATA_TYPE_FP16, 384, 64, kSM_70, fused_multihead_attention_v2_fp16_384_64_kernel_sm70_cubin,
+        fused_multihead_attention_v2_fp16_384_64_kernel_sm70_cubin_len,
+        "fused_multihead_attention_v2_fp16_384_64_kernel_sm70", 69632, 256, 0, false},
+    {DATA_TYPE_FP16, 384, 64, kSM_70, fused_multihead_attention_v2_fp16_384_64_kernel_sm70_cubin,
+        fused_multihead_attention_v2_fp16_384_64_kernel_sm70_cubin_len,
+        "fused_multihead_attention_v2_fp16_384_64_kernel_sm70_noloop", 69632, 256, 32, false},
 
     // Turing
     {DATA_TYPE_FP16, 64, 64, kSM_75, fused_multihead_attention_v2_fp16_64_64_kernel_sm75_cubin,
@@ -221,6 +267,9 @@ static const struct FusedMultiHeadAttentionKernelMetaInfoV2
         fused_multihead_attention_v2_fp16_384_64_kernel_sm75_cubin_len,
         "fused_multihead_attention_v2_fp16_384_64_kernel_sm75", 53248, 256, 0, false},
 
+    {DATA_TYPE_INT8, 64, 64, kSM_75, fused_multihead_attention_v2_int8_64_64_kernel_sm75_cubin,
+        fused_multihead_attention_v2_int8_64_64_kernel_sm75_cubin_len,
+        "fused_multihead_attention_v2_int8_64_64_kernel_sm75", 20480, 128, 0, false},
     {DATA_TYPE_INT8, 128, 64, kSM_75, fused_multihead_attention_v2_int8_128_64_kernel_sm75_cubin,
         fused_multihead_attention_v2_int8_128_64_kernel_sm75_cubin_len,
         "fused_multihead_attention_v2_int8_128_64_kernel_sm75_interleaved_noloop", 18432, 128, 16, true},
@@ -296,7 +345,9 @@ static const struct FusedMultiHeadAttentionKernelMetaInfoV2
     {DATA_TYPE_FP16, 384, 64, kSM_80, fused_multihead_attention_v2_fp16_384_64_kernel_sm80_cubin,
         fused_multihead_attention_v2_fp16_384_64_kernel_sm80_cubin_len,
         "fused_multihead_attention_v2_fp16_384_64_kernel_sm80", 114688, 256, 0, false},
-
+    {DATA_TYPE_INT8, 64, 64, kSM_80, fused_multihead_attention_v2_int8_64_64_kernel_sm80_cubin,
+        fused_multihead_attention_v2_int8_64_64_kernel_sm80_cubin_len,
+        "fused_multihead_attention_v2_int8_64_64_kernel_sm80", 24576, 128, 0, false},
     {DATA_TYPE_INT8, 128, 64, kSM_80, fused_multihead_attention_v2_int8_128_64_kernel_sm80_cubin,
         fused_multihead_attention_v2_int8_128_64_kernel_sm80_cubin_len,
         "fused_multihead_attention_v2_int8_128_64_kernel_sm80_interleaved_noloop", 20480, 128, 16, true},

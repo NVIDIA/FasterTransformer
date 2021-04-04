@@ -31,6 +31,7 @@ typedef struct {
     int algoId, customOption, tile, splitK_val, swizzle, reductionScheme, workspaceSize;
     //only used in cublasLt >= 11.0
     int stages;
+    float exec_time;
 } cublasLtMatmulAlgo_info;
 /* Structure to store information about different run trials */
 typedef struct {
@@ -74,7 +75,6 @@ const char * const matmulTileName[] = {
     "512x64" ,
 };
 
-double diffTime(timeval start, timeval end);
 
 int generate_encoder_igemm_config(int batch_size, int seq_len, int head_num, int size_per_head, void* buffer, bool isAppend = true);
 

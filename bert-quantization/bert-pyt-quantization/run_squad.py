@@ -888,7 +888,7 @@ def main():
                         help="scale applied to distillation component of loss")
 
     args = parser.parse_args()
-    if args.ft_mode is not None:
+    if args.quant_mode is not None:
         args = quant_utils.set_args(args)
     args.fp16 = args.fp16 or args.amp
     print(args)

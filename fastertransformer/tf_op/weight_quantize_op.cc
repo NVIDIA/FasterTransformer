@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "fastertransformer/faster_transformer.h"
+#include "fastertransformer/bert_encoder_transformer.h"
 #include "fastertransformer/tf_op/common_op.h"
 
 int index_CUBLASLT_ORDER_COL4_4R2_8C(int col_id, int row_id, int m_32){

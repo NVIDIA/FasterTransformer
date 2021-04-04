@@ -19,7 +19,7 @@
 #include <cuda_runtime.h>
 #include <cuda_fp16.h>
 #include <curand_kernel.h>
-#include "fastertransformer/arguments.h"
+#include "fastertransformer/utils/arguments.h"
 #include "fastertransformer/cuda/cuda_kernels.h"
 #include <float.h>
 #include <type_traits>
@@ -126,14 +126,15 @@ void topK_kernelLauncher(void* workspace,
                          size_t& workspace_size,
                          T* log_probs,
                          int* ids,
+                         const bool* finished,
                          DecodingBeamsearchArguments args,
                          cudaStream_t stream);
 
 template <typename T>
 void topK_softMax(const T* log_probs, 
-                  const float* bias, 
+                  const T* bias, 
                   const bool* finished, 
-                  T* cum_log_probs, 
+                  float* cum_log_probs, 
                   int* ids, 
                   void * tmp_storage,
                   DecodingBeamsearchArguments args,
@@ -142,6 +143,22 @@ void topK_softMax(const T* log_probs,
 /* *************************** end of BeamSearch kernel *********************************** */
 
 /* ********************************** Sampling kernel *********************************** */
+void ker_curand_setupLauncher(curandState_t* state,
+    DecodingSamplingArguments args,
+    cudaStream_t stream);
+
+
+template <typename T>
+void topK_sampling_kernel_kernelLauncher_v2(void* workspace,
+                                            size_t& workspace_size,
+                                            T* log_probs,
+                                            int* ids,
+                                            int* sequence_length,
+                                            bool* finished_buf,
+                                            curandState_t* curandstate,
+                                            DecodingSamplingArguments args,
+                                            cudaStream_t stream,
+                                            const int batch_size);
 
 template <typename T>
 void topK_sampling_kernel_kernelLauncher(void* workspace,
@@ -152,7 +169,8 @@ void topK_sampling_kernel_kernelLauncher(void* workspace,
                                         bool* finished_buf,
                                         int random_num,
                                         DecodingSamplingArguments args,
-                                        cudaStream_t stream);
+                                        cudaStream_t stream,
+                                        const int batch_size);
 
 template<typename T>
 void topP_sampling_kernel_kernelLauncher(void* workspace,
@@ -166,7 +184,24 @@ void topP_sampling_kernel_kernelLauncher(void* workspace,
                                          int* output_ids, 
                                          int* sequence_length,
                                          const int n,
-                                         cudaStream_t stream);
+                                         cudaStream_t stream,
+                                         const int batch_size);
+
+template<typename T>
+void topP_sampling_kernel_kernelLauncher_v2(void* workspace,
+                                         size_t& workspace_size,
+                                         const T* log_probs,
+                                         const int* id_vals,
+                                         int* offset_buf,
+                                         int* begin_offset_buf,
+                                         bool* finished_buf,
+                                         curandState_t* curandstate,
+                                         DecodingSamplingArguments& args,
+                                         int* output_ids, 
+                                         int* sequence_length,
+                                         const int n,
+                                         cudaStream_t stream,
+                                         const int batch_size);
 
 template<typename T>
 void beam_topK_kernelLauncher(const T* log_probs, 
@@ -182,7 +217,19 @@ void topK_topP_sampling_kernel_kernelLauncher(void* workspace,
                                               const T* logits,
                                               const int random_num,
                                               DecodingSamplingArguments& args,
-                                              cudaStream_t stream);
+                                              cudaStream_t stream,
+                                              const int batch_size);
+
+template<typename T>
+void topK_topP_sampling_kernel_kernelLauncher_v2(void* workspace,
+                                                 size_t& workspace_size,
+                                                 int* output_ids,
+                                                 const T* logits,
+                                                 bool* finished_buf,
+                                                 curandState_t* curandstate,
+                                                 DecodingSamplingArguments& args,
+                                                 cudaStream_t stream,
+                                                 const int batch_size);
 
 /* *************************** end of Sampling kernel *********************************** */
 

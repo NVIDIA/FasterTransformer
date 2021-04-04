@@ -1,4 +1,4 @@
-# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,48 +16,78 @@
 # apt-get install bc
 pip install opennmt-py==1.1.1
 
-for precision in fp32 fp16;
+for precision in fp16 fp32;
 do
 
 if [ "$precision" = "fp16" ]; then
     echo "Using fp16."
     precision_num=1
+    precision_large="FP16"
 else
     echo "Using fp32"
     precision_num=0
+    precision_large="FP32"
 fi
 
 logdir="decoding-log-${precision}"
-mkdir -p ${logdir}
+if [ ! -f ${logdir} ] ; then
+    mkdir ${logdir} -p
+fi
+
 all_log="${logdir}/all-log.log"
-echo -e "| <batch_size, seq_len, beam_size> | PyTorch (ms) | Decoder (ms) | Decoding (ms) | Decoder Speedup | Decoding Speedup | " > $all_log
-echo -e "|:-----------------------:|:------:|:------:|:------:|:---------:|:---------:| " >> $all_log
+echo -e "| Batch Size | Beam Width | Precision | PyTorch <br/> Throughput (token/sec) | FT Decoder <br/> Throughput (token/sec) | FT Decoding <br/> Throughput (token/sec) | FT Decoder <br/> Speedup | FT Decoding <br/> Speedup | " > $all_log
+echo -e "|:----------:|:----------:|:---------:|:------------------------------------:|:---------------------------------------:|:----------------------------------------:|:------------------------:|:-------------------------:| " >> $all_log
 
-for beam_size in 1 4 ;
+cat /proc/cpuinfo > ${logdir}/cpuinfo.txt
+nvidia-smi > ${logdir}/gpuinfo.txt
+
+for batch_size in 1 8 128 ;
 do
-for batch_size in 1 8 32 64 128 ;
+for beam_size in 1 4 32 ;
 do
-for seq_len in 32 64 128 ;
-do
-    ./bin/decoding_gemm ${batch_size} ${beam_size} 8 64 31538 ${seq_len} 512 ${precision_num}
-    tmp_log=${logdir}/beamsize-${beam_size}-batchsize-${batch_size}-seq-${seq_len}-${precision}-log.log
-    if [ "$precision" = "fp16" ]; then
-        python pytorch/decoding_sample.py ${batch_size} 6 ${seq_len} 8 64 ${beam_size} 31538 --fp16 --time 2>&1 | tee $tmp_log
-    else
-        python pytorch/decoding_sample.py ${batch_size} 6 ${seq_len} 8 64 ${beam_size} 31538 --time 2>&1 | tee $tmp_log
+    if [ -f "decoding_gemm_config.in" ] ; then
+        rm decoding_gemm_config.in
     fi
-    pt_time=`tail -n 3 ${tmp_log} | head -n 1 | awk '{print $5}'`
-    decoder_time=`tail -n 2 ${tmp_log} | head -n 1 | awk '{print $7}'`
-    decoding_o_time=`tail -n 1 ${tmp_log} | awk '{print $5}'`
 
-    speedup_decoder=$(echo "scale=2; $pt_time / $decoder_time" | bc)
-    speedup_decoding=$(echo "scale=2; $pt_time / $decoding_o_time" | bc)
-    echo ' ' | awk -v batch_size=$batch_size -v seq_len=$seq_len -v beam_size=$beam_size \
-                        -v pt_time=$pt_time -v decoder_time=$decoder_time \
-                        -v decoding_o_time=$decoding_o_time -v speedup_decoder=$speedup_decoder -v speedup_decoding=$speedup_decoding \
-                        '{print "| <" batch_size ", " seq_len ", " beam_size "> | " pt_time " | " \
-                        decoder_time " | " decoding_o_time " | " speedup_decoder " | " speedup_decoding " | "  }' >> $all_log
-done
+    ./bin/decoding_gemm ${batch_size} ${beam_size} 8 64 31538 128 512 ${precision_num}
+    sleep 60
+
+    py_log=${logdir}/beamsize-${beam_size}-batchsize-${batch_size}-seq-128-${precision}-ths-log.log
+    ft_decoder_log=${logdir}/beamsize-${beam_size}-batchsize-${batch_size}-seq-128-${precision}-ft-decoder-log.log
+    ft_decoding_log=${logdir}/beamsize-${beam_size}-batchsize-${batch_size}-seq-128-${precision}-ft-decoding-log.log
+
+    python pytorch/run_translation.py --batch_size ${batch_size} --beam_size ${beam_size} \
+                                      --max_seq_len 128 \
+                                      --model_type torch_decoding \
+                                      --data_type ${precision} \
+                                      --output_file output.txt 2>&1 | tee ${py_log}
+    sleep 60
+    python pytorch/run_translation.py --batch_size ${batch_size} --beam_size ${beam_size} \
+                                      --max_seq_len 128 \
+                                      --model_type torch_decoding_with_decoder_ext \
+                                      --data_type ${precision} \
+                                      --output_file output.txt 2>&1 | tee ${ft_decoder_log}
+    sleep 60
+    python pytorch/run_translation.py --batch_size ${batch_size} --beam_size ${beam_size} \
+                                      --max_seq_len 128 \
+                                      --model_type decoding_ext \
+                                      --data_type ${precision} \
+                                      --output_file output.txt 2>&1 | tee ${ft_decoding_log}
+    sleep 60
+    ft_decoding_throughput=`tail -n 1 ${ft_decoding_log} | awk '{print $4}'`
+    ft_decoder_throughput=`tail -n 1 ${ft_decoder_log} | awk '{print $4}'`
+    py_throughput=`tail -n 1 ${py_log} | awk '{print $4}'`
+    ft_decoder_speedup=$(echo "scale=2; $ft_decoder_throughput / $py_throughput " | bc)
+    ft_decoding_speedup=$(echo "scale=2; $ft_decoding_throughput / $py_throughput " | bc)
+
+    echo "" | awk -v py_throughput=$py_throughput -v ft_decoder_throughput=$ft_decoder_throughput \
+                        -v ft_decoding_throughput=$ft_decoding_throughput -v ft_decoder_speedup=$ft_decoder_speedup \
+                        -v ft_decoding_speedup=$ft_decoding_speedup -v batch_size=$batch_size -v beam_size=$beam_size \
+                        -v precision_large=$precision_large \
+                        '{printf "| %3d | %3d | %s | %5d | %5d | %5d | %4.2f | %4.2f | \n", batch_size, beam_size,
+                        precision_large, py_throughput, ft_decoder_throughput, ft_decoding_throughput,
+                        ft_decoder_speedup, ft_decoding_speedup }' >> $all_log
+
 done
 done
 done

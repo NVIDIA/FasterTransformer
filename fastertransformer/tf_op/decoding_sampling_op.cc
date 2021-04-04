@@ -73,6 +73,7 @@ REGISTER_OP("DecodingSampling")
     .Attr("num_layer: int >= 1")
     .Attr("start_id: int >= 0")
     .Attr("end_id: int >= 0")
+    .Attr("is_fuse_qkv: bool")
     .SetShapeFn([](shape_inference::InferenceContext *c) {
         int max_seq_len;
         c->GetAttr("max_seq_len", &max_seq_len);
@@ -106,6 +107,7 @@ public:
         OP_REQUIRES_OK(context, context->GetAttr("num_layer", &num_layer_));
         OP_REQUIRES_OK(context, context->GetAttr("start_id", &start_id_));
         OP_REQUIRES_OK(context, context->GetAttr("end_id", &end_id_));
+        OP_REQUIRES_OK(context, context->GetAttr("is_fuse_qkv", &is_fuse_qkv_));
     }
 
   void Compute(OpKernelContext *context) override
@@ -119,6 +121,7 @@ public:
 
         DecodingInitParam<DataType_> decoding_params;
         decoding_params.cublas_handle = this->get_cublas_handler();
+        decoding_params.cublaslt_handle = this->get_cublaslt_handler();
         Tensor *output_ids = nullptr;
         OP_REQUIRES_OK(
             context,
@@ -148,7 +151,7 @@ public:
                 vocab_size, num_layer_,
                 memory_hidden_dim, memory_max_seq_len,
                 start_id_, end_id_, 
-                candidate_num_, probability_threshold_);
+                candidate_num_, probability_threshold_, is_fuse_qkv_);
         }
         catch (std::runtime_error &error)
         {
@@ -165,19 +168,30 @@ public:
         const int hidden_unit = size_per_head_ * head_num_;
         for (int i = 0; i < num_layer_; i++)
         {
+            params[i].request_batch_size = batch_size_;
+            params[i].request_max_mem_seq_len = memory_max_seq_len;
             params[i].stream = stream;
             params[i].cublas_handle = this->get_cublas_handler();
+            params[i].cublaslt_handle = this->get_cublaslt_handler();
             check_cuda_error(cublasSetStream(params[i].cublas_handle, params[i].stream));
 
             this->get_tensor(context, 2, &params[i].self_layernorm.beta, i * hidden_unit);
             this->get_tensor(context, 3, &params[i].self_layernorm.gamma, i * hidden_unit);
-            
-            this->get_tensor(context, 4, &params[i].self_attention.query_weight.kernel, i * hidden_unit * hidden_unit);
-            this->get_tensor(context, 5, &params[i].self_attention.query_weight.bias, i * hidden_unit);
-            this->get_tensor(context, 6, &params[i].self_attention.key_weight.kernel, i * hidden_unit * hidden_unit);
-            this->get_tensor(context, 7, &params[i].self_attention.key_weight.bias, i * hidden_unit);
-            this->get_tensor(context, 8, &params[i].self_attention.value_weight.kernel, i * hidden_unit * hidden_unit);
-            this->get_tensor(context, 9, &params[i].self_attention.value_weight.bias, i * hidden_unit);
+
+            if(is_fuse_qkv_)
+            {
+                this->get_tensor(context, 4, &params[i].self_attention.query_weight.kernel, i * hidden_unit * hidden_unit * 3);
+                this->get_tensor(context, 5, &params[i].self_attention.query_weight.bias, i * hidden_unit * 3);
+            }
+            else
+            {
+                this->get_tensor(context, 4, &params[i].self_attention.query_weight.kernel, i * hidden_unit * hidden_unit);
+                this->get_tensor(context, 5, &params[i].self_attention.query_weight.bias, i * hidden_unit);
+                this->get_tensor(context, 6, &params[i].self_attention.key_weight.kernel, i * hidden_unit * hidden_unit);
+                this->get_tensor(context, 7, &params[i].self_attention.key_weight.bias, i * hidden_unit);
+                this->get_tensor(context, 8, &params[i].self_attention.value_weight.kernel, i * hidden_unit * hidden_unit);
+                this->get_tensor(context, 9, &params[i].self_attention.value_weight.bias, i * hidden_unit);
+            }
 
             this->get_tensor(context, 10, &params[i].self_attention.attention_output_weight.kernel, i * hidden_unit * hidden_unit);
             this->get_tensor(context, 11, &params[i].self_attention.attention_output_weight.bias, i * hidden_unit);
@@ -203,7 +217,7 @@ public:
         this->get_tensor(context, 29, &decoding_params.layernorm.gamma);
         this->get_tensor(context, 30, &decoding_params.embedding_table);
         this->get_tensor(context, 31, &decoding_params.embedding_kernel);
-        this->get_tensor(context, 32, &decoding_params.embedding_bias_T);
+        this->get_tensor(context, 32, &decoding_params.embedding_bias);
         this->get_tensor(context, 33, &decoding_params.position_encoding_table);
 
         try
@@ -222,7 +236,7 @@ public:
         }
 
         delete decoding_sampling_;
-        delete params;
+        delete [] params;
     }
 
 private:
@@ -230,6 +244,7 @@ private:
     int head_num_, size_per_head_, num_layer_;
     int start_id_, end_id_;
     float probability_threshold_;
+    bool is_fuse_qkv_;
     typedef TFTraits<T> traits_;
     typedef typename traits_::DataType DataType_;
 };

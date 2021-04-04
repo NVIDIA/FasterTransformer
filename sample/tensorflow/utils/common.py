@@ -31,7 +31,8 @@ class TransformerArgument:
                 fuse_qkv=True,
                 remove_padding=False,
                 int8_mode=0,
-                allow_gemm_test=False):
+                allow_gemm_test=False,
+                memory_hidden_dim=-1):
     '''
     The arguments of Transformer layer (for both encoder and decoder).
     
@@ -45,7 +46,8 @@ class TransformerArgument:
         kernel_init_range: The initializer range of bias for all convolution layer and fully-connected layer. 
         fuse_qkv: bool. Wether fuse the q, k, v gemm or not.
         remove_padding: bool. Remove the padding of sentences of encoder.
-        int8_mode: Mode of int8 quantization. 0 means not using int8 quantization, 1 means using int8 quantization without quantizing residuals, 2 means using int8 quantization with quantizing residuals.
+        int8_mode: Mode of int8 quantization. 0 means not using int8 quantization, 1 means using int8 quantization without quantizing residuals, 
+                                                                                   2 means using int8 quantization with quantizing residuals.
         allow_gemm_test: whether allow gemm test inside FT.
     '''
     
@@ -65,6 +67,7 @@ class TransformerArgument:
       self.check_threshold = 2e-2
     self.fuse_qkv = fuse_qkv
     self.remove_padding = remove_padding
+    self.memory_hidden_dim = memory_hidden_dim
 
 class DecodingArgument(object):
   def __init__( self,

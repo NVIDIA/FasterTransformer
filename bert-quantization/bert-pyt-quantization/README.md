@@ -21,7 +21,8 @@ export MODEL_DIR=</path/to/model/checkpoint>
 git clone https://github.com/NVIDIA/TensorRT.git
 cd TensorRT
 git checkout release/7.2
-pip install tools/pytorch-quantization/.
+cd tools/pytorch-quantization
+pip install .
 ```
 
 download SQuAD data:
@@ -76,7 +77,7 @@ The results would be like:
 {"exact_match": 82.63, "f1": 89.53}
 ```
 
-Then do PTQ, `ft_mode` is unified with int8_mode in FasterTransformer, can be one of `1` or `2`.
+Then do PTQ, `quant_mode` is unified with int8_mode in FasterTransformer, can be one of `ft1` or `ft2` or `ft3`.
 
 ```bash
 python run_squad.py \
@@ -101,14 +102,14 @@ python run_squad.py \
   --fp16 \
   --calibrator percentile \
   --percentile 99.999 \
-  --ft_mode 2
+  --quant_mode ft2
 ```
 
 The results would be like:
 
 ```bash
-{"exact_match": 81.93, "f1": 89.05}     # for mode 1
-{"exact_match": 80.41, "f1": 88.15}     # for mode 2
+{"exact_match": 81.92, "f1": 89.09}     # for mode 1
+{"exact_match": 80.36, "f1": 88.09}     # for mode 2
 ```
 
 
@@ -117,7 +118,7 @@ The results would be like:
 If PTQ does not yield an acceptable result you can finetune with quantization to recover accuracy.
 We recommend to calibrate the pretrained model and finetune to avoid overfitting:
 
-`ft_mode` is unified with int8_mode in FasterTransformer, can be one of `1` or `2`.
+`quant_mode` is unified with int8_mode in FasterTransformer, can be one of `ft1` or `ft2` or `ft3`.
 
 ```bash
 python run_squad.py \
@@ -138,7 +139,7 @@ python run_squad.py \
   --fp16 \
   --calibrator percentile \
   --percentile 99.99 \
-  --ft_mode 2
+  --quant_mode ft2
 
 python -m torch.distributed.launch --nproc_per_node=8 run_squad.py \
   --init_checkpoint=$MODEL_DIR/bert-base-uncased-calib-mode-2/pytorch_model.bin \
@@ -161,14 +162,14 @@ python -m torch.distributed.launch --nproc_per_node=8 run_squad.py \
   --output_dir=$MODEL_DIR/bert-base-uncased-QAT-mode-2 \
   --max_steps=-1 \
   --fp16 \
-  --ft_mode 2
+  --quant_mode ft2
 ```
 
 The results would be like:
 
 ```bash
-{"exact_match": 81.91, "f1": 89.09}     # for mode 1
-{"exact_match": 81.72, "f1": 89.09}     # for mode 2
+{"exact_match": 82.17, "f1": 89.37}     # for mode 1
+{"exact_match": 82.02, "f1": 89.30}     # for mode 2
 ```
 
 The results of quantization may differ if different seeds are provided.
@@ -197,7 +198,7 @@ python run_squad.py \
   --fp16 \
   --calibrator percentile \
   --percentile 99.99 \
-  --ft_mode 2
+  --quant_mode ft2
 
 python -m torch.distributed.launch --nproc_per_node=8 run_squad.py \
   --init_checkpoint=$MODEL_DIR/bert-base-uncased-PTQ-mode-2-for-KD/pytorch_model.bin \
@@ -220,7 +221,7 @@ python -m torch.distributed.launch --nproc_per_node=8 run_squad.py \
   --output_dir=$MODEL_DIR/bert-base-uncased-QAT-mode-2 \
   --max_steps=-1 \
   --fp16 \
-  --ft_mode 2 \
+  --quant_mode ft2 \
   --distillation \
   --teacher=$MODEL_DIR/bert-base-uncased-finetuned/pytorch_model.bin
 ```
@@ -228,5 +229,5 @@ python -m torch.distributed.launch --nproc_per_node=8 run_squad.py \
 The results would be like:
 
 ```bash
-{"exact_match": 83.96, "f1": 90.37}
+{"exact_match": 83.67, "f1": 90.37}
 ```

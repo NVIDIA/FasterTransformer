@@ -235,8 +235,9 @@ def build_base_model(model_opt, fields, gpu, args, checkpoint=None, gpu_id=None)
                 if args.data_type == 'fp16':
                     for i in range(len(w[-1])):
                         w[-1][i] = w[-1][i].half()
+            # Here, we use hidden_dim as mem_hiddem_dim
             decoder_layers = nn.ModuleList(
-                [FTDecoderLayer(model_opt.heads, model_opt.dec_rnn_size // model_opt.heads, w[i], args) for i in range(model_opt.dec_layers)])
+                [FTDecoderLayer(model_opt.heads, model_opt.dec_rnn_size // model_opt.heads, model_opt.dec_rnn_size, w[i], args) for i in range(model_opt.dec_layers)])
             model.decoder.transformer_layers = decoder_layers
         elif args.model_type == 'decoding_ext':
             vocab_size = len(fields["tgt"].base_field.vocab)
@@ -258,6 +259,8 @@ def build_base_model(model_opt, fields, gpu, args, checkpoint=None, gpu_id=None)
                 decoding_weights.to_half()
             model.decoder = TorchDecoding(model_opt.dec_layers, model_opt.heads, model_opt.dec_rnn_size // model_opt.heads,
                                             vocab_size, bos_idx, eos_idx, decoding_weights, args=args)
+        else:
+            raise ValueError("Wrong model_type argument, must be one of [decoding_ext, torch_decoding, torch_decoding_with_decoder_ext]")
 
     else:
         if model_opt.param_init != 0.0:

@@ -46,12 +46,8 @@ def main():
                         help='test the time or not.')
     parser.add_argument('--use_pretrained', action='store_true',
                         help='use pretrained weights or not.')
-    parser.add_argument('--module_path', type=str, default='./',
-                        help='directory containing the th_fastertransformer dynamic lib')
-    parser.add_argument('--ths', action='store_true',
-                        help='use TorchScript mode')
-    parser.add_argument('--ths_path', type=str, default='./lib/libths_fastertransformer.so',
-                        help='path of the ths_fastertransformer dynamic lib file')
+    parser.add_argument('--ths_path', type=str, default='./lib/libpyt_fastertransformer.so',
+                        help='path of the pyt_fastertransformer dynamic lib file')
 
     args = parser.parse_args()
 
@@ -78,14 +74,11 @@ def main():
     print('vocab_size: ' + str(vocab_size))
     print('use_pretrained: ' + str(args.use_pretrained))
     print('use_fp16: ' + str(args.fp16))
-    print('TorchScript mode: ' + str(args.ths))
     print('test_time: ' + str(args.time))
     print("========================================\n")
 
-    decodingargs1 = ArgHelper('torch_decoding', 'fp16' if args.fp16 else 'fp32',
-                              os.path.abspath(args.module_path), args.ths, os.path.abspath(args.ths_path))
-    decodingargs2 = ArgHelper('torch_decoding_with_decoder_ext', 'fp16' if args.fp16 else 'fp32',
-                              os.path.abspath(args.module_path), args.ths, os.path.abspath(args.ths_path))
+    decodingargs1 = ArgHelper('torch_decoding', 'fp16' if args.fp16 else 'fp32', os.path.abspath(args.ths_path))
+    decodingargs2 = ArgHelper('torch_decoding_with_decoder_ext', 'fp16' if args.fp16 else 'fp32', os.path.abspath(args.ths_path))
 
     mem = torch.empty(args.batch_size, args.seq_len, hidden_dim).cuda()
     torch.nn.init.uniform_(mem, -1, 1)

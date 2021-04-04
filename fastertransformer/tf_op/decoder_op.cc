@@ -56,19 +56,24 @@ REGISTER_OP("Decoder")
     .Input("ffn_bias1: T")                  // # 26
     .Input("ffn_kernel2: T")                // # 27
     .Input("ffn_bias2: T")                  // # 28
-    .Input("old_self_cache: T")             // # 29
-    .Input("old_mem_cache: T")              // # 30
-    .Input("pseudo_input: T")               // # 31, pseudo input, used to prevent the parallel execution for OP and TF
+    .Input("old_self_cache: ListT")         // # 29, 30
+    .Input("old_mem_cache: T")              // # 31
+    .Input("pseudo_input: T")               // # 32, pseudo input, used to prevent the parallel execution for OP and TF
+    .Input("step: int32")                   // # 33
     .Output("decoder_output: T")
-    .Output("new_self_cache: T")
+    .Output("new_self_cache: ListT")
     .Output("new_mem_cache: T")
+    .Attr("ListT: list({float, half})")
     .Attr("T: {float, half}")
     .Attr("head_num: int >= 1")
     .Attr("size_per_head: int >= 1")
+    .Attr("memory_hidden_dim: int >= 1")
+    .Attr("is_fuse_qkv: bool")
     .SetShapeFn([](shape_inference::InferenceContext *c) {
       c->set_output(0, c->input(0));
       c->set_output(1, c->input(29));
       c->set_output(2, c->input(30));
+      c->set_output(3, c->input(31));
       return Status::OK();
     });
 template <typename Device, typename T>
@@ -79,6 +84,22 @@ public:
   {
     OP_REQUIRES_OK(context, context->GetAttr("head_num", &head_num_));
     OP_REQUIRES_OK(context, context->GetAttr("size_per_head", &size_per_head_));
+    OP_REQUIRES_OK(context, context->GetAttr("memory_hidden_dim", &memory_hidden_dim_));
+    OP_REQUIRES_OK(context, context->GetAttr("is_fuse_qkv", &is_fuse_qkv_));
+    
+    try
+    {
+      decoder_ = new OpenDecoder<DecoderTraits_::OpType>(head_num_, size_per_head_, memory_hidden_dim_, is_fuse_qkv_);
+    }
+    catch (std::runtime_error &error)
+    {
+      OP_REQUIRES(context, false, errors::Internal(error.what()));
+    }
+  }
+
+  ~DecoderOp()
+  {
+    delete decoder_;
   }
 
   void Compute(OpKernelContext *context) override
@@ -86,23 +107,19 @@ public:
     // input(1): memory_tensor: [batch_size, memory_max_seq_len, memory_hidden_dim]
     assert((int)(context->input(1).dims()) == 3);
     const int batch_size_ = (int)context->input(1).dim_size(0);
-    const int max_seq_len_ = (int)context->input(1).dim_size(1);
-    const int memory_hidden_dim_ = (int)context->input(1).dim_size(2);
+    const int max_mem_seq_len_ = (int)context->input(1).dim_size(1);
+    OP_REQUIRES(context, memory_hidden_dim_ == (int)context->input(1).dim_size(2),
+      errors::InvalidArgument("[ERROR] memory hidden dimension does not equal to the second dimension of memory tensor"));
+
+    // Detect we use batch major
+    bool use_batch_major = (context->input(29).dims() == 5)? true : false;
+    // we use decoder_max_seq_len == -1 to tell the decoder we use seq major cache format
+    int decoder_max_seq_len = (use_batch_major)? (int)context->input(30).dim_size(2) : -1;
 
     typedef DecoderTransformerTraits<traits_::OpType> DecoderTraits_;
-    OpenDecoder<DecoderTraits_::OpType> *decoder_;
     const cudaStream_t &stream = context->eigen_device<Device>().stream();
     fastertransformer::Allocator<AllocatorType::TF> allocator_(context, stream);
-    try
-    {
-      decoder_ = new OpenDecoder<DecoderTraits_::OpType>(batch_size_, max_seq_len_,
-                                                         head_num_, size_per_head_, memory_hidden_dim_);
-    }
-    catch (std::runtime_error &error)
-    {
-      OP_REQUIRES(context, false, errors::Internal(error.what()));
-    }
-    OP_REQUIRES(context, context->num_inputs() == 32, errors::InvalidArgument("[ERROR] More or Less input arguments"));
+    OP_REQUIRES(context, context->num_inputs() == 34, errors::InvalidArgument("[ERROR] More or Less input arguments"));
 
     Tensor *decoder_output_tensor = nullptr;
     OP_REQUIRES_OK(
@@ -110,12 +127,13 @@ public:
         context->allocate_output(0, {batch_size_, 1, head_num_ * size_per_head_}, &decoder_output_tensor));
     DataType_ *decoder_output = reinterpret_cast<DataType_ *>(decoder_output_tensor->flat<T>().data());
 
-    Tensor self_cache_tensor = context->input(29);
-    context->set_output(1, self_cache_tensor);
-    DataType_ *self_cache = reinterpret_cast<DataType_ *>(self_cache_tensor.flat<T>().data());
+    Tensor self_cache_keys_tensor = context->input(29);
+    Tensor self_cache_values_tensor = context->input(30);
+    context->set_output(1, self_cache_keys_tensor);
+    context->set_output(2, self_cache_values_tensor);
 
-    Tensor memory_cache_tensor = context->input(30);
-    context->set_output(2, memory_cache_tensor);
+    Tensor memory_cache_tensor = context->input(31);
+    context->set_output(3, memory_cache_tensor);
     DataType_ *memory_cache = reinterpret_cast<DataType_ *>(memory_cache_tensor.flat<T>().data());
 
     const DataType_ *from_tensor = reinterpret_cast<const DataType_ *>(context->input(0).flat<T>().data());
@@ -128,7 +146,10 @@ public:
 
     DecoderInitParam<DataType_> params;
     params.cublas_handle = this->get_cublas_handler();
+    params.cublaslt_handle = this->get_cublaslt_handler();
     params.stream = stream;
+    params.request_max_mem_seq_len = max_mem_seq_len_;
+    params.request_batch_size = batch_size_;
     check_cuda_error(cublasSetStream(params.cublas_handle, params.stream));
 
     const int hidden_units = head_num_ * size_per_head_;
@@ -162,21 +183,32 @@ public:
     this->get_tensor(context, 27, &params.ffn.output_weight.kernel);
     this->get_tensor(context, 28, &params.ffn.output_weight.bias);
 
-    const int step = (int)context->input(29).dim_size(1);
-    DataType_ *K_cache = self_cache;
-    DataType_ *V_cache = self_cache + batch_size_ * step * hidden_units;
+    const int step = *reinterpret_cast<const int*>(context->input(33).flat<int>().data()) + 1;
+    //const int step = (int)context->input(29).dim_size(1);
+
+    DataType_ *K_cache = reinterpret_cast<DataType_ *>(self_cache_keys_tensor.flat<T>().data());
+    DataType_ *V_cache = reinterpret_cast<DataType_ *>(self_cache_values_tensor.flat<T>().data());
+
     DataType_ *K_mem_cache = memory_cache;
-    DataType_ *V_mem_cache = memory_cache + batch_size_ * max_seq_len_ * hidden_units;
+    DataType_ *V_mem_cache = memory_cache + batch_size_ * max_mem_seq_len_ * hidden_units;
+    decoder_->set_max_batch_size(batch_size_);
     const int decoder_buffer_size = decoder_->getWorkspaceSize() * sizeof(DataType_);
-    DataType_ *decoder_buffer = (DataType_ *)allocator_.malloc(decoder_buffer_size);
+    void *buf = allocator_.malloc(((sizeof(DataType_) == sizeof(half)) ? CUBLAS_WORKSPACE_SIZE : 0) + decoder_buffer_size);
+    void *cublas_workspace = nullptr;
+    DataType_ *decoder_buffer = (DataType_ *)buf;
+    if (sizeof(DataType_) == sizeof(half))
+    {
+      cublas_workspace = buf;
+      decoder_buffer = (DataType_ *)((char*)cublas_workspace + CUBLAS_WORKSPACE_SIZE);
+    }
 
     try
     {
-      decoder_->initialize(params, decoder_buffer);
+      decoder_->initialize(params, decoder_buffer, cublas_workspace);
       decoder_->forward(from_tensor, memory_tensor,
                         K_cache, V_cache,
                         K_mem_cache, V_mem_cache,
-                        memory_sequence_length, decoder_output, step,
+                        memory_sequence_length, decoder_output, step, decoder_max_seq_len,
                         true);
     }
     catch (std::runtime_error &error)
@@ -189,22 +221,25 @@ public:
       std::cout << errors::Internal("Runtime error");
       exit(-1);
     }
-
-    allocator_.free(decoder_buffer);
-    delete decoder_;
+    allocator_.free(buf);
   }
 
 private:
+  int memory_hidden_dim_, max_batch_size_;
   int head_num_, size_per_head_;
+  bool is_fuse_qkv_;
   typedef TFTraits<T> traits_;
   typedef typename traits_::DataType DataType_;
+  typedef DecoderTransformerTraits<traits_::OpType> DecoderTraits_;
+  OpenDecoder<DecoderTraits_::OpType> *decoder_;
 };
 
 #ifdef GOOGLE_CUDA
 
 #define REGISTER_GPU(T)                                          \
   REGISTER_KERNEL_BUILDER(                                       \
-      Name("Decoder").Device(DEVICE_GPU).TypeConstraint<T>("T"), \
+      Name("Decoder").Device(DEVICE_GPU).TypeConstraint<T>("T")  \
+      .HostMemory("step"),                                       \
       DecoderOp<GPUDevice, T>)
 REGISTER_GPU(float);
 REGISTER_GPU(Eigen::half);
