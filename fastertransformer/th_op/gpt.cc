@@ -25,7 +25,6 @@ using torch::Tensor;
 using std::vector;
 
 FasterTransformerGPT::FasterTransformerGPT(
-    const int64_t batch_size,
     const int64_t head_num,
     const int64_t size_per_head,
     const int64_t vocab_size,
@@ -35,8 +34,6 @@ FasterTransformerGPT::FasterTransformerGPT(
     const int64_t candidate_num,
     const double probability_threshold,
     const double temperature,
-    const int64_t input_len,
-    const int64_t output_len,
     const int64_t max_seq_len,
     const int64_t tensor_para_size,
     const int64_t layer_para_size,
@@ -60,9 +57,6 @@ FasterTransformerGPT::FasterTransformerGPT(
     Tensor layernorm_gamma,
     Tensor layernorm_beta)
     : st_(self_layernorm_gamma[0].scalar_type()),
-      batch_size_(batch_size),
-      input_len_(input_len),
-      output_len_(output_len),
       max_seq_len_(max_seq_len),
       weights_transformer{self_layernorm_gamma,
               self_layernorm_beta,
@@ -102,15 +96,13 @@ FasterTransformerGPT::FasterTransformerGPT(
 
   switch (st_) {
   case at::ScalarType::Float:
-    gpt = new torch_ext::GPT<float>(batch_size, head_num, size_per_head, vocab_size,
-                                    start_id, end_id, decoder_layers, candidate_num, probability_threshold, temperature, 
-                                    input_len, output_len, max_seq_len, 
+    gpt = new torch_ext::GPT<float>(head_num, size_per_head, vocab_size,
+                                    start_id, end_id, decoder_layers, candidate_num, probability_threshold, temperature, max_seq_len, 
                                     tensor_para_size, layer_para_size, layer_para_batch_size, is_fuse_QKV, max_batch_size, weights_transformer, weights);
     break;
   case at::ScalarType::Half:
-    gpt = new torch_ext::GPT<half>(batch_size, head_num, size_per_head, vocab_size,
-                                    start_id, end_id, decoder_layers, candidate_num, probability_threshold, temperature, 
-                                    input_len, output_len, max_seq_len, 
+    gpt = new torch_ext::GPT<half>(head_num, size_per_head, vocab_size,
+                                    start_id, end_id, decoder_layers, candidate_num, probability_threshold, temperature, max_seq_len, 
                                     tensor_para_size, layer_para_size, layer_para_batch_size, is_fuse_QKV, max_batch_size, weights_transformer, weights);
     break;
   default:
@@ -122,15 +114,20 @@ FasterTransformerGPT::~FasterTransformerGPT() {
   delete gpt;
 };
 
-std::vector<Tensor> FasterTransformerGPT::forward(Tensor start_ids, Tensor start_lengths, Tensor attn_mask) {
+std::vector<Tensor> FasterTransformerGPT::forward(Tensor start_ids, Tensor start_lengths, Tensor attn_mask, int64_t output_len) {
   CHECK_INPUT(start_ids, at::ScalarType::Int);
   CHECK_INPUT(start_lengths, at::ScalarType::Int);
   CHECK_CUDA(attn_mask); CHECK_CONTIGUOUS(attn_mask);
 
-  auto output_ids = torch::empty({input_len_ + output_len_, batch_size_}, torch::dtype(torch::kInt32).device(torch::kCUDA).requires_grad(false));
+  int batch_size = start_ids.size(0);
+  int input_len = at::min(start_lengths).item().to<int>();
+
+  Tensor output_ids = torch::empty({max_seq_len_, batch_size}, torch::dtype(torch::kInt32).device(torch::kCUDA).requires_grad(false));
 
   attn_mask = attn_mask.to(st_);
-  gpt->forward(start_ids, start_lengths, attn_mask, output_ids);
+  gpt->forward(start_ids, start_lengths, attn_mask, output_ids, output_len);
+
+  output_ids = output_ids.slice(0, 0, output_len);
 
   return std::vector<Tensor>{output_ids};
 };

@@ -92,7 +92,11 @@ class GPTWeights(object):
 
         # Load
         w.append(torch.from_numpy(np.fromfile(ckpt_path + "/model.wte.bin", dtype=np.single)))
-        w.append(torch.from_numpy(np.fromfile(ckpt_path + "/model.wpe.bin", dtype=np.single)))
+
+        wpe = torch.from_numpy(np.fromfile(ckpt_path + "/model.wpe.bin", dtype=np.single)).reshape(-1, self.global_hidden_units)
+        assert self.max_seq_len <= wpe.size(0), "max_seq_len must not exceed the value of maximum sequence length during traning."
+        wpe = wpe[:self.max_seq_len]  # excludes weights not to really use.
+        w.append(wpe)
 
         is_load = lambda i: i >= self.layers_per_device * layer_para_rank and i < self.layers_per_device * (layer_para_rank + 1)
         w.append([torch.from_numpy(np.fromfile(ckpt_path + "/model.layers.{}.input_layernorm.weight.bin".format(i), dtype=np.single)) if is_load(i) else torch.empty(0) for i in range(self.layer_num)])
@@ -123,10 +127,9 @@ class GPTWeights(object):
             raise RuntimeError("head_num, size_per_head, vocab_size, and max_seq_len must be the same as the ones during training.")
 
 class GPT(nn.Module):
-    def __init__(self, batch_size, head_num, size_per_head, vocab_size, start_id, end_id, layer_num, top_k, top_p, temperature,
-                 input_len, output_len, max_seq_len, tensor_para_size, layer_para_size, layer_para_batch_size, is_fuse_QKV, max_batch_size, lib_path):
+    def __init__(self, head_num, size_per_head, vocab_size, start_id, end_id, layer_num, top_k, top_p, temperature,
+                 output_len, max_seq_len, tensor_para_size, layer_para_size, layer_para_batch_size, is_fuse_QKV, max_batch_size, lib_path):
         super().__init__()
-        self.batch_size = batch_size
         self.head_num = head_num
         self.size_per_head = size_per_head
         self.vocab_size = vocab_size
@@ -136,7 +139,6 @@ class GPT(nn.Module):
         self.top_k = top_k
         self.top_p = top_p
         self.temperature = temperature
-        self.input_len = input_len
         self.output_len = output_len
         self.max_seq_len = max_seq_len
         self.tensor_para_size = tensor_para_size
@@ -146,13 +148,9 @@ class GPT(nn.Module):
         self.max_batch_size = max_batch_size
 
         assert torch.cuda.is_available(), "CUDA is required for this model."
-        assert batch_size <= max_batch_size, "batch_size must not exceed max_batch_size."
-        assert input_len > 0, "input_len must be larger than zero. For an unconditional case, use start_id as the first token."
-        assert input_len + output_len <= max_seq_len, "input_len + output_len must not exceed max_seq_len."
 
         assert head_num % tensor_para_size == 0, "head_num must be a multiple of tensor_para_size."
         assert layer_num % layer_para_size == 0, "layer_num must be a multiple of layer_para_size."
-        assert layer_para_batch_size <= batch_size, "layer_para_batch_size must not exceed batch_size."
 
         # Prepare weights
         self.weights = GPTWeights(head_num, size_per_head, layer_num, vocab_size, max_seq_len, tensor_para_size, layer_para_size)
@@ -184,36 +182,36 @@ class GPT(nn.Module):
 
     def half(self):
         self.weights._map(lambda w : w.half())
-        self.model = torch.classes.FasterTransformer.GPT(self.batch_size, self.head_num, self.size_per_head, self.vocab_size,
-                                                        self.start_id, self.end_id, self.layer_num, self.top_k, self.top_p, self.temperature,
-                                                        self.input_len, self.output_len, self.max_seq_len,
+        self.model = torch.classes.FasterTransformer.GPT(self.head_num, self.size_per_head, self.vocab_size,
+                                                        self.start_id, self.end_id, self.layer_num, self.top_k, self.top_p, self.temperature, self.max_seq_len,
                                                         self.tensor_para_size, self.layer_para_size, self.layer_para_batch_size, 
                                                         self.is_fuse_QKV, self.max_batch_size, *self.weights.w)
 
 
     def cuda(self):
         self.weights._map(lambda w : w.cuda(self.device))
-        self.model = torch.classes.FasterTransformer.GPT(self.batch_size, self.head_num, self.size_per_head, self.vocab_size,
-                                                        self.start_id, self.end_id, self.layer_num, self.top_k, self.top_p, self.temperature,
-                                                        self.input_len, self.output_len, self.max_seq_len,
+        self.model = torch.classes.FasterTransformer.GPT(self.head_num, self.size_per_head, self.vocab_size,
+                                                        self.start_id, self.end_id, self.layer_num, self.top_k, self.top_p, self.temperature, self.max_seq_len,
                                                         self.tensor_para_size, self.layer_para_size, self.layer_para_batch_size, 
                                                         self.is_fuse_QKV, self.max_batch_size, *self.weights.w)
 
 
     def forward(self, start_ids, start_lengths, attn_mask, batch_first=True):
-        assert start_ids.size(0) == self.batch_size \
-            and start_lengths.size(0) == self.batch_size \
-            and attn_mask.size(0) == self.batch_size, \
-            "All of start_ids, start_lengths, attn_mask must have the same batch size as the one defined during initialization."
+        batch_size = start_ids.size(0)
+        assert batch_size <= self.max_batch_size, "batch_size must not exceed max_batch_size."
+        assert batch_size >= self.layer_para_batch_size, "batch_size must be equal to or larger than layer_para_batch_size."
+        assert batch_size % self.layer_para_batch_size == 0, "batch_size must be a multiple of layer_para_batch_size."
 
-        assert min(start_lengths) >= self.input_len, "All start lengths must be larger or equal to input_len."
+        input_len = min(start_lengths)
+        assert input_len > 0, "input_len must be larger than zero. For an unconditional case, use start_id as the first token."
+        assert input_len + self.output_len <= self.max_seq_len, "input_len + output_len must not exceed max_seq_len."
 
         # Inputs to device
         start_ids = start_ids.cuda(self.device)
         start_lengths = start_lengths.cuda(self.device)
         attn_mask = attn_mask.cuda(self.device)
 
-        output_ids, = self.model.forward(start_ids, start_lengths, attn_mask)
+        output_ids, = self.model.forward(start_ids, start_lengths, attn_mask, self.output_len)
         if batch_first:
             output_ids = output_ids.T
 

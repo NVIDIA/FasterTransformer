@@ -92,7 +92,7 @@ def get_ft_pytorch_output(args_dict):
                             --size_per_head={} \
                             --tensor_para_size={} \
                             --layer_para_size={} \
-                            --batch_size={} \
+                            --max_batch_size={} \
                             --top_k={} \
                             --top_p={} \
                             --temperature={} \
