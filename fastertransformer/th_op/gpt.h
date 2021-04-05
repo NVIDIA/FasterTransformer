@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,14 +39,13 @@ using std::vector;
 class IGPT {
 public:
   virtual ~IGPT() {}
-  virtual void forward(Tensor& start_ids, Tensor& start_lengths, Tensor& attn_mask, Tensor& output_ids) = 0;
+  virtual void forward(Tensor& start_ids, Tensor& start_lengths, Tensor& attn_mask, Tensor& output_ids, int output_len) = 0;
 };
 
 template <typename T>
 class GPT : public IGPT {
 public:
   GPT(
-      const int batch_size,
       const int head_num,
       const int size_per_head,
       const int vocab_size,
@@ -56,8 +55,6 @@ public:
       const int candidate_num,
       const float probability_threshold,
       const float temperature,
-      const int input_len,
-      const int output_len,
       const int max_seq_len,
       const int tensor_para_size,
       const int layer_para_size,
@@ -66,7 +63,7 @@ public:
       const int max_batch_size,
       vector<vector<Tensor>> weights_transformer,
       vector<Tensor> weights)
-      : batch_size_(batch_size), input_len_(input_len), output_len_(output_len), max_seq_len_(max_seq_len), size_per_head_(size_per_head),
+      : max_seq_len_(max_seq_len), size_per_head_(size_per_head),
         vocab_size_(vocab_size), decoder_layers_(decoder_layers), start_id_(start_id), end_id_(end_id),
         candidate_num_(candidate_num), probability_threshold_(probability_threshold), temperature_(temperature),
         is_fuse_QKV_(is_fuse_QKV), max_batch_size_(max_batch_size)
@@ -78,9 +75,6 @@ public:
     const int local_inner_size = local_hidden_units * 4;
 
     global_head_num_ = global_head_num;
-    decoding_params.request_batch_size = batch_size;
-    decoding_params.request_input_len = input_len;
-    decoding_params.request_output_len = output_len;
 
     // Set tensor and layer parallel
     int rank;
@@ -228,7 +222,7 @@ public:
     delete [] param;
   }
 
-  void forward(Tensor& start_ids, Tensor& start_lengths, Tensor& attn_mask, Tensor& output_ids) override
+  void forward(Tensor& start_ids, Tensor& start_lengths, Tensor& attn_mask, Tensor& output_ids, int output_len) override
   {
     // Set cudaStream, and cublasHandlers.
     cudaStream_t stream = at::cuda::getCurrentCUDAStream().stream();
@@ -242,9 +236,12 @@ public:
     decoding_params.cublaslt_handle = cublasLtHandle;
     decoding_params.stream = stream;
 
+    int batch_size = start_ids.size(0);
+    int input_len = at::min(start_lengths).item().to<int>();
+
     for (int i = 0; i < decoder_layers_; i++) {
       if(layer_parallel_param.is_valid(i) == false) continue;
-      param[i].request_batch_size = batch_size_;
+      param[i].request_batch_size = batch_size;
       param[i].stream = stream;
       param[i].cublas_handle = cublasHandle;
       param[i].cublaslt_handle = cublasLtHandle;
@@ -262,6 +259,9 @@ public:
     decoding->set_tensor_parallel_param(tensor_parallel_param);
     decoding->set_layer_parallel_param(layer_parallel_param);
 
+    decoding_params.request_batch_size = batch_size;
+    decoding_params.request_input_len = input_len;
+    decoding_params.request_output_len = output_len;
     decoding_params.d_start_ids = get_ptr<int>(start_ids);
     decoding_params.d_attn_mask = get_ptr<T>(attn_mask);
     decoding_params.max_input_len = at::max(start_lengths).item().to<int>();
@@ -275,9 +275,6 @@ public:
   }
 
 private:
-  const int batch_size_;
-  const int input_len_;
-  const int output_len_;
   const int max_seq_len_;
   int global_head_num_;
   const int size_per_head_;
@@ -302,7 +299,6 @@ private:
 class FasterTransformerGPT : public torch::jit::CustomClassHolder {
 public:
   FasterTransformerGPT(
-    const int64_t batch_size,
     const int64_t head_num,
     const int64_t size_per_head,
     const int64_t vocab_size,
@@ -312,8 +308,6 @@ public:
     const int64_t candidate_num,
     const double probability_threshold,
     const double temperature,
-    const int64_t input_len,
-    const int64_t output_len,
     const int64_t max_seq_len,
     const int64_t tensor_para_size,
     const int64_t layer_para_size,
@@ -340,13 +334,10 @@ public:
 
   ~FasterTransformerGPT();
   
-  vector<Tensor> forward(Tensor start_ids, Tensor start_lengths, Tensor attn_mask);
+  vector<Tensor> forward(Tensor start_ids, Tensor start_lengths, Tensor attn_mask, int64_t output_len);
 
 private:
   const at::ScalarType st_;
-  int64_t batch_size_;
-  int64_t input_len_;
-  int64_t output_len_;
   int64_t max_seq_len_;
   vector<vector<Tensor>> weights_transformer;
   vector<Tensor> weights;

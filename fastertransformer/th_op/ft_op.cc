@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -120,8 +120,8 @@ static auto fasterTransformerDecodingTHS =
 
 static auto fasterTransformerGPTTHS = 
 torch::jit::class_<torch_ext::FasterTransformerGPT>("FasterTransformer", "GPT")
-  .def(torch::jit::init<int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t,
-                        double, double, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, bool, int64_t,
+  .def(torch::jit::init<int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t,
+                        double, double, int64_t, int64_t, int64_t, int64_t, bool, int64_t,
                         Tensor, Tensor,
                         std::vector<Tensor>, std::vector<Tensor>, std::vector<Tensor>, std::vector<Tensor>, 
                         std::vector<Tensor>, std::vector<Tensor>, std::vector<Tensor>, std::vector<Tensor>,

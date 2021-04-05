@@ -1,4 +1,4 @@
-# Copyright (c) 2020, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -27,8 +27,6 @@ from utils.gpt import GPT, GPTWeights
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--batch_size', type=int, default=1,
-                        help='batch size')
     parser.add_argument('--layer_num', type=int, default=24,
                         help='number of layers')
     parser.add_argument('--output_len', type=int, default=32,
@@ -66,9 +64,9 @@ def main():
     parser.add_argument('--end_id', type=int, default=50256,
                         help='end token id.')
     parser.add_argument('--max_batch_size', type=int, default=8,
-                        help='max batch size. It\'s required for assiging buffer internally.')
-    parser.add_argument('--max_seq_len', type=int, default=1024,
-                        help='maximum sequence length during training. It\'s required for assiging buffer internally.')
+                        help='max batch size.')
+    parser.add_argument('--max_seq_len', type=int, default=128,
+                        help='max sequence length.')
     parser.add_argument('--fp16', action='store_true',
                         help='whether or not to run in fp16')
     parser.add_argument('--time', action='store_true',
@@ -80,7 +78,6 @@ def main():
                         
     args = parser.parse_args()
 
-    batch_size = args.batch_size
     layer_num = args.layer_num
     output_len = args.output_len
     head_num = args.head_num
@@ -110,12 +107,15 @@ def main():
     if args.sample_input_file:  # conditional case
         with open(args.sample_input_file, "r") as f:
             contexts = f.read().splitlines()
-        assert len(contexts) >= batch_size, "sample input file should have the same/larger number of context inputs as/than batch size."
+            batch_size = min(len(contexts), max_batch_size)
         contexts = contexts[:batch_size]
         start_ids = [torch.IntTensor(enc.encode(c)) for c in contexts]
     else:  # unconditional case
+        batch_size = max_batch_size
         contexts = ['<|endoftext|>'] * batch_size
         start_ids = [torch.IntTensor([end_id])] * batch_size
+
+    print("[INFO] batch size: {}".format(batch_size))
 
     start_lengths = [len(ids) for ids in start_ids]
     input_len = min(start_lengths)
@@ -125,8 +125,8 @@ def main():
     attn_mask = torch.ones((batch_size, input_len, input_len)).tril()
 
     # Prepare model.
-    gpt = GPT(batch_size, head_num, size_per_head, vocab_size, start_id, end_id,
-              layer_num, top_k, top_p, temperature, input_len, output_len, max_seq_len, 
+    gpt = GPT(head_num, size_per_head, vocab_size, start_id, end_id,
+              layer_num, top_k, top_p, temperature, output_len, max_seq_len, 
               tensor_para_size, layer_para_size, layer_para_batch_size, 
               is_fuse_QKV, max_batch_size, lib_path=args.lib_path)
     gpt.load(ckpt_path=args.ckpt_path)
