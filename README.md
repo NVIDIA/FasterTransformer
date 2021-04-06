@@ -7,8 +7,7 @@ This repository provides a script and recipe to run the highly optimized transfo
 - [FasterTransformer](#fastertransformer)
   - [Table Of Contents](#table-of-contents)
   - [Model overview](#model-overview)
-    - [Architecture matrix](#architecture-matrix)
-    - [Configuration support matrix](#configuration-support-matrix)
+    - [Support matrix](#support-matrix)
   - [Setup](#setup)
     - [Requirements](#requirements)
   - [Quick Start Guide](#quick-start-guide)
@@ -61,7 +60,7 @@ FasterTransformer is built on top of CUDA, cuBLAS and cuBLASLt, providing the C+
 
 More details are in [`docs/encoder_guide.md`](docs/encoder_guide.md), [`docs/decoder_guide.md`](docs/decoder_guide.md) and [`docs/gpt_guide.md`](docs/gpt_guide.md). Some common questions and the respective answers are put in [`docs/QAList.md`](docs/QAList.md)
 
-### Architecture matrix
+### Support matrix
 
 The following matrix shows the architecture differences between the model.
 
@@ -73,29 +72,6 @@ The following matrix shows the architecture differences between the model.
 | v3.0 | Yes | Yes | Yes | Yes | Yes | No  | No  |
 | v3.1 | Yes | Yes | Yes | Yes | Yes | Yes | No  |
 | v4.0 | Yes | Yes | Yes | Yes | Yes | Yes | Yes |
-
-### Configuration support matrix
-
-The following configurations are supported in the FasterTransformer encoder.
-- Batch size (B<sub>1</sub>): smaller or equal to 4096
-- Sequence length (S): smaller or equal to 1024.
-- Head number (H) and size per head (N): 
-  - 16 heads * 64 per heads
-  - 12 heads * 64 per heads
-  - 4 heads * 32 per heads
-  - 8 heads * 96 per heads
-- Data type: FP32, FP16 and INT8
-- Any number layer (N<sub>1</sub>) if the memory is enough
-
-The following configurations are supported in the FasterTransformer decoder and decoding.
-- Batch size (B<sub>1</sub>) * beam width (B<sub>2</sub>): smaller than 1024
-- Beam width: 1, 4, 16, 32 and 64 
-- Sequence length (S): smaller than 4096 
-- Head number (H): 8,12 and 16
-- Size per head (N): 32, 64 and 96
-- Vocabulary size (V): from 64 to 40000
-- Data type: FP32 and FP16
-- Any number layer (N<sub>2</sub>) if the memory is enough
 
 ## Setup
 
