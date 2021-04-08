@@ -169,7 +169,7 @@ void print_to_file(const T *result, const int size, const char *file, cudaStream
   cudaDeviceSynchronize();
   check_cuda_error(cudaGetLastError());
   printf("[INFO] file: %s with size %d.\n", file, size);
-  auto outFile = std::ofstream(file, open_mode);
+  std::ofstream outFile(file, open_mode);
   if(outFile)
   {
     T* tmp = new T[size];
