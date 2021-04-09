@@ -132,6 +132,7 @@ def main():
     gpt.load(ckpt_path=args.ckpt_path)
     if args.fp16:
         gpt.half()
+    gpt.cuda()
 
     with torch.no_grad():
         # Generate tokens.
