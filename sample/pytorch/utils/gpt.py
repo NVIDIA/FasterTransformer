@@ -171,21 +171,16 @@ class GPT(nn.Module):
         # Load the C++ model into Pytorch model.
         torch.classes.load_library(os.path.abspath(lib_path))
 
-        # Create and copy model to the device.
-        self.cuda()
-
+        self.model = None
 
     def load(self, ckpt_path):
         self.weights.load(ckpt_path, tensor_para_rank=self.tensor_para_rank, layer_para_rank=self.layer_para_rank)
-        self.cuda()
 
 
     def half(self):
         self.weights._map(lambda w : w.half())
-        self.model = torch.classes.FasterTransformer.GPT(self.head_num, self.size_per_head, self.vocab_size,
-                                                        self.start_id, self.end_id, self.layer_num, self.top_k, self.top_p, self.temperature, self.max_seq_len,
-                                                        self.tensor_para_size, self.layer_para_size, self.layer_para_batch_size, 
-                                                        self.is_fuse_QKV, self.max_batch_size, *self.weights.w)
+        if self.model is not None:
+            self.cuda()
 
 
     def cuda(self):
@@ -210,6 +205,8 @@ class GPT(nn.Module):
         start_ids = start_ids.cuda(self.device)
         start_lengths = start_lengths.cuda(self.device)
         attn_mask = attn_mask.cuda(self.device)
+
+        assert self.model is not None, "The model must be copied to the device(s) through cuda()."
 
         output_ids, = self.model.forward(start_ids, start_lengths, attn_mask, self.output_len)
         if batch_first:
