@@ -223,7 +223,7 @@ if __name__ == "__main__":
     parser.add_argument('-infer_gpu_num', '-i_g', type=int, help='How many gpus for inference', required=True)
     parser.add_argument('-fused_qkv', '-fused_qkv', type=int, default=1, help='Fuse the qkv weights or not. Default is true (1)', choices=[0, 1])
     parser.add_argument('-head_num', '-h_n', type=int, help='Number of heads', required=True)
-    parser.add_argument('-checkpoint_version', type=int, default=0, help='Number of heads')
+    parser.add_argument('-checkpoint_version', type=int, default=0, help='Checkpoint version of Megatron-LM')
     args = parser.parse_args()
     print("\n=============== Argument ===============")
     for key in vars(args):
