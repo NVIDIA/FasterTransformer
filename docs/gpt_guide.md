@@ -203,7 +203,8 @@ Note that there are different checkpoint version of Megatron. The version of the
     #### Set up in interactive mode
 
     ```bash
-    srun -A devtech -J devtech-gpt:gpt  -p luna -N1 --mpi=pmix --ntasks-per-node=8 --container-image nvcr.io/nvidia/pytorch:20.12-py3 --container-mounts /lustre/fsw/devtech/hpc-devtech/dahn/FasterTransformer:/workspace/fastertransformer --container-workdir /workspace/fastertransformer --pty bash
+    cd <FasterTransformer root path>
+    srun -N1 --mpi=pmix --ntasks-per-node=8 --container-image nvcr.io/nvidia/pytorch:20.12-py3 --container-mounts<FasterTransformer root path>:/workspace/fastertransformer --container-workdir /workspace/fastertransformer --pty bash
 
     mkdir build && cd build
     cmake -DSM=80 -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON .. && make -j12
@@ -213,14 +214,14 @@ Note that there are different checkpoint version of Megatron. The version of the
     * tensor_para_size=8, layer_para_size=1
 
     ```bash
-    srun -A devtech -p luna -N1 --mpi=pmix --ntasks-per-node=8 --container-image nvcr.io/nvidia/pytorch:20.12-py3 --container-mounts /lustre/fsw/devtech/hpc-devtech/dahn/FasterTransformer:/workspace/fastertransformer --container-workdir /workspace/fastertransformer/build python ./pytorch/gpt_sample.py --tensor_para_size=8 --layer_para_size=1 --ckpt_path="/workspace/fastertransformer/models/megatron-models/c-model/345m/8-gpu"
+    srun -N1 --mpi=pmix --ntasks-per-node=8 --container-image nvcr.io/nvidia/pytorch:20.12-py3 --container-mounts <FasterTransformer root path>:/workspace/fastertransformer --container-workdir /workspace/fastertransformer/build python ./pytorch/gpt_sample.py --tensor_para_size=8 --layer_para_size=1 --ckpt_path="/workspace/fastertransformer/models/megatron-models/c-model/345m/8-gpu"
     ```
 
     #### Run on multi-node
     * tensor_para_size=8, layer_para_size=2
 
     ```bash
-    srun -A devtech -p luna -N2 --mpi=pmix --ntasks-per-node=8 --container-image nvcr.io/nvidia/pytorch:20.12-py3 --container-mounts /lustre/fsw/devtech/hpc-devtech/dahn/FasterTransformer:/workspace/fastertransformer --container-workdir /workspace/fastertransformer/build python ./pytorch/gpt_sample.py --tensor_para_size=8 --layer_para_size=2 --ckpt_path="/workspace/fastertransformer/models/megatron-models/c-model/345m/8-gpu"
+    srun -N2 --mpi=pmix --ntasks-per-node=8 --container-image nvcr.io/nvidia/pytorch:20.12-py3 --container-mounts <FasterTransformer root path>:/workspace/fastertransformer --container-workdir /workspace/fastertransformer/build python ./pytorch/gpt_sample.py --tensor_para_size=8 --layer_para_size=2 --ckpt_path="/workspace/fastertransformer/models/megatron-models/c-model/345m/8-gpu"
     ```
 
 3. Run GPT on tensorflow
