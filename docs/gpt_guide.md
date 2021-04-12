@@ -204,7 +204,7 @@ Note that there are different checkpoint version of Megatron. The version of the
 
     ```bash
     cd <FasterTransformer root path>
-    srun -N1 --mpi=pmix --ntasks-per-node=8 --container-image nvcr.io/nvidia/pytorch:20.12-py3 --container-mounts<FasterTransformer root path>:/workspace/fastertransformer --container-workdir /workspace/fastertransformer --pty bash
+    srun -N1 --mpi=pmix --ntasks-per-node=8 --container-image nvcr.io/nvidia/pytorch:20.12-py3 --container-mounts <FasterTransformer root path>:/workspace/fastertransformer --container-workdir /workspace/fastertransformer --pty bash
 
     mkdir build && cd build
     cmake -DSM=80 -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON .. && make -j12
