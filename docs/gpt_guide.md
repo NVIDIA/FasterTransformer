@@ -105,8 +105,8 @@ wget --content-disposition https://api.ngc.nvidia.com/v2/models/nvidia/megatron_
 mkdir -p models/megatron-models/345m
 unzip megatron_lm_345m_v0.0.zip -d models/megatron-models/345m
 git clone https://github.com/NVIDIA/Megatron-LM.git
-python ../sample/pytorch/utils/megatron_ckpt_convert.py -i ./models/megatron-models/345m/release/ -o ./models/megatron-models/c-model/345m/ -t_g 1 -i_g 1
-python ../sample/pytorch/utils/megatron_ckpt_convert.py -i ./models/megatron-models/345m/release/ -o ./models/megatron-models/c-model/345m/ -t_g 1 -i_g 8
+python ../sample/pytorch/utils/megatron_ckpt_convert.py -head_num 16 -i ./models/megatron-models/345m/release/ -o ./models/megatron-models/c-model/345m/ -t_g 1 -i_g 1
+python ../sample/pytorch/utils/megatron_ckpt_convert.py -head_num 16 -i ./models/megatron-models/345m/release/ -o ./models/megatron-models/c-model/345m/ -t_g 1 -i_g 8
 ```
 
 where `t_g` means the number GPUs of TP during training, and `i_g` means the number of GPUs for TP during inference.
