@@ -127,7 +127,7 @@ std::vector<Tensor> FasterTransformerGPT::forward(Tensor start_ids, Tensor start
   attn_mask = attn_mask.to(st_);
   gpt->forward(start_ids, start_lengths, attn_mask, output_ids, output_len);
 
-  output_ids = output_ids.slice(0, 0, output_len);
+  output_ids = output_ids.slice(0, 0, input_len + output_len);
 
   return std::vector<Tensor>{output_ids};
 };
