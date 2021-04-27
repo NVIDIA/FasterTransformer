@@ -143,6 +143,15 @@ def split_and_convert_process(i, saved_dir,factor,key,args, val, ckpt_ver):
 
     elif key.find("attention.query_key_value.bias") != -1:
         local_dim = (int)(val.shape[-1] / 3)
+
+        if ckpt_ver == 3:
+            num_splits = 3
+            head_num = args.head_num//args.trained_gpu_num
+            size_per_head = local_dim//head_num
+
+            val = val.reshape(head_num, num_splits, size_per_head)
+            val = val.transpose(1,0,2)
+
         val = val.reshape(3, local_dim)
         split_vals = np.split(val, factor, axis=-1)
 
