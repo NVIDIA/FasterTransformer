@@ -176,14 +176,17 @@ std::shared_ptr<std::vector<Tensor>> prepareRequest(std::string request_config_f
 
   int *start_len = new int[batch_size];
   int *start_ids = new int[batch_size * max_start_len];
+  int *output_len = new int[batch_size];
   for(int i = 0; i < batch_size; i++) start_len[i] = v_start_lengths[i];
   for(int i = 0; i < batch_size * max_start_len; i++) start_ids[i] = v_start_ids[i];
+  for(int i = 0; i < batch_size; i++) output_len[i] = 0;
 
   printf("[INFO] request data at host is prepared\n");
 
   return std::shared_ptr<std::vector<Tensor>>(new std::vector<Tensor>{
       Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<int64_t>{batch_size, max_start_len}, (void *) start_ids},
-      Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<int64_t>{batch_size}, (void*)start_len}});
+      Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<int64_t>{batch_size}, (void*)start_len},
+      Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<int64_t>{batch_size}, (void*)output_len}});
 }
 
 //template <fastertransformer::OperationType OpType>
