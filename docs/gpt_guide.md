@@ -14,7 +14,7 @@
     - [gpt with triton backend](#gpt-with-triton-backend)
   - [Performance](#performance)
     - [Perofrmance of GPT-89B](#perofrmance-of-gpt-89b)
-    - [Performance C of GPT-175B](#performance-c-of-gpt-175b)
+    - [Performance of GPT-175B](#performance-of-gpt-175b)
 
 ## Model architecture
 
@@ -275,7 +275,7 @@ We demonstrate the inference time of Megatron and FasterTransformer on Triton, a
 | 8  | 512 | 32 | 3341.66 | 1415.02 | 2.36 |
 | 16 | 512 | 32 | 6090.07 | 1952.2  | 3.12 |
 
-### Performance C of GPT-175B
+### Performance of GPT-175B
 
 | Batch_size | Input Seqlen | Output Seqlen | Megatron <br/> Latency (ms) | FT <br/> Latency (ms) | FT <br/> Speedup |
 |:----------:|:------------:|:-------------:|:---------------------------:|:---------------------:|:----------------:|
