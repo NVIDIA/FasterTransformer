@@ -121,7 +121,7 @@ void decoding_sample(int batch_size,
   DecoderInitParam<T> *param = new DecoderInitParam<T>[decoder_layers];
 
   for(int i = 0; i < decoder_layers; i++){
-    param[i].request_batch_size = batch_size;
+    param[i].request_batch_size = batch_size * beam_width;
     param[i].request_max_mem_seq_len = memory_max_seq_len;
     param[i].stream = stream;
     param[i].cublas_handle = cublasHandle;
