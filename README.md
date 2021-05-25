@@ -126,6 +126,7 @@ The following section shows how to use FasterTransformer on the NGC container.
 
     ```bash
     git clone https://github.com/NVIDIA/FasterTransformer.git
+    cd FasterTransformer
     mkdir -p build
     cd build
     ```
