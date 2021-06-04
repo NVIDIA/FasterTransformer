@@ -818,6 +818,9 @@ In the experiments of decoding, we updated the following parameters:
 
 ### Changelog
 
+June 2021
+- Support XLNet
+
 April 2021
 - Support multi-gpus and multi-nodes inference for GPT model on C++ and PyTorch.
 - Support single node, multi-gpus inference for GPT model on triton.
