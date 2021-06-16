@@ -278,13 +278,16 @@ public:
     void forward_context(const DecoderInitParam<DataType_> *decoder_param,
                          const DecodingInitParam<DataType_> decoding_params)
     {
-        cudaMemsetAsync(decoding_params.output_ids, 0, sizeof(int) * args_.batch_size_ * args_.seq_len_, decoding_params.stream);
 #ifndef NDEBUG
         PRINT_FUNC_NAME_();
 #endif
         const int input_len = decoding_params.request_input_len;
         const int max_input_len = decoding_params.max_input_len;
+        const int max_len = (decoding_params.request_output_len > 0 && input_len + decoding_params.request_output_len <= args_.seq_len_) ?
+                            input_len + decoding_params.request_output_len :
+                            args_.seq_len_;
         const int request_batch_size = decoding_params.request_batch_size;
+        cudaMemsetAsync(decoding_params.output_ids, 0, sizeof(int) * args_.batch_size_ * max_len, decoding_params.stream);
 
         // d_start_ids: [batch * seqlen]
         if(input_len == 1)
