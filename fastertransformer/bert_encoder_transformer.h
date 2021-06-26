@@ -319,8 +319,9 @@ public:
 
   //allocate buffer for BertEncoderTransformer
   //do gemm test if allow_gemm_test == true
-  void allocateBuffer(IAllocator *allocator, int batch_size, int from_seq_len, 
-                      int to_seq_len, int head_num, int size_per_head, bool use_trt_kernel=true) 
+  void allocateBuffer(IAllocator *allocator, int batch_size, int from_seq_len,
+                      int to_seq_len, int head_num, int size_per_head, bool use_trt_kernel=true,
+                      float q_scaling=1.0)
   {
 #ifndef NDEBUG
     PRINT_FUNC_NAME_();
@@ -415,7 +416,7 @@ public:
 
       //allocate buffer for attention_
       attention_->allocateBuffer(allocator, cublas_workspace_, batch_size_, from_seq_len_, to_seq_len,
-                                 head_num_, size_per_head_, hasChangedConfig, use_trt_kernel);
+                                 head_num_, size_per_head_, hasChangedConfig, use_trt_kernel, q_scaling);
     }
     catch (std::runtime_error &error)
     {
@@ -790,4 +791,3 @@ public:
 };
 
 } // namespace fastertransformer
-

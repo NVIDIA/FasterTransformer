@@ -208,7 +208,7 @@ private:
 };
 
 FusedMHARunnerFP16v2::FusedMHARunnerFP16v2(const int numHeads, const int headSize, const int sm)
-    : MHARunner(numHeads, headSize, 2)
+    : MHARunner(numHeads, headSize, 2, q_scaling)
     , mSm(sm)
     , pimpl(new mhaImpl(this))
 {

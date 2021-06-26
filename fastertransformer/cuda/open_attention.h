@@ -227,6 +227,7 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
   int to_seq_len_;
   int head_num_;
   int size_per_head_;
+  float q_scaling_;
   //int8_mode == 0 -- not use int8
   //int8_mode == 1 -- use int8; without quantized residual; when (batch*seqLen >= 512) or (seqLen % 32 !=0 ), using trt fused mha
   //int8_mode == 2 -- use int8; with quantized residual; with trt fused mha
@@ -359,7 +360,7 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
   //allocate buffer for OpenMultiHeadAttention
   //read config again if hasChangedConfig == true
   void allocateBuffer(IAllocator* allocator, void* cublas_workspace, int batch_size, int from_seq_len, int to_seq_len,
-                      int head_num, int size_per_head, bool hasChangedConfig, bool use_trt_kernel)
+                      int head_num, int size_per_head, bool hasChangedConfig, bool use_trt_kernel, float q_scaling)
   {
 #ifndef NDEBUG
     PRINT_FUNC_NAME_();
@@ -388,6 +389,7 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
         head_num_ = head_num;
         size_per_head_ = size_per_head;
         cublas_workspace_ = cublas_workspace;
+        q_scaling_ = q_scaling
 
         const int buf_size = batch_size_ * head_num_ * from_seq_len_ * size_per_head_;
         const int qk_buf_size = batch_size_ * head_num_ * from_seq_len_ * from_seq_len_;
@@ -909,7 +911,7 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
         else
         {
 
-          DataType_ scalar = 1 / sqrtf(size_per_head_ * 1.0f);
+          DataType_ scalar = 1 / sqrtf(size_per_head_ * q_scaling_ * 1.0f);
           multiHeadAttr_nofuse_kernelLauncher(
                 param_.stream,
                 param_.cublas_handle,
@@ -996,7 +998,7 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
         }
         else
         {
-          DataType_ scalar = 1 / sqrtf(size_per_head_ * 1.0f);
+          DataType_ scalar = 1 / sqrtf(size_per_head_ * q_scaling_ * 1.0f);
 
           multiHeadAttr_nofuse_kernelLauncher(
             param_.stream,
