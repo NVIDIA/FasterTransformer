@@ -2225,24 +2225,24 @@ __global__
 void add_QKV_bias_rebuild_padding(T* Q, const T* bias_Q, T* K, const T* bias_K, T* V, const T* bias_V, T* q_buf_, T* k_buf_, T* v_buf_, 
   const int batch_size, const int seq_len, const int head_num, const int size_per_head, const int* mask_offset)
 {
-  const int tid = threadIdx.x;
   const int bid = blockIdx.x;
-  const int bdim = blockDim.x;
 
   const int tgt_batch_id = (bid + mask_offset[bid]) / seq_len;
   const int tgt_seq_id = (bid + mask_offset[bid]) % seq_len;
-  const int tgt_head_id = tid / size_per_head;
-  const int tgt_hidden_id = tid % size_per_head;
+  for (int idx = threadIdx.x; idx < head_num * size_per_head; idx += blockDim.x) {
+    const int tgt_head_id = idx / size_per_head;
+    const int tgt_hidden_id = idx % size_per_head;
 
-  const int src_id = bid * bdim + tid;
-  const int tgt_id = tgt_batch_id * head_num * seq_len * size_per_head + \
-                    tgt_head_id * seq_len * size_per_head + \
-                    tgt_seq_id * size_per_head + \
-                    tgt_hidden_id;
-  
-  q_buf_[tgt_id] = Q[src_id] + bias_Q[tid];
-  k_buf_[tgt_id] = K[src_id] + bias_K[tid];
-  v_buf_[tgt_id] = V[src_id] + bias_V[tid];
+    const int src_id = bid * head_num * size_per_head + idx;
+    const int tgt_id = tgt_batch_id * head_num * seq_len * size_per_head + \
+                      tgt_head_id * seq_len * size_per_head + \
+                      tgt_seq_id * size_per_head + \
+                      tgt_hidden_id;
+
+    q_buf_[tgt_id] = Q[src_id] + bias_Q[idx];
+    k_buf_[tgt_id] = K[src_id] + bias_K[idx];
+    v_buf_[tgt_id] = V[src_id] + bias_V[idx];
+  }
 }
 
 template<typename T>
@@ -2254,14 +2254,16 @@ void add_QKV_bias_rebuild_padding_kernelLauncher(T* Q, const T* bias_Q, T* K, co
     
   if(std::is_same<T, float>::value)
   {
-    add_QKV_bias_rebuild_padding<<<valid_word_num, k, 0, stream>>>(Q, bias_Q, K, bias_K, 
-      V, bias_V, q_buf, k_buf, v_buf, 
-      batch_size, seq_len, head_num, size_per_head, mask_offset);                                                 
+    int num_threads = std::min(k, 1024);
+    add_QKV_bias_rebuild_padding<<<valid_word_num, num_threads, 0, stream>>>(Q, bias_Q, K, bias_K,
+      V, bias_V, q_buf, k_buf, v_buf,
+      batch_size, seq_len, head_num, size_per_head, mask_offset);
   }
   else
   {
-    add_QKV_bias_rebuild_padding<<<valid_word_num, k / 2, 0, stream>>>((half2*)Q, (const half2*)bias_Q, 
-      (half2*)K, (const half2*)bias_K, (half2*)V, (const half2*)bias_V, 
+    int num_threads = std::min(k / 2, 1024);
+    add_QKV_bias_rebuild_padding<<<valid_word_num, num_threads, 0, stream>>>((half2*)Q, (const half2*)bias_Q,
+      (half2*)K, (const half2*)bias_K, (half2*)V, (const half2*)bias_V,
       (half2*)q_buf, (half2*)k_buf, (half2*)v_buf,
        batch_size, seq_len, head_num, size_per_head / 2, mask_offset);
   }  
@@ -3284,18 +3286,18 @@ void transpose_rebuild_padding(T* src, T* dst, const int batch_size, const int s
 {
   // TODO: optimize this kernel? 
   // do remove_sequence_length_padding
-  const int tid = threadIdx.x; // batch * seq_len or valid_word_num
-  const int bid = blockIdx.x; // head_num * size_per_head
-
+  const int bid = blockIdx.x; // batch * seq_len or valid_word_num
   const int src_batch_id = (bid + mask_offset[bid]) / seq_len;
   const int src_seq_id = (bid + mask_offset[bid]) % seq_len;
 
   const int dst_seq_id = bid;
 
-  const int head_id = tid / size_per_head;
-  const int hidden_id = tid % size_per_head;
-  dst[dst_seq_id * head_num * size_per_head + tid] = src[ src_batch_id * head_num * seq_len * size_per_head +
-    head_id * seq_len * size_per_head + src_seq_id * size_per_head + hidden_id];
+  for (int idx = threadIdx.x; idx < head_num * size_per_head; idx += blockDim.x) {
+    const int head_id = idx / size_per_head;
+    const int hidden_id = idx % size_per_head;
+    dst[dst_seq_id * head_num * size_per_head + idx] = src[ src_batch_id * head_num * seq_len * size_per_head +
+      head_id * seq_len * size_per_head + src_seq_id * size_per_head + hidden_id];
+  }
 }
 
 template<typename T>
@@ -3307,13 +3309,15 @@ void transpose_rebuild_padding_kernelLauncher(T* src, T* dst, const int valid_wo
   int k = head_num * size_per_head;
   if (std::is_same<T, float>::value)
   {
-    transpose_rebuild_padding<<<valid_word_num, k, 0, stream>>>(src, dst, 
+    int num_threads = std::min(k, 1024);
+    transpose_rebuild_padding<<<valid_word_num, num_threads, 0, stream>>>(src, dst,
             batch_size, seq_len, head_num, size_per_head, mask_offset);
   }
   else
   {
-    transpose_rebuild_padding<half2><<<valid_word_num, k / 2, 0, stream>>>(
-            (half2*)src, (half2*)dst, 
+    int num_threads = std::min(k / 2, 1024);
+    transpose_rebuild_padding<half2><<<valid_word_num, num_threads, 0, stream>>>(
+            (half2*)src, (half2*)dst,
             batch_size, seq_len, head_num, size_per_head / 2, mask_offset);
   }  
 }
@@ -3472,4 +3476,3 @@ void trt_add_QKV_bias_transpose_debug_kernelLauncher(
 
 }//namespace cuda
 }//namespace fastertransformer
-

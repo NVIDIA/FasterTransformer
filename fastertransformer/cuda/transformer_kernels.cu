@@ -126,46 +126,159 @@ void add_bias_relu(half* out, const half* __restrict bias, int m, int n)
   }
 }
 
-template <typename T>
-__global__ 
+template <typename T, int N>
+__global__
 void add_bias_input_layernorm(T* out, const T* input, const T* bias, const T* gamma, const T* beta, int m, int n)
 {
-  int tid = threadIdx.x;
+  __shared__ float s_mean;
+  __shared__ float s_variance;
+  float mean =  0.0f;
+  float variance = 0.0f;
+  float local_out_cache[N];
+
+  #pragma unroll N
+  for (int idx = threadIdx.x, i = 0; idx < n && i < N; ++i) {
+    float local_out = (float)(out[blockIdx.x * n + idx] + input[blockIdx.x * n + idx] + __ldg(&bias[idx]));
+    mean += local_out;
+    // save local_out to local_out_cache to save some recompute
+    local_out_cache[i] = local_out;
+    idx += blockDim.x;
+  }
+
+  mean = blockReduceSum<float>(mean);
+  if(threadIdx.x == 0)
+    s_mean = mean / n;
+  __syncthreads();
+
+  #pragma unroll N
+  for (int idx = threadIdx.x, i = 0; idx < n && i < N; ++i) {
+    float local_out = local_out_cache[i];
+    variance += (local_out - s_mean) * (local_out - s_mean);
+    idx += blockDim.x;
+  }
+  variance = blockReduceSum<float>(variance);
+  if(threadIdx.x == 0)
+    s_variance = variance / n + 1e-6f;
+  __syncthreads();
+
+  #pragma unroll N
+  for (int idx = threadIdx.x, i = 0; idx < n && i < N; ++i) {
+    float local_out = local_out_cache[i];
+    out[blockIdx.x * n + idx] =
+        (T)(((local_out - s_mean) * rsqrtf(s_variance)) * (float)(__ldg(&gamma[idx])) + (float)(__ldg(&beta[idx])));
+    idx += blockDim.x;
+  }
+}
+
+template <int N>
+__global__
+void add_bias_input_layernorm_half(half* out, const half* input, const half* bias,
+  const half* gamma, const half* beta, int m, int n)
+{
 
   __shared__ float s_mean;
   __shared__ float s_variance;
   float mean =  0.0f;
   float variance = 0.0f;
 
+  half2* out_ptr = (half2*)out;
+  const half2* input_ptr = (const half2*)input;
+  const half2* bias_ptr = (const half2*)bias;
+  const half2* gamma_ptr = (const half2*)gamma;
+  const half2* beta_ptr = (const half2*)beta;
+
+  float2 out_fp2_cache[N];
+
   float local_out = 0.0f;
-  local_out += (float)(out[blockIdx.x * n + tid] + input[blockIdx.x * n + tid] + __ldg(&bias[tid]));
+  #pragma unroll N
+  for (int idx = threadIdx.x, i = 0; idx < n / 2 && i < N; ++i) {
+    int id = blockIdx.x * n / 2 + idx;
+    float2 local_out_fp2 = __half22float2(__hadd2(__hadd2(out_ptr[id], input_ptr[id]), __ldg(&bias_ptr[idx])));
+    local_out += local_out_fp2.x;
+    local_out += local_out_fp2.y;
+    // save local_out_fp2 to out_fp2_cache to save some recomputation
+    out_fp2_cache[i] = local_out_fp2;
+    idx += blockDim.x;
+  }
 
   mean = blockReduceSum<float>(local_out);
   if(threadIdx.x == 0)
     s_mean = mean / n;
   __syncthreads();
 
-  variance = blockReduceSum<float>((local_out - s_mean) * (local_out - s_mean));
+  #pragma unroll N
+  for (int idx = threadIdx.x, i = 0; i < N && idx < n / 2; ++i) {
+    float2 local_out_fp2 = out_fp2_cache[i];
+    variance += (local_out_fp2.x - s_mean) * (local_out_fp2.x - s_mean);
+    variance += (local_out_fp2.y - s_mean) * (local_out_fp2.y - s_mean);
+    idx += blockDim.x;
+  }
+
+  variance = blockReduceSum<float>(variance);
   if(threadIdx.x == 0)
-    s_variance = variance / n + 1e-6f;
+    s_variance = rsqrtf(variance / n + 1e-6f);
   __syncthreads();
 
-  out[blockIdx.x * n + tid] = 
-        (T)(((local_out - s_mean) * rsqrtf(s_variance)) * (float)(__ldg(&gamma[tid])) + (float)(__ldg(&beta[tid])));
+  #pragma unroll N
+  for (int idx = threadIdx.x, i = 0; i < N && idx < n / 2; ++i) {
+    int id = blockIdx.x * n / 2 + idx;
+    float2 local_out_fp2 = out_fp2_cache[i];
+    float2 gamma_val = __half22float2(__ldg(&gamma_ptr[idx]));
+    float2 beta_val = __half22float2(__ldg(&beta_ptr[idx]));
+    local_out_fp2.x = (local_out_fp2.x - s_mean) * s_variance * gamma_val.x + beta_val.x;
+    local_out_fp2.y = (local_out_fp2.y - s_mean) * s_variance * gamma_val.y + beta_val.y;
+    out_ptr[id] = __float22half2_rn(local_out_fp2);
+    idx += blockDim.x;
+  }
 }
 
-template <>
-__global__ 
-void add_bias_input_layernorm(half* out, const half* input, const half* bias, 
-  const half* gamma, const half* beta, int m, int n)
+template <typename T>
+__global__
+void add_bias_input_layernorm_slow(T* out, const T* input, const T* bias, const T* gamma, const T* beta, int m, int n)
 {
-
-  int tid = threadIdx.x;
   __shared__ float s_mean;
   __shared__ float s_variance;
   float mean =  0.0f;
   float variance = 0.0f;
-  float2 local_out_fp2;
+
+  for (int idx = threadIdx.x; idx < n; idx += blockDim.x) {
+    float local_out = (float)(out[blockIdx.x * n + idx] + input[blockIdx.x * n + idx] + __ldg(&bias[idx]));
+    mean += local_out;
+    // save local_out to out to save some recompute
+    out[blockIdx.x * n + idx] = local_out;
+  }
+
+  mean = blockReduceSum<float>(mean);
+  if(threadIdx.x == 0)
+    s_mean = mean / n;
+  __syncthreads();
+
+  for (int idx = threadIdx.x; idx < n; idx += blockDim.x) {
+    float local_out = out[blockIdx.x * n + idx];
+    variance += (local_out - s_mean) * (local_out - s_mean);
+  }
+  variance = blockReduceSum<float>(variance);
+  if(threadIdx.x == 0)
+    s_variance = variance / n + 1e-6f;
+  __syncthreads();
+
+  for (int idx = threadIdx.x; idx < n; idx += blockDim.x) {
+    float local_out = out[blockIdx.x * n + idx];
+    out[blockIdx.x * n + idx] =
+        (T)(((local_out - s_mean) * rsqrtf(s_variance)) * (float)(__ldg(&gamma[idx])) + (float)(__ldg(&beta[idx])));
+  }
+}
+
+template <>
+__global__
+void add_bias_input_layernorm_slow(half* out, const half* input, const half* bias,
+  const half* gamma, const half* beta, int m, int n)
+{
+
+  __shared__ float s_mean;
+  __shared__ float s_variance;
+  float mean =  0.0f;
+  float variance = 0.0f;
 
   half2* out_ptr = (half2*)out;
   const half2* input_ptr = (const half2*)input;
@@ -174,30 +287,43 @@ void add_bias_input_layernorm(half* out, const half* input, const half* bias,
   const half2* beta_ptr = (const half2*)beta;
 
   float local_out = 0.0f;
-  int id = blockIdx.x * n / 2 + tid; 
-  local_out_fp2 = __half22float2(__hadd2(__hadd2(out_ptr[id], input_ptr[id]), __ldg(&bias_ptr[tid])));
-  local_out += local_out_fp2.x;
-  local_out += local_out_fp2.y;
+  for (int idx = threadIdx.x; idx < n / 2; idx += blockDim.x) {
+    int id = blockIdx.x * n / 2 + idx;
+    half2 tmp = __hadd2(__hadd2(out_ptr[id], input_ptr[id]), __ldg(&bias_ptr[idx]));
+    float2 local_out_fp2 = __half22float2(tmp);
+    local_out += local_out_fp2.x;
+    local_out += local_out_fp2.y;
+    // save tmp to out_ptr to save some recomputation
+    out_ptr[id] = tmp;
+  }
 
   mean = blockReduceSum<float>(local_out);
   if(threadIdx.x == 0)
     s_mean = mean / n;
   __syncthreads();
 
-  variance = (local_out_fp2.x - s_mean) * (local_out_fp2.x - s_mean);
-  variance += (local_out_fp2.y - s_mean) * (local_out_fp2.y - s_mean);
+  for (int idx = threadIdx.x; idx < n / 2; idx += blockDim.x) {
+    int id = blockIdx.x * n / 2 + idx;
+    float2 local_out_fp2 = __half22float2(out_ptr[id]);
+    variance += (local_out_fp2.x - s_mean) * (local_out_fp2.x - s_mean);
+    variance += (local_out_fp2.y - s_mean) * (local_out_fp2.y - s_mean);
+  }
+
   variance = blockReduceSum<float>(variance);
   if(threadIdx.x == 0)
     s_variance = rsqrtf(variance / n + 1e-6f);
   __syncthreads();
 
-  float2 gamma_val = __half22float2(__ldg(&gamma_ptr[tid]));
-  float2 beta_val = __half22float2(__ldg(&beta_ptr[tid]));
-  local_out_fp2.x = (local_out_fp2.x - s_mean) * s_variance * gamma_val.x + beta_val.x;
-  local_out_fp2.y = (local_out_fp2.y - s_mean) * s_variance * gamma_val.y + beta_val.y;
-  out_ptr[id] = __float22half2_rn(local_out_fp2);
+  for (int idx = threadIdx.x; idx < n / 2; idx += blockDim.x) {
+    int id = blockIdx.x * n / 2 + idx;
+    float2 local_out_fp2 = __half22float2(out_ptr[id]);
+    float2 gamma_val = __half22float2(__ldg(&gamma_ptr[idx]));
+    float2 beta_val = __half22float2(__ldg(&beta_ptr[idx]));
+    local_out_fp2.x = (local_out_fp2.x - s_mean) * s_variance * gamma_val.x + beta_val.x;
+    local_out_fp2.y = (local_out_fp2.y - s_mean) * s_variance * gamma_val.y + beta_val.y;
+    out_ptr[id] = __float22half2_rn(local_out_fp2);
+  }
 }
-
 
 template <typename T>
 __global__ 
@@ -341,12 +467,20 @@ void add_bias_input_layernorm_kernelLauncher(T* out, const T* input, const T* bi
   const T* gamma, const T* beta, int m, int n, cudaStream_t stream)
 {
   dim3 grid(m);
-  dim3 block(n);
-  assert(n <= 1024);
+  dim3 block(std::min(n, 1024));
   if(n == 768 || n == 1024)
     add_bias_input_layernorm_v2<T><<<grid, n / 4, 0, stream>>>(out, input, bias, gamma, beta, n);
-  else
-    add_bias_input_layernorm<T><<<grid, block, 0, stream>>>(out, input, bias, gamma, beta, m, n);
+  else {
+    block.x = std::min(n, 1024);
+    int num_trips = (n / 2 + block.x - 1) / block.x;
+    if (num_trips == 1) {
+      add_bias_input_layernorm<T, 1><<<grid, block, 0, stream>>>(out, input, bias, gamma, beta, m, n);
+    } else if (num_trips == 2) {
+      add_bias_input_layernorm<T, 2><<<grid, block, 0, stream>>>(out, input, bias, gamma, beta, m, n);
+    } else {
+      add_bias_input_layernorm_slow<T><<<grid, block, 0, stream>>>(out, input, bias, gamma, beta, m, n);
+    }
+  }
 }
 
 template <>
@@ -354,13 +488,21 @@ void add_bias_input_layernorm_kernelLauncher(half* out, const half* input, const
   const half* gamma, const half* beta, int m, int n, cudaStream_t stream)
 {
   dim3 grid(m);
-  dim3 block(n / 2);
-  assert(n / 2 <= 1024);
-  
+  dim3 block(std::min(n / 2, 1024));;
+
   if(m >= 512 && (n == 768 || n == 1024))
     add_bias_input_layernorm_v2<half><<<grid, n / 8, 0, stream>>>(out, input, bias, gamma, beta, n);
-  else
-    add_bias_input_layernorm<half><<<grid, block, 0, stream>>>(out, input, bias, gamma, beta, m, n);
+  else {
+    block.x = std::min(n, 1024);
+    int num_trips = (n / 2 + block.x - 1) / block.x;
+    if (num_trips == 1) {
+      add_bias_input_layernorm<T, 1><<<grid, block, 0, stream>>>(out, input, bias, gamma, beta, m, n);
+    } else if (num_trips == 2) {
+      add_bias_input_layernorm<T, 2><<<grid, block, 0, stream>>>(out, input, bias, gamma, beta, m, n);
+    } else {
+      add_bias_input_layernorm_slow<T><<<grid, block, 0, stream>>>(out, input, bias, gamma, beta, m, n);
+    }
+  }
 }
 
 template <typename T>
