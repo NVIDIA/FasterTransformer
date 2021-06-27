@@ -44,7 +44,8 @@ FasterTransformerEncoder::FasterTransformerEncoder(
   int64_t layer_num,
   int64_t layer_idx,
   bool allow_gemm_test,
-  bool use_trt_kernel)
+  bool use_trt_kernel,
+  int64_t mlp_hidden_dim)
 : _st(q_kernel.scalar_type()), _remove_padding(remove_padding),
   weights{q_kernel, q_bias, k_kernel, k_bias, v_kernel, v_bias,
           attr_output_kernel, attr_output_bias, attr_output_layernorm_gamma, attr_output_layernorm_beta,
@@ -62,9 +63,9 @@ FasterTransformerEncoder::FasterTransformerEncoder(
   CHECK_INPUT(attr_output_bias, _st);  // hidden_dim
   CHECK_INPUT(attr_output_layernorm_gamma, _st);  // hidden_dim
   CHECK_INPUT(attr_output_layernorm_beta, _st);  // hidden_dim
-  CHECK_INPUT(inter_kernel, _st);  // 4 * hidden_dim, hidden_dim
-  CHECK_INPUT(inter_bias, _st);  // 4 * hidden_dim
-  CHECK_INPUT(output_kernel, _st);  // hidden_dim, 4 * hidden_dim
+  CHECK_INPUT(inter_kernel, _st);  // mlp_hidden_dim, hidden_dim
+  CHECK_INPUT(inter_bias, _st);  // mlp_hidden_dim
+  CHECK_INPUT(output_kernel, _st);  // hidden_dim, mlp_hidden_dim
   CHECK_INPUT(output_bias, _st);  // hidden_dim
   CHECK_INPUT(output_layernorm_gamma, _st);  // hidden_dim
   CHECK_INPUT(output_layernorm_beta, _st);  // hidden_dim
@@ -76,18 +77,20 @@ FasterTransformerEncoder::FasterTransformerEncoder(
   switch (_st) {
     case at::ScalarType::Float:
       ftencoder = new FTEncoder<float>(head_num, head_size,
-                                                  int8_mode, layer_num, layer_idx,
-                                                  allow_gemm_test, use_trt_kernel, weights);
+                                        int8_mode, layer_num, layer_idx,
+                                        allow_gemm_test, use_trt_kernel,
+                                        mlp_hidden_dim, weights);
       break;
     case at::ScalarType::Half:
       ftencoder = new FTEncoder<half>(head_num, head_size,
-                                                 int8_mode, layer_num, layer_idx,
-                                                 allow_gemm_test, use_trt_kernel, weights);
+                                      int8_mode, layer_num, layer_idx,
+                                      allow_gemm_test, use_trt_kernel,
+                                      mlp_hidden_dim, weights);
       break;
     default:
       throw std::runtime_error("Wrong Tensor type.");
   }
-  head_info = torch::empty({8}, torch::dtype(torch::kInt64));
+  head_info = torch::empty({9}, torch::dtype(torch::kInt64));
   head_info[0] = head_num;
   head_info[1] = head_size;
   head_info[2] = (int64_t)remove_padding;
@@ -96,6 +99,7 @@ FasterTransformerEncoder::FasterTransformerEncoder(
   head_info[5] = layer_idx;
   head_info[6] = (int64_t)allow_gemm_test;
   head_info[7] = (int64_t)use_trt_kernel;
+  head_info[8] = mlp_hidden_dim;
 }
 
 FasterTransformerEncoder::~FasterTransformerEncoder() {

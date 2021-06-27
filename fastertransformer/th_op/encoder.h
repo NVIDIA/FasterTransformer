@@ -138,6 +138,7 @@ private:
   BertInitParam<T> encoder_param;
   BertEncoderTransformer<EncoderTraits_>* encoder = nullptr;
   bool _use_trt_kernel;
+  const int _mlp_hidden_dim;
 };
 
 template <typename T>
@@ -228,7 +229,8 @@ public:
     int64_t layer_num,
     int64_t layer_idx,
     bool allow_gemm_test,
-    bool use_trt_kernel);
+    bool use_trt_kernel,
+    int64_t _mlp_hidden_dim);
 
   ~FasterTransformerEncoder();
   
