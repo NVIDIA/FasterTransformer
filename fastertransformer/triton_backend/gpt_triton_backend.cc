@@ -51,6 +51,8 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createGptMod
                   reader.GetInteger("ft_instance_hyperparameter", "layer_para_batch_size"),
                   reader.GetFloat("ft_instance_hyperparameter", "probability_threshold"),
                   reader.GetInteger("ft_instance_hyperparameter", "is_fuse_QKV"),
+		  reader.GetFloat("ft_instance_hyperparameter", "temperature"),
+                  reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty"),
                   reader.Get("ft_instance_hyperparameter", "model_name"),
                   reader.Get("ft_instance_hyperparameter", "model_path_prefix"));
   else
@@ -67,6 +69,8 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createGptMod
                   reader.GetInteger("ft_instance_hyperparameter", "layer_para_batch_size"),
                   reader.GetFloat("ft_instance_hyperparameter", "probability_threshold"),
                   reader.GetInteger("ft_instance_hyperparameter", "is_fuse_QKV"),
+		  reader.GetFloat("ft_instance_hyperparameter", "temperature"),
+                  reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty"),
                   reader.Get("ft_instance_hyperparameter", "model_name"),
                   reader.Get("ft_instance_hyperparameter", "model_path_prefix"));
 }
@@ -174,10 +178,10 @@ std::shared_ptr<std::vector<Tensor>> prepareRequest(std::string request_config_f
   read_start_ids(batch_size, &v_start_lengths, &v_start_ids,
                  max_start_len, end_id, start_id_filename);
 
-  int *start_len = new int[batch_size];
+  int *start_lengths = new int[batch_size];
   int *start_ids = new int[batch_size * max_start_len];
   int *output_len = new int[batch_size];
-  for(int i = 0; i < batch_size; i++) start_len[i] = v_start_lengths[i];
+  for(int i = 0; i < batch_size; i++) start_lengths[i] = v_start_lengths[i];
   for(int i = 0; i < batch_size * max_start_len; i++) start_ids[i] = v_start_ids[i];
   for(int i = 0; i < batch_size; i++) output_len[i] = 0;
 
@@ -185,7 +189,7 @@ std::shared_ptr<std::vector<Tensor>> prepareRequest(std::string request_config_f
 
   return std::shared_ptr<std::vector<Tensor>>(new std::vector<Tensor>{
       Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<int64_t>{batch_size, max_start_len}, (void *) start_ids},
-      Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<int64_t>{batch_size}, (void*)start_len},
+      Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<int64_t>{batch_size}, (void*)start_lengths},
       Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<int64_t>{batch_size}, (void*)output_len}});
 }
 
@@ -193,10 +197,11 @@ std::shared_ptr<std::vector<Tensor>> prepareRequest(std::string request_config_f
 //std::pair<int*, GptModelInstance<OpType>::DataType*> GptModelInstance<OpType>::prepareRequestAttentionMask2(std::shared_ptr<Request> request) {}
 
 template <fastertransformer::OperationType OpType>
-std::pair<int*, void*> GptModelInstance<OpType>::prepareRequestAttentionMask(std::shared_ptr<std::vector<Tensor>> input_tensors, const int input_len)
+std::tuple<int*, int*, void*> GptModelInstance<OpType>::prepareRequestAttentionMask(std::shared_ptr<std::vector<Tensor>> input_tensors, const int input_len)
 {
   auto shape = (*input_tensors)[0].shape;
   auto start_ids = (*input_tensors)[0].data;
+  auto start_lengths = (*input_tensors)[1].data;
   assert(shape.size() == 2);
   auto batch_size = shape[0], max_start_len = shape[1];
   const int start_len = input_len;
@@ -205,9 +210,13 @@ std::pair<int*, void*> GptModelInstance<OpType>::prepareRequestAttentionMask(std
   //check_cuda_error(cudaStreamCreate(&stream));
 
   int* d_start_ids;
-
   check_cuda_error(cudaMalloc((void **)&d_start_ids, sizeof(int) * batch_size * max_start_len));
   check_cuda_error(cudaMemcpyAsync(d_start_ids, start_ids, sizeof(int) * batch_size * max_start_len, cudaMemcpyHostToDevice, stream));
+
+  int* d_start_lengths;
+  check_cuda_error(cudaMalloc((void **)&d_start_lengths, sizeof(int) * batch_size));
+  check_cuda_error(cudaMemcpyAsync(d_start_lengths, start_lengths, sizeof(int) * batch_size, cudaMemcpyHostToDevice, stream));
+
   DataType* h_attn_mask = new DataType[batch_size * start_len * start_len];
   memset(h_attn_mask, 0, sizeof(DataType) * batch_size * start_len * start_len);
   for(int i = 0; i < batch_size; i++)
@@ -221,12 +230,13 @@ std::pair<int*, void*> GptModelInstance<OpType>::prepareRequestAttentionMask(std
     }
   }
   DataType* d_attn_mask;
-  cudaMalloc((void **)&d_attn_mask, sizeof(DataType) * batch_size * start_len * start_len);
-  cudaMemcpyAsync(d_attn_mask, h_attn_mask, sizeof(DataType) * batch_size * start_len * start_len, cudaMemcpyHostToDevice, stream);
+  check_cuda_error(cudaMalloc((void **)&d_attn_mask, sizeof(DataType) * batch_size * start_len * start_len));
+  check_cuda_error(cudaMemcpyAsync(d_attn_mask, h_attn_mask, sizeof(DataType) * batch_size * start_len * start_len, cudaMemcpyHostToDevice, stream));
 
   // cudaDeviceSynchronize();
   // check_cuda_error(cudaGetLastError());
-  return std::make_pair(d_start_ids, (void *) d_attn_mask);
+
+  return std::make_tuple(d_start_ids, d_start_lengths, (void *) d_attn_mask);
 }
 
 template <fastertransformer::OperationType OpType>
@@ -245,7 +255,7 @@ std::unique_ptr<AbstractTransformerModelInstance> GptModel<OpType>::createModelI
                                                           vocab_size, decoder_layers,
                                                           start_id, end_id,
                                                           candidate_num, probability_threshold,
-                                                          1.0, tensor_para_size, layer_para_size, is_fuse_QKV);
+                                                          temperature, tensor_para_size, layer_para_size, is_fuse_QKV, repetition_penalty);
 
   return std::unique_ptr<GptModelInstance<OpType>>
     (new GptModelInstance<OpType>(

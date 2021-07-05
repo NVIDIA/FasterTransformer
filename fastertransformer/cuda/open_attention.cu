@@ -2428,7 +2428,7 @@ void softmax_kernel_v3(half* qk_buf_, const half* attr_mask,
       tmp = __hadd2(__hmul2(__half2half2(scalar), qk), mask_val_tmp);
       max_val = fmax((float)tmp.x, (float)tmp.y);
     }
-    
+
     max_val = blockDim.x <= 32 ? warpReduceMax(max_val) : blockReduceMax<float>(max_val);
 
     if (threadIdx.x == 0){

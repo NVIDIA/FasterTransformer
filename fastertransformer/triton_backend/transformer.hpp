@@ -100,7 +100,7 @@ struct Tensor {
   const MemoryType where;
   const DataType type;
   const std::vector<int64_t> shape;
-  const void* data;
+  void* data;
 };
 
 struct AbstractParamInstance

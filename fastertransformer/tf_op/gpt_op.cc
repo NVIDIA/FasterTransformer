@@ -56,6 +56,7 @@ REGISTER_OP("DecodingGPT")
     .Input("start_ids: int32")              // 22
     .Input("min_start_length: int32")       // 23
     .Input("max_start_length: int32")       // 24
+    .Input("start_lengths: int32")          // 25
     .Output("output_ids: int32")
     .Attr("T: {float, half}")
     .Attr("batch_size: int >= 1")
@@ -202,6 +203,8 @@ public:
         cudaMemcpyAsync(&max_start_length, d_max_start_length, sizeof(int), cudaMemcpyDeviceToHost, stream);
         assert(min_start_length != -1);
         assert(max_start_length != -1);
+        const int* d_start_lengths = reinterpret_cast<const int *>(context->input(25).flat<int32>().data());
+        OP_REQUIRES(context, d_start_lengths != nullptr, errors::InvalidArgument("d_start_lengths is null"));
 
         TensorParallelParam tensor_parallel_param;
         tensor_parallel_param.rank = 0;
