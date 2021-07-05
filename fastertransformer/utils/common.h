@@ -197,8 +197,8 @@ void print_to_file(const T *result, const int size, const char *file, cudaStream
 template <typename T>
 void print_to_screen(T *result, const int size)
 {
-  T *tmp = (T *)malloc(sizeof(T) * size);
-  check_cuda_error(cudaMemcpy(tmp, result, sizeof(T) * size, cudaMemcpyDeviceToHost));
+  float *tmp = (float *)malloc(sizeof(float) * size);
+  check_cuda_error(cudaMemcpy(tmp, result, sizeof(float) * size, cudaMemcpyDeviceToHost));
   for (int i = 0; i < size; ++i)
     printf("%d, %f\n", i, (float)tmp[i]);
   free(tmp);

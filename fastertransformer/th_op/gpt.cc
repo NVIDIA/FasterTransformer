@@ -40,6 +40,7 @@ FasterTransformerGPT::FasterTransformerGPT(
     const int64_t layer_para_batch_size,
     const bool is_fuse_QKV,
     const int max_batch_size,
+    const double repetition_penalty,
     Tensor embedding_table,
     Tensor position_encoding_table,
     vector<Tensor> self_layernorm_gamma,
@@ -98,12 +99,14 @@ FasterTransformerGPT::FasterTransformerGPT(
   case at::ScalarType::Float:
     gpt = new torch_ext::GPT<float>(head_num, size_per_head, vocab_size,
                                     start_id, end_id, decoder_layers, candidate_num, probability_threshold, temperature, max_seq_len, 
-                                    tensor_para_size, layer_para_size, layer_para_batch_size, is_fuse_QKV, max_batch_size, weights_transformer, weights);
+                                    tensor_para_size, layer_para_size, layer_para_batch_size, is_fuse_QKV, max_batch_size, repetition_penalty, 
+                                    weights_transformer, weights);
     break;
   case at::ScalarType::Half:
     gpt = new torch_ext::GPT<half>(head_num, size_per_head, vocab_size,
-                                    start_id, end_id, decoder_layers, candidate_num, probability_threshold, temperature, max_seq_len, 
-                                    tensor_para_size, layer_para_size, layer_para_batch_size, is_fuse_QKV, max_batch_size, weights_transformer, weights);
+                                   start_id, end_id, decoder_layers, candidate_num, probability_threshold, temperature, max_seq_len, 
+                                   tensor_para_size, layer_para_size, layer_para_batch_size, is_fuse_QKV, max_batch_size, repetition_penalty,
+                                   weights_transformer, weights);
     break;
   default:
     throw std::runtime_error("Wrong Tensor type.");
@@ -120,7 +123,7 @@ std::vector<Tensor> FasterTransformerGPT::forward(Tensor start_ids, Tensor start
   CHECK_CUDA(attn_mask); CHECK_CONTIGUOUS(attn_mask);
 
   int batch_size = start_ids.size(0);
-  int input_len = at::min(start_lengths).item().to<int>();
+  int input_len = at::max(start_lengths).item().to<int>();
 
   Tensor output_ids = torch::empty({max_seq_len_, batch_size}, torch::dtype(torch::kInt32).device(torch::kCUDA).requires_grad(false));
 

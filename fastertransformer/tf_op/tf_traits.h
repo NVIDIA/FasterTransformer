@@ -18,9 +18,10 @@
 #ifndef TENSORFLOW_TRAITS_H_
 #define TENSORFLOW_TRAITS_H_
 
-using namespace fastertransformer;
 namespace tensorflow
 {
+  using namespace fastertransformer;
+
   template <typename T> class TFTraits;
   
   template <>

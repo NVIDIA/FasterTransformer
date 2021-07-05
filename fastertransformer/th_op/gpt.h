@@ -25,6 +25,7 @@
 #include "torch/extension.h"
 #include "torch/csrc/cuda/Stream.h"
 #include <ATen/ATen.h>
+#include <ATen/cuda/CUDAContext.h>
 
 #include "fastertransformer/gpt.h"
 #include "fastertransformer/th_op/th_traits.h"
@@ -61,12 +62,13 @@ public:
       const int layer_para_batch_size,
       const bool is_fuse_QKV,
       const int max_batch_size,
+      const float repetition_penalty,
       vector<vector<Tensor>> weights_transformer,
       vector<Tensor> weights)
       : max_seq_len_(max_seq_len), size_per_head_(size_per_head),
         vocab_size_(vocab_size), decoder_layers_(decoder_layers), start_id_(start_id), end_id_(end_id),
         candidate_num_(candidate_num), probability_threshold_(probability_threshold), temperature_(temperature),
-        is_fuse_QKV_(is_fuse_QKV), max_batch_size_(max_batch_size)
+        is_fuse_QKV_(is_fuse_QKV), max_batch_size_(max_batch_size), repetition_penalty_(repetition_penalty)
   {
     const int local_head_num = head_num / tensor_para_size; 
     const int global_head_num = head_num; 
@@ -163,6 +165,8 @@ public:
     decoding_params.embedding_kernel = get_ptr<T>(embedding_table);
     decoding_params.layernorm.gamma = get_ptr<T>(layernorm_gamma);
     decoding_params.layernorm.beta = get_ptr<T>(layernorm_beta);
+
+    check_cuda_error(cublasLtCreate(&cublasLtHandle));
   }
 
   void init_nccl_comm(ncclUniqueId &tensor_para_nccl_uid, ncclUniqueId &layer_para_nccl_uid,
@@ -219,6 +223,7 @@ public:
     ncclCommDestroy(tensor_para_nccl_comm);
     ncclCommDestroy(layer_para_nccl_comm);
 
+    check_cuda_error(cublasLtDestroy(cublasLtHandle));
     delete [] param;
   }
 
@@ -226,18 +231,15 @@ public:
   {
     // Set cudaStream, and cublasHandlers.
     cudaStream_t stream = at::cuda::getCurrentCUDAStream().stream();
-    cublasHandle_t cublasHandle;
-    cublasLtHandle_t cublasLtHandle;
-    check_cuda_error(cublasCreate(&cublasHandle));
-    check_cuda_error(cublasLtCreate(&cublasLtHandle));
+    cublasHandle_t cublasHandle = at::cuda::getCurrentCUDABlasHandle();
     check_cuda_error(cublasSetStream(cublasHandle, stream));
+
 
     decoding_params.cublas_handle = cublasHandle;
     decoding_params.cublaslt_handle = cublasLtHandle;
     decoding_params.stream = stream;
 
     int batch_size = start_ids.size(0);
-    int input_len = at::min(start_lengths).item().to<int>();
 
     for (int i = 0; i < decoder_layers_; i++) {
       if(layer_parallel_param.is_valid(i) == false) continue;
@@ -254,17 +256,19 @@ public:
                                                                                         vocab_size_, decoder_layers_,
                                                                                         start_id_, end_id_,
                                                                                         candidate_num_, probability_threshold_,
-                                                                                        temperature_, tensor_para_size_, layer_para_size_, is_fuse_QKV_);
+                                                                                        temperature_, tensor_para_size_, layer_para_size_, 
+                                                                                        is_fuse_QKV_, repetition_penalty_);
     
     decoding->set_tensor_parallel_param(tensor_parallel_param);
     decoding->set_layer_parallel_param(layer_parallel_param);
 
     decoding_params.request_batch_size = batch_size;
-    decoding_params.request_input_len = input_len;
     decoding_params.request_output_len = output_len;
     decoding_params.d_start_ids = get_ptr<int>(start_ids);
+    decoding_params.d_start_lengths = get_ptr<int>(start_lengths);
     decoding_params.d_attn_mask = get_ptr<T>(attn_mask);
     decoding_params.max_input_len = at::max(start_lengths).item().to<int>();
+    decoding_params.request_input_len = decoding_params.max_input_len;
     decoding_params.output_ids = get_ptr<int>(output_ids);
 
     decoding->forward_context(param, decoding_params);
@@ -289,11 +293,13 @@ private:
   int layer_para_size_;
   const int is_fuse_QKV_;
   const int max_batch_size_;
+  const float repetition_penalty_;
   DecoderInitParam<T> *param;
   DecodingInitParam<T> decoding_params;
   TensorParallelParam tensor_parallel_param;
   LayerParallelParam layer_parallel_param;
   ncclComm_t tensor_para_nccl_comm, layer_para_nccl_comm;
+  cublasLtHandle_t cublasLtHandle;
 };
 
 class FasterTransformerGPT : public torch::jit::CustomClassHolder {
@@ -314,6 +320,7 @@ public:
     const int64_t layer_para_batch_size,
     const bool is_fuse_QKV,
     const int max_batch_size,
+    const double repetition_penalty,
     Tensor embedding_table,
     Tensor position_encoding_table,
     vector<Tensor> self_layernorm_gamma,

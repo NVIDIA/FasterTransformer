@@ -81,6 +81,9 @@ struct Masked_multihead_attention_params {
 
   // The 1.f / sqrt(Dh). Computed on the host.
   float inv_sqrt_dh;
+
+  const int *input_lengths = input_lengths;
+  int max_input_len = max_input_len;
 };
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
