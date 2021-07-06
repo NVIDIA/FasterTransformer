@@ -360,7 +360,7 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
   //allocate buffer for OpenMultiHeadAttention
   //read config again if hasChangedConfig == true
   void allocateBuffer(IAllocator* allocator, void* cublas_workspace, int batch_size, int from_seq_len, int to_seq_len,
-                      int head_num, int size_per_head, bool hasChangedConfig, bool use_trt_kernel, float q_scaling)
+                      int head_num, int size_per_head, bool hasChangedConfig, bool use_trt_kernel)
   {
 #ifndef NDEBUG
     PRINT_FUNC_NAME_();
@@ -389,7 +389,6 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
         head_num_ = head_num;
         size_per_head_ = size_per_head;
         cublas_workspace_ = cublas_workspace;
-        q_scaling_ = q_scaling
 
         const int buf_size = batch_size_ * head_num_ * from_seq_len_ * size_per_head_;
         const int qk_buf_size = batch_size_ * head_num_ * from_seq_len_ * from_seq_len_;
@@ -482,8 +481,8 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
   }
 
   //Ctor
-  OpenMultiHeadAttention(int int8_mode=0, bool allow_gemm_test=false, bool use_ORDER_COL32_2R_4R4=false, int sm = 75) : 
-    int8_mode_(int8_mode), allow_gemm_test_(allow_gemm_test), use_ORDER_COL32_2R_4R4_(use_ORDER_COL32_2R_4R4), sm_(sm)
+  OpenMultiHeadAttention(int int8_mode=0, bool allow_gemm_test=false, bool use_ORDER_COL32_2R_4R4=false, int sm = 75, float q_scaling=1.0) : 
+    int8_mode_(int8_mode), allow_gemm_test_(allow_gemm_test), use_ORDER_COL32_2R_4R4_(use_ORDER_COL32_2R_4R4), sm_(sm), q_scaling_(q_scaling)
    {
 #ifndef NDEBUG
     PRINT_FUNC_NAME_();
@@ -524,6 +523,7 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
     sm_ = attention->sm_;
     int8_mode_ = attention->int8_mode_;
     allow_gemm_test_ = attention->allow_gemm_test_;
+    q_scaling_ = attention->q_scaling_
 
     for(int i = 0; i < 2; i++) cublasBmmAlgo_[i] = attention->cublasBmmAlgo_[i];
     cublasAlgoMap_ = attention->cublasAlgoMap_;
@@ -1096,4 +1096,3 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
                                        
 }//namespace cuda
 }//namespace fastertransformer
-

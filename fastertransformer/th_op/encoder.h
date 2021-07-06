@@ -121,7 +121,7 @@ public:
     encoder_param.trt_seqlen_size = (int)trt_seqlen_offset.size(0);
     check_cuda_error(cublasSetStream(encoder_param.cublas_handle, encoder_param.stream));
     fastertransformer::Allocator<AllocatorType::TH>* allocator = new fastertransformer::Allocator<AllocatorType::TH>();
-    encoder_tmp->allocateBuffer(allocator, batch_size, seq_len, seq_len, _head_num, _head_size, _use_trt_kernel, _q_scaling);
+    encoder_tmp->allocateBuffer(allocator, batch_size, seq_len, seq_len, _head_num, _head_size, _use_trt_kernel);
     encoder_tmp->initialize(encoder_param);
     encoder_tmp->forward();
     encoder_tmp->freeBuffer();
