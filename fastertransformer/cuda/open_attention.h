@@ -911,7 +911,7 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
         else
         {
 
-          DataType_ scalar = 1 / sqrtf(size_per_head_ * q_scaling_ * 1.0f);
+          DataType_ scalar = 1 / (sqrtf(size_per_head_ * 1.0f) * q_scaling_);
           multiHeadAttr_nofuse_kernelLauncher(
                 param_.stream,
                 param_.cublas_handle,
@@ -998,7 +998,7 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
         }
         else
         {
-          DataType_ scalar = 1 / sqrtf(size_per_head_ * q_scaling_ * 1.0f);
+          DataType_ scalar = 1 / (sqrtf(size_per_head_ * 1.0f) * q_scaling_);
 
           multiHeadAttr_nofuse_kernelLauncher(
             param_.stream,

@@ -37,7 +37,7 @@ namespace fastertransformer
 class MHARunner
 {
 public:
-    MHARunner(const int numHeads, const int headSize, const int wordSize, const float q_scaling)
+    MHARunner(const int numHeads, const int headSize, const int wordSize, const float q_scaling=1.0f)
         : mS(0)
         , mB(0)
         , mOmatSize(0)
@@ -49,7 +49,7 @@ public:
         , mStrideQKV(0)
         , mLdOut(0)
         , mStrideOut(0)
-        , mRsqrtHeadSize(1.f / sqrtf(headSize * q_scaling))
+        , mRsqrtHeadSize(1.f / (sqrtf(headSize) * q_scaling))
     {
     }
 
