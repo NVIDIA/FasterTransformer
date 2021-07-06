@@ -227,6 +227,7 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
   int to_seq_len_;
   int head_num_;
   int size_per_head_;
+  float q_scaling_;
   //int8_mode == 0 -- not use int8
   //int8_mode == 1 -- use int8; without quantized residual; when (batch*seqLen >= 512) or (seqLen % 32 !=0 ), using trt fused mha
   //int8_mode == 2 -- use int8; with quantized residual; with trt fused mha
@@ -480,8 +481,8 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
   }
 
   //Ctor
-  OpenMultiHeadAttention(int int8_mode=0, bool allow_gemm_test=false, bool use_ORDER_COL32_2R_4R4=false, int sm = 75) : 
-    int8_mode_(int8_mode), allow_gemm_test_(allow_gemm_test), use_ORDER_COL32_2R_4R4_(use_ORDER_COL32_2R_4R4), sm_(sm)
+  OpenMultiHeadAttention(int int8_mode=0, bool allow_gemm_test=false, bool use_ORDER_COL32_2R_4R4=false, int sm = 75, float q_scaling=1.0) : 
+    int8_mode_(int8_mode), allow_gemm_test_(allow_gemm_test), use_ORDER_COL32_2R_4R4_(use_ORDER_COL32_2R_4R4), sm_(sm), q_scaling_(q_scaling)
    {
 #ifndef NDEBUG
     PRINT_FUNC_NAME_();
@@ -522,6 +523,7 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
     sm_ = attention->sm_;
     int8_mode_ = attention->int8_mode_;
     allow_gemm_test_ = attention->allow_gemm_test_;
+    q_scaling_ = attention->q_scaling_
 
     for(int i = 0; i < 2; i++) cublasBmmAlgo_[i] = attention->cublasBmmAlgo_[i];
     cublasAlgoMap_ = attention->cublasAlgoMap_;
@@ -909,7 +911,7 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
         else
         {
 
-          DataType_ scalar = 1 / sqrtf(size_per_head_ * 1.0f);
+          DataType_ scalar = 1 / (sqrtf(size_per_head_ * 1.0f) * q_scaling_);
           multiHeadAttr_nofuse_kernelLauncher(
                 param_.stream,
                 param_.cublas_handle,
@@ -996,7 +998,7 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
         }
         else
         {
-          DataType_ scalar = 1 / sqrtf(size_per_head_ * 1.0f);
+          DataType_ scalar = 1 / (sqrtf(size_per_head_ * 1.0f) * q_scaling_);
 
           multiHeadAttr_nofuse_kernelLauncher(
             param_.stream,
@@ -1094,4 +1096,3 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
                                        
 }//namespace cuda
 }//namespace fastertransformer
-

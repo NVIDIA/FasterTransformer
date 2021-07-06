@@ -319,8 +319,8 @@ public:
 
   //allocate buffer for BertEncoderTransformer
   //do gemm test if allow_gemm_test == true
-  void allocateBuffer(IAllocator *allocator, int batch_size, int from_seq_len, 
-                      int to_seq_len, int head_num, int size_per_head, bool use_trt_kernel=true) 
+  void allocateBuffer(IAllocator *allocator, int batch_size, int from_seq_len,
+                      int to_seq_len, int head_num, int size_per_head, bool use_trt_kernel=true)
   {
 #ifndef NDEBUG
     PRINT_FUNC_NAME_();
@@ -790,4 +790,3 @@ public:
 };
 
 } // namespace fastertransformer
-
