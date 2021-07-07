@@ -130,7 +130,7 @@ Tensor FasterTransformerEncoder::forward(Tensor input, Tensor attr_mask, Tensor 
 std::vector<Tensor> FasterTransformerEncoder::get_pickle_info() const {
   std::vector<Tensor> tmp(weights);
   tmp.push_back(head_info);
-  tmp.push_back(_q_scaling)
+  tmp.push_back(_q_scaling);
   return tmp;
 }
 
