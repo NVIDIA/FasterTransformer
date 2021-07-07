@@ -80,13 +80,13 @@ FasterTransformerEncoder::FasterTransformerEncoder(
       ftencoder = new FTEncoder<float>(head_num, head_size,
                                         int8_mode, layer_num, layer_idx,
                                         allow_gemm_test, use_trt_kernel,
-                                        mlp_hidden_dim, weights);
+                                        q_scaling, mlp_hidden_dim, weights);
       break;
     case at::ScalarType::Half:
       ftencoder = new FTEncoder<half>(head_num, head_size,
                                       int8_mode, layer_num, layer_idx,
                                       allow_gemm_test, use_trt_kernel,
-                                      mlp_hidden_dim, weights);
+                                      q_scaling, mlp_hidden_dim, weights);
       break;
     default:
       throw std::runtime_error("Wrong Tensor type.");
