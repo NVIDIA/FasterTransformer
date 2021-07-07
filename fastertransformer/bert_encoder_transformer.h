@@ -732,9 +732,9 @@ public:
 #endif
 
         n = mlp_hidden_dim_;
-
-        cublasMM_cublasLtMM_wrapper(param_.cublaslt_handle, param_.cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N,
-                                    n, m, k, &alpha,
+    
+        cublasMM_cublasLtMM_wrapper(param_.cublaslt_handle, param_.cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, 
+                                    n, m, k, &alpha, 
                                     param_.ffn.intermediate_weight.kernel, AType_, n,
                                     attr_matmul_buf_, BType_, k, 
                                     &beta, (DataType_ *)inter_matmul_buf_, CType_, n,
@@ -749,9 +749,9 @@ public:
 
         n = k;
         k = mlp_hidden_dim_;
-
-        cublasMM_cublasLtMM_wrapper(param_.cublaslt_handle, param_.cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N,
-                                    n, m, k, &alpha,
+    
+        cublasMM_cublasLtMM_wrapper(param_.cublaslt_handle, param_.cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, 
+                                    n, m, k, &alpha, 
                                     param_.ffn.output_weight.kernel, AType_, n,
                                     inter_matmul_buf_, BType_, k, 
                                     &beta, (DataType_ *)(param_.transformer_out), CType_, n,

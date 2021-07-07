@@ -50,8 +50,9 @@ template <typename T>
 class FTEncoder : public IFTEncoder {
 public:
   FTEncoder(int head_num, int head_size,
-            int int8_mode, int layer_num, int layer_idx, bool allow_gemm_test, bool use_trt_kernel,
-            const std::vector<Tensor>& w) : _head_num(head_num), _head_size(head_size), _use_trt_kernel(use_trt_kernel), _weights(w) {
+            int int8_mode, int layer_num, int layer_idx, bool allow_gemm_test, bool use_trt_kernel, int mlp_hidden_dim,
+            const std::vector<Tensor>& w) : _head_num(head_num), _head_size(head_size), _use_trt_kernel(use_trt_kernel),
+            _mlp_hidden_dim(mlp_hidden_dim), _weights(w) {
     int hidden_dim = _head_num * _head_size;
     check_cuda_error(cublasCreate(&_cublasHandle));
     check_cuda_error(cublasLtCreate(&_cublasltHandle));
@@ -120,7 +121,7 @@ public:
     encoder_param.trt_seqlen_size = (int)trt_seqlen_offset.size(0);
     check_cuda_error(cublasSetStream(encoder_param.cublas_handle, encoder_param.stream));
     fastertransformer::Allocator<AllocatorType::TH>* allocator = new fastertransformer::Allocator<AllocatorType::TH>();
-    encoder_tmp->allocateBuffer(allocator, batch_size, seq_len, seq_len, _head_num, _head_size, _use_trt_kernel);
+    encoder_tmp->allocateBuffer(allocator, batch_size, seq_len, seq_len, _head_num, _head_size, _use_trt_kernel, _mlp_hidden_dim);
     encoder_tmp->initialize(encoder_param);
     encoder_tmp->forward();
     encoder_tmp->freeBuffer();
