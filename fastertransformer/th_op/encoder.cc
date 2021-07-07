@@ -45,6 +45,7 @@ FasterTransformerEncoder::FasterTransformerEncoder(
   int64_t layer_idx,
   bool allow_gemm_test,
   bool use_trt_kernel,
+  double q_scaling,
   int64_t mlp_hidden_dim)
 : _st(q_kernel.scalar_type()), _remove_padding(remove_padding),
   weights{q_kernel, q_bias, k_kernel, k_bias, v_kernel, v_bias,
@@ -91,6 +92,7 @@ FasterTransformerEncoder::FasterTransformerEncoder(
       throw std::runtime_error("Wrong Tensor type.");
   }
   head_info = torch::empty({9}, torch::dtype(torch::kInt64));
+  _q_scaling = torch::tensor({q_scaling}, torch::dtype(torch::kFloat64));
   head_info[0] = head_num;
   head_info[1] = head_size;
   head_info[2] = (int64_t)remove_padding;
@@ -128,6 +130,7 @@ Tensor FasterTransformerEncoder::forward(Tensor input, Tensor attr_mask, Tensor 
 std::vector<Tensor> FasterTransformerEncoder::get_pickle_info() const {
   std::vector<Tensor> tmp(weights);
   tmp.push_back(head_info);
+  tmp.push_back(_q_scaling)
   return tmp;
 }
 

@@ -50,9 +50,9 @@ template <typename T>
 class FTEncoder : public IFTEncoder {
 public:
   FTEncoder(int head_num, int head_size,
-            int int8_mode, int layer_num, int layer_idx, bool allow_gemm_test, bool use_trt_kernel, int mlp_hidden_dim,
+            int int8_mode, int layer_num, int layer_idx, bool allow_gemm_test, bool use_trt_kernel, float q_scaling, int mlp_hidden_dim,
             const std::vector<Tensor>& w) : _head_num(head_num), _head_size(head_size), _use_trt_kernel(use_trt_kernel),
-            _mlp_hidden_dim(mlp_hidden_dim), _weights(w) {
+            _q_scaling(q_scaling), _mlp_hidden_dim(mlp_hidden_dim), _weights(w) {
     int hidden_dim = _head_num * _head_size;
     check_cuda_error(cublasCreate(&_cublasHandle));
     check_cuda_error(cublasLtCreate(&_cublasltHandle));
@@ -140,6 +140,7 @@ private:
   BertEncoderTransformer<EncoderTraits_>* encoder = nullptr;
   bool _use_trt_kernel;
   const int _mlp_hidden_dim;
+  float _q_scaling;
 };
 
 template <typename T>
@@ -231,6 +232,7 @@ public:
     int64_t layer_idx,
     bool allow_gemm_test,
     bool use_trt_kernel,
+    double q_scaling,
     int64_t _mlp_hidden_dim);
 
   ~FasterTransformerEncoder();
@@ -244,6 +246,7 @@ private:
   bool _remove_padding;
   IFTEncoder* ftencoder;
   Tensor head_info;
+  Tensor _q_scaling;
   std::vector<Tensor> weights;
   bool _allow_gemm_test;
 };

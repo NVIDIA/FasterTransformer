@@ -37,7 +37,7 @@ namespace fastertransformer
 class MHARunner
 {
 public:
-    MHARunner(const int numHeads, const int headSize, const int wordSize)
+    MHARunner(const int numHeads, const int headSize, const int wordSize, const float q_scaling=1.0f)
         : mS(0)
         , mB(0)
         , mOmatSize(0)
@@ -49,7 +49,7 @@ public:
         , mStrideQKV(0)
         , mLdOut(0)
         , mStrideOut(0)
-        , mRsqrtHeadSize(1.f / sqrtf(headSize))
+        , mRsqrtHeadSize(1.f / (sqrtf(headSize) * q_scaling))
     {
     }
 
@@ -101,7 +101,7 @@ protected:
 class FusedMHARunnerFP16v2 : public MHARunner
 {
 public:
-    FusedMHARunnerFP16v2(const int numHeads, const int headSize, const int sm);
+    FusedMHARunnerFP16v2(const int numHeads, const int headSize, const int sm, const float q_scaling);
     ~FusedMHARunnerFP16v2() = default; // for pimpl
 
     virtual void setup(const int S, const int B) override;
