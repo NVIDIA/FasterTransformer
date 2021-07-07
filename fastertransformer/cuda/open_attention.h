@@ -428,7 +428,7 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
         else
         {
         if (use_trt_kernel && (sm_ == kSM_70 || sm_ == kSM_86 || sm_ == kSM_80 || sm_ == kSM_75 || sm_ == kSM_72) && size_per_head_ == 64)
-            dispatcher_fp16.reset(new FusedMHARunnerFP16v2(head_num_, size_per_head_, sm_));
+            dispatcher_fp16.reset(new FusedMHARunnerFP16v2(head_num_, size_per_head_, sm_, q_scaling_));
           buf_ = (DataType_*) allocator_->malloc(get_workspace_size(), false);
           if (buf_ == NULL)
             throw std::runtime_error(std::string("Allocator failed to allocate internal buffer."));
@@ -523,7 +523,7 @@ class OpenMultiHeadAttention: IMultiHeadAttention<OpType_>
     sm_ = attention->sm_;
     int8_mode_ = attention->int8_mode_;
     allow_gemm_test_ = attention->allow_gemm_test_;
-    q_scaling_ = attention->q_scaling_
+    q_scaling_ = attention->q_scaling_;
 
     for(int i = 0; i < 2; i++) cublasBmmAlgo_[i] = attention->cublasBmmAlgo_[i];
     cublasAlgoMap_ = attention->cublasAlgoMap_;

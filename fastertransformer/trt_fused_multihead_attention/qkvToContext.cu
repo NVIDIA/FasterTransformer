@@ -207,7 +207,7 @@ private:
     size_t threads_per_cta;
 };
 
-FusedMHARunnerFP16v2::FusedMHARunnerFP16v2(const int numHeads, const int headSize, const int sm)
+FusedMHARunnerFP16v2::FusedMHARunnerFP16v2(const int numHeads, const int headSize, const int sm, const float q_scaling)
     : MHARunner(numHeads, headSize, 2, q_scaling)
     , mSm(sm)
     , pimpl(new mhaImpl(this))
