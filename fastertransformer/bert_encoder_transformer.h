@@ -356,7 +356,7 @@ public:
         int n = k;
 
         int buf_size = m * n;
-        size_t buf_size_in_byte = calBufSizeInByte(batch_size_, from_seq_len_, head_num_, size_per_head_, int8_mode_);
+        size_t buf_size_in_byte = calBufSizeInByte(batch_size_, from_seq_len_, head_num_, size_per_head_, mlp_hidden_dim_, int8_mode_);
         
         //allocate buffer
         if (int8_mode_ != 0){
