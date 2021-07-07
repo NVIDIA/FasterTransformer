@@ -115,6 +115,7 @@ class BertEncoderTransformer
   int to_seq_len_;
   int head_num_;
   int size_per_head_;
+  int mlp_hidden_dim_;
 
   int sm_;
   bool allow_gemm_test_ = false;
@@ -144,7 +145,7 @@ public:
     layer_idx_ = layer_idx;
   }
 
-  size_t calBufSizeInByte(int batch_size, int seq_len, int head_num, int size_per_head, int int8_mode){
+  size_t calBufSizeInByte(int batch_size, int seq_len, int head_num, int size_per_head, int mlp_hidden_dim, int int8_mode){
     size_t m = batch_size*seq_len;
     size_t n = head_num*size_per_head;
     size_t k = n;
@@ -156,15 +157,15 @@ public:
                          m*k*sizeof(int8_t) +
                          //int8 qkv weight
                          3*n*k*sizeof(int8_t) +
-                         //FC0 & FC1 & FC2 for m*k(4k)*sizeof(DataType)
-                         4*m*k * sizeof(int) +
+                         //FC0 & FC1 & FC2 for m*mlp_hidden_dim*sizeof(DataType)
+                         m*mlp_hidden_dim * sizeof(int) +
                          //attr_out_buf_ & attr_matmul_buf_ & inter_matmul_buf_
                          6*m*n*sizeof(DataType_) +
                          //temp buf
                          m*n*sizeof(DataType_);
     }
     else{
-      normal_buf_size = sizeof(DataType_) * (m*n) * 7 + ((sizeof(half) == sizeof(DataType_)) ? CUBLAS_WORKSPACE_SIZE : 0);
+      normal_buf_size = sizeof(DataType_) * ((m*n) * 3 + m*mlp_hidden_dim) + ((sizeof(half) == sizeof(DataType_)) ? CUBLAS_WORKSPACE_SIZE : 0);
     }
     return normal_buf_size;  
   }
@@ -320,7 +321,8 @@ public:
   //allocate buffer for BertEncoderTransformer
   //do gemm test if allow_gemm_test == true
   void allocateBuffer(IAllocator *allocator, int batch_size, int from_seq_len,
-                      int to_seq_len, int head_num, int size_per_head, bool use_trt_kernel=true)
+                      int to_seq_len, int head_num, int size_per_head, int mlp_hidden_dim,
+                      bool use_trt_kernel=true)
   {
 #ifndef NDEBUG
     PRINT_FUNC_NAME_();
@@ -347,13 +349,14 @@ public:
         to_seq_len_ = to_seq_len;
         head_num_ = head_num;
         size_per_head_ = size_per_head;
+        mlp_hidden_dim_ = mlp_hidden_dim;
 
         int m = batch_size_ * from_seq_len_;
         int k = head_num_ * size_per_head_;
         int n = k;
 
         int buf_size = m * n;
-        size_t buf_size_in_byte = calBufSizeInByte(batch_size_, from_seq_len_, head_num_, size_per_head_, int8_mode_);
+        size_t buf_size_in_byte = calBufSizeInByte(batch_size_, from_seq_len_, head_num_, size_per_head_, mlp_hidden_dim_, int8_mode_);
         
         //allocate buffer
         if (int8_mode_ != 0){
@@ -631,8 +634,8 @@ public:
         check_cuda_error(cudaGetLastError());
 #endif
 
-        n *= 4;
-        
+        n = mlp_hidden_dim_;
+
         if (int8_mode_ == 1){
           quantized_kernelLauncher(attr_matmul_buf_tmp_, attr_matmul_buf_, k*m, ProjBiasNorm_amax_ptr + 3, param_.stream);
           cublasLtMM_withAlgo(int_buf_, 1, m, n, k, m*k, n*k, m*n, 
@@ -658,8 +661,8 @@ public:
 #endif
 
         n = k;
-        k *= 4;
-        
+        k = mlp_hidden_dim_;
+
         if (int8_mode_ == 1)
         {
           cublasLtMM_withAlgo(int_buf_, 1, m, n, k, m*k, n*k, m*n, 
@@ -728,8 +731,8 @@ public:
         check_cuda_error(cudaGetLastError());
 #endif
 
-        n *= 4;
-        
+        n = mlp_hidden_dim_;
+    
         cublasMM_cublasLtMM_wrapper(param_.cublaslt_handle, param_.cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, 
                                     n, m, k, &alpha, 
                                     param_.ffn.intermediate_weight.kernel, AType_, n,
@@ -745,8 +748,8 @@ public:
 #endif
 
         n = k;
-        k *= 4;
-        
+        k = mlp_hidden_dim_;
+    
         cublasMM_cublasLtMM_wrapper(param_.cublaslt_handle, param_.cublas_handle, CUBLAS_OP_N, CUBLAS_OP_N, 
                                     n, m, k, &alpha, 
                                     param_.ffn.output_weight.kernel, AType_, n,

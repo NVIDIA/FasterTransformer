@@ -186,7 +186,8 @@ public:
                                            from_seq_len_,
                                            to_seq_len_,
                                            head_num_,
-                                           size_per_head_
+                                           size_per_head_,
+                                           4 * head_num_ * size_per_head_,
                                            );
       encoder_transformer_tmp->initialize(param);
       encoder_transformer_tmp->forward();
@@ -624,7 +625,8 @@ public:
                                            from_seq_len_,
                                            to_seq_len_,
                                            head_num_,
-                                           size_per_head_
+                                           size_per_head_,
+                                           4 * head_num_ * size_per_head_,
                                            );
       encoder_transformer_->initialize(param);
       encoder_transformer_->forward();
@@ -668,4 +670,3 @@ REGISTER_GPU(Eigen::half);
 
 } //namespace
 } //namespace tensorflow
-

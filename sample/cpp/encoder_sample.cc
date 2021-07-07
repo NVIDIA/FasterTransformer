@@ -62,7 +62,7 @@ int main(int argc, char* argv[])
   int head_num = atoi(argv[4]);
   int size_per_head = atoi(argv[5]);
   bool is_remove_padding = (bool)atoi(argv[7]);
-  int int8_mode = atoi(argv[8]);	
+  int int8_mode = atoi(argv[8]);      
 
   if(atoi(argv[6]) == 0)
     encoder_sample<float>(batch_size, num_layers, seq_len, head_num, size_per_head, is_remove_padding, int8_mode, allow_gemm_test);
@@ -282,7 +282,7 @@ void encoder_sample(int batch_size,
   BertEncoderTransformer<EncoderTraits_> *encoder_transformer_ = 
           new BertEncoderTransformer<EncoderTraits_>(int8_mode, allow_gemm_test);
 
-  encoder_transformer_->allocateBuffer(&allocator, batch_size, from_seq_len, to_seq_len, head_num, size_per_head);
+  encoder_transformer_->allocateBuffer(&allocator, batch_size, from_seq_len, to_seq_len, head_num, size_per_head, 4 * head_num * size_per_head);
 
   //warm up
   cudaDeviceSynchronize();
@@ -370,7 +370,7 @@ void encoder_sample(int batch_size,
     if(is_remove_padding == true)
     {
       rebuild_sequence_length_padding_kernelLauncher(d_transformer_out, d_transformer_out_with_padding, 
-                                                      d_sequence_id_offset, 
+                                                      d_sequence_id_offset,
                                                       encoder_param.valid_word_num, hidden_dim,
                                                       encoder_param.stream);
     }
@@ -387,4 +387,3 @@ void encoder_sample(int batch_size,
   delete encoder_transformer_;
   return;
 }
-
