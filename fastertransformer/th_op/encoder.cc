@@ -77,12 +77,12 @@ FasterTransformerEncoder::FasterTransformerEncoder(
   switch (_st) {
     case at::ScalarType::Float:
       ftencoder = new FTEncoder<float>(head_num, head_size,
-                                                  int8_mode, layer_num, layer_idx,
+                                                  int8_mode, layer_num, layer_idx, q_scaling,
                                                   allow_gemm_test, use_trt_kernel, weights);
       break;
     case at::ScalarType::Half:
       ftencoder = new FTEncoder<half>(head_num, head_size,
-                                                 int8_mode, layer_num, layer_idx,
+                                                 int8_mode, layer_num, layer_idx, q_scaling,
                                                  allow_gemm_test, use_trt_kernel, weights);
       break;
     default:
@@ -126,7 +126,7 @@ Tensor FasterTransformerEncoder::forward(Tensor input, Tensor attr_mask, Tensor 
 std::vector<Tensor> FasterTransformerEncoder::get_pickle_info() const {
   std::vector<Tensor> tmp(weights);
   tmp.push_back(head_info);
-  tmp.push_back(_q_scaling)
+  tmp.push_back(_q_scaling);
   return tmp;
 }
 
