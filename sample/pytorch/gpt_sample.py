@@ -43,8 +43,6 @@ def main():
                         help='top p probability threshold')
     parser.add_argument('--temperature', type=float, default=1.,
                         help='temperature')
-    parser.add_argument('--is_fuse_QKV', type=bool, default=True,
-                        help='whether or not to fuse QKV')
     parser.add_argument('--tensor_para_size', type=int, default=1,
                         help='tensor parallel size')
     parser.add_argument('--layer_para_size', type=int, default=1,
@@ -86,7 +84,6 @@ def main():
     top_k = args.top_k
     top_p = args.top_p
     temperature = args.temperature
-    is_fuse_QKV = args.is_fuse_QKV
     tensor_para_size = args.tensor_para_size
     layer_para_size = args.layer_para_size
     layer_para_batch_size = args.layer_para_batch_size
@@ -128,7 +125,7 @@ def main():
     gpt = GPT(head_num, size_per_head, vocab_size, start_id, end_id,
               layer_num, top_k, top_p, temperature, output_len, max_seq_len, 
               tensor_para_size, layer_para_size, layer_para_batch_size, 
-              is_fuse_QKV, max_batch_size, lib_path=args.lib_path)
+              max_batch_size, lib_path=args.lib_path)
     gpt.load(ckpt_path=args.ckpt_path)
     if args.fp16:
         gpt.half()

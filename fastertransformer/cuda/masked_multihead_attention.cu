@@ -644,7 +644,7 @@ __global__ void masked_multihead_attention_kernel(Masked_multihead_attention_par
     // WARNING: ALL THE THREADS OF A WARP MUST ENTER!!!
     float qk = Qk_dot<T, THREADS_PER_KEY>::dot(q, k) * params.inv_sqrt_dh;
 
-    bool is_mask = (ti >= params.input_lengths[bi] && ti < params.max_input_len);
+    bool is_mask = params.is_mask? (ti >= params.input_lengths[bi] && ti < params.max_input_len) : false;
 
     // Store the product to shared memory. There's one qk value per timestep. Update the max.
     if( ti < params.timestep && tidx % THREADS_PER_KEY == 0 ) {
@@ -689,7 +689,8 @@ __global__ void masked_multihead_attention_kernel(Masked_multihead_attention_par
   float sum = 0.f;
 
   for( int ti = tidx; ti <= params.timestep; ti += THREADS_PER_BLOCK ) {
-    bool is_mask = (ti >= params.input_lengths[bi] && ti < params.max_input_len);
+    bool is_mask = params.is_mask? (ti >= params.input_lengths[bi] && ti < params.max_input_len) : false;
+
     float logit = is_mask? 0.f : __expf(qk_smem[ti] - qk_max);
     sum += logit;
     qk_smem[ti] = logit;

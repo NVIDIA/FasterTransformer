@@ -722,6 +722,8 @@ public:
                                         const bool* finished, const int step, const int max_seq_len,
                                         const int max_input_len, const int* input_lengths)
     {
+        assert(is_fuse_QKV_in_normal_gemm_ == true);  // only support for is_fuse_QKV = True.
+
         int m = l_parallel_param_.local_batch_size;
         int n = t_parallel_param_.local_hidden_units_;
         int k = hidden_units_;
@@ -730,92 +732,25 @@ public:
 
         DataType_ alpha = (DataType_)1.0f, beta = (DataType_)0.0f;
 
-        if(is_fuse_QKV_in_normal_gemm_ == true)
-        {
-            cublasMM_cublasLtMM_wrapper_decoder(param_.cublaslt_handle, 
-                                                param_.cublas_handle, 
-                                                CUBLAS_OP_N, CUBLAS_OP_N,
-                                                3*n, m, k,
-                                                &alpha,
-                                                param_.self_attention.query_weight.kernel , AType_, 3*n,
-                                                from_tensor, BType_, k,
-                                                &beta,
-                                                query_buf_, CType_, 3*n,
-                                                param_.stream, cublasAlgoMap_,
-                                                cublas_workspace_);
-            
-            fusedQKV_masked_attention_dispatch_v2<DataType_>(
-              query_buf_,
-              param_.self_attention.query_weight.bias, 
-              key_cache_,
-              value_cache_,
-              context_buf_, finished, param_.request_batch_size, l_parallel_param_.local_batch_size,
-              t_parallel_param_.local_head_num_, size_per_head_, step, max_seq_len, max_input_len, input_lengths, param_.stream);
-        }
-        else
-        {
-            if(is_fuse_QKV_in_batched_gemm_ == true)
-            {
-                cublasGemmAlgo_t cublasAlgo = static_cast<cublasGemmAlgo_t>(getAlgoIdFromMap(cublasAlgoMap_, 3, n, m, k, std::is_same<float, DataType_>::value ? FLOAT_DATATYPE : HALF_DATATYPE));
-                check_cuda_error(cublasGemmBatchedEx(param_.cublas_handle, 
-                  CUBLAS_OP_N, CUBLAS_OP_N, 
-                  n, m, k, 
-                  &alpha, 
-                  (const void* const*) qkv_kernel_, AType_, n,
-                  (const void* const*) qkv_input_, BType_, k,
-                  &beta,
-                  (void* const*)qkv_buf_, CType_, n,
-                  3, 
-                  computeType_,
-                  cublasAlgo));
-            }
-            else
-            {
-
-                cublasMM_cublasLtMM_wrapper_decoder(param_.cublaslt_handle, 
-                                                    param_.cublas_handle, 
-                                                    CUBLAS_OP_N, CUBLAS_OP_N,
-                                                    n, m, k,
-                                                    &alpha,
-                                                    param_.self_attention.query_weight.kernel , AType_, n,
-                                                    from_tensor, BType_, k,
-                                                    &beta,
-                                                    query_buf_, CType_, n,
-                                                    param_.stream, cublasAlgoMap_,
-                                                    cublas_workspace_);
-
-                cublasMM_cublasLtMM_wrapper_decoder(param_.cublaslt_handle, 
-                                                    param_.cublas_handle, 
-                                                    CUBLAS_OP_N, CUBLAS_OP_N,
-                                                    n, m, k,
-                                                    &alpha,
-                                                    param_.self_attention.key_weight.kernel, AType_, n,
-                                                    from_tensor, BType_, k,
-                                                    &beta,
-                                                    key_buf_, CType_, n,
-                                                    param_.stream, cublasAlgoMap_,
-                                                    cublas_workspace_);                
-
-                cublasMM_cublasLtMM_wrapper_decoder(param_.cublaslt_handle, 
-                                                    param_.cublas_handle, 
-                                                    CUBLAS_OP_N, CUBLAS_OP_N,
-                                                    n, m, k,
-                                                    &alpha,
-                                                    param_.self_attention.value_weight.kernel, AType_, n,
-                                                    from_tensor, BType_, k,
-                                                    &beta,
-                                                    value_buf_, CType_, n,
-                                                    param_.stream, cublasAlgoMap_,
-                                                    cublas_workspace_);
-            }
-            masked_attention_dispatch_v2<DataType_>(
-              key_buf_, value_buf_,
-              query_buf_, param_.self_attention.query_weight.bias, 
-              key_cache_, param_.self_attention.key_weight.bias,
-              value_cache_, param_.self_attention.value_weight.bias,
-              context_buf_, finished, param_.request_batch_size, l_parallel_param_.local_batch_size,
-              t_parallel_param_.local_head_num_, size_per_head_, step, max_seq_len, max_input_len, input_lengths, param_.stream); 
-        }
+        cublasMM_cublasLtMM_wrapper_decoder(param_.cublaslt_handle, 
+                                            param_.cublas_handle, 
+                                            CUBLAS_OP_N, CUBLAS_OP_N,
+                                            3*n, m, k,
+                                            &alpha,
+                                            param_.self_attention.query_weight.kernel , AType_, 3*n,
+                                            from_tensor, BType_, k,
+                                            &beta,
+                                            query_buf_, CType_, 3*n,
+                                            param_.stream, cublasAlgoMap_,
+                                            cublas_workspace_);
+        
+        fusedQKV_masked_attention_dispatch_v2<DataType_>(
+            query_buf_,
+            param_.self_attention.query_weight.bias, 
+            key_cache_,
+            value_cache_,
+            context_buf_, finished, param_.request_batch_size, l_parallel_param_.local_batch_size,
+            t_parallel_param_.local_head_num_, size_per_head_, step, max_seq_len, max_input_len, input_lengths, param_.stream);
   
         k = t_parallel_param_.local_hidden_units_;
         n = hidden_units_;

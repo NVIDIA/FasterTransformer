@@ -58,7 +58,7 @@ public:
   int max_input_len;
   int *d_start_ids;
   const int *d_start_lengths;
-  T *d_attn_mask;
+  const T *d_attn_mask;
 
   virtual ~DecodingInitParam() {}
 };

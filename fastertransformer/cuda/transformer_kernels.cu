@@ -460,7 +460,8 @@ void add_bias_input(T* output, const T* input, const T* bias, const int m, const
 template<typename T>
 void add_bias_input_kernelLauncher(T* output, const T* bias, const T* input, const int m, const int n, cudaStream_t stream)
 {
-  dim3 grid(min(m, 65536));
+  int blocks_per_row = ceil(float(n)/1024);
+  dim3 grid(min(m * blocks_per_row, 65536));
   dim3 block(min(n, 1024));
   
   add_bias_input<<<grid, block, 0, stream>>>(output, input, bias, m, n);
