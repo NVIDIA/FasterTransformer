@@ -85,7 +85,7 @@ public:
 
 
     int sm = getSMVersion();
-    dispatcher_fp16.reset(new FusedMHARunnerFP16v2(head_num_, size_per_head_, sm));
+    dispatcher_fp16.reset(new FusedMHARunnerFP16v2(head_num_, size_per_head_, sm, 1.0f));
 
     try
     {
