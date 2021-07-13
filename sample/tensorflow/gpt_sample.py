@@ -119,14 +119,14 @@ def sample_model(
     with tf.Session(graph=tf.Graph(), config=config) as sess:
         saver = tf.train.import_meta_graph("{}/{}/model.ckpt.meta".format(models_dir, model_name))
 
-        lengths = np.random.randint(low=1, high=8, size=batch_size)
-        min_start_length = lengths.min()
-        max_start_length = lengths.max()
+        start_lengths = np.random.randint(low=1, high=2, size=batch_size) # This example only support unconditional case now.
+        min_start_length = start_lengths.min()
+        max_start_length = start_lengths.max()
         attention_mask = np.tile(np.tri(min_start_length), (batch_size, 1, 1))
 
         start_ids = np.ones([batch_size, max_start_length]) * enc.encoder['<|endoftext|>']
         for i in range(batch_size):
-            start_ids[i][0:lengths[i]] = 198
+            start_ids[i][0:start_lengths[i]] = 198
         # User can put some real start ids here, we use '\n' (198) here.
 
         sess.run(tf.global_variables_initializer())
@@ -161,6 +161,7 @@ def sample_model(
                               start_ids,
                               min_start_length,
                               max_start_length,
+                              start_lengths,
                               attention_mask)
 
         generated = 0
@@ -292,6 +293,7 @@ def ft_gpt_op(decoding_vars,
               start_ids,
               min_start_length,
               max_start_length,
+              start_lengths,
               attention_mask):
     """Run the decoding with sampling by FasterTransformer.
 
@@ -346,6 +348,7 @@ def ft_gpt_op(decoding_vars,
         start_ids, # 22
         min_start_length, # 23
         max_start_length, # 24
+        start_lengths, # 25
         batch_size=batch_size,
         candidate_num=decoding_args.top_k,
         probability_threshold=decoding_args.top_p,

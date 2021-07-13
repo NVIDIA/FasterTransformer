@@ -130,7 +130,7 @@ static auto fasterTransformerDecodingTHS =
 static auto fasterTransformerGPTTHS = 
 torch::jit::class_<torch_ext::FasterTransformerGPT>("FasterTransformer", "GPT")
   .def(torch::jit::init<int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t,
-                        double, double, int64_t, int64_t, int64_t, int64_t, bool, int64_t,
+                        double, double, int64_t, int64_t, int64_t, int64_t, bool, int64_t, double,
                         Tensor, Tensor,
                         std::vector<Tensor>, std::vector<Tensor>, std::vector<Tensor>, std::vector<Tensor>, 
                         std::vector<Tensor>, std::vector<Tensor>, std::vector<Tensor>, std::vector<Tensor>,

@@ -735,8 +735,8 @@ void topK_sampling_kernel_kernelLauncher(void* workspace,
 
 #undef CASE_K
 
-#define CASE_K(K,BLOCK_SIZE_1_, BLOCK_SIZE_2_, BLOCKS_PER_BEAM_) \
-  case K: \
+#define CASE_K(K_MIN, K_MAX, BLOCK_SIZE_1_, BLOCK_SIZE_2_, BLOCKS_PER_BEAM_) \
+  case K_MIN ... K_MAX: \
     topk_stage_1_opt3<T, BLOCK_SIZE_1_, BLOCKS_PER_BEAM_><<<batch_size * BLOCKS_PER_BEAM_, BLOCK_SIZE_1_, 0, stream>>>( \
         log_probs, \
         temp_log_probs, \
@@ -744,7 +744,7 @@ void topK_sampling_kernel_kernelLauncher(void* workspace,
         topk_tmp_val_buf, \
         finished_buf, \
         candidate_num, vocab_size, end_id); \
-    topk_stage_2_opt3_sampling<T, BLOCK_SIZE_2_, BLOCKS_PER_BEAM_><<<batch_size, BLOCK_SIZE_2_, K * sizeof(int) , stream>>>( \
+    topk_stage_2_opt3_sampling<T, BLOCK_SIZE_2_, BLOCKS_PER_BEAM_><<<batch_size, BLOCK_SIZE_2_, K_MAX * sizeof(int) , stream>>>( \
         topk_tmp_id_buf, \
         topk_tmp_val_buf, \
         topk_tmp2_val_buf, \
@@ -802,12 +802,9 @@ void topK_sampling_kernel_kernelLauncher_v2(void* workspace,
 
         switch(candidate_num)
         {
-            CASE_K(1,128,128,8);
-            CASE_K(4,128,128,8);
-            CASE_K(8,128,128,8);
-            CASE_K(16,128,128,8);
-            CASE_K(32,256,128,8);
-            CASE_K(64,256,256,8);
+            CASE_K(1,16,128,128,8);
+            CASE_K(17,32,256,128,8);
+            CASE_K(33,64,256,256,8);
             default:
                 printf("[ERROR] Topk kernel does not support candidate_num = %d \n", candidate_num);
                 exit(0);
@@ -1475,8 +1472,8 @@ __global__ void topk_topp_sampling_kernel_v2(const int* __restrict topk_tmp_id_b
     }
 }
 
-#define CASE_K(K,BLOCK_SIZE_1_, BLOCK_SIZE_2_, BLOCKS_PER_BEAM_) \
-  case K: \
+#define CASE_K(K_MIN, K_MAX ,BLOCK_SIZE_1_, BLOCK_SIZE_2_, BLOCKS_PER_BEAM_) \
+  case K_MIN ... K_MAX: \
     topk_stage_1_opt3<T, BLOCK_SIZE_1_, BLOCKS_PER_BEAM_><<<batch_size * BLOCKS_PER_BEAM_, BLOCK_SIZE_1_, 0, stream>>>( \
         logits, \
         temp_logits, \
@@ -1484,7 +1481,7 @@ __global__ void topk_topp_sampling_kernel_v2(const int* __restrict topk_tmp_id_b
         topk_tmp_val_buf, \
         finished_buf, \
         candidate_num, vocab_size, end_id); \
-    topk_topp_sampling_kernel_v2<T, BLOCK_SIZE_2_, BLOCKS_PER_BEAM_><<<batch_size, BLOCK_SIZE_2_, K * sizeof(int) , stream>>>( \
+    topk_topp_sampling_kernel_v2<T, BLOCK_SIZE_2_, BLOCKS_PER_BEAM_><<<batch_size, BLOCK_SIZE_2_, K_MAX * sizeof(int) , stream>>>( \
         topk_tmp_id_buf, \
         topk_tmp_val_buf, \
         topk_tmp2_val_buf, \
@@ -1542,12 +1539,9 @@ void topK_topP_sampling_kernel_kernelLauncher_v2(void* workspace,
 
         switch(candidate_num)
         {
-            CASE_K(1,128,128,8);
-            CASE_K(4,128,128,8);
-            CASE_K(8,128,128,8);
-            CASE_K(16,128,128,8);
-            CASE_K(32,256,128,8);
-            CASE_K(64,256,256,8);
+            CASE_K(1,16,128,128,8);
+            CASE_K(17,32,256,128,8);
+            CASE_K(33,64,256,256,8);
             default:
                 printf("[ERROR] Topk kernel does not support candidate_num = %d \n", candidate_num);
                 exit(0);

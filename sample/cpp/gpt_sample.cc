@@ -367,7 +367,7 @@ void decoding_sample(const INIReader reader)
   int max_input_len = -1;
   read_start_ids(request_batch_size, &v_start_lengths, &v_start_ids, 
                  max_input_len, end_id);
-
+  int* start_lengths = v_start_lengths.data();
   int* start_ids = v_start_ids.data();
   for(int i = 0; i < request_batch_size; i++)
   {
@@ -612,6 +612,11 @@ void decoding_sample(const INIReader reader)
   int* d_start_ids;
   cudaMalloc((void **)&d_start_ids, sizeof(int) * request_batch_size * max_input_len);
   cudaMemcpyAsync(d_start_ids, start_ids, sizeof(int) * request_batch_size * max_input_len, cudaMemcpyHostToDevice, stream);
+
+  int* d_start_lengths;
+  cudaMalloc((void **)&d_start_lengths, sizeof(int) * request_batch_size);
+  cudaMemcpyAsync(d_start_lengths, start_lengths, sizeof(int) * request_batch_size, cudaMemcpyHostToDevice, stream);
+
   T* h_attn_mask = new T[request_batch_size * request_input_len * request_input_len];
   memset(h_attn_mask, 0, sizeof(T) * request_batch_size * request_input_len * request_input_len);
   for(int i = 0; i < request_batch_size; i++)
@@ -628,6 +633,7 @@ void decoding_sample(const INIReader reader)
   cudaMalloc((void **)&d_attn_mask, sizeof(T) * request_batch_size * request_input_len * request_input_len);
   cudaMemcpyAsync(d_attn_mask, h_attn_mask, sizeof(T) * request_batch_size * request_input_len * request_input_len, cudaMemcpyHostToDevice, stream);
   decoding_params.d_start_ids = d_start_ids;
+  decoding_params.d_start_lengths = d_start_lengths;
   decoding_params.d_attn_mask = d_attn_mask;
   
   cudaDeviceSynchronize();

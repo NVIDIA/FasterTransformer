@@ -57,7 +57,8 @@ public:
   int request_output_len = 0;
   int max_input_len;
   int *d_start_ids;
-  T *d_attn_mask;
+  const int *d_start_lengths;
+  const T *d_attn_mask;
 
   virtual ~DecodingInitParam() {}
 };
@@ -99,7 +100,7 @@ struct GptArguments : public DecodingSamplingArguments
   int start_len_;
   float temperature_{2.0};
   float len_penalty{1.0};
-  float repeat_penalty{2.0};
+  float repetition_penalty_{1.0};
   int *vocab_mask{nullptr};
   int min_gpu_num_{1};
 };

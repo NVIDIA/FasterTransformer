@@ -20,9 +20,10 @@
 
 #include <cuda_fp16.h>
 
-using namespace fastertransformer;
 namespace torch_ext
 {
+  using namespace fastertransformer;
+
   template <typename T> class THTraits;
   
   template <>

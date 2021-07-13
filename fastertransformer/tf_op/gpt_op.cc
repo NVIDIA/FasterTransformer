@@ -56,6 +56,7 @@ REGISTER_OP("DecodingGPT")
     .Input("start_ids: int32")              // 22
     .Input("min_start_length: int32")       // 23
     .Input("max_start_length: int32")       // 24
+    .Input("start_lengths: int32")          // 25
     .Output("output_ids: int32")
     .Attr("T: {float, half}")
     .Attr("batch_size: int >= 1")
@@ -139,8 +140,8 @@ public:
             OP_REQUIRES(context, false, errors::Internal(error.what()));
         }
 
-        OP_REQUIRES(context, context->num_inputs() <= 25, errors::InvalidArgument("[ERROR] Require less input arguments"));
-        OP_REQUIRES(context, context->num_inputs() >= 25, errors::InvalidArgument("[ERROR] Require more input arguments"));
+        OP_REQUIRES(context, context->num_inputs() <= 26, errors::InvalidArgument("[ERROR] Require less input arguments"));
+        OP_REQUIRES(context, context->num_inputs() >= 26, errors::InvalidArgument("[ERROR] Require more input arguments"));
 
         DecoderInitParam<DataType_> *params = new DecoderInitParam<DataType_>[num_layer_];
         const int hidden_unit = size_per_head_ * head_num_;
@@ -190,6 +191,7 @@ public:
         const DataType_* d_attn_mask = nullptr;
         this->get_tensor(context, 21, &d_attn_mask);
 
+
         const int* d_start_ids = reinterpret_cast<const int *>(context->input(22).flat<int32>().data());
         OP_REQUIRES(context, d_start_ids != nullptr, errors::InvalidArgument("d_start_ids is null"));
         const int* d_min_start_length = reinterpret_cast<const int *>(context->input(23).flat<int32>().data());
@@ -202,6 +204,8 @@ public:
         cudaMemcpyAsync(&max_start_length, d_max_start_length, sizeof(int), cudaMemcpyDeviceToHost, stream);
         assert(min_start_length != -1);
         assert(max_start_length != -1);
+        const int* d_start_lengths = reinterpret_cast<const int *>(context->input(25).flat<int32>().data());
+        OP_REQUIRES(context, d_start_lengths != nullptr, errors::InvalidArgument("d_start_lengths is null"));
 
         TensorParallelParam tensor_parallel_param;
         tensor_parallel_param.rank = 0;
@@ -214,6 +218,9 @@ public:
         layer_parallel_param.world_size = 1;
         layer_parallel_param.layers_per_group = num_layer_;
         layer_parallel_param.local_batch_size = batch_size_;
+        
+        decoding_params.d_attn_mask = d_attn_mask;
+        decoding_params.d_start_lengths = d_start_lengths;
 
         decoding_handler->set_tensor_parallel_param(tensor_parallel_param);
         decoding_handler->set_layer_parallel_param(layer_parallel_param);

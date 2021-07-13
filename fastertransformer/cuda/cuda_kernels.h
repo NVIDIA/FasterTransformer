@@ -58,9 +58,13 @@ void embedding_position_lookups_kernel_launcher(T* from_tensor,
                                                 const T* embedding_table, 
                                                 const T* pos_table, 
                                                 const int* word_ids,
+                                                const int local_batch_size,
                                                 const int batch_size,
                                                 const int hidden_units, 
                                                 int step, 
+                                                int ite,
+                                                int max_input_len,
+                                                const int* start_lengths,
                                                 cudaStream_t stream);
 
 template <typename T>
@@ -82,6 +86,21 @@ void apply_temperature_penalty_kernelLauncher(T* logits,
                                               const int m,
                                               const int vocab_size,
                                               const int vocab_size_padd,
+                                              cudaStream_t stream);
+
+template <typename T>
+void apply_repetition_penalty_kernelLauncher(T* logits,
+                                              const float penalty,
+                                              int* start_ids,
+                                              int* output_ids,
+                                              const int batch_size,
+                                              const int local_batch_size,
+                                              const int vocab_size,
+                                              const int vocab_size_padd,
+                                              const int* start_lengths,
+                                              const int max_input_len,
+                                              const int step,
+                                              const int ite,
                                               cudaStream_t stream);
 
 void set_start_ids_kernelLauncher(int* out_ids,

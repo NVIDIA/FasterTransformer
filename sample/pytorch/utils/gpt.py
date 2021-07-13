@@ -128,7 +128,7 @@ class GPTWeights(object):
 
 class GPT(nn.Module):
     def __init__(self, head_num, size_per_head, vocab_size, start_id, end_id, layer_num, top_k, top_p, temperature,
-                 output_len, max_seq_len, tensor_para_size, layer_para_size, layer_para_batch_size, is_fuse_QKV, max_batch_size, lib_path):
+                 output_len, max_seq_len, tensor_para_size, layer_para_size, layer_para_batch_size, max_batch_size, lib_path):
         super().__init__()
         self.head_num = head_num
         self.size_per_head = size_per_head
@@ -144,7 +144,6 @@ class GPT(nn.Module):
         self.tensor_para_size = tensor_para_size
         self.layer_para_size = layer_para_size
         self.layer_para_batch_size = layer_para_batch_size
-        self.is_fuse_QKV = is_fuse_QKV
         self.max_batch_size = max_batch_size
 
         assert torch.cuda.is_available(), "CUDA is required for this model."
@@ -188,7 +187,7 @@ class GPT(nn.Module):
         self.model = torch.classes.FasterTransformer.GPT(self.head_num, self.size_per_head, self.vocab_size,
                                                         self.start_id, self.end_id, self.layer_num, self.top_k, self.top_p, self.temperature, self.max_seq_len,
                                                         self.tensor_para_size, self.layer_para_size, self.layer_para_batch_size, 
-                                                        self.is_fuse_QKV, self.max_batch_size, *self.weights.w)
+                                                        True, self.max_batch_size, *self.weights.w)
 
 
     def forward(self, start_ids, start_lengths, attn_mask, batch_first=True):

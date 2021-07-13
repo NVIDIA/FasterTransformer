@@ -455,7 +455,6 @@ template<
   int THREADS_PER_BLOCK
 >
 __global__ void masked_multihead_attention_kernel(Masked_multihead_attention_params<T> params) {
-
   // Make sure the hidden dimension per head is a multiple of the number of threads per key.
   static_assert(Dh % THREADS_PER_KEY == 0, "");
   // Make sure the hidden dimension per head is a multiple of the number of threads per value.
@@ -645,9 +644,12 @@ __global__ void masked_multihead_attention_kernel(Masked_multihead_attention_par
     // WARNING: ALL THE THREADS OF A WARP MUST ENTER!!!
     float qk = Qk_dot<T, THREADS_PER_KEY>::dot(q, k) * params.inv_sqrt_dh;
 
+    bool is_mask = params.is_mask? (ti >= params.input_lengths[bi] && ti < params.max_input_len) : false;
+
     // Store the product to shared memory. There's one qk value per timestep. Update the max.
     if( ti < params.timestep && tidx % THREADS_PER_KEY == 0 ) {
-      qk_max = fmaxf(qk_max, qk);
+
+      qk_max = is_mask? qk_max : fmaxf(qk_max, qk);
       qk_smem[ti] = qk;
     }
   }
@@ -685,8 +687,11 @@ __global__ void masked_multihead_attention_kernel(Masked_multihead_attention_par
 
   // Compute the logits and start the sum.
   float sum = 0.f;
-  for( int ti = tidx; ti <= params.timestep; ti += THREADS_PER_BLOCK ) { 
-    float logit = __expf(qk_smem[ti] - qk_max);
+
+  for( int ti = tidx; ti <= params.timestep; ti += THREADS_PER_BLOCK ) {
+    bool is_mask = params.is_mask? (ti >= params.input_lengths[bi] && ti < params.max_input_len) : false;
+
+    float logit = is_mask? 0.f : __expf(qk_smem[ti] - qk_max);
     sum += logit;
     qk_smem[ti] = logit;
   }

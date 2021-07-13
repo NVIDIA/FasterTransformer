@@ -149,16 +149,30 @@ namespace fastertransformer
                                                     const T* embedding_table,
                                                     const T* pos_table,
                                                     const int* word_ids,
+                                                    const int local_batch_size,
                                                     const int batch_size,
                                                     const int hidden_units,
-                                                    int step)
+                                                    int step,
+                                                    int ite,
+                                                    int max_input_len,
+                                                    const int* start_lengths)
   {
-      for(int index = blockIdx.x * blockDim.x + threadIdx.x; index < batch_size * hidden_units; index += blockDim.x * gridDim.x)
+      int timestep = step - 1;
+      // if the input is padded in the batch, indices of the word_id and the pos_table also should be shifted forward by the length of the padding.
+      int len_padding = max_input_len - start_lengths[local_batch_size * ite + blockIdx.x];
+      int idx_word_id = (step == max_input_len) ? timestep - len_padding : timestep;
+      int idx_pos_table = timestep - len_padding;
+
+      // printf("batch id: %d, len_padding: %d, max_input_len: %d\n", local_batch_size * ite + blockIdx.x, len_padding, max_input_len);
+
+      int *word_ids_buf = (int*)word_ids + idx_word_id * batch_size + local_batch_size * ite;
+      for(int index = blockIdx.x * blockDim.x + threadIdx.x; index < local_batch_size * hidden_units; index += blockDim.x * gridDim.x)
       {
           const int row_index = index / hidden_units;
           const int col_index = index % hidden_units;
-          from_tensor[index] = embedding_table[word_ids[row_index] * hidden_units + col_index]
-                              + pos_table[(step - 1) * hidden_units + col_index];
+
+          from_tensor[index] = embedding_table[word_ids_buf[row_index] * hidden_units + col_index]
+          + pos_table[idx_pos_table * hidden_units + col_index];
       }
   }
 
@@ -168,23 +182,31 @@ namespace fastertransformer
                                                   const T* embedding_table, 
                                                   const T* pos_table, 
                                                   const int* word_ids,
+                                                  const int local_batch_size,
                                                   const int batch_size,
                                                   const int hidden_units, 
                                                   int step, 
+                                                  int ite,
+                                                  int max_input_len,
+                                                  const int* start_lengths,
                                                   cudaStream_t stream)
   {
-      dim3 grid(min(batch_size, 65536));
+      dim3 grid(min(local_batch_size, 65536));
       dim3 block(min(hidden_units, 1024));
       embedding_position_lookups_kernel<T><<<grid, block, 0, stream>>>(from_tensor,
                                                                        embedding_table,
                                                                        pos_table,
                                                                        word_ids,
+                                                                       local_batch_size,
                                                                        batch_size,
                                                                        hidden_units,
-                                                                       step);
+                                                                       step, 
+                                                                       ite,
+                                                                       max_input_len,
+                                                                       start_lengths);
   }
 
-  template <typename T>
+  template <typename T> __launch_bounds__(1024, 1)
   __global__ void start_id_embedding_position_lookups_kernel(T* from_tensor,
                                                              int* output_ids,
                                                              const T* embedding_table,
@@ -271,8 +293,7 @@ namespace fastertransformer
                                                 const int m,
                                                 const int vocab_size,
                                                 const int vocab_size_padd,
-                                                cudaStream_t stream)
-  {
+                                                cudaStream_t stream) {
       dim3 grid(min(m, 65536));
       dim3 block(min(vocab_size_padd, 1024));
       const T temperature_inverse = (T)(1.f / (float) temperature);
@@ -281,6 +302,76 @@ namespace fastertransformer
                                                                       m,
                                                                       vocab_size,
                                                                       vocab_size_padd);
+  }
+
+  template <typename T>
+  __global__ void apply_repetition_penalty_kernel(T* logits,
+                                                  const float penalty,
+                                                  int* start_ids,
+                                                  int* output_ids,
+                                                  const int batch_size,
+                                                  const int local_batch_size,
+                                                  const int vocab_size,
+                                                  const int vocab_size_padd,
+                                                  const int* start_lengths,
+                                                  const int max_input_len,
+                                                  const int step,
+                                                  const int ite) {
+
+    for(int index = blockIdx.x * blockDim.x + threadIdx.x; index < local_batch_size * step; index += blockDim.x * gridDim.x) {
+      int tid = index / local_batch_size;
+      int lid = index % local_batch_size;
+      int bid = lid + ite * local_batch_size;
+
+      bool is_mask = (tid >= start_lengths[bid] && tid < max_input_len);
+
+      if (is_mask) continue;  // padding has nothing to do with repetition penalty.
+
+      int vid;
+      if (tid < start_lengths[bid]) {  // get tokens from context input
+        int idx = bid * max_input_len + tid; // start_ids shape: (batch_size, max_input_len)
+        vid = start_ids[idx];
+      } else {  // get tokens from previous output
+        int idx = batch_size * tid + local_batch_size * ite + lid;  // output_ids shape: (input_len + output_len, batch_size)
+        vid = output_ids[idx];
+      }
+
+      if(vid >= vocab_size) continue;
+
+      int idx_out = lid * vocab_size_padd + vid;  // logits shape: (local_batch_size, vocab_size_padd)
+      logits[idx_out] = logits[idx_out] < T(0) ? float(logits[idx_out]) * penalty : float(logits[idx_out]) / penalty;
+    }
+  }
+
+  template <typename T>
+  void apply_repetition_penalty_kernelLauncher(T* logits,
+                                               const float penalty,
+                                               int* start_ids,
+                                               int* output_ids,
+                                               const int batch_size,
+                                               const int local_batch_size,
+                                               const int vocab_size,
+                                               const int vocab_size_padd,
+                                               const int* start_lengths,
+                                               const int max_input_len,
+                                               const int step,
+                                               const int ite,
+                                               cudaStream_t stream) {
+    
+    dim3 block(512);
+    dim3 grid((int)(ceil(local_batch_size * step / 512.)));
+    apply_repetition_penalty_kernel<T><<<grid, block, 0, stream>>>(logits,
+                                                                   penalty,
+                                                                   start_ids,
+                                                                   output_ids,
+                                                                   batch_size,
+                                                                   local_batch_size,
+                                                                   vocab_size,
+                                                                   vocab_size_padd,
+                                                                   start_lengths,
+                                                                   max_input_len,
+                                                                   step,
+                                                                   ite);
   }
 
   __global__ void set_start_ids_kernel(int* out_ids,
@@ -777,7 +868,7 @@ namespace fastertransformer
         args.end_id_, 
         1.f/args.temperature_, 
         args.len_penalty,
-        args.repeat_penalty, 
+        args.repetition_penalty_, 
         args.vocab_mask);
   }
 
@@ -1106,9 +1197,13 @@ namespace fastertransformer
                                                   const float* embedding_table,
                                                   const float* pos_table,
                                                   const int* word_ids,
+                                                  const int local_batch_size,
                                                   const int batch_size,
                                                   const int hidden_units,
                                                   int step,
+                                                  int ite,
+                                                  int max_input_len,
+                                                  const int* start_lengths,
                                                   cudaStream_t stream);
 
   template 
@@ -1116,9 +1211,13 @@ namespace fastertransformer
                                                   const half* embedding_table,
                                                   const half* pos_table,
                                                   const int* word_ids,
+                                                  const int local_batch_size,
                                                   const int batch_size,
                                                   const int hidden_units,
                                                   int step,
+                                                  int ite,
+                                                  int max_input_len,
+                                                  const int* start_lengths,
                                                   cudaStream_t stream);
 
   template
@@ -1160,6 +1259,36 @@ namespace fastertransformer
                                                          const int vocab_size,
                                                          const int vocab_size_padd,
                                                          cudaStream_t stream);
+
+
+  template void apply_repetition_penalty_kernelLauncher(float* logits,
+                                                        const float penalty,
+                                                        int* start_ids,
+                                                        int* output_ids,
+                                                        const int batch_size,
+                                                        const int local_batch_size,
+                                                        const int vocab_size,
+                                                        const int vocab_size_padd,
+                                                        const int* start_lengths,
+                                                        const int max_input_len,
+                                                        const int step,
+                                                        const int ite,
+                                                        cudaStream_t stream);
+
+template void apply_repetition_penalty_kernelLauncher(half* logits,
+                                                      const float penalty,
+                                                      int* start_ids,
+                                                      int* output_ids,
+                                                      const int batch_size,
+                                                      const int local_batch_size,
+                                                      const int vocab_size,
+                                                      const int vocab_size_padd,
+                                                      const int* start_lengths,
+                                                      const int max_input_len,
+                                                      const int step,
+                                                      const int ite,
+                                                      cudaStream_t stream);
+
 
   template void kernel_padding_kernelLauncher(float *padded_kernel, const float *kernel,
                                            const int row_dim, const int col_dim,

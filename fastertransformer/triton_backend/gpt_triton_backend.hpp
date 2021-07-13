@@ -35,6 +35,8 @@ struct GptModel : public AbstractTransformerModel {
    size_t layer_para_batch_size = 0,
    const float probability_threshold = 0.0,
    const bool is_fuse_QKV = true,
+   const float temperature = 0.0,
+   const float repetition_penalty = 0.0,
    const std::string model_name = "",
    const std::string model_path_prefix = "")
     : batch_size(batch_size),
@@ -49,6 +51,8 @@ struct GptModel : public AbstractTransformerModel {
       layer_para_batch_size(layer_para_batch_size),
       probability_threshold(probability_threshold),
       is_fuse_QKV(is_fuse_QKV),
+      temperature(temperature),
+      repetition_penalty(repetition_penalty),
       model_name(model_name),
       model_path_prefix(model_path_prefix){}
 
@@ -66,6 +70,8 @@ struct GptModel : public AbstractTransformerModel {
   size_t layer_para_batch_size;
   const float probability_threshold;
   const bool is_fuse_QKV;
+  const float temperature;
+  const float repetition_penalty;
   const std::string model_name;
   const std::string model_path_prefix;
 
@@ -86,6 +92,8 @@ struct GptModel : public AbstractTransformerModel {
        << "\nlayer_para_batch_size: " << layer_para_batch_size
        << "\nprobability_threshold: " << probability_threshold
        << "\nis_fuse_QKV: " << is_fuse_QKV
+       << "\ntemperature: " << temperature
+       << "\nrepetition_penalty" << repetition_penalty
        << "\nmodel_name: " << model_name
        << "\nmodel_path_prefix: " << model_path_prefix << std::endl;
     return ss.str();
@@ -307,8 +315,9 @@ struct GptModelInstance : public AbstractTransformerModelInstance
     }
 
     auto d_inputs = prepareRequestAttentionMask(input_tensors, decoding_params.request_input_len);
-    decoding_params.d_start_ids = d_inputs.first;
-    decoding_params.d_attn_mask = (DataType *) d_inputs.second;
+    decoding_params.d_start_ids = std::get<0>(d_inputs);
+    decoding_params.d_start_lengths = std::get<1>(d_inputs);
+    decoding_params.d_attn_mask = (DataType *) std::get<2>(d_inputs);
     cudaDeviceSynchronize();
     
     // TODO: Here, we set the local batch size to request batch size
@@ -324,8 +333,9 @@ struct GptModelInstance : public AbstractTransformerModelInstance
     // gettimeofday(&end, NULL);
     // printf("[INFO] inference time: %.2f ms \n", (end.tv_sec - start.tv_sec) * 1000 + (end.tv_usec - start.tv_usec) * 0.001);
 
-    cudaFree(d_inputs.first);
-    cudaFree(d_inputs.second);
+    cudaFree(std::get<0>(d_inputs));
+    cudaFree(std::get<1>(d_inputs));
+    cudaFree(std::get<2>(d_inputs));
     
     return std::shared_ptr<std::vector<Tensor>> (new std::vector<Tensor>{
         Tensor {MEMORY_GPU, TYPE_UINT32,
@@ -346,7 +356,7 @@ struct GptModelInstance : public AbstractTransformerModelInstance
   }
 
 private:
-  std::pair<int*, void*> prepareRequestAttentionMask(std::shared_ptr<std::vector<Tensor>> input_tensors, const int input_len);
+  std::tuple<int*, int*, void*> prepareRequestAttentionMask(std::shared_ptr<std::vector<Tensor>> input_tensors, const int input_len);
 };
 
 std::shared_ptr<std::vector<Tensor>> prepareRequest(std::string request_config_filename, std::string start_id_filename = std::string("../sample/cpp/start_ids.csv"));
