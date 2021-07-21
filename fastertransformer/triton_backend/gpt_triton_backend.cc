@@ -336,17 +336,17 @@ void check_outputs(std::shared_ptr<std::vector<Tensor>> output_tensors, const ch
 
       {
         std::cout << "Writing " << outCount << " elements\n";
-        int zerroCount = 0;
+        int zeroCount = 0;
         for (size_t i = 0; i < outCount; i++)
         {
-            if (hBuf[i] == int(0)) zerroCount++;
+            if (hBuf[i] == int(0)) zeroCount++;
             outFile << hBuf[i] << " ";
             if((i+1) % (batch_size) == 0) outFile << std::endl;
 
             if( i < 10) printf("%5d ", hBuf[i]);
             if((i+1) % (batch_size) == 0 && i < 10) std::cout << std::endl;
         }
-        std::cout << std::endl << "zerroCount = " << zerroCount << std::endl;
+        std::cout << std::endl << "zeroCount = " << zeroCount << std::endl;
       }
       delete [] hBuf;
     }
