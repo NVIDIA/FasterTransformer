@@ -93,7 +93,7 @@ struct GptModel : public AbstractTransformerModel {
        << "\nprobability_threshold: " << probability_threshold
        << "\nis_fuse_QKV: " << is_fuse_QKV
        << "\ntemperature: " << temperature
-       << "\nrepetition_penalty" << repetition_penalty
+       << "\nrepetition_penalty: " << repetition_penalty
        << "\nmodel_name: " << model_name
        << "\nmodel_path_prefix: " << model_path_prefix << std::endl;
     return ss.str();
