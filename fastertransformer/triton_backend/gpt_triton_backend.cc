@@ -158,11 +158,11 @@ int read_start_ids(int batch_size, std::vector<int>*v_start_lengths, std::vector
 
 //template <fastertransformer::OperationType OpType>
 //std::shared_ptr<Request> prepareRequest(std::shared_ptr<GptModel<OpType>> model)
-std::shared_ptr<std::vector<Tensor>> prepareRequest(std::string request_config_filenmae, std::string start_id_filename)
+std::shared_ptr<std::vector<Tensor>> prepareRequest(std::string request_config_filename, std::string start_id_filename)
 {
-  INIReader reader = INIReader(request_config_filenmae);
+  INIReader reader = INIReader(request_config_filename);
   if (reader.ParseError() < 0) {
-    std::cout << "[ERROR] Can't load '" << request_config_filenmae << "'\n";
+    std::cout << "[ERROR] Can't load '" << request_config_filename << "'\n";
     return nullptr;
   }
 
