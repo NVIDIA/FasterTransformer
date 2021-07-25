@@ -86,6 +86,48 @@ void beam_topK_kernel(const T* log_probs,
     }
 }
 
+template <typename T, int THREADBLOCK_SIZE>
+__global__ void beam_topK_kernel_general(const T* log_probs,
+                                         T* tmp_log_probs,
+                                         int* topk_tmp_id_buf,
+                                         T* topk_tmp_val_buf,
+                                         const int k,
+                                         const int vocab_size) {
+  const bool IS_FP16 = std::is_same<T, half>::value;
+  const T MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
+  typedef cub::BlockReduce<TopK_2<T>, THREADBLOCK_SIZE> BlockReduce;
+  __shared__ typename BlockReduce::TempStorage temp_storage;
+
+  const int tid = threadIdx.x;
+  const int bid = blockIdx.x;
+  TopK_2<T> partial;
+
+  for (int elem_id = tid; elem_id < vocab_size; elem_id += THREADBLOCK_SIZE) {
+    int index = elem_id + bid * vocab_size;
+    tmp_log_probs[index] = log_probs[index];
+  }
+
+  for (int ite = 0; ite < k; ite++) {
+    partial.init();
+#pragma unroll
+    for (int elem_id = tid; elem_id < vocab_size; elem_id += THREADBLOCK_SIZE) {
+      int index = elem_id + bid * vocab_size;
+      partial.insert(tmp_log_probs[index], index);
+    }
+
+    TopK_2<T> total =
+        BlockReduce(temp_storage).Reduce(partial, reduce_topk_op_2<T>);
+
+    if (tid == 0) {
+      const int index = bid * k + ite;
+      topk_tmp_id_buf[index] = total.p;
+      topk_tmp_val_buf[index] = total.u;
+      tmp_log_probs[total.p] = -MAX_T_VAL;
+    }
+    __syncthreads();
+  }
+}
+
 #define CASE_K(K) \
   case K : \
     beam_topK_kernel<T, K, block_size><<<batch_size, block_size, 0, stream>>>(log_probs, \
@@ -703,16 +745,21 @@ void topK_sampling_kernel_kernelLauncher(void* workspace,
     
     int topk_tmp_ids_buf_size = args.batch_size_ * args.candidate_num_; // type int
     int topk_tmp_val_buf_size = args.batch_size_ * args.candidate_num_; // type T
+    int temp_log_probs_buf_size = args.batch_size_ * args.candidate_num_ * vocab_size;
     topk_tmp_ids_buf_size = (int)(ceil(topk_tmp_ids_buf_size / 4.)) * 4;
     topk_tmp_val_buf_size = (int)(ceil(topk_tmp_val_buf_size / 4.)) * 4;
+    temp_log_probs_buf_size = (int)(ceil(temp_log_probs_buf_size / 4.)) * 4;
 
     if(workspace == nullptr)
     {
-        workspace_size = sizeof(int) * topk_tmp_ids_buf_size + sizeof(T) * topk_tmp_val_buf_size;
+        workspace_size = sizeof(float) * temp_log_probs_buf_size +
+                         sizeof(int) * topk_tmp_ids_buf_size +
+                         sizeof(float) * topk_tmp_val_buf_size;
     }
     else
     {
-        int* topk_tmp_id_buf = (int*)workspace;
+        T* temp_log_probs = (T*)workspace;
+        int* topk_tmp_id_buf = (int*)(temp_log_probs + temp_log_probs_buf_size);
         T* topk_tmp_val_buf = (T*)(topk_tmp_id_buf + topk_tmp_ids_buf_size);
 
         switch(candidate_num)
@@ -723,8 +770,8 @@ void topK_sampling_kernel_kernelLauncher(void* workspace,
             CASE_K(16);
             CASE_K(64);
             default:
-                printf("[ERROR] Topk kernel does not support candidate_num = %d \n", candidate_num);
-                exit(0);
+                beam_topK_kernel_general<T,block_size><<<batch_size, block_size, 0, stream>>>(log_probs,
+                    temp_log_probs, topk_tmp_id_buf, topk_tmp_val_buf, candidate_num,vocab_size);
                 break;
         }
         sampling<T> <<< batch_size, candidate_num, 0, stream>>> (topk_tmp_id_buf, topk_tmp_val_buf, 
