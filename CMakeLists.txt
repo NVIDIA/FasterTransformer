@@ -322,8 +322,8 @@ install(
     transformer-shared
   EXPORT
     transformer-shared-targets
-  LIBRARY DESTINATION ${CMAKE_INSTALL_PREFIX}/lib
-  ARCHIVE DESTINATION ${CMAKE_INSTALL_PREFIX}/lib
+  LIBRARY DESTINATION ${CMAKE_INSTALL_PREFIX}/backends/fastertransformer
+  ARCHIVE DESTINATION ${CMAKE_INSTALL_PREFIX}/backends/fastertransformer
 )
 
 install(
@@ -339,7 +339,7 @@ file(GLOB_RECURSE HEADER_FILES "*.h" "*.hpp" "*.cuh")
 foreach ( file ${HEADER_FILES} )
     file( RELATIVE_PATH rfile ${CMAKE_CURRENT_SOURCE_DIR} ${file} )
     get_filename_component( dir ${rfile} DIRECTORY )
-    install( FILES ${file} DESTINATION  ${CMAKE_INSTALL_PREFIX}/include/${dir} )
+    install( FILES ${file} DESTINATION  ${CMAKE_INSTALL_PREFIX}/backends/fastertransformer/include/${dir} )
 endforeach()
 
 
