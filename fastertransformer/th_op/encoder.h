@@ -50,7 +50,7 @@ template <typename T>
 class FTEncoder : public IFTEncoder {
 public:
   FTEncoder(int head_num, int head_size,
-            int int8_mode, int layer_num, int layer_idx, bool allow_gemm_test, bool use_trt_kernel, float q_scaling,
+            int int8_mode, int layer_num, int layer_idx, float q_scaling, bool allow_gemm_test, bool use_trt_kernel,
             const std::vector<Tensor>& w) : _head_num(head_num), _head_size(head_size), _use_trt_kernel(use_trt_kernel),
             _q_scaling(q_scaling), _weights(w) {
     int hidden_dim = _head_num * _head_size;
