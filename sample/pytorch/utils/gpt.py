@@ -187,7 +187,7 @@ class GPT(nn.Module):
         self.model = torch.classes.FasterTransformer.GPT(self.head_num, self.size_per_head, self.vocab_size,
                                                         self.start_id, self.end_id, self.layer_num, self.top_k, self.top_p, self.temperature, self.max_seq_len,
                                                         self.tensor_para_size, self.layer_para_size, self.layer_para_batch_size, 
-                                                        True, self.max_batch_size, *self.weights.w)
+                                                        True, self.max_batch_size, 1.0, *self.weights.w)
 
 
     def forward(self, start_ids, start_lengths, attn_mask, batch_first=True):
