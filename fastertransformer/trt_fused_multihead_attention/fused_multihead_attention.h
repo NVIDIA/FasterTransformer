@@ -313,7 +313,7 @@ public:
 
     static TFusedMHAKernelFactory<TFusedMHAKernelList>& Get()
     {
-        static TFusedMHAKernelFactory<TFusedMHAKernelList> s_factory;
+        thread_local TFusedMHAKernelFactory<TFusedMHAKernelList> s_factory;
         return s_factory;
     }
 
