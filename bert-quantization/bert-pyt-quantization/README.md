@@ -68,7 +68,7 @@ python -m torch.distributed.launch --nproc_per_node=8 run_squad.py \
   --output_dir=$MODEL_DIR/bert-base-uncased-finetuned \
   --max_steps=-1 \
   --fp16 \
-  --quant_disable
+  --quant-disable
 ```
 
 The results would be like:
