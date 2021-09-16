@@ -18,11 +18,13 @@ set(fastertransformer_ths_files
   encoder.cc
   decoder.cc
   decoding.cc
-  gpt.cc
   utils.cu
   weight_quantize_op.cc
 )
-
+if(BUILD_GPT)
+  message("build gpt.cc")
+  list(APPEND fastertransformer_ths_files gpt.cc)
+endif()
 add_definitions(-DTORCH_CUDA=1)
 
 if(BUILD_PYT)

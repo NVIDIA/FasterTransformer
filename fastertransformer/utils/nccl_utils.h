@@ -105,13 +105,3 @@ void nccl_recv(T* recv_buf, const int data_size, const int peer, ParallelParam p
 
 template<typename T>
 void nccl_broadcast(T* buff, const int data_size, const int root, ParallelParam param, cudaStream_t stream);
-
-#ifdef BUILD_GPT
-
-template<typename T>
-void nccl_recv(T* recv_buf, const int data_size, const int peer, ncclComm_t comm, cudaStream_t stream);
-
-template<typename T>
-void nccl_send(const T* send_buf, const int data_size, const int peer, ncclComm_t comm, cudaStream_t stream);
-
-#endif

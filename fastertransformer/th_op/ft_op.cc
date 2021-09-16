@@ -20,7 +20,9 @@
 #include "fastertransformer/th_op/encoder.h"
 #include "fastertransformer/th_op/decoder.h"
 #include "fastertransformer/th_op/decoding.h"
+#ifdef BUILD_GPT
 #include "fastertransformer/th_op/gpt.h"
+#endif
 #include "fastertransformer/th_op/weight_quantize_op.h"
 
 using torch::Tensor;
@@ -126,7 +128,7 @@ static auto fasterTransformerDecodingTHS =
         state[24], state[25], state[26], state[27], state[28], state[29], state[30], state[31]);
     }
   );
-
+#if BUILD_GPT
 static auto fasterTransformerGPTTHS = 
 torch::jit::class_<torch_ext::FasterTransformerGPT>("FasterTransformer", "GPT")
   .def(torch::jit::init<int64_t, int64_t, int64_t, int64_t, int64_t, int64_t, int64_t,
@@ -137,7 +139,7 @@ torch::jit::class_<torch_ext::FasterTransformerGPT>("FasterTransformer", "GPT")
                         std::vector<Tensor>, std::vector<Tensor>, std::vector<Tensor>, std::vector<Tensor>, 
                         Tensor, Tensor>())
   .def("forward", &torch_ext::FasterTransformerGPT::forward);
-
+#endif
 static auto build_mask_remove_padding =
   torch::RegisterOperators("fastertransformer::build_mask_remove_padding", &torch_ext::build_mask_remove_padding);
 

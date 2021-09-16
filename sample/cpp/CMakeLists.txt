@@ -25,6 +25,10 @@ set(gpt_sample_files
   gpt_sample.cc
 )
 
+set(gpt_sample_single_gpu_files
+  gpt_sample_single_gpu.cc
+)
+
 set(gpt_triton_sample_files
   gpt_triton_sample.cc
 )
@@ -38,6 +42,9 @@ target_link_libraries(encoder_sample PUBLIC -lcublas -lcudart encoder)
 
 add_executable(decoding_beamsearch_sample ${decoding_beamsearch_sample_files})
 target_link_libraries(decoding_beamsearch_sample PUBLIC -lcublas -lcublasLt -lcudart decoder decoding)
+
+add_executable(gpt_sample_single_gpu ${gpt_sample_single_gpu_files})
+target_link_libraries(gpt_sample_single_gpu PUBLIC -lcublas -lcublasLt -lcudart decoder decoding nccl_utils)
 
 if(BUILD_GPT)
   add_executable(gpt_sample ${gpt_sample_files})

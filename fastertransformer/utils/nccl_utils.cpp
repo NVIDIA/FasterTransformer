@@ -32,10 +32,13 @@ void get_nccl_uid(int rank, ncclUniqueId *uid)
 #endif
 }
 
+#endif
+
 template<typename T>
 void all2all_reduce_sum(const T* send_buf, T* recv_buf, const int data_size,
                         ParallelParam param, cudaStream_t stream)
 {
+#ifdef BUILD_GPT
     if(param.world_size <= 1) return;
 
     ncclDataType_t nccl_data_type;
@@ -56,12 +59,14 @@ void all2all_reduce_sum(const T* send_buf, T* recv_buf, const int data_size,
     cudaDeviceSynchronize();
     CUDACHECK(cudaGetLastError());
 #endif
+#endif
 }
 
 template<typename T>
 void all2all_gather(const T* send_buf, T* recv_buf, const int data_size,
                     ParallelParam param, cudaStream_t stream)
 {
+#ifdef BUILD_GPT
     if(param.world_size <= 1) return;
     ncclDataType_t nccl_data_type;
     if(std::is_same<T, float>::value) nccl_data_type = ncclFloat;
@@ -80,11 +85,13 @@ void all2all_gather(const T* send_buf, T* recv_buf, const int data_size,
     cudaDeviceSynchronize();
     CUDACHECK(cudaGetLastError());
 #endif
+#endif
 }
 
 template<typename T>
-void nccl_send(const T* send_buf, const int data_size, const int peer, ncclComm_t comm, cudaStream_t stream)
+void nccl_send(const T* send_buf, const int data_size, const int peer, ParallelParam param, cudaStream_t stream)
 {
+#ifdef BUILD_GPT
     ncclDataType_t nccl_data_type;
     if(std::is_same<T, float>::value) nccl_data_type = ncclFloat;
     else if(std::is_same<T, half>::value) nccl_data_type = ncclHalf;
@@ -95,23 +102,25 @@ void nccl_send(const T* send_buf, const int data_size, const int peer, ncclComm_
         printf("[ERROR] nccl_send only support float, half, int and bool. \n");
         exit(-1);
     }
-    NCCLCHECK(ncclSend(send_buf, data_size, nccl_data_type, peer, comm, stream));
+    NCCLCHECK(ncclSend(send_buf, data_size, nccl_data_type, peer, param.nccl_comm, stream));
 
 #ifndef NDEBUG
     cudaDeviceSynchronize();
     CUDACHECK(cudaGetLastError());
 #endif
     cudaDeviceSynchronize();
+#endif
 }
 
-template void nccl_send(const float* send_buf, const int data_size, const int peer, ncclComm_t comm, cudaStream_t stream);
-template void nccl_send(const half* send_buf, const int data_size, const int peer, ncclComm_t comm, cudaStream_t stream);
-template void nccl_send(const int* send_buf, const int data_size, const int peer, ncclComm_t comm, cudaStream_t stream);
-template void nccl_send(const bool* send_buf, const int data_size, const int peer, ncclComm_t comm, cudaStream_t stream);
+template void nccl_send(const float* send_buf, const int data_size, const int peer, ParallelParam param, cudaStream_t stream);
+template void nccl_send(const half* send_buf, const int data_size, const int peer, ParallelParam param, cudaStream_t stream);
+template void nccl_send(const int* send_buf, const int data_size, const int peer, ParallelParam param, cudaStream_t stream);
+template void nccl_send(const bool* send_buf, const int data_size, const int peer, ParallelParam param, cudaStream_t stream);
 
 template<typename T>
-void nccl_recv(T* recv_buf, const int data_size, const int peer, ncclComm_t comm, cudaStream_t stream)
+void nccl_recv(T* recv_buf, const int data_size, const int peer, ParallelParam param, cudaStream_t stream)
 {
+#ifdef BUILD_GPT
     ncclDataType_t nccl_data_type;
     if(std::is_same<T, float>::value) nccl_data_type = ncclFloat;
     else if(std::is_same<T, half>::value) nccl_data_type = ncclHalf;
@@ -122,23 +131,25 @@ void nccl_recv(T* recv_buf, const int data_size, const int peer, ncclComm_t comm
         printf("[ERROR] nccl_recv only support float, half, int and bool. \n");
         exit(-1);
     }
-    NCCLCHECK(ncclRecv(recv_buf, data_size, nccl_data_type, peer, comm, stream));
+    NCCLCHECK(ncclRecv(recv_buf, data_size, nccl_data_type, peer, param.nccl_comm, stream));
 
 #ifndef NDEBUG
     cudaDeviceSynchronize();
     CUDACHECK(cudaGetLastError());
 #endif
     cudaDeviceSynchronize();
+#endif
 }
 
-template void nccl_recv(float* recv_buf, const int data_size, const int peer, ncclComm_t comm, cudaStream_t stream);
-template void nccl_recv(half* recv_buf, const int data_size, const int peer, ncclComm_t comm, cudaStream_t stream);
-template void nccl_recv(int* recv_buf, const int data_size, const int peer, ncclComm_t comm, cudaStream_t stream);
-template void nccl_recv(bool* recv_buf, const int data_size, const int peer, ncclComm_t comm, cudaStream_t stream);
+template void nccl_recv(float* recv_buf, const int data_size, const int peer, ParallelParam param, cudaStream_t stream);
+template void nccl_recv(half* recv_buf, const int data_size, const int peer, ParallelParam param, cudaStream_t stream);
+template void nccl_recv(int* recv_buf, const int data_size, const int peer, ParallelParam param, cudaStream_t stream);
+template void nccl_recv(bool* recv_buf, const int data_size, const int peer, ParallelParam param, cudaStream_t stream);
 
 template<typename T>
 void nccl_broadcast(T* buff, const int data_size, const int root, ParallelParam param, cudaStream_t stream)
 {
+#ifdef BUILD_GPT
     ncclDataType_t nccl_data_type;
     if(std::is_same<T, bool>::value) nccl_data_type = ncclInt8;
     else
@@ -153,20 +164,10 @@ void nccl_broadcast(T* buff, const int data_size, const int root, ParallelParam 
     CUDACHECK(cudaGetLastError());
 #endif
     cudaDeviceSynchronize();
+#endif
 }
 
 template void nccl_broadcast(bool* buff, const int data_size, const int root, ParallelParam param, cudaStream_t stream);
-
-#else // BUILD_GPT
-
-template<typename T>
-void all2all_reduce_sum(const T* send_buf, T* recv_buf, const int data_size,
-                        ParallelParam param, cudaStream_t stream){}
-
-template<typename T>
-void all2all_gather(const T* send_buf, T* recv_buf, const int data_size,
-                    ParallelParam param, cudaStream_t stream){}
-#endif
 
 template void all2all_reduce_sum(const float* send_buf, float* recv_buf, const int data_size,
                                  ParallelParam param, cudaStream_t stream);

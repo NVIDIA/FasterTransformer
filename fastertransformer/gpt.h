@@ -367,7 +367,7 @@ public:
                     {
                         const int size = m * t_parallel_param_.local_hidden_units_;
                         nccl_recv(from_tensor[in_id] + ite * m * h_1 + size * t_parallel_param_.rank, size, l_parallel_param_.rank - 1, 
-                                    l_parallel_param_.nccl_comm, decoding_params.stream);
+                                    l_parallel_param_, decoding_params.stream);
                         all2all_gather(from_tensor[in_id] + ite * m * h_1, from_tensor[in_id] + ite * m * h_1, size, 
                                     t_parallel_param_, decoding_params.stream);
                     }
@@ -411,7 +411,7 @@ public:
                     {
                         const int size = m * t_parallel_param_.local_hidden_units_;
                         nccl_send(from_tensor[out_id] + ite * m * h_1 + size * t_parallel_param_.rank, size, l_parallel_param_.rank + 1,
-                                    l_parallel_param_.nccl_comm, decoding_params.stream);
+                                    l_parallel_param_, decoding_params.stream);
                     }
                 }
             } // end of for loop of layer
@@ -491,7 +491,7 @@ public:
                     {
                         PUSH_RANGE("token/recv")
                         nccl_recv(decoding_params.output_ids + (step - 1) * m + ite * local_batch, local_batch,
-                                  l_parallel_param_.world_size - 1, l_parallel_param_.nccl_comm, decoding_params.stream);
+                                  l_parallel_param_.world_size - 1, l_parallel_param_, decoding_params.stream);
                         POP_RANGE
                     }
                 }
@@ -558,7 +558,7 @@ public:
                         {
                             const int size = local_batch * t_parallel_param_.local_hidden_units_;
                             nccl_recv(from_tensor_[from_id] + size * t_parallel_param_.rank, size, l_parallel_param_.rank - 1, 
-                                      l_parallel_param_.nccl_comm, decoding_params.stream);
+                                      l_parallel_param_, decoding_params.stream);
                             all2all_gather(from_tensor_[from_id], from_tensor_[from_id], size, 
                                            t_parallel_param_, decoding_params.stream);
                         }
@@ -613,7 +613,7 @@ public:
                         {
                             const size_t size = local_batch * t_parallel_param_.local_hidden_units_;
                             nccl_send(from_tensor_[out_id] + size * t_parallel_param_.rank, size, l_parallel_param_.rank + 1, 
-                                      l_parallel_param_.nccl_comm, decoding_params.stream);
+                                      l_parallel_param_, decoding_params.stream);
                         }
                     }
                 }
@@ -837,7 +837,7 @@ public:
                 if(l_parallel_param_.rank == l_parallel_param_.world_size - 1 && l_parallel_param_.world_size > 1)
                 {
                     PUSH_RANGE("token/send")
-                    nccl_send(decoding_params.output_ids + step * m + ite * local_batch, local_batch, 0, l_parallel_param_.nccl_comm, decoding_params.stream);
+                    nccl_send(decoding_params.output_ids + step * m + ite * local_batch, local_batch, 0, l_parallel_param_, decoding_params.stream);
                     POP_RANGE
                 }
 
@@ -866,7 +866,7 @@ public:
             {
                 nccl_recv(decoding_params.output_ids + (max_len - 1) * m + ite * local_batch,
                           local_batch, l_parallel_param_.world_size - 1,
-                          l_parallel_param_.nccl_comm, decoding_params.stream);
+                          l_parallel_param_, decoding_params.stream);
             }
         }
     } // end of forward
