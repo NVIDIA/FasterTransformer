@@ -18,7 +18,11 @@ find_package(CUDA 10.1 REQUIRED)
 
 option(BUILD_TF "Build in TensorFlow mode" OFF)
 option(BUILD_PYT "Build in PyTorch TorchScript class mode" OFF)
-option(BUILD_GPT "Build project with gpt" ON) # TODO Set default to OFF
+if(NOT BUILD_GPT)
+  option(BUILD_GPT "Build project with gpt" OFF)
+endif()
+
+option(SPARSITY_SUPPORT "Build project with Ampere sparsity feature support" OFF)
 
 if(BUILD_GPT)
   message(STATUS "Add DBUILD_GPT, requires MPI and NCCL")
@@ -52,6 +56,7 @@ endif()
 set(CUDA_PATH ${CUDA_TOOLKIT_ROOT_DIR})
 
 set(TF_PATH "" CACHE STRING "TensorFlow path")
+set(CUSPARSELT_PATH "" CACHE STRING "cuSPARSELt path")
 
 if(BUILD_TF AND NOT TF_PATH)
   message(FATAL_ERROR "TF_PATH must be set if BUILD_TF(=TensorFlow mode) is on.")
@@ -76,34 +81,7 @@ set(CMAKE_C_FLAGS    "${CMAKE_C_FLAGS}")
 set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS}")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}  -Xcompiler -Wall -ldl")
 
-# if (SM STREQUAL 80 OR
-#     SM STREQUAL 86 OR
-#     SM STREQUAL 70 OR
-#     SM STREQUAL 75 OR
-#     SM STREQUAL 61 OR
-#     SM STREQUAL 60)
-# #set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode=arch=compute_${SM},code=\\\"sm_${SM},compute_${SM}\\\" -rdc=true")
-# set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode=arch=compute_${SM},code=\\\"sm_${SM},compute_${SM}\\\"")
-#   if (SM STREQUAL 70 OR SM STREQUAL 75 OR SM STREQUAL 80 OR SM STREQUAL 86)
-#     set(CMAKE_C_FLAGS    "${CMAKE_C_FLAGS}    -DWMMA")
-#     set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS}  -DWMMA")
-#     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -DWMMA")
-#   endif()
-# message("-- Assign GPU architecture (sm=${SM})")
-
-# else()
-# set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}  \
-#                       -gencode=arch=compute_70,code=\\\"sm_70,compute_70\\\" \
-#                       -gencode=arch=compute_75,code=\\\"sm_75,compute_75\\\" \
-#                       ")
-# #                      -rdc=true")
-# set(CMAKE_C_FLAGS    "${CMAKE_C_FLAGS}    -DWMMA")
-# set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS}  -DWMMA")
-# set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -DWMMA")
-# message("-- Assign GPU architecture (sm=70,75)")
-# endif()
-
-set(SM_SETS 52 60 61 70 75 80)
+set(SM_SETS 52 60 61 70 75 80 86)
 set(USING_WMMA False)
 set(FIND_SM False)
 
@@ -143,16 +121,17 @@ if(NOT (FIND_SM STREQUAL True))
                         -gencode=arch=compute_70,code=\\\"sm_70,compute_70\\\" \
                         -gencode=arch=compute_75,code=\\\"sm_75,compute_75\\\" \
                         -gencode=arch=compute_80,code=\\\"sm_80,compute_80\\\" \
+                        -gencode=arch=compute_86,code=\\\"sm_86,compute_86\\\" \
                         ")
   #                      -rdc=true")
   set(CMAKE_C_FLAGS    "${CMAKE_C_FLAGS}    -DWMMA")
   set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS}  -DWMMA")
   set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -DWMMA")
   if(BUILD_PYT)
-    set(ENV{TORCH_CUDA_ARCH_LIST} "7.0;7.5;8.0")
+    set(ENV{TORCH_CUDA_ARCH_LIST} "7.0;7.5;8.0;8.6")
   endif()
-  set(CMAKE_CUDA_ARCHITECTURES 70 75 80)
-  message("-- Assign GPU architecture (sm=70,75,80)")
+  set(CMAKE_CUDA_ARCHITECTURES 70 75 80 86)
+  message("-- Assign GPU architecture (sm=70,75,80,86)")
 endif()
 
 if(BUILD_PYT)
@@ -187,9 +166,16 @@ set(COMMON_LIB_DIRS
   ${CUDA_PATH}/lib64
 )
 
+if (SPARSITY_SUPPORT)
+  list(APPEND COMMON_HEADER_DIRS ${CUSPARSELT_PATH}/include)
+  list(APPEND COMMON_LIB_DIRS ${CUSPARSELT_PATH}/lib64)
+  add_definitions(-DSPARSITY_ENABLED=1)
+endif()
+
 if(BUILD_TF)
   list(APPEND COMMON_HEADER_DIRS ${TF_PATH}/include)
   list(APPEND COMMON_LIB_DIRS ${TF_PATH})
+  add_definitions(-D_GLIBCXX_USE_CXX11_ABI=0)
 endif()
 
 set(PYTHON_PATH "python" CACHE STRING "Python path")
@@ -232,27 +218,9 @@ link_directories(
   ${COMMON_LIB_DIRS}
 )
 
-add_subdirectory(fastertransformer)
-add_subdirectory(tools)
-add_subdirectory(sample)
-
-if(BUILD_TF)
-  add_custom_target(copy ALL COMMENT "Copying tensorflow test scripts")
-  add_custom_command(TARGET copy
-      POST_BUILD
-      COMMAND cp ${PROJECT_SOURCE_DIR}/sample/tensorflow/ ${PROJECT_BINARY_DIR} -r
- )
-endif()
-
-if(BUILD_PYT)
-  add_custom_target(copy ALL COMMENT "Copying pytorch test scripts")
-  add_custom_command(TARGET copy
-      POST_BUILD
-      COMMAND cp ${PROJECT_SOURCE_DIR}/sample/pytorch/ ${PROJECT_BINARY_DIR} -r
-      COMMAND mkdir -p ${PROJECT_BINARY_DIR}/pytorch/translation/data/
-      COMMAND cp ${PROJECT_SOURCE_DIR}/sample/tensorflow/utils/translation/test.* ${PROJECT_BINARY_DIR}/pytorch/translation/data/
- )
-endif()
+add_subdirectory(3rdparty)
+add_subdirectory(src)
+add_subdirectory(examples)
 
 ########################################
 
@@ -261,45 +229,133 @@ if(BUILD_GPT)
 # TODO Remove this part or modify such that we can run it under cmake 3.10
 cmake_minimum_required(VERSION 3.15 FATAL_ERROR)
 add_library(transformer-static STATIC
-  $<TARGET_OBJECTS:encoder>
-  $<TARGET_OBJECTS:cuda_kernels>
-  $<TARGET_OBJECTS:transformer_kernels>
-  $<TARGET_OBJECTS:nvtx_utils>
-  $<TARGET_OBJECTS:cuda_int8_kernels>
-  $<TARGET_OBJECTS:attention_kernels>
-  $<TARGET_OBJECTS:trt_fused_multi_head_attention>
-  $<TARGET_OBJECTS:encoder_gemm_func>
-  $<TARGET_OBJECTS:encoder_igemm_func>
-  $<TARGET_OBJECTS:decoder>
-  $<TARGET_OBJECTS:decoding>
-  $<TARGET_OBJECTS:topk>
-  $<TARGET_OBJECTS:online_softmax_beamsearch>
-  $<TARGET_OBJECTS:nccl_utils>)
+  $<TARGET_OBJECTS:layernorm_kernels>
+  $<TARGET_OBJECTS:layernorm_int8_kernels>
+  $<TARGET_OBJECTS:activation_kernels>
+  $<TARGET_OBJECTS:activation_int8_kernels>
+  $<TARGET_OBJECTS:layout_transformer_int8_kernels>
+  $<TARGET_OBJECTS:quantization_int8_kernels>
+  $<TARGET_OBJECTS:softmax_int8_kernels>
+  $<TARGET_OBJECTS:transpose_int8_kernels>
+  $<TARGET_OBJECTS:unfused_attention_kernels>
+  $<TARGET_OBJECTS:bert_preprocess_kernels>
+  $<TARGET_OBJECTS:decoder_masked_multihead_attention>
+  $<TARGET_OBJECTS:add_residual_kernels>
+  $<TARGET_OBJECTS:longformer_kernels>
+  $<TARGET_OBJECTS:add_bias_transpose_kernels>
+  $<TARGET_OBJECTS:online_softmax_beamsearch_kernels>
+  $<TARGET_OBJECTS:decoding_kernels>
+  $<TARGET_OBJECTS:gpt_kernels>
+  $<TARGET_OBJECTS:beam_search_penalty_kernels>
+  $<TARGET_OBJECTS:beam_search_topk_kernels>
+  $<TARGET_OBJECTS:sampling_topk_kernels>
+  $<TARGET_OBJECTS:sampling_topp_kernels>
+  $<TARGET_OBJECTS:sampling_penalty_kernels>
+  $<TARGET_OBJECTS:GptContextAttentionLayer>
+  $<TARGET_OBJECTS:DecoderSelfAttentionLayer>
+  $<TARGET_OBJECTS:cublasMMWrapper>
+  $<TARGET_OBJECTS:cublasAlgoMap>
+  $<TARGET_OBJECTS:TensorParallelDecoderSelfAttentionLayer>
+  $<TARGET_OBJECTS:BaseSamplingLayer>
+  $<TARGET_OBJECTS:BaseBeamSearchLayer>
+  $<TARGET_OBJECTS:FfnLayer>
+  $<TARGET_OBJECTS:layernorm_kernels>
+  $<TARGET_OBJECTS:add_residual_kernels>
+  $<TARGET_OBJECTS:OnlineBeamSearchLayer>
+  $<TARGET_OBJECTS:BeamSearchLayer>
+  $<TARGET_OBJECTS:TopKSamplingLayer>
+  $<TARGET_OBJECTS:TensorParallelGeluFfnLayer>
+  $<TARGET_OBJECTS:TensorParallelGptContextAttentionLayer>
+  $<TARGET_OBJECTS:GptJDecoderLayerWeight>
+  $<TARGET_OBJECTS:GptJTritonBackend>
+  $<TARGET_OBJECTS:GptJDecoder>
+  $<TARGET_OBJECTS:GptJContextDecoder>
+  $<TARGET_OBJECTS:ParallelGptDecoderLayerWeight>
+  $<TARGET_OBJECTS:ParallelGptTritonBackend>
+  $<TARGET_OBJECTS:ParallelGptDecoder>
+  $<TARGET_OBJECTS:ParallelGptContextDecoder>
+  $<TARGET_OBJECTS:decoding_kernels>
+  $<TARGET_OBJECTS:gpt_kernels>
+  $<TARGET_OBJECTS:OnlineBeamSearchLayer>
+  $<TARGET_OBJECTS:TopPSamplingLayer>
+  $<TARGET_OBJECTS:TopKTopPSamplingLayer>
+  $<TARGET_OBJECTS:bert_preprocess_kernels>
+  $<TARGET_OBJECTS:nccl_utils>
+  $<TARGET_OBJECTS:memory_utils>
+  $<TARGET_OBJECTS:GptJWeight>
+  $<TARGET_OBJECTS:GptJ>
+  $<TARGET_OBJECTS:GptJTritonBackend>
+  $<TARGET_OBJECTS:ParallelGptWeight>
+  $<TARGET_OBJECTS:ParallelGpt>
+  $<TARGET_OBJECTS:ParallelGptTritonBackend>)
 set_property(TARGET transformer-static PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET transformer-static PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-target_link_libraries(transformer-static PUBLIC -lcublas -lcudart -lcurand -lnccl -lmpi nvtx_utils)
+target_link_libraries(transformer-static PUBLIC -lcudart -lnccl -lmpi -lcublas -lcublasLt -lcurand)
 
 add_library(transformer-shared SHARED
-  $<TARGET_OBJECTS:encoder>
-  $<TARGET_OBJECTS:cuda_kernels>
-  $<TARGET_OBJECTS:transformer_kernels>
-  $<TARGET_OBJECTS:nvtx_utils>
-  $<TARGET_OBJECTS:cuda_int8_kernels>
-  $<TARGET_OBJECTS:attention_kernels>
-  $<TARGET_OBJECTS:trt_fused_multi_head_attention>
-  $<TARGET_OBJECTS:encoder_gemm_func>
-  $<TARGET_OBJECTS:encoder_igemm_func>
-  $<TARGET_OBJECTS:decoder>
-  $<TARGET_OBJECTS:decoding>
-  $<TARGET_OBJECTS:topk>
-  $<TARGET_OBJECTS:online_softmax_beamsearch>
+  $<TARGET_OBJECTS:layernorm_kernels>
+  $<TARGET_OBJECTS:layernorm_int8_kernels>
+  $<TARGET_OBJECTS:activation_kernels>
+  $<TARGET_OBJECTS:activation_int8_kernels>
+  $<TARGET_OBJECTS:layout_transformer_int8_kernels>
+  $<TARGET_OBJECTS:quantization_int8_kernels>
+  $<TARGET_OBJECTS:softmax_int8_kernels>
+  $<TARGET_OBJECTS:transpose_int8_kernels>
+  $<TARGET_OBJECTS:unfused_attention_kernels>
+  $<TARGET_OBJECTS:bert_preprocess_kernels>
+  $<TARGET_OBJECTS:decoder_masked_multihead_attention>
+  $<TARGET_OBJECTS:add_residual_kernels>
+  $<TARGET_OBJECTS:longformer_kernels>
+  $<TARGET_OBJECTS:add_bias_transpose_kernels>
+  $<TARGET_OBJECTS:online_softmax_beamsearch_kernels>
+  $<TARGET_OBJECTS:decoding_kernels>
+  $<TARGET_OBJECTS:gpt_kernels>
+  $<TARGET_OBJECTS:beam_search_penalty_kernels>
+  $<TARGET_OBJECTS:beam_search_topk_kernels>
+  $<TARGET_OBJECTS:sampling_topk_kernels>
+  $<TARGET_OBJECTS:sampling_topp_kernels>
+  $<TARGET_OBJECTS:sampling_penalty_kernels>
+  $<TARGET_OBJECTS:GptContextAttentionLayer>
+  $<TARGET_OBJECTS:DecoderSelfAttentionLayer>
+  $<TARGET_OBJECTS:cublasMMWrapper>
+  $<TARGET_OBJECTS:cublasAlgoMap>
+  $<TARGET_OBJECTS:TensorParallelDecoderSelfAttentionLayer>
+  $<TARGET_OBJECTS:BaseSamplingLayer>
+  $<TARGET_OBJECTS:BaseBeamSearchLayer>
+  $<TARGET_OBJECTS:FfnLayer>
+  $<TARGET_OBJECTS:layernorm_kernels>
+  $<TARGET_OBJECTS:add_residual_kernels>
+  $<TARGET_OBJECTS:OnlineBeamSearchLayer>
+  $<TARGET_OBJECTS:BeamSearchLayer>
+  $<TARGET_OBJECTS:TopKSamplingLayer>
+  $<TARGET_OBJECTS:TensorParallelGeluFfnLayer>
+  $<TARGET_OBJECTS:TensorParallelGptContextAttentionLayer>
+  $<TARGET_OBJECTS:GptJDecoderLayerWeight>
+  $<TARGET_OBJECTS:GptJTritonBackend>
+  $<TARGET_OBJECTS:GptJDecoder>
+  $<TARGET_OBJECTS:GptJContextDecoder>
+  $<TARGET_OBJECTS:ParallelGptDecoderLayerWeight>
+  $<TARGET_OBJECTS:ParallelGptTritonBackend>
+  $<TARGET_OBJECTS:ParallelGptDecoder>
+  $<TARGET_OBJECTS:ParallelGptContextDecoder>
+  $<TARGET_OBJECTS:decoding_kernels>
+  $<TARGET_OBJECTS:gpt_kernels>
+  $<TARGET_OBJECTS:OnlineBeamSearchLayer>
+  $<TARGET_OBJECTS:TopPSamplingLayer>
+  $<TARGET_OBJECTS:TopKTopPSamplingLayer>
+  $<TARGET_OBJECTS:bert_preprocess_kernels>
+  $<TARGET_OBJECTS:GptJWeight>
+  $<TARGET_OBJECTS:ParallelGptWeight>
   $<TARGET_OBJECTS:nccl_utils>
-  $<TARGET_OBJECTS:gpt_triton_backend>)
-## add_library(transformer-shared SHARED  $<TARGET_OBJECTS:encoder>)
+  $<TARGET_OBJECTS:memory_utils>
+  $<TARGET_OBJECTS:GptJ>
+  $<TARGET_OBJECTS:GptJTritonBackend>
+  $<TARGET_OBJECTS:ParallelGpt>
+  $<TARGET_OBJECTS:ParallelGptTritonBackend>)
 set_target_properties(transformer-shared PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set_target_properties(transformer-shared PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 set_target_properties(transformer-shared PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(transformer-shared PUBLIC ${NCCL_LIBRARIES} ${MPI_LIBRARIES} -lcublas -lcublasLt -lcudart -lcurand )
+target_link_libraries(transformer-shared PUBLIC -lcudart -lnccl -lmpi -lcublas -lcublasLt -lcurand)
 
 include(GNUInstallDirs)
 set(INSTALL_CONFIGDIR ${CMAKE_INSTALL_LIBDIR}/cmake/FasterTransformer)
@@ -339,13 +395,13 @@ file(GLOB_RECURSE HEADER_FILES "*.h" "*.hpp" "*.cuh")
 foreach ( file ${HEADER_FILES} )
     file( RELATIVE_PATH rfile ${CMAKE_CURRENT_SOURCE_DIR} ${file} )
     get_filename_component( dir ${rfile} DIRECTORY )
-    install( FILES ${file} DESTINATION  ${CMAKE_INSTALL_PREFIX}/backends/fastertransformer/include/${dir} )
+    install( FILES ${file} DESTINATION  ${CMAKE_INSTALL_PREFIX}/include/${dir} )
 endforeach()
 
 
 ################################################################################
-add_executable(gpt sample/cpp/gpt_sample.cc )
-target_link_libraries(gpt PUBLIC -lcublas -lcublasLt -lcudart -lcurand -lnccl -lmpi transformer-static)
+# add_executable(gpt sample/cpp/gpt_sample.cc )
+# target_link_libraries(gpt PUBLIC -lcublas -lcublasLt -lcudart -lcurand -lnccl -lmpi transformer-static)
 # target_link_libraries(gpt PUBLIC -lcublas -lcublasLt -lcudart -lcurand -lnccl -lmpi decoder decoding)
 
 export(

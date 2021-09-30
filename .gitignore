@@ -1,4 +1,8 @@
 *~
 *.o
 *build*/
-*.pyc
+models/
+__pycache__/
+.vscode
+./translation
+.cache

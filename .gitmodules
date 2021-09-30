@@ -1,0 +1,7 @@
+[submodule "3rdparty/Megatron-LM"]
+	path = 3rdparty/Megatron-LM
+	url = https://github.com/NVIDIA/Megatron-LM.git
+	branch = v2.4
+[submodule "examples/tensorflow/bert/tensorflow_bert/bert"]
+	path = examples/tensorflow/bert/tensorflow_bert/bert
+	url = https://github.com/google-research/bert.git
