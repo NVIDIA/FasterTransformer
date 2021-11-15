@@ -193,4 +193,7 @@ if __name__ == "__main__":
     flags.mark_flag_as_required("xla")
     flags.DEFINE_bool("tf_profile", False,
                       "whether to use tensorflow profiling")
+    flags.DEFINE_bool("remove_padding", False, "Whether remove the padding of sentences")
+    flags.DEFINE_integer("int8_mode", 0, "whether use int8 or not; and how to use int8")
+    flags.DEFINE_bool("allow_gemm_test", False, "whether allow gemm test inside FT.")
     tf.app.run()
