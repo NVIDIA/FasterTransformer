@@ -46,7 +46,8 @@ void ParallelGpt<T>::initialize()
                                                             cublas_wrapper_,
                                                             allocator_,
                                                             is_free_buffer_after_forward_,
-                                                            is_context_qk_buf_float_);
+                                                            is_context_qk_buf_float_,
+                                                            sparse_);
 
     gpt_decoder_ = new ParallelGptDecoder<T>(max_batch_size_ * beam_width_,
                                              head_num_,
@@ -62,7 +63,9 @@ void ParallelGpt<T>::initialize()
                                              stream_,
                                              cublas_wrapper_,
                                              allocator_,
-                                             is_free_buffer_after_forward_);
+                                             is_free_buffer_after_forward_,
+                                             sparse_,
+                                             int8_mode_);
 
     if (beam_width_ > 1) {
         if (beam_width_ < 16) {
@@ -259,6 +262,9 @@ bool ParallelGpt<T>::isValidSeqLen(size_t seq_len)
         return true;
     }
     else {
+        // Since the max_seq_len_ is related to the position embedding table,
+        // we cannot dynamic adjust it. 
+        // return false;
         freeBuffer();
         max_seq_len_ = (seq_len + 1) * 1.2;
         return true;
@@ -307,8 +313,10 @@ ParallelGpt<T>::ParallelGpt(size_t max_batch_size,
                             cublasMMWrapper* cublas_wrapper,
                             IAllocator* allocator,
                             bool is_free_buffer_after_forward,
-                            cudaDeviceProp* cuda_device_prop):
-    BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, cuda_device_prop),
+                            cudaDeviceProp* cuda_device_prop,
+                            bool sparse,
+                            int int8_mode):
+    BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, cuda_device_prop, sparse),
     max_batch_size_(max_batch_size),
     max_seq_len_(max_seq_len + 1),
     max_input_len_(max_input_len),
@@ -334,7 +342,8 @@ ParallelGpt<T>::ParallelGpt(size_t max_batch_size,
     local_head_num_(head_num_ / tensor_para_size_),
     pipeline_para_size_(pipeline_para_size),
     pipeline_para_rank_(pipeline_para_rank),
-    pipeline_para_comm_(pipeline_para_comm)
+    pipeline_para_comm_(pipeline_para_comm),
+    int8_mode_(int8_mode)
 {
     vocab_size_padded_ = ((size_t)ceil(vocab_size_ / 1. / tensor_para_size_) * tensor_para_size_);
     if (std::is_same<half, T>::value) {
@@ -373,7 +382,8 @@ ParallelGpt<T>::ParallelGpt(ParallelGpt<T> const& gpt):
     pipeline_para_size_(gpt.pipeline_para_size_),
     pipeline_para_rank_(gpt.pipeline_para_rank_),
     pipeline_para_comm_(gpt.pipeline_para_comm_),
-    vocab_size_padded_(gpt.vocab_size_padded_)
+    vocab_size_padded_(gpt.vocab_size_padded_),
+    int8_mode_(gpt.int8_mode_)
 {
     initialize();
 }

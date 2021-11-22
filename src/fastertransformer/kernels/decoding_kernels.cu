@@ -107,10 +107,11 @@ __global__ void embeddingLookupPosEncoding(T* from_tensor,
         const int step_offset = input_lengths == nullptr ?
                                     step * hidden_units :
                                     (step - max_input_length + input_lengths[row_index]) * hidden_units;
-	const int token_id = all_ids[id_offset + row_index];
-        const T table_embed = embedding_table[token_id * hidden_units + col_index];
-        const T pos_embed = position_encoding == nullptr? (T)0 : position_encoding[step_offset + col_index];
-        from_tensor[index] = table_embed * scale + pos_embed;
+        T val = embedding_table[all_ids[id_offset + row_index] * hidden_units + col_index] * scale;
+        if (position_encoding != nullptr) {
+            val = val + position_encoding[step_offset + col_index];
+        }
+        from_tensor[index] = val;
     }
 }
 
@@ -242,6 +243,54 @@ template void invokePaddingEmbedding(half* padded_embedding_kernel,
                                      const int vocab_size,
                                      const int vocab_size_padded,
                                      cudaStream_t stream);
+
+template<typename T>
+__global__ void paddingEmbeddingKernel(T* padded_embedding_kernel,
+                                       const T* embedding_kernel,
+                                       const int hidden_unit,
+                                       const int vocab_size,
+                                       const int vocab_size_padded)
+{
+    for (int id = threadIdx.x + blockIdx.x * blockDim.x; id < hidden_unit * vocab_size_padded;
+         id += blockDim.x * gridDim.x) {
+        int row_id = id / vocab_size_padded;
+        int col_id = id % vocab_size_padded;
+        if (col_id < vocab_size) {
+            padded_embedding_kernel[id] = embedding_kernel[row_id * vocab_size + col_id];
+        }
+        else {
+            padded_embedding_kernel[id] = (T)(0.0f);
+        }
+    }
+}
+
+template<typename T>
+void invokePaddingEmbeddingKernel(T* padded_embedding_kernel,
+                                  const T* embedding_kernel,
+                                  const int hidden_unit,
+                                  const int vocab_size,
+                                  const int vocab_size_padded,
+                                  cudaStream_t stream)
+{
+    dim3 block(512);
+    dim3 grid((int)(ceil(hidden_unit * vocab_size_padded / 512.)));
+    paddingEmbeddingKernel<<<grid, block, 0, stream>>>(
+        padded_embedding_kernel, embedding_kernel, hidden_unit, vocab_size, vocab_size_padded);
+}
+
+template void invokePaddingEmbeddingKernel(float* padded_embedding_kernel,
+                                           const float* embedding_kernel,
+                                           const int hidden_unit,
+                                           const int vocab_size,
+                                           const int vocab_size_padded,
+                                           cudaStream_t stream);
+
+template void invokePaddingEmbeddingKernel(half* padded_embedding_kernel,
+                                           const half* embedding_kernel,
+                                           const int hidden_unit,
+                                           const int vocab_size,
+                                           const int vocab_size_padded,
+                                           cudaStream_t stream);
 
 // modified from TensorFlow's implementation of tf.contrib.seq2seq.gather_tree
 __global__ void gatherTree(int* beams,

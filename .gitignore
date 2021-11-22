@@ -1,7 +1,7 @@
 *~
 *.o
 *build*/
-models/
+./models/
 __pycache__/
 .vscode
 ./translation

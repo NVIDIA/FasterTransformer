@@ -160,6 +160,44 @@ void GptDecoderLayerWeight<T>::mallocWeights()
     deviceMalloc(&weights_ptr[11], hidden_units_);
 }
 
+#ifdef SPARSITY_ENABLED
+template<typename T>
+void GptDecoderLayerWeight<T>::compress_weights(cublasMMWrapper& cublas_wrapper, int hidden_dim)
+{
+    hidden_units_ = hidden_dim;
+    inter_size_ = 4 * hidden_units_;
+
+    const size_t num_sparse_weights = 4;
+    int shapes[num_sparse_weights][2] = {
+        {hidden_units_, 3 * hidden_units_},
+        {hidden_units_, hidden_units_},
+        {hidden_units_, inter_size_},
+        {inter_size_, hidden_units_}
+    };
+    const T* dense_weights[num_sparse_weights] = {
+        self_attention_weights.query_weight.kernel,
+        self_attention_weights.attention_output_weight.kernel,
+        ffn_weights.intermediate_weight.kernel,
+        ffn_weights.output_weight.kernel
+    };
+
+    for (size_t i = 0; i < num_sparse_weights; ++i) {
+        int m = shapes[i][1];
+        int k = shapes[i][0];
+        size_t compressed_size = cublas_wrapper.getSparseMatrixSize(m, k);
+        deviceMalloc(&sp_weights_ptr[i], static_cast<int>(compressed_size), false);
+        cublas_wrapper.compressMatrix(dense_weights[i], sp_weights_ptr[i], m, k);
+    }
+
+    self_attention_weights.query_weight.sp_kernel = sp_weights_ptr[0];
+    self_attention_weights.attention_output_weight.sp_kernel = sp_weights_ptr[1];
+    ffn_weights.intermediate_weight.sp_kernel = sp_weights_ptr[2];
+    ffn_weights.output_weight.sp_kernel = sp_weights_ptr[3];
+    is_maintain_sp_buffer = true;
+}
+#endif
+
+
 template struct GptDecoderLayerWeight<float>;
 template struct GptDecoderLayerWeight<half>;
 

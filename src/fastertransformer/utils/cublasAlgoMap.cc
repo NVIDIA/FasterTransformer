@@ -150,7 +150,7 @@ void cublasAlgoMap::loadSpGemmConfig()
         printf("[ERROR] fgets fail at %s:%d \n", __FILE__, __LINE__);
         exit(-1);
     }
-    while(fscanf(fd, "%d %d %d %d %d ### %d %d %d %d %d %f\n", 
+    while(fscanf(fd, "%d %d %d %d %d ### %d %d %d %d %d %f\n",
           &batch_size, &seq_len, &head_num, &size_per_head, &data_type, &batchCount, &m, &n, &k, &algoId, &exec_time)!=EOF)
     {
         char mark[256];
@@ -176,6 +176,10 @@ int cublasAlgoMap::getSpAlgo(const int batch_count, const int m, const int n, co
 
 bool cublasAlgoMap::isUseSparse(const int batch_count, const int m, const int n, const int k)
 {
+    // not available to use cusparselt.
+    if (m % 8 != 0 || n % 8 != 0 || k % 8 != 0) {
+        return false;
+    }
     char mark[256];
     sprintf(mark, "%d_%d_%d_%d", batch_count, m, n, k);
     if (sp_algo_map_.find(mark) != sp_algo_map_.end()) {

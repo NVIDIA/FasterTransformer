@@ -236,24 +236,23 @@ def ft_gpt_op(var_dict,
 
     output_ids, parent_ids, sequence_length, cum_log_probs = gpt_op_module.gpt(
         extended_input_ids, # 0
-        extended_input_lengths, # 1
-        [var_dict["model/h%d/ln_1/b:0" % l] for l in range(decoder_args.num_layer)], # 2
-        [var_dict["model/h%d/ln_1/g:0" % l] for l in range(decoder_args.num_layer)], # 3
-        [var_dict["model/h%d/attn/c_attn/w:0" % l] for l in range(decoder_args.num_layer)], # 4
-        [var_dict["model/h%d/attn/c_attn/b:0" % l] for l in range(decoder_args.num_layer)], # 5
-        [var_dict["model/h%d/attn/c_proj/w:0" % l] for l in range(decoder_args.num_layer)], # 6
-        [var_dict["model/h%d/attn/c_proj/b:0" % l] for l in range(decoder_args.num_layer)],  # 7
-        [var_dict["model/h%d/ln_2/b:0" % l] for l in range(decoder_args.num_layer)], # 8
-        [var_dict["model/h%d/ln_2/g:0" % l] for l in range(decoder_args.num_layer)], # 9
-        [var_dict["model/h%d/mlp/c_fc/w:0" % l] for l in range(decoder_args.num_layer)], # 10
-        [var_dict["model/h%d/mlp/c_fc/b:0" % l] for l in range(decoder_args.num_layer)], # 11
-        [var_dict["model/h%d/mlp/c_proj/w:0" % l] for l in range(decoder_args.num_layer)], # 12
-        [var_dict["model/h%d/mlp/c_proj/b:0" % l] for l in range(decoder_args.num_layer)], # 13
-        var_dict['model/ln_f/b:0'], # 28
-        var_dict['model/ln_f/g:0'], # 29
-        var_dict['model/wpe:0'], # 33 
-        var_dict['model/wte:0'], # 30
-        var_dict['model/wte:0'], # 30
+        [tf.cast(var_dict["model/h%d/ln_1/b:0" % l], data_type) for l in range(decoder_args.num_layer)], # 2
+        [tf.cast(var_dict["model/h%d/ln_1/g:0" % l], data_type) for l in range(decoder_args.num_layer)], # 3
+        [tf.cast(var_dict["model/h%d/attn/c_attn/w:0" % l], data_type) for l in range(decoder_args.num_layer)], # 4
+        [tf.cast(var_dict["model/h%d/attn/c_attn/b:0" % l], data_type) for l in range(decoder_args.num_layer)], # 5
+        [tf.cast(var_dict["model/h%d/attn/c_proj/w:0" % l], data_type) for l in range(decoder_args.num_layer)], # 6
+        [tf.cast(var_dict["model/h%d/attn/c_proj/b:0" % l], data_type) for l in range(decoder_args.num_layer)],  # 7
+        [tf.cast(var_dict["model/h%d/ln_2/b:0" % l], data_type) for l in range(decoder_args.num_layer)], # 8
+        [tf.cast(var_dict["model/h%d/ln_2/g:0" % l], data_type) for l in range(decoder_args.num_layer)], # 9
+        [tf.cast(var_dict["model/h%d/mlp/c_fc/w:0" % l], data_type) for l in range(decoder_args.num_layer)], # 10
+        [tf.cast(var_dict["model/h%d/mlp/c_fc/b:0" % l], data_type)for l in range(decoder_args.num_layer)], # 11
+        [tf.cast(var_dict["model/h%d/mlp/c_proj/w:0" % l], data_type) for l in range(decoder_args.num_layer)], # 12
+        [tf.cast(var_dict["model/h%d/mlp/c_proj/b:0" % l], data_type) for l in range(decoder_args.num_layer)], # 13
+        tf.cast(var_dict['model/ln_f/b:0'], data_type), # 28
+        tf.cast(var_dict['model/ln_f/g:0'], data_type), # 29
+        tf.cast(var_dict['model/wpe:0'], data_type), # 33 
+        tf.cast(var_dict['model/wte:0'], data_type), # 30
+        tf.cast(var_dict['model/wte:0'], data_type), # 30
         max_batch_size=batch_size,
         max_seq_len=decoding_args.max_seq_len,
         beam_width=decoder_args.beam_width,

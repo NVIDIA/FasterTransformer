@@ -17,12 +17,14 @@
 #include "src/fastertransformer/layers/attention_layers/DecoderSelfAttentionLayer.h"
 #include "src/fastertransformer/kernels/decoder_masked_multihead_attention.h"
 #include "src/fastertransformer/kernels/decoder_masked_multihead_attention_utils.h"
+#include "src/fastertransformer/utils/logger.h"
 
 namespace fastertransformer {
 
 template<typename T>
 void fusedQKV_masked_attention_dispatch(const T* qkv_buf,
                                         const T* qkv_bias,
+                                        const T* relative_attention_bias,
                                         T* key_cache,
                                         T* value_cache,
                                         T* context_buf,
@@ -37,6 +39,8 @@ void fusedQKV_masked_attention_dispatch(const T* qkv_buf,
                                         const int max_input_len,
                                         const int* input_lengths,
                                         const int step,
+                                        const float q_scaling,
+                                        const int relative_attention_bias_stride,
                                         cudaStream_t stream)
 {
     using DataType = typename std::conditional<sizeof(T) == 4, float, uint16_t>::type;
@@ -44,9 +48,16 @@ void fusedQKV_masked_attention_dispatch(const T* qkv_buf,
     Masked_multihead_attention_params<DataType> params;
     memset(&params, 0, sizeof(params));
     int hidden_units = head_num * size_per_head;
-    params.q_bias = reinterpret_cast<const DataType*>(qkv_bias);
-    params.k_bias = reinterpret_cast<const DataType*>(qkv_bias) + hidden_units;
-    params.v_bias = reinterpret_cast<const DataType*>(qkv_bias) + 2 * hidden_units;
+    if (qkv_bias != nullptr) {
+        params.q_bias = reinterpret_cast<const DataType*>(qkv_bias);
+        params.k_bias = reinterpret_cast<const DataType*>(qkv_bias) + hidden_units;
+        params.v_bias = reinterpret_cast<const DataType*>(qkv_bias) + 2 * hidden_units;
+    }
+    else {
+        params.q_bias = nullptr;
+        params.k_bias = nullptr;
+        params.v_bias = nullptr;
+    }
 
     // Set the output buffer.
     params.out = reinterpret_cast<DataType*>(context_buf);
@@ -66,17 +77,27 @@ void fusedQKV_masked_attention_dispatch(const T* qkv_buf,
     params.timestep = step - 1;
     params.num_heads = head_num;
     params.hidden_size_per_head = size_per_head;
-    params.rotary_embedding_dim = rotary_embedding_dim;
-    params.inv_sqrt_dh = 1.F / sqrtf((float)params.hidden_size_per_head);
+    params.inv_sqrt_dh = 1.F / (sqrtf((float)params.hidden_size_per_head) * q_scaling);
 
     params.input_lengths = input_lengths;
     params.max_input_len = max_input_len;
+    // TODO(bhsueh) Need better implementation
+    if (relative_attention_bias != nullptr) {
+        if (sizeof(T) == 4) {
+            params.relative_attention_bias_float = reinterpret_cast<const float*>(relative_attention_bias);
+        }
+        else {
+            params.relative_attention_bias_half = reinterpret_cast<const half*>(relative_attention_bias);
+        }
+    }
+    params.relative_attention_bias_stride = relative_attention_bias_stride;
 
     masked_multihead_attention(params, stream);
 }
 
 template void fusedQKV_masked_attention_dispatch(const float* qkv_buf,
                                                  const float* qkv_bias,
+                                                 const float* relative_attention_bias,
                                                  float* key_cache,
                                                  float* value_cache,
                                                  float* context_buf,
@@ -91,10 +112,13 @@ template void fusedQKV_masked_attention_dispatch(const float* qkv_buf,
                                                  const int max_input_len,
                                                  const int* input_lengths,
                                                  const int step,
+                                                 const float q_scaling,
+                                                 const int relative_attention_bias_stride,
                                                  cudaStream_t stream);
 
 template void fusedQKV_masked_attention_dispatch(const half* qkv_buf,
                                                  const half* qkv_bias,
+                                                 const half* relative_attention_bias,
                                                  half* key_cache,
                                                  half* value_cache,
                                                  half* context_buf,
@@ -109,14 +133,18 @@ template void fusedQKV_masked_attention_dispatch(const half* qkv_buf,
                                                  const int max_input_len,
                                                  const int* input_lengths,
                                                  const int step,
+                                                 const float q_scaling,
+                                                 const int relative_attention_bias_stride,
                                                  cudaStream_t stream);
 
 template<typename T>
 void DecoderSelfAttentionLayer<T>::allocateBuffer()
 {
     if (is_allocate_buffer_ == false) {
-        qkv_buf_ = reinterpret_cast<T*>(allocator_->malloc(sizeof(T) * max_batch_size_ * 3 * local_hidden_units_, false));
-        context_buf_ = reinterpret_cast<T*>(allocator_->malloc(sizeof(T) * max_batch_size_ * local_hidden_units_, false));
+        qkv_buf_ =
+            reinterpret_cast<T*>(allocator_->malloc(sizeof(T) * max_batch_size_ * 3 * local_hidden_units_, false));
+        context_buf_ =
+            reinterpret_cast<T*>(allocator_->malloc(sizeof(T) * max_batch_size_ * local_hidden_units_, false));
         is_allocate_buffer_ = true;
     }
 }
@@ -148,41 +176,83 @@ template<typename T>
 DecoderSelfAttentionLayer<T>::DecoderSelfAttentionLayer(size_t max_batch_size,
                                                         size_t head_num,
                                                         size_t size_per_head,
+                                                        size_t local_head_num,
+                                                        size_t rotary_embedding_dim,
+                                                        size_t d_model,
+                                                        const float q_scaling,
                                                         cudaStream_t stream,
                                                         cublasMMWrapper* cublas_wrapper,
                                                         IAllocator* allocator,
-                                                        bool is_free_buffer_after_forward):
-    BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
+                                                        bool is_free_buffer_after_forward,
+                                                        bool sparse,
+                                                        int int8_mode):
+    BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, sparse),
     max_batch_size_(max_batch_size),
     head_num_(head_num),
     size_per_head_(size_per_head),
     hidden_units_(head_num_ * size_per_head_),
-    local_head_num_(head_num_),
+    local_head_num_(local_head_num),
     local_hidden_units_(local_head_num_ * size_per_head_),
-    rotary_embedding_dim_(0)
+    rotary_embedding_dim_(rotary_embedding_dim),
+    d_model_(d_model),
+    q_scaling_(q_scaling),
+    int8_mode_(int8_mode)
 {
-    FT_CHECK(size_per_head_ == 32 || size_per_head_ == 64 || size_per_head_ == 96 
-             || size_per_head_ == 128 || size_per_head_ == 160 || size_per_head_ == 192
-             || size_per_head_ == 224 || size_per_head_ == 256);
+    FT_CHECK(size_per_head_ == 32 || size_per_head_ == 64 || size_per_head_ == 96 || size_per_head_ == 128
+             || size_per_head_ == 160 || size_per_head_ == 192 || size_per_head_ == 224 || size_per_head_ == 256);
 }
 
 template<typename T>
-DecoderSelfAttentionLayer<T>::DecoderSelfAttentionLayer(DecoderSelfAttentionLayer<T> const& attention_layer):
-    BaseAttentionLayer<T>(attention_layer.stream_,
-                          attention_layer.cublas_wrapper_,
-                          attention_layer.allocator_,
-                          attention_layer.is_free_buffer_after_forward_),
-    max_batch_size_(attention_layer.max_batch_size_),
-    head_num_(attention_layer.head_num_),
-    size_per_head_(attention_layer.size_per_head_),
-    hidden_units_(attention_layer.hidden_units_),
-    local_head_num_(attention_layer.local_head_num_),
-    local_hidden_units_(attention_layer.local_hidden_units_),
-    rotary_embedding_dim_(attention_layer.rotary_embedding_dim_)
+DecoderSelfAttentionLayer<T>::DecoderSelfAttentionLayer(size_t max_batch_size,
+                                                        size_t head_num,
+                                                        size_t size_per_head,
+                                                        cudaStream_t stream,
+                                                        cublasMMWrapper* cublas_wrapper,
+                                                        IAllocator* allocator,
+                                                        bool is_free_buffer_after_forward,
+                                                        bool sparse,
+                                                        int int8_mode):
+    DecoderSelfAttentionLayer<T>(max_batch_size,
+                                 head_num,
+                                 size_per_head,
+                                 head_num,
+                                 0,
+                                 head_num * size_per_head,
+                                 1.0f,
+                                 stream,
+                                 cublas_wrapper,
+                                 allocator,
+                                 is_free_buffer_after_forward,
+                                 sparse,
+                                 int8_mode)
 {
-    FT_CHECK(size_per_head_ == 32 || size_per_head_ == 64 || size_per_head_ == 96
-             || size_per_head_ == 128 || size_per_head_ == 160 || size_per_head_ == 192
-             || size_per_head_ == 224 || size_per_head_ == 256);
+}
+
+template<typename T>
+DecoderSelfAttentionLayer<T>::DecoderSelfAttentionLayer(size_t max_batch_size,
+                                                        size_t head_num,
+                                                        size_t size_per_head,
+                                                        const float q_scaling,
+                                                        cudaStream_t stream,
+                                                        cublasMMWrapper* cublas_wrapper,
+                                                        IAllocator* allocator,
+                                                        bool is_free_buffer_after_forward,
+                                                        bool sparse,
+                                                        int int8_mode):
+    DecoderSelfAttentionLayer<T>(max_batch_size,
+                                 head_num,
+                                 size_per_head,
+                                 head_num,
+                                 0,
+                                 head_num * size_per_head,
+                                 q_scaling,
+                                 stream,
+                                 cublas_wrapper,
+                                 allocator,
+                                 is_free_buffer_after_forward,
+                                 sparse,
+                                 int8_mode)
+{
 }
 
 template<typename T>
@@ -193,19 +263,52 @@ DecoderSelfAttentionLayer<T>::DecoderSelfAttentionLayer(size_t max_batch_size,
                                                         cudaStream_t stream,
                                                         cublasMMWrapper* cublas_wrapper,
                                                         IAllocator* allocator,
-                                                        bool is_free_buffer_after_forward):
-    BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
-    max_batch_size_(max_batch_size),
-    head_num_(head_num),
-    size_per_head_(size_per_head),
-    hidden_units_(head_num_ * size_per_head_),
-    local_head_num_(local_head_num),
-    local_hidden_units_(local_head_num_ * size_per_head_),
-    rotary_embedding_dim_(0)
+                                                        bool is_free_buffer_after_forward,
+                                                        bool sparse,
+                                                        int int8_mode):
+    DecoderSelfAttentionLayer<T>(max_batch_size,
+                                 head_num,
+                                 size_per_head,
+                                 local_head_num,
+                                 0,
+                                 head_num * size_per_head,
+                                 1.0f,
+                                 stream,
+                                 cublas_wrapper,
+                                 allocator,
+                                 is_free_buffer_after_forward,
+                                 sparse,
+                                 int8_mode)
 {
-    FT_CHECK(size_per_head_ == 32 || size_per_head_ == 64 || size_per_head_ == 96
-             || size_per_head_ == 128 || size_per_head_ == 160 || size_per_head_ == 192
-             || size_per_head_ == 224 || size_per_head_ == 256);
+}
+
+template<typename T>
+DecoderSelfAttentionLayer<T>::DecoderSelfAttentionLayer(size_t max_batch_size,
+                                                        size_t head_num,
+                                                        size_t size_per_head,
+                                                        size_t local_head_num,
+                                                        size_t d_model,
+                                                        const float q_scaling,
+                                                        cudaStream_t stream,
+                                                        cublasMMWrapper* cublas_wrapper,
+                                                        IAllocator* allocator,
+                                                        bool is_free_buffer_after_forward,
+                                                        bool sparse,
+                                                        int int8_mode):
+    DecoderSelfAttentionLayer<T>(max_batch_size,
+                                 head_num,
+                                 size_per_head,
+                                 local_head_num,
+                                 0,
+                                 d_model,
+                                 q_scaling,
+                                 stream,
+                                 cublas_wrapper,
+                                 allocator,
+                                 is_free_buffer_after_forward,
+                                 sparse,
+                                 int8_mode)
+{
 }
 
 template<typename T>
@@ -217,19 +320,41 @@ DecoderSelfAttentionLayer<T>::DecoderSelfAttentionLayer(size_t max_batch_size,
                                                         cudaStream_t stream,
                                                         cublasMMWrapper* cublas_wrapper,
                                                         IAllocator* allocator,
-                                                        bool is_free_buffer_after_forward):
-    BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
-    max_batch_size_(max_batch_size),
-    head_num_(head_num),
-    size_per_head_(size_per_head),
-    hidden_units_(head_num_ * size_per_head_),
-    local_head_num_(local_head_num),
-    local_hidden_units_(local_head_num_ * size_per_head_),
-    rotary_embedding_dim_(rotary_embedding_dim)
+                                                        bool is_free_buffer_after_forward,
+                                                        bool sparse,
+                                                        int int8_mode):
+    DecoderSelfAttentionLayer<T>(max_batch_size,
+                                 head_num,
+                                 size_per_head,
+                                 local_head_num,
+                                 rotary_embedding_dim,
+                                 head_num * size_per_head,
+                                 1.0f,
+                                 stream,
+                                 cublas_wrapper,
+                                 allocator,
+                                 is_free_buffer_after_forward,
+                                 sparse,
+                                 int8_mode)
 {
-    FT_CHECK(size_per_head_ == 32 || size_per_head_ == 64 || size_per_head_ == 96
-             || size_per_head_ == 128 || size_per_head_ == 160 || size_per_head_ == 192
-             || size_per_head_ == 224 || size_per_head_ == 256);
+}
+
+template<typename T>
+DecoderSelfAttentionLayer<T>::DecoderSelfAttentionLayer(DecoderSelfAttentionLayer<T> const& attention_layer):
+    DecoderSelfAttentionLayer<T>(attention_layer.max_batch_size_,
+                                 attention_layer.head_num_,
+                                 attention_layer.size_per_head_,
+                                 attention_layer.local_head_num_,
+                                 attention_layer.rotary_embedding_dim_,
+                                 attention_layer.d_model_,
+                                 attention_layer.q_scaling_,
+                                 attention_layer.stream_,
+                                 attention_layer.cublas_wrapper_,
+                                 attention_layer.allocator_,
+                                 attention_layer.is_free_buffer_after_forward_,
+                                 attention_layer.sparse_,
+                                 attention_layer.int8_mode_)
+{
 }
 
 template<typename T>
@@ -245,19 +370,20 @@ void DecoderSelfAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor
                                            const AttentionWeight<T>* attention_weights)
 {
     // input tensors:
-    //      attention_input [batch_size, hidden_dimension],
+    //      attention_input [batch_size, d_model_],
     //      finished [batch_size],
     //      sequence_lengths [batch_size]
     //      input_lengths [batch_size]
     //      max_input_length [1] on cpu
     //      step [1] on cpu
+    //      relative_attention_bias [1, head_num, step, step] or [1, head_num, max_seq_len, max_seq_len] (option)
 
     // output tensors:
-    //      attention_output [batch_size, hidden_dimension],
+    //      attention_output [batch_size, d_model_],
     //      key_cache [batch, local_head_num, size_per_head // x, max_seq_len, x]
     //      value_cache [batch, local_head_num, max_seq_len, size_per_head]
 
-    FT_CHECK(input_tensors->size() == 6);
+    FT_CHECK(input_tensors->size() == 6 || input_tensors->size() == 7);
     FT_CHECK(output_tensors->size() == 3);
     FT_CHECK(output_tensors->at(1).shape.size() == 5 || output_tensors->at(1).shape.size() == 3);
     FT_CHECK(output_tensors->at(2).shape.size() == 4 || output_tensors->at(2).shape.size() == 3);
@@ -267,6 +393,9 @@ void DecoderSelfAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor
     const T* attention_input = reinterpret_cast<const T*>(input_tensors->at(0).data);
     const bool* finished = reinterpret_cast<const bool*>(input_tensors->at(1).data);
     const int* sequence_lengths = reinterpret_cast<const int*>(input_tensors->at(2).data);
+    const T* relative_attention_bias =
+        reinterpret_cast<const T*>(input_tensors->size() == 7 ? input_tensors->at(6).data : nullptr);
+    const int relative_attention_bias_stride = input_tensors->size() == 7 ? input_tensors->at(6).shape[3] : 0;
 
     T* attention_out = (T*)(output_tensors->at(0).data);
     T* key_cache = (T*)(output_tensors->at(1).data);
@@ -275,20 +404,56 @@ void DecoderSelfAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor
     const int batch_size = input_tensors->at(0).shape[0];
     const int max_seq_len = output_tensors->at(1).shape[3];
 
-    cublas_wrapper_->Gemm(CUBLAS_OP_N,
-                          CUBLAS_OP_N,
-                          3 * local_hidden_units_,  // n
-                          batch_size,
-                          hidden_units_,  // k
-                          attention_weights->query_weight.kernel,
-                          3 * local_hidden_units_,  // n
-                          attention_input,
-                          hidden_units_,  // k
-                          qkv_buf_,
-                          3 * local_hidden_units_ /* n */);
+#ifdef SPARSITY_ENABLED
+    const int m_padded = div_up(batch_size, 8);
+    if (sparse_ && cublas_wrapper_->isUseSparse(1, 3 * local_hidden_units_, m_padded, d_model_)) {
+        cublas_wrapper_->SpGemm(CUBLAS_OP_N,
+                                CUBLAS_OP_N,
+                                3 * local_hidden_units_,
+                                m_padded,
+                                d_model_,
+                                attention_weights->query_weight.sp_kernel,
+                                attention_input,
+                                qkv_buf_);
+    }
+    else {
+#endif
+        if (int8_mode_ != 0 && batch_size <= 2) {
+            FT_CHECK(attention_weights->query_weight.int8_kernel != NULL
+                     && attention_weights->query_weight.scale != NULL);
+            int8WeightPerChannelLdkMultiplicationLauncher(attention_weights->query_weight.int8_kernel,
+                                                          attention_input,
+                                                          attention_weights->query_weight.scale,
+                                                          qkv_buf_,
+                                                          batch_size,
+                                                          3 * local_hidden_units_,
+                                                          d_model_,
+                                                          stream_);
+        }
+        else {
+            if (int8_mode_ == 1) {
+                FT_LOG_WARNING(
+                    "[DecoderSelfAttentionLayer<T>::forward] int8 gpt doesn't support m > 2, run fp gpt instead.\n");
+            }
+            cublas_wrapper_->Gemm(CUBLAS_OP_N,
+                                  CUBLAS_OP_N,
+                                  3 * local_hidden_units_,  // n
+                                  batch_size,
+                                  d_model_,  // k
+                                  attention_weights->query_weight.kernel,
+                                  3 * local_hidden_units_,  // n
+                                  attention_input,
+                                  d_model_,  // k
+                                  qkv_buf_,
+                                  3 * local_hidden_units_ /* n */);
+        }
+#ifdef SPARSITY_ENABLED
+    }
+#endif
     sync_check_cuda_error();
     fusedQKV_masked_attention_dispatch<T>(qkv_buf_,
                                           attention_weights->query_weight.bias,
+                                          relative_attention_bias,
                                           key_cache,
                                           value_cache,
                                           context_buf_,
@@ -303,20 +468,58 @@ void DecoderSelfAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor
                                           *(int*)(input_tensors->at(4).data),
                                           (int*)(input_tensors->at(3).data),
                                           *(int*)(input_tensors->at(5).data),
+                                          q_scaling_,
+                                          relative_attention_bias_stride,
                                           stream_);
     sync_check_cuda_error();
-    cublas_wrapper_->Gemm(CUBLAS_OP_N,
-                          CUBLAS_OP_N,
-                          hidden_units_,  // n
-                          batch_size,
-                          local_hidden_units_,  // k
-                          attention_weights->attention_output_weight.kernel,
-                          hidden_units_,  // n
-                          context_buf_,
-                          local_hidden_units_,  // k
-                          attention_out,
-                          hidden_units_ /* n */);
-    sync_check_cuda_error();
+
+#ifdef SPARSITY_ENABLED
+    if (sparse_ && cublas_wrapper_->isUseSparse(1, d_model_, m_padded, local_hidden_units_)) {
+        cublas_wrapper_->SpGemm(CUBLAS_OP_N,
+                                CUBLAS_OP_N,
+                                d_model_,
+                                m_padded,
+                                local_hidden_units_,
+                                attention_weights->attention_output_weight.sp_kernel,
+                                context_buf_,
+                                attention_out);
+    }
+    else {
+#endif
+        if (int8_mode_ != 0 && batch_size <= 2) {
+            FT_CHECK(attention_weights->attention_output_weight.int8_kernel != NULL
+                     && attention_weights->attention_output_weight.scale != NULL);
+            int8WeightPerChannelLdkMultiplicationLauncher(attention_weights->attention_output_weight.int8_kernel,
+                                                          context_buf_,
+                                                          attention_weights->attention_output_weight.scale,
+                                                          attention_out,
+                                                          batch_size,
+                                                          d_model_,
+                                                          local_hidden_units_,
+                                                          stream_);
+        }
+        else {
+            if (int8_mode_ == 1) {
+                FT_LOG_WARNING(
+                    "[DecoderSelfAttentionLayer<T>::forward] int8 gpt doesn't support m > 2, run fp gpt instead.\n");
+            }
+            cublas_wrapper_->Gemm(CUBLAS_OP_N,
+                                  CUBLAS_OP_N,
+                                  d_model_,  // n
+                                  batch_size,
+                                  local_hidden_units_,  // k
+                                  attention_weights->attention_output_weight.kernel,
+                                  d_model_,  // n
+                                  context_buf_,
+                                  local_hidden_units_,  // k
+                                  attention_out,
+                                  d_model_ /* n */);
+        }
+        sync_check_cuda_error();
+#ifdef SPARSITY_ENABLED
+    }
+#endif
+
     if (is_free_buffer_after_forward_ == true) {
         freeBuffer();
     }

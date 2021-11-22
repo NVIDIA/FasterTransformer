@@ -36,6 +36,7 @@ GptOp::GptOp(const int64_t max_batch_size,
              const double temperature,
              const double len_penalty,
              const double repetition_penalty,
+             const bool sparse,
              const std::vector<th::Tensor> weights):
     st_(weights[0].scalar_type())
 {
@@ -62,6 +63,7 @@ GptOp::GptOp(const int64_t max_batch_size,
                                      temperature,
                                      len_penalty,
                                      repetition_penalty,
+                                     sparse,
                                      weights);
             break;
         case at::ScalarType::Half:
@@ -82,6 +84,7 @@ GptOp::GptOp(const int64_t max_batch_size,
                                     temperature,
                                     len_penalty,
                                     repetition_penalty,
+                                    sparse,
                                     weights);
             break;
         default:
@@ -137,5 +140,6 @@ static auto fasterTransformerGptTHS = torch::jit::class_<torch_ext::GptOp>("Fast
                                                                 double,
                                                                 double,
                                                                 double,
+                                                                bool,
                                                                 std::vector<th::Tensor>>())
                                           .def("forward", &torch_ext::GptOp::forward);

@@ -15,7 +15,7 @@
  */
 
 #include <curand_kernel.h>
-
+#include "src/fastertransformer/utils/logger.h"
 #include "src/fastertransformer/utils/memory_utils.h"
 
 namespace fastertransformer {
@@ -34,6 +34,7 @@ template void deviceMalloc(half** ptr, int size, bool is_random_initialize);
 template void deviceMalloc(int** ptr, int size, bool is_random_initialize);
 template void deviceMalloc(bool** ptr, int size, bool is_random_initialize);
 template void deviceMalloc(char** ptr, int size, bool is_random_initialize);
+template void deviceMalloc(int8_t** ptr, int size, bool is_random_initialize);
 
 template<typename T>
 void deviceMemSetZero(T* ptr, int size)
@@ -60,6 +61,7 @@ template void deviceFree(half*& ptr);
 template void deviceFree(int*& ptr);
 template void deviceFree(bool*& ptr);
 template void deviceFree(char*& ptr);
+template void deviceFree(int8_t*& ptr);
 
 template<typename T>
 void deviceFill(T* devptr, int size, T value)
@@ -106,6 +108,7 @@ template void cudaD2Dcpy(float* tgt, const float* src, int size);
 template void cudaD2Dcpy(half* tgt, const half* src, int size);
 template void cudaD2Dcpy(int* tgt, const int* src, int size);
 template void cudaD2Dcpy(bool* tgt, const bool* src, int size);
+template void cudaD2Dcpy(int8_t* tgt, const int8_t* src, int size);
 
 template<typename T>
 __global__ void cuda_random_uniform_kernel(T* buffer, const int size)
@@ -179,6 +182,11 @@ int loadWeightFromBin(T* ptr, std::vector<int> shape, std::string filename)
     }
 
     size_t float_data_size = sizeof(float) * size;
+    in.seekg(0, in.end);
+    // FT_CHECK(in.tellg() == float_data_size);
+    in.seekg(0, in.beg);
+
+    FT_LOG_DEBUG("Read " + std::to_string(float_data_size) + " bytes from " + filename);
     in.read((char*)host_array.data(), float_data_size);
 
     size_t in_get_size = in.gcount();
@@ -205,10 +213,9 @@ int loadWeightFromBin(T* ptr, std::vector<int> shape, std::string filename)
 template int loadWeightFromBin(float* ptr, std::vector<int> shape, std::string filename);
 template int loadWeightFromBin(half* ptr, std::vector<int> shape, std::string filename);
 
-
 __global__ void cudaD2DcpyHalf2Float(float* dst, half* src, const int size)
 {
-    for(int tid = threadIdx.x + blockIdx.x * blockDim.x; tid < size; tid += blockDim.x * gridDim.x) {
+    for (int tid = threadIdx.x + blockIdx.x * blockDim.x; tid < size; tid += blockDim.x * gridDim.x) {
         dst[tid] = __half2float(src[tid]);
     }
 }
@@ -220,7 +227,7 @@ void invokeCudaD2DcpyHalf2Float(float* dst, half* src, const int size, cudaStrea
 
 __global__ void cudaD2DcpyFloat2Half(half* dst, float* src, const int size)
 {
-    for(int tid = threadIdx.x + blockIdx.x * blockDim.x; tid < size; tid += blockDim.x * gridDim.x) {
+    for (int tid = threadIdx.x + blockIdx.x * blockDim.x; tid < size; tid += blockDim.x * gridDim.x) {
         dst[tid] = __float2half(src[tid]);
     }
 }

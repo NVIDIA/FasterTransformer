@@ -16,11 +16,14 @@
 #pragma once
 #include <array>
 #include <assert.h>
+#include <cooperative_groups/reduce.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 #include <float.h>
 #include <type_traits>
+
+namespace cg = cooperative_groups;
 
 namespace fastertransformer {
 
@@ -51,9 +54,9 @@ __inline__ __device__ T blockReduceSum(T val)
 
     __syncthreads();
 
-    // Modify from blockDim.x << 5 to blockDim.x / 32. to prevent 
+    // Modify from blockDim.x << 5 to blockDim.x / 32. to prevent
     // blockDim.x is not divided by 32
-    val = (threadIdx.x < (blockDim.x / 32.)) ? shared[lane] : (T)(0.0f);
+    val = (threadIdx.x < (blockDim.x / 32.f)) ? shared[lane] : (T)(0.0f);
     val = warpReduceSum<T>(val);
 
     return val;
@@ -83,12 +86,118 @@ __inline__ __device__ T blockReduceMax(T val)
 
     __syncthreads();
 
-    // Modify from blockDim.x << 5 to blockDim.x / 32. to prevent 
+    // Modify from blockDim.x << 5 to blockDim.x / 32. to prevent
     // blockDim.x is not divided by 32
-    val = (threadIdx.x < (blockDim.x / 32.)) ? shared[lane] : -1e20f;
+    val = (threadIdx.x < (blockDim.x / 32.f)) ? shared[lane] : -1e20f;
     val = warpReduceMax(val);
 
     return val;
+}
+
+template<typename T, int NUM>
+__inline__ __device__ T warpReduceSumV2(T* val)
+{
+#pragma unroll
+    for (int i = 0; i < NUM; i++) {
+#pragma unroll
+        for (int mask = 16; mask > 0; mask >>= 1)
+            val[i] += __shfl_xor_sync(FINAL_MASK, val[i], mask, 32);
+    }
+    return (T)(0.0f);
+}
+
+template<typename T, int NUM>
+__inline__ __device__ T blockReduceSumV2(T* val)
+{
+    static __shared__ T shared[32][NUM];
+    int lane = threadIdx.x & 0x1f;
+    int wid = threadIdx.x >> 5;
+
+    warpReduceSumV2<T, NUM>(val);
+
+    if (lane == 0) {
+#pragma unroll
+        for (int i = 0; i < NUM; i++) {
+            shared[wid][i] = val[i];
+        }
+    }
+
+    __syncthreads();
+
+    bool is_mask = threadIdx.x < (blockDim.x / 32.f);
+#pragma unroll
+    for (int i = 0; i < NUM; i++) {
+        val[i] = is_mask ? shared[lane][i] : (T)(0.0f);
+    }
+    warpReduceSumV2<T, NUM>(val);
+    return (T)0.0f;
+}
+
+template<typename T, int NUM>
+__inline__ __device__ T warpReduceMaxV2(T* val)
+{
+#pragma unroll
+    for (int i = 0; i < NUM; i++) {
+#pragma unroll
+        for (int mask = 16; mask > 0; mask >>= 1)
+            val[i] = max(val[i], __shfl_xor_sync(FINAL_MASK, val[i], mask, 32));
+    }
+    return (T)(0.0f);
+}
+
+template<typename T, int NUM>
+__inline__ __device__ T blockReduceMaxV2(T* val)
+{
+    static __shared__ T shared[32][NUM];
+    int lane = threadIdx.x & 0x1f;  // in-warp idx
+    int wid = threadIdx.x >> 5;     // warp idx
+
+    warpReduceMaxV2<T, NUM>(val);  // get maxx in each warp
+
+    if (lane == 0)  // record in-warp maxx by warp Idx
+    {
+#pragma unroll
+        for (int i = 0; i < NUM; i++) {
+            shared[wid][i] = val[i];
+        }
+    }
+
+    __syncthreads();
+
+    // Modify from blockDim.x << 5 to blockDim.x / 32. to prevent
+    // blockDim.x is not divided by 32
+    bool is_mask = threadIdx.x < (blockDim.x / 32.f);
+#pragma unroll
+    for (int i = 0; i < NUM; i++) {
+        val[i] = is_mask ? shared[lane][i] : (T)-1e20f;
+    }
+    warpReduceMaxV2<T, NUM>(val);
+
+    return (T)0.0f;
+}
+
+template<int NUM>
+__inline__ __device__ void cgBlockReduceSumElements(float* element_list, float* cgBlockReduceSumElements_shm)
+{
+    cg::thread_block cta = cg::this_thread_block();
+    cg::thread_block_tile<32> tile = cg::tiled_partition<32>(cta);
+
+    const int tid = cta.thread_rank();
+    const int blockz = blockDim.x;
+    for (int i = 0; i < NUM; i++) {
+        cgBlockReduceSumElements_shm[i * blockz + tid] = cg::reduce(tile, element_list[i], cg::plus<float>());
+    }
+    cg::sync(cta);
+    if (tid == 0) {
+#pragma unroll
+        for (int i = 0; i < NUM; i++) {
+            float beta = 0.0f;
+            for (int j = 0; j < blockz; j += 32) {
+                beta += cgBlockReduceSumElements_shm[i * blockz + j];
+            }
+            element_list[i] = beta;
+        }
+    }
 }
 
 template<typename T, int MAX_K>
@@ -164,6 +273,18 @@ template<typename T>
 __device__ __forceinline__ TopK_2<T> reduce_topk_op_2(const TopK_2<T>& a, const TopK_2<T>& b)
 {
     return a.u > b.u ? a : b;
+}
+
+template<typename T>
+__device__ __forceinline__ T clamp_inf_for_half(const float input)
+{
+    if (std::is_same<T, half>::value == true) {
+        // clamp inf values to enable fp16 training
+        return (float)input > 0.0f ? min(input, HALF_FLT_MAX - 1000) : max(input, -HALF_FLT_MAX + 1000);
+    }
+    else {
+        return input;
+    }
 }
 
 }  // namespace fastertransformer

@@ -30,4 +30,15 @@ void invokeTopkBeamSearch(void* workspace,
                           const int end_id,
                           cudaStream_t stream);
 
+template<typename T>
+void invokeTileEncoderResults(T* tiled_encoder_output,
+                              int* tiled_encoder_sequence_length,
+                              const T* encoder_output,
+                              const int* encoder_sequence_length,
+                              const size_t batch_size,
+                              const size_t beam_width,
+                              const size_t mem_max_seq_len,
+                              const size_t d_model,
+                              cudaStream_t stream);
+
 }  // namespace fastertransformer

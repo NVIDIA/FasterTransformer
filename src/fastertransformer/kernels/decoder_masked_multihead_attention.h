@@ -85,6 +85,10 @@ struct Multihead_attention_params_base {
   // Used when we have some input context like gpt
   const int *input_lengths;
   int max_input_len;
+
+  const float* relative_attention_bias_float = nullptr;
+  const half* relative_attention_bias_half = nullptr;
+  int relative_attention_bias_stride;
 };
 
 template< typename T, bool CROSS_ATTENTION>

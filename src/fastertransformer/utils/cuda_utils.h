@@ -172,7 +172,7 @@ void print_to_file(const T* result,
 }
 
 template<typename T>
-void print_abs_mean(const T* buf, uint size, cudaStream_t stream)
+void print_abs_mean(const T* buf, uint size, cudaStream_t stream, std::string name = "")
 {
     if (buf == nullptr) {
         printf("[WARNING] It is an nullptr, skip!");
@@ -186,16 +186,16 @@ void print_abs_mean(const T* buf, uint size, cudaStream_t stream)
     check_cuda_error(cudaGetLastError());
     double sum = 0.0f;
     uint64_t zero_count = 0;
+    float max_val = -1e10;
     for (uint i = 0; i < size; i++) {
         sum += abs((double)h_tmp[i]);
         if ((float)h_tmp[i] == 0.0f) {
             zero_count ++;
         }
+        max_val = max_val > abs(float(h_tmp[i])) ? max_val : abs(float(h_tmp[i]));
     }
-    printf("[INFO] size: %u \n", size);
-    printf("[IFNO] abs mean: %f \n", sum / size);
-    printf("[INFO] abs sum: %f \n", sum);
-    printf("[INFO] zero_count: %ld \n", zero_count);
+    printf("[INFO][FT] %s size: %u, abs mean: %f, abs sum: %f, abs max: %f", name.c_str(), size, sum / size, sum, max_val);
+    std::cout << std::endl;
     delete [] h_tmp;
     cudaDeviceSynchronize();
     check_cuda_error(cudaGetLastError());

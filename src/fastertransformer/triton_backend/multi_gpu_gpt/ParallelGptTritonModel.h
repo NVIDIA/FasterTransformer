@@ -46,7 +46,8 @@ struct ParallelGptTritonModel: public AbstractTransformerModel {
                            size_t tensor_para_size,
                            size_t pipeline_para_size,
                            std::string model_name,
-                           std::string model_dir);
+                           std::string model_dir,
+                           int int8_mode);
 
     ~ParallelGptTritonModel() = default;
 
@@ -57,9 +58,9 @@ struct ParallelGptTritonModel: public AbstractTransformerModel {
                         std::pair<std::vector<ncclComm_t>, std::vector<ncclComm_t>> nccl_comms) override;
 
     virtual std::pair<std::vector<ncclComm_t>, std::vector<ncclComm_t>>
-    createNcclComms(std::vector<ncclUniqueId> nccl_ids, const int node_id) override;
+    createNcclComms(std::vector<ncclUniqueId> nccl_ids, const int node_id, bool multi_instances = false, int instance_id = 0) override;
 
-    virtual std::vector<ncclUniqueId> createNcclIds(const uint32_t world_size) override;
+    virtual std::vector<ncclUniqueId> createNcclIds(const uint32_t world_size, bool multi_instances = false) override;
 
     virtual std::string toString() override;
     virtual std::pair<uint32_t, uint32_t> getMaxBatchSeqlen() override;
@@ -91,5 +92,5 @@ private:
 
     std::string model_name_;
     std::string model_dir_;
-
+    int int8_mode_ = 0;
 };

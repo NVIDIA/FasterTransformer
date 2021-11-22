@@ -145,6 +145,7 @@ void gpt_example(const INIReader reader)
     const float temperature = reader.GetFloat("ft_instance_hyperparameter", "temperature");
     const float repetition_penalty = reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty");
     const std::string model_dir = std::string(reader.Get("ft_instance_hyperparameter", "model_dir"));
+    const bool sparse = static_cast<bool>(reader.GetInteger("ft_instance_hyperparameter", "sparse"));
 
     const size_t head_num = reader.GetInteger(model_name, "head_num");
     const size_t size_per_head = reader.GetInteger(model_name, "size_per_head");
@@ -196,13 +197,25 @@ void gpt_example(const INIReader reader)
     cublasCreate(&cublas_handle);
     cublasLtCreate(&cublaslt_handle);
     cublasSetStream(cublas_handle, stream);
-    cublasAlgoMap* cublas_algo_map = new cublasAlgoMap("gemm_config.in");
+#ifdef SPARSITY_ENABLED
+    cusparseLtHandle_t cusparselt_handle;
+    CHECK_CUSPARSE(cusparseLtInit(&cusparselt_handle));
+    cublasAlgoMap* cublas_algo_map = new cublasAlgoMap(GEMM_CONFIG, SPGEMM_CONFIG);
+#else
+    cublasAlgoMap* cublas_algo_map = new cublasAlgoMap(GEMM_CONFIG);
+#endif
 
     Allocator<AllocatorType::CUDA> allocator(getDevice());
 
     std::mutex* cublas_wrapper_mutex = new std::mutex();
+#ifdef SPARSITY_ENABLED
+    cublasMMWrapper cublas_wrapper = cublasMMWrapper(
+        cublas_handle, cublaslt_handle, cusparselt_handle, stream, cublas_algo_map, cublas_wrapper_mutex, &allocator);
+#else
     cublasMMWrapper cublas_wrapper =
         cublasMMWrapper(cublas_handle, cublaslt_handle, stream, cublas_algo_map, cublas_wrapper_mutex, &allocator);
+#endif
+
     if (std::is_same<T, half>::value) {
         cublas_wrapper.setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
     }
@@ -214,6 +227,14 @@ void gpt_example(const INIReader reader)
 
     fastertransformer::GptWeight<T> gpt_weights(hidden_units, inter_size, vocab_size, decoder_layers, max_seq_len);
     gpt_weights.loadModel(model_dir);
+
+#ifdef SPARSITY_ENABLED
+    if (sparse) {
+        printf("[INFO] Compress weights for sparse inference\n");
+        gpt_weights.compress_weights(cublas_wrapper);
+    }
+#endif
+
     Gpt<T> gpt = Gpt<T>(0,  // max_batch_size, FT will adjust the buffer automatically.
                         0,  // max_seq_len, FT will adjust the buffer automatically.
                         0,  // max_input_len, FT will adjust the buffer automatically.
@@ -236,7 +257,8 @@ void gpt_example(const INIReader reader)
                         &cublas_wrapper,
                         &allocator,
                         false,
-                        &prop);
+                        &prop,
+                        sparse);
 
     int* d_output_ids;
     int* d_parent_ids;
@@ -345,6 +367,9 @@ void gpt_example(const INIReader reader)
         }
     }
 
+#ifdef SPARSITY_ENABLED
+    cusparseLtDestroy(&cusparselt_handle);
+#endif
     delete cublas_algo_map;
     delete cublas_wrapper_mutex;
     return;

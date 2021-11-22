@@ -55,7 +55,8 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createGptMod
             reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size"),
             reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size"),
             reader.Get("ft_instance_hyperparameter", "model_name"),
-            reader.Get("ft_instance_hyperparameter", "model_dir"));
+            reader.Get("ft_instance_hyperparameter", "model_dir"),
+            reader.GetInteger("ft_instance_hyperparameter", "int8_mode"));
     else
         return std::make_shared<ParallelGptTritonModel<float>>(
             reader.GetInteger("ft_instance_hyperparameter", "max_batch_size"),
@@ -78,7 +79,8 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createGptMod
             reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size"),
             reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size"),
             reader.Get("ft_instance_hyperparameter", "model_name"),
-            reader.Get("ft_instance_hyperparameter", "model_dir"));
+            reader.Get("ft_instance_hyperparameter", "model_dir"),
+            reader.GetInteger("ft_instance_hyperparameter", "int8_mode"));
 }
 
 template<typename T>
@@ -102,7 +104,8 @@ ParallelGptTritonModel<T>::ParallelGptTritonModel(size_t max_batch_size,
                                                   size_t tensor_para_size,
                                                   size_t pipeline_para_size,
                                                   std::string model_name,
-                                                  std::string model_dir):
+                                                  std::string model_dir,
+                                                  int int8_mode):
     max_batch_size_(max_batch_size),
     max_seq_len_(max_seq_len),
     max_input_len_(max_input_len),
@@ -123,7 +126,8 @@ ParallelGptTritonModel<T>::ParallelGptTritonModel(size_t max_batch_size,
     tensor_para_size_(tensor_para_size),
     pipeline_para_size_(pipeline_para_size),
     model_name_(model_name),
-    model_dir_(model_dir)
+    model_dir_(model_dir),
+    int8_mode_(int8_mode)
 {
 }
 
@@ -154,7 +158,7 @@ ParallelGptTritonModel<T>::createModelInstance(int device_id,
         cublas_handle, cublaslt_handle, stream, cublas_algo_map.get(), cublas_wrapper_mutex.get(), allocator.get()));
 
     std::unique_ptr<cudaDeviceProp> cuda_device_prop_ptr(new cudaDeviceProp);
-    ft::check_cuda_error(cudaGetDeviceProperties(cuda_device_prop_ptr.get(), 0));
+    ft::check_cuda_error(cudaGetDeviceProperties(cuda_device_prop_ptr.get(), device_id));
 
     if (std::is_same<T, half>::value) {
         cublas_wrapper->setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
@@ -192,7 +196,9 @@ ParallelGptTritonModel<T>::createModelInstance(int device_id,
                            cublas_wrapper.get(),
                            allocator.get(),
                            false,
-                           cuda_device_prop_ptr.get()));
+                           cuda_device_prop_ptr.get(),
+                           false,
+                           int8_mode_));
 
     auto weight = std::unique_ptr<ft::ParallelGptWeight<T>>(new ft::ParallelGptWeight<T>(head_num_ * size_per_head_,
                                                                                          inter_size_,
@@ -202,7 +208,8 @@ ParallelGptTritonModel<T>::createModelInstance(int device_id,
                                                                                          tensor_para_size_,
                                                                                          tensor_para_rank,
                                                                                          pipeline_para_size_,
-                                                                                         pipeline_para_rank));
+                                                                                         pipeline_para_rank,
+                                                                                         int8_mode_));
 
     weight->loadModel(model_dir_);
     return std::unique_ptr<ParallelGptTritonModelInstance<T>>(
@@ -230,22 +237,34 @@ std::string ParallelGptTritonModel<T>::toString()
        << "\nbeam_search_diversity_rate: " << beam_search_diversity_rate_ << "\ntop_k: " << top_k_
        << "\ntop_p: " << top_p_ << "\ntemperature: " << temperature_ << "\nlen_penalty: " << len_penalty_
        << "\nrepetition_penalty: " << repetition_penalty_ << "\ntensor_para_size: " << tensor_para_size_
-       << "\npipeline_para_size: " << pipeline_para_size_ << "\nmodel_name: " << model_name_
-       << "\nmodel_dir: " << model_dir_ << std::endl;
+       << "\npipeline_para_size: " << pipeline_para_size_ << "\nint8_mode: " << int8_mode_
+       << "\nmodel_name: " << model_name_ << "\nmodel_dir: " << model_dir_ << std::endl;
     return ss.str();
 }
 
 template<typename T>
-std::vector<ncclUniqueId> ParallelGptTritonModel<T>::createNcclIds(const uint32_t world_size)
+std::vector<ncclUniqueId> ParallelGptTritonModel<T>::createNcclIds(const uint32_t world_size, bool multi_instances)
 {
-    if (world_size != tensor_para_size_ * pipeline_para_size_) {
-        printf("[ERROR] world_size (%d) should equal to tensor_para_size_ * pipeline_para_size_ (%ld * %ld here) \n",
-               world_size,
-               tensor_para_size_,
-               pipeline_para_size_);
-        ft::FT_CHECK(world_size == tensor_para_size_ * pipeline_para_size_);
-    }
     std::vector<ncclUniqueId> nccl_ids(tensor_para_size_ + pipeline_para_size_);
+    if (multi_instances)
+    {
+        if (tensor_para_size_ * pipeline_para_size_ != 1) {
+            printf("[ERROR] Multiple Instances currently only support tensor_para_size_ and  pipeline_para_size_ both 1\n");
+            ft::FT_CHECK(tensor_para_size_ == 1 && pipeline_para_size_ == 1);
+        }
+        nccl_ids.resize(2);
+    }
+    else
+    {
+        if (world_size != tensor_para_size_ * pipeline_para_size_) {
+            printf("[ERROR] world_size (%d) should equal to tensor_para_size_ * pipeline_para_size_ (%ld * %ld here) \n",
+                    world_size,
+                    tensor_para_size_,
+                    pipeline_para_size_);
+            ft::FT_CHECK(world_size == tensor_para_size_ * pipeline_para_size_);
+        }
+    }
+    
     for (uint32_t i = 0; i < nccl_ids.size(); i++) {
         NCCLCHECK(ncclGetUniqueId(&nccl_ids[i]));
     }
@@ -254,26 +273,40 @@ std::vector<ncclUniqueId> ParallelGptTritonModel<T>::createNcclIds(const uint32_
 
 template<typename T>
 std::pair<std::vector<ncclComm_t>, std::vector<ncclComm_t>>
-ParallelGptTritonModel<T>::createNcclComms(std::vector<ncclUniqueId> nccl_ids, const int node_id)
+ParallelGptTritonModel<T>::createNcclComms(std::vector<ncclUniqueId> nccl_ids, const int node_id, bool multi_instances, int instance_id)
 {
     const int gpu_count = ft::getDeviceCount();
     std::vector<ncclComm_t> tensor_para_comms(gpu_count);
     std::vector<ncclComm_t> pipeline_para_comms(gpu_count);
+    if (multi_instances) 
+    {
+        ncclUniqueId tensor_para_nccl_uid = nccl_ids[0];
+        ncclUniqueId pipeline_para_nccl_uid = nccl_ids[1];
+        size_t tensor_para_rank = 0;
+        size_t pipeline_para_rank = 0;
 
-    NCCLCHECK(ncclGroupStart());
-    for (int gid = 0; gid < gpu_count; gid++) {
-        int rank = node_id * gpu_count + gid;
-        size_t tensor_para_rank = rank % tensor_para_size_;
-        size_t pipeline_para_rank = rank / tensor_para_size_;
-        ncclUniqueId tensor_para_nccl_uid = nccl_ids[pipeline_para_rank];
-        ncclUniqueId pipeline_para_nccl_uid = nccl_ids[pipeline_para_size_ + tensor_para_rank];
-
-        ft::check_cuda_error(cudaSetDevice(gid));
-        NCCLCHECK(ncclCommInitRank(&tensor_para_comms[gid], tensor_para_size_, tensor_para_nccl_uid, tensor_para_rank));
+        ft::check_cuda_error(cudaSetDevice(instance_id));
+        NCCLCHECK(ncclCommInitRank(&tensor_para_comms[instance_id], tensor_para_size_, tensor_para_nccl_uid, tensor_para_rank));
         NCCLCHECK(ncclCommInitRank(
-            &pipeline_para_comms[gid], pipeline_para_size_, pipeline_para_nccl_uid, pipeline_para_rank));
+            &pipeline_para_comms[instance_id], pipeline_para_size_, pipeline_para_nccl_uid, pipeline_para_rank));
     }
-    NCCLCHECK(ncclGroupEnd());
+    else
+    {
+        NCCLCHECK(ncclGroupStart());
+        for (int gid = 0; gid < gpu_count; gid++) {
+            int rank = node_id * gpu_count + gid;
+            size_t tensor_para_rank = rank % tensor_para_size_;
+            size_t pipeline_para_rank = rank / tensor_para_size_;
+            ncclUniqueId tensor_para_nccl_uid = nccl_ids[pipeline_para_rank];
+            ncclUniqueId pipeline_para_nccl_uid = nccl_ids[pipeline_para_size_ + tensor_para_rank];
+
+            ft::check_cuda_error(cudaSetDevice(gid));
+            NCCLCHECK(ncclCommInitRank(&tensor_para_comms[gid], tensor_para_size_, tensor_para_nccl_uid, tensor_para_rank));
+            NCCLCHECK(ncclCommInitRank(
+                &pipeline_para_comms[gid], pipeline_para_size_, pipeline_para_nccl_uid, pipeline_para_rank));
+        }
+        NCCLCHECK(ncclGroupEnd());
+    }
     return std::pair<std::vector<ncclComm_t>, std::vector<ncclComm_t>>(tensor_para_comms, pipeline_para_comms);
 }
 

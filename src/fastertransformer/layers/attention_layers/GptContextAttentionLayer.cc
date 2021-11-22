@@ -53,6 +53,19 @@ void GptContextAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>
     const int request_seq_len = input_tensors->at(1).shape[2];
     const int m = input_tensors->at(0).shape[0];
 
+#ifdef SPARSITY_ENABLED
+    const int m_padded = div_up(m, 8);
+    if (sparse_ && cublas_wrapper_->isUseSparse(1, 3 * local_hidden_units_, m_padded, hidden_units_)) {
+        cublas_wrapper_->SpGemm(CUBLAS_OP_N,
+                                CUBLAS_OP_N,
+                                3 * local_hidden_units_,
+                                m_padded,
+                                hidden_units_,
+                                attention_weights->query_weight.sp_kernel,
+                                attention_input,
+                                qkv_buf_);
+    } else {
+#endif
     cublas_wrapper_->Gemm(CUBLAS_OP_N,
                           CUBLAS_OP_N,
                           3 * local_hidden_units_,  // n
@@ -64,8 +77,10 @@ void GptContextAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>
                           hidden_units_,  // k
                           qkv_buf_,
                           3 * local_hidden_units_ /* n */);
+#ifdef SPARSITY_ENABLED
+    }
+#endif
     sync_check_cuda_error();
-
     invokeAddFusedQKVBiasTranspose(q_buf_2_,
                                    k_buf_2_,
                                    v_buf_2_,
@@ -179,6 +194,18 @@ void GptContextAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>
             qkv_buf_3_, qkv_buf_2_, request_batch_size, request_seq_len, local_head_num_, size_per_head_, stream_);
         sync_check_cuda_error();
 
+#ifdef SPARSITY_ENABLED
+    if (sparse_ && cublas_wrapper_->isUseSparse(1, hidden_units_, m_padded, local_hidden_units_)) {
+        cublas_wrapper_->SpGemm(CUBLAS_OP_N,
+                                CUBLAS_OP_N,
+                                hidden_units_,
+                                m_padded,
+                                local_hidden_units_,
+                                attention_weights->attention_output_weight.sp_kernel,
+                                qkv_buf_3_,
+                                attention_out);
+    } else {
+#endif
         cublas_wrapper_->Gemm(CUBLAS_OP_N,
                               CUBLAS_OP_N,
                               hidden_units_,
@@ -190,6 +217,9 @@ void GptContextAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>
                               local_hidden_units_,
                               attention_out,
                               hidden_units_);
+#ifdef SPARSITY_ENABLED
+    }
+#endif
     }
 
     if (is_free_buffer_after_forward_ == true)
@@ -206,8 +236,9 @@ GptContextAttentionLayer<T>::GptContextAttentionLayer(size_t max_batch_size,
                                                       cublasMMWrapper* cublas_wrapper,
                                                       IAllocator* allocator,
                                                       bool is_free_buffer_after_forward,
-                                                      bool is_qk_buf_float):
-    BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
+                                                      bool is_qk_buf_float,
+                                                      bool sparse):
+    BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, sparse),
     max_batch_size_(max_batch_size),
     max_seq_len_(max_seq_len),
     head_num_(head_num),
@@ -230,8 +261,9 @@ GptContextAttentionLayer<T>::GptContextAttentionLayer(size_t max_batch_size,
                                                       cublasMMWrapper* cublas_wrapper,
                                                       IAllocator* allocator,
                                                       bool is_free_buffer_after_forward,
-                                                      bool is_qk_buf_float):
-    BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
+                                                      bool is_qk_buf_float,
+                                                      bool sparse):
+    BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, sparse),
     max_batch_size_(max_batch_size),
     max_seq_len_(max_seq_len),
     head_num_(head_num),
@@ -255,8 +287,9 @@ GptContextAttentionLayer<T>::GptContextAttentionLayer(size_t max_batch_size,
                                                       cublasMMWrapper* cublas_wrapper,
                                                       IAllocator* allocator,
                                                       bool is_free_buffer_after_forward,
-                                                      bool is_qk_buf_float):
-    BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
+                                                      bool is_qk_buf_float,
+                                                      bool sparse):
+    BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, sparse),
     max_batch_size_(max_batch_size),
     max_seq_len_(max_seq_len),
     head_num_(head_num),
@@ -274,7 +307,8 @@ GptContextAttentionLayer<T>::GptContextAttentionLayer(GptContextAttentionLayer<T
     BaseAttentionLayer<T>(attention_layer.stream_,
                           attention_layer.cublas_wrapper_,
                           attention_layer.allocator_,
-                          attention_layer.is_free_buffer_after_forward_),
+                          attention_layer.is_free_buffer_after_forward_,
+                          attention_layer.sparse_),
     max_batch_size_(attention_layer.max_batch_size_),
     max_seq_len_(attention_layer.max_seq_len_),
     head_num_(attention_layer.head_num_),

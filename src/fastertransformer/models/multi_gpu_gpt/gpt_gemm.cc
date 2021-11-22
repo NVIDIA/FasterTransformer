@@ -24,7 +24,7 @@ int main(int argc, char* argv[])
     if (argc != 9 && argc != 10) {
         printf(
             "[ERROR] gpt_gemm batch_size beam_width max_input_len head_number size_per_head inter_size vocab_size is_fp16 tensor_para_size\n");
-        printf("e.g. ./bin/gpt_gemm 8 4 32 12 128 1536 51200 1 1\n");
+        printf("e.g. ./bin/gpt_gemm 8 4 32 96 128 49152 51200 8 1\n");
         return 0;
     }
 
@@ -36,7 +36,8 @@ int main(int argc, char* argv[])
     const int inter_size = atoi(argv[6]);
     const int vocab_size = atoi(argv[7]);
     const int is_fp16 = atoi(argv[8]);
-    const int tensor_para_size = argc == 9 ? 1 : atoi(argv[9]);
+    const int tensor_para_size = argc <= 9 ? 1 : atoi(argv[9]);
+    const int is_fp16_compute_type = argc <= 10 ? 0 : atoi(argv[10]);
 
     printf("[INFO] arguments: \n");
     printf("  batch_size: %d \n", batch_size);

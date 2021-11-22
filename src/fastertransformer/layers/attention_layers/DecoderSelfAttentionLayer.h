@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "src/fastertransformer/kernels/matrix_vector_multiplication.h"
 #include "src/fastertransformer/layers/attention_layers/BaseAttentionLayer.h"
 
 namespace fastertransformer {
@@ -32,7 +33,11 @@ private:
     const size_t hidden_units_;
     const size_t local_head_num_;
     const size_t local_hidden_units_;
+    const size_t d_model_;
+    const float q_scaling_;
     const size_t rotary_embedding_dim_;
+
+    const int int8_mode_ = 0;
 
     void allocateBuffer() override;
     void freeBuffer() override;
@@ -47,15 +52,43 @@ protected:
     T* qkv_buf_;
     T* context_buf_;
     using BaseAttentionLayer<T>::stream_;
+    using BaseAttentionLayer<T>::sparse_;
 
 public:
+    DecoderSelfAttentionLayer(size_t max_batch_size,
+                              size_t head_num,
+                              size_t size_per_head,
+                              size_t local_head_num,
+                              size_t rotary_embedding_dim,
+                              size_t d_model,
+                              const float q_scaling,
+                              cudaStream_t stream,
+                              cublasMMWrapper* cublas_wrapper,
+                              IAllocator* allocator,
+                              bool is_free_buffer_after_forward,
+                              bool sparse = false,
+                              int int8_mode = 0);
+
     DecoderSelfAttentionLayer(size_t max_batch_size,
                               size_t head_num,
                               size_t size_per_head,
                               cudaStream_t stream,
                               cublasMMWrapper* cublas_wrapper,
                               IAllocator* allocator,
-                              bool is_free_buffer_after_forward);
+                              bool is_free_buffer_after_forward,
+                              bool sparse = false,
+                              int int8_mode = 0);
+
+    DecoderSelfAttentionLayer(size_t max_batch_size,
+                              size_t head_num,
+                              size_t size_per_head,
+                              const float q_scaling,
+                              cudaStream_t stream,
+                              cublasMMWrapper* cublas_wrapper,
+                              IAllocator* allocator,
+                              bool is_free_buffer_after_forward,
+                              bool sparse = false,
+                              int int8_mode = 0);
 
     DecoderSelfAttentionLayer(size_t max_batch_size,
                               size_t head_num,
@@ -64,7 +97,22 @@ public:
                               cudaStream_t stream,
                               cublasMMWrapper* cublas_wrapper,
                               IAllocator* allocator,
-                              bool is_free_buffer_after_forward);
+                              bool is_free_buffer_after_forward,
+                              bool sparse = false,
+                              int int8_mode = 0);
+
+    DecoderSelfAttentionLayer(size_t max_batch_size,
+                              size_t head_num,
+                              size_t size_per_head,
+                              size_t local_head_num,
+                              size_t d_model,
+                              const float q_scaling,
+                              cudaStream_t stream,
+                              cublasMMWrapper* cublas_wrapper,
+                              IAllocator* allocator,
+                              bool is_free_buffer_after_forward,
+                              bool sparse = false,
+                              int int8_mode = 0);
 
     DecoderSelfAttentionLayer(size_t max_batch_size,
                               size_t head_num,
@@ -74,7 +122,9 @@ public:
                               cudaStream_t stream,
                               cublasMMWrapper* cublas_wrapper,
                               IAllocator* allocator,
-                              bool is_free_buffer_after_forward);
+                              bool is_free_buffer_after_forward,
+                              bool sparse = false,
+                              int int8_mode = 0);
 
     DecoderSelfAttentionLayer(DecoderSelfAttentionLayer<T> const& attention_layer);
 
@@ -122,12 +172,23 @@ void fusedQKV_masked_attention_dispatch(const T* qkv_buf,
                                         const int step,
                                         cudaStream_t stream)
 {
-    fusedQKV_masked_attention_dispatch(
-        qkv_buf, qkv_bias, key_cache, value_cache, context_buf, finished,
-        sequence_lengths, max_batch_size, inference_batch_size, head_num,
-        size_per_head, /*rotary_embedding_dim */ 0, max_seq_len,
-        max_input_len, input_lengths, step, stream
-    );
+    fusedQKV_masked_attention_dispatch(qkv_buf,
+                                       qkv_bias,
+                                       key_cache,
+                                       value_cache,
+                                       context_buf,
+                                       finished,
+                                       sequence_lengths,
+                                       max_batch_size,
+                                       inference_batch_size,
+                                       head_num,
+                                       size_per_head,
+                                       /*rotary_embedding_dim */ 0,
+                                       max_seq_len,
+                                       max_input_len,
+                                       input_lengths,
+                                       step,
+                                       stream);
 }
 
 }  // namespace fastertransformer

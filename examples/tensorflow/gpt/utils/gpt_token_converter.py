@@ -27,7 +27,7 @@ def convert_token(
     max_input_length=-1
 ):
     enc = encoder.get_encoder(vocab_file, bpe_file)
-    tokens_batch = np.loadtxt(out_file, dtype=np.int32).T
+    tokens_batch = np.loadtxt(out_file, dtype=np.int32)
     end_id = 50256
     if(tokens_batch.ndim == 1): 
         tokens_batch = tokens_batch.reshape([1, -1])

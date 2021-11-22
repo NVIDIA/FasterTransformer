@@ -23,8 +23,9 @@ __global__ void addBiasResidual(T* output, const T* input, const T* bias, const 
 {
     const int col_index = blockIdx.y * blockDim.x + threadIdx.x;
     if (col_index < n) {
+        T bias_val = (bias == nullptr) ? (T)(0.0f) : bias[col_index];
         output[blockIdx.x * n + col_index] =
-            output[blockIdx.x * n + col_index] + input[blockIdx.x * n + col_index] + bias[col_index];
+            output[blockIdx.x * n + col_index] + input[blockIdx.x * n + col_index] + bias_val;
     }
 }
 
@@ -120,5 +121,28 @@ template void invokeAddBiasAttentionFfnResidual(
 
 template void invokeAddBiasAttentionFfnResidual(
     half* block_output, const half* ffn_output, const half* attn_output, const half* input, const half* bias, const int m, const int n, cudaStream_t stream);
+
+template<typename T>
+__global__ void T5addResidual(T* output, const T* input, const int m, const int n)
+{
+    const int col_index = blockIdx.y * blockDim.x + threadIdx.x;
+    if (col_index < n) {
+        float out_val = (float)output[blockIdx.x * n + col_index] + (float)input[blockIdx.x * n + col_index];
+        output[blockIdx.x * n + col_index] = (T)((std::is_same<T, half>::value && (out_val > 64512 || out_val < -64512)) ?
+            (out_val > 0 ? 64512 : -64512) : out_val);
+    }
+}
+
+template<typename T>
+void invokeT5AddResidual(T* output, const T* input, const int m, const int n, cudaStream_t stream)
+{
+    int blocks_per_row = ceil(float(n) / 1024);
+    dim3 grid(m, blocks_per_row);
+    dim3 block(min(n, 1024));
+    T5addResidual<<<grid, block, 0, stream>>>(output, input, m, n);
+}
+
+template void invokeT5AddResidual(float* output, const float* input, const int m, const int n, cudaStream_t stream);
+template void invokeT5AddResidual(half* output, const half* input, const int m, const int n, cudaStream_t stream);
 
 }  // namespace fastertransformer

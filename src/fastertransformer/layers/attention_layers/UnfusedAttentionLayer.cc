@@ -24,26 +24,30 @@ void UnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* o
                                        const std::vector<fastertransformer::Tensor>* input_tensors,
                                        const AttentionWeight<T>* attention_weights)
 {
-    // input_tensors: [input_query (token_num, hidden_dimension),
-    //                 attention_mask (batch, 1, seqlen, seqlen),
-    //                 padding_offset (token_num)]
+    // input_tensors:
+    //      input_query (token_num, d_model),
+    //      attention_mask (batch, 1, seqlen, seqlen),
+    //      padding_offset (token_num)
+    //      relative_attention_bias (optional)
     // If padding_offset.data is nullptr, then not remove padding
 
     FT_CHECK(isValidBatchSize(input_tensors->at(1).shape[0]));
     FT_CHECK(isValidSeqLen(input_tensors->at(1).shape[2]));
+    FT_CHECK(input_tensors->size() == 3 || input_tensors->size() == 4);
     allocateBuffer();
 
     T* attention_out = (T*)output_tensors->at(0).data;
     const T* from_tensor = (const T*)input_tensors->at(0).data;
     const T* attention_mask = (const T*)input_tensors->at(1).data;
     const int* padding_offset = (const int*)input_tensors->at(2).data;
+    const T* relative_attention_bias = input_tensors->size() == 4 ? (const T*)input_tensors->at(3).data : nullptr;
 
     const int request_batch_size = input_tensors->at(1).shape[0];
     const int request_seq_len = input_tensors->at(1).shape[2];
 
     const int m = input_tensors->at(0).shape[0];
-    const int k = hidden_units_;
-    const int n = hidden_units_;
+    int k = d_model_;
+    int n = hidden_units_;
 #ifdef SPARSITY_ENABLED
     int m_tmp = m;
     if (m_tmp % 8 != 0) {
@@ -52,72 +56,73 @@ void UnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* o
     const int m_padded = m_tmp;
 
     if (sparse_ && cublas_wrapper_->isUseSparse(1, n, m, k)) {
-        cublas_wrapper_->SpGemm(CUBLAS_OP_N,
-                                CUBLAS_OP_N,
-                                n,
-                                m_padded,
-                                k,
-                                attention_weights->query_weight.sp_kernel,
-                                from_tensor,
-                                q_buf_);
-        cublas_wrapper_->SpGemm(CUBLAS_OP_N,
-                                CUBLAS_OP_N,
-                                n,
-                                m_padded,
-                                k,
-                                attention_weights->key_weight.sp_kernel,
-                                from_tensor,
-                                k_buf_);
-        cublas_wrapper_->SpGemm(CUBLAS_OP_N,
-                                CUBLAS_OP_N,
-                                n,
-                                m_padded,
-                                k,
-                                attention_weights->value_weight.sp_kernel,
-                                from_tensor,
-                                v_buf_);
-    } else {
-#endif
-    const bool is_batched_QKV_ = cublas_wrapper_->isFuseBatchGemm(3, n, m, k);
-    if (is_batched_QKV_) {
-        const T* hA[]{attention_weights->query_weight.kernel,
-                      attention_weights->key_weight.kernel,
-                      attention_weights->value_weight.kernel,
-                      nullptr,
-                      from_tensor,
-                      from_tensor,
-                      from_tensor,
-                      nullptr,
-                      q_buf_,
-                      k_buf_,
-                      v_buf_};
-        // Note: Here, we assume the weights of each time may be different.
-        // If we can preprocess these weights before inference, we can reduce the overhead
-        // caused by cudaMemcpyAsync
-        cudaMemcpyAsync((void*)batch_qkv_kernel_ptr_, hA, sizeof(T*) * 12, cudaMemcpyHostToDevice, stream_);
-        cublas_wrapper_->batchedGemm(CUBLAS_OP_N,
-                                     CUBLAS_OP_N,
-                                     n,
-                                     m,
-                                     k,
-                                     (const void* const*)batch_qkv_kernel_ptr_,
-                                     n,
-                                     (const void* const*)batch_qkv_input_ptr_,
-                                     k,
-                                     (void* const*)batch_qkv_buf_ptr_,
-                                     n,
-                                     3);
+        cublas_wrapper_->SpGemm(
+            CUBLAS_OP_N, CUBLAS_OP_N, n, m_padded, k, attention_weights->query_weight.sp_kernel, from_tensor, q_buf_);
+        cublas_wrapper_->SpGemm(
+            CUBLAS_OP_N, CUBLAS_OP_N, n, m_padded, k, attention_weights->key_weight.sp_kernel, from_tensor, k_buf_);
+        cublas_wrapper_->SpGemm(
+            CUBLAS_OP_N, CUBLAS_OP_N, n, m_padded, k, attention_weights->value_weight.sp_kernel, from_tensor, v_buf_);
     }
     else {
-        cublas_wrapper_->Gemm(
-            CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, attention_weights->query_weight.kernel, n, from_tensor, k, q_buf_, n);
+#endif
+        const bool is_batched_QKV_ = cublas_wrapper_->isFuseBatchGemm(3, n, m, k);
+        if (is_batched_QKV_) {
+            const T* hA[]{attention_weights->query_weight.kernel,
+                          attention_weights->key_weight.kernel,
+                          attention_weights->value_weight.kernel,
+                          nullptr,
+                          from_tensor,
+                          from_tensor,
+                          from_tensor,
+                          nullptr,
+                          q_buf_,
+                          k_buf_,
+                          v_buf_};
+            // Note: Here, we assume the weights of each time may be different.
+            // If we can preprocess these weights before inference, we can reduce the overhead
+            // caused by cudaMemcpyAsync
+            cudaMemcpyAsync((void*)batch_qkv_kernel_ptr_, hA, sizeof(T*) * 12, cudaMemcpyHostToDevice, stream_);
+            cublas_wrapper_->batchedGemm(CUBLAS_OP_N,
+                                         CUBLAS_OP_N,
+                                         n,
+                                         m,
+                                         k,
+                                         (const void* const*)batch_qkv_kernel_ptr_,
+                                         n,
+                                         (const void* const*)batch_qkv_input_ptr_,
+                                         k,
+                                         (void* const*)batch_qkv_buf_ptr_,
+                                         n,
+                                         3);
+        }
+        else {
+            cublas_wrapper_->Gemm(CUBLAS_OP_N,
+                                  CUBLAS_OP_N,
+                                  n,
+                                  m,
+                                  k,
+                                  attention_weights->query_weight.kernel,
+                                  n,
+                                  from_tensor,
+                                  k,
+                                  q_buf_,
+                                  n);
 
-        cublas_wrapper_->Gemm(
-            CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, attention_weights->key_weight.kernel, n, from_tensor, k, k_buf_, n);
+            cublas_wrapper_->Gemm(
+                CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, attention_weights->key_weight.kernel, n, from_tensor, k, k_buf_, n);
 
-        cublas_wrapper_->Gemm(
-            CUBLAS_OP_N, CUBLAS_OP_N, n, m, k, attention_weights->value_weight.kernel, n, from_tensor, k, v_buf_, n);
-    }
+            cublas_wrapper_->Gemm(CUBLAS_OP_N,
+                                  CUBLAS_OP_N,
+                                  n,
+                                  m,
+                                  k,
+                                  attention_weights->value_weight.kernel,
+                                  n,
+                                  from_tensor,
+                                  k,
+                                  v_buf_,
+                                  n);
+        }
 #ifdef SPARSITY_ENABLED
     }
 #endif
@@ -140,8 +145,7 @@ void UnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* o
         sync_check_cuda_error();
     }
     else {
-        cudaMemsetAsync(
-            q_buf_2_, 0, 3 * request_batch_size * request_seq_len * head_num_ * size_per_head_ * sizeof(T), stream_);
+        cudaMemsetAsync(q_buf_2_, 0, 3 * max_batch_size_ * max_seq_len_ * hidden_units_ * sizeof(T), stream_);
         sync_check_cuda_error();
         invokeAddQKVBiasRebuildPadding(q_buf_,
                                        attention_weights->query_weight.bias,
@@ -179,7 +183,15 @@ void UnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* o
                                         request_batch_size * head_num_);
 
     T scalar = 1 / (sqrtf(size_per_head_ * 1.0f) * q_scaling_);
-    invokeMaskedSoftMax(qk_buf_, qk_buf_, attention_mask, request_batch_size, request_seq_len, head_num_, scalar, stream_);
+
+    // TODO (fuse with softMax)
+    if (relative_attention_bias != nullptr) {
+        invokeAddRelativeAttentionBias(
+            qk_buf_, relative_attention_bias, request_batch_size, head_num_, request_seq_len, stream_);
+    }
+
+    invokeMaskedSoftMax(
+        qk_buf_, qk_buf_, attention_mask, request_batch_size, request_seq_len, head_num_, scalar, stream_);
     sync_check_cuda_error();
 
     cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_N,
@@ -215,6 +227,9 @@ void UnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* o
                                                  stream_);
     }
 
+    k = hidden_units_;
+    n = d_model_;
+
 #ifdef SPARSITY_ENABLED
     if (sparse_ && cublas_wrapper_->isUseSparse(1, n, m, k)) {
         cublas_wrapper_->SpGemm(CUBLAS_OP_N,
@@ -225,19 +240,20 @@ void UnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* o
                                 attention_weights->attention_output_weight.sp_kernel,
                                 qkv_buf_2_,
                                 attention_out);
-    } else {
+    }
+    else {
 #endif
-    cublas_wrapper_->Gemm(CUBLAS_OP_N,
-                          CUBLAS_OP_N,
-                          n,
-                          m,
-                          k,
-                          attention_weights->attention_output_weight.kernel,
-                          n,
-                          qkv_buf_2_,
-                          k,
-                          attention_out,
-                          n);
+        cublas_wrapper_->Gemm(CUBLAS_OP_N,
+                              CUBLAS_OP_N,
+                              n,
+                              m,
+                              k,
+                              attention_weights->attention_output_weight.kernel,
+                              n,
+                              qkv_buf_2_,
+                              k,
+                              attention_out,
+                              n);
 #ifdef SPARSITY_ENABLED
     }
 #endif
@@ -258,11 +274,38 @@ UnfusedAttentionLayer<T>::UnfusedAttentionLayer(size_t max_batch_size,
                                                 IAllocator* allocator,
                                                 bool is_free_buffer_after_forward,
                                                 bool sparse):
+    UnfusedAttentionLayer(max_batch_size,
+                          max_seq_len,
+                          head_num,
+                          size_per_head,
+                          head_num * size_per_head,
+                          q_scaling,
+                          stream,
+                          cublas_wrapper,
+                          allocator,
+                          is_free_buffer_after_forward,
+                          sparse)
+{
+}
+
+template<typename T>
+UnfusedAttentionLayer<T>::UnfusedAttentionLayer(size_t max_batch_size,
+                                                size_t max_seq_len,
+                                                size_t head_num,
+                                                size_t size_per_head,
+                                                size_t d_model,
+                                                float q_scaling,
+                                                cudaStream_t stream,
+                                                cublasMMWrapper* cublas_wrapper,
+                                                IAllocator* allocator,
+                                                bool is_free_buffer_after_forward,
+                                                bool sparse):
     BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     max_batch_size_(max_batch_size),
     max_seq_len_(max_seq_len),
     head_num_(head_num),
     size_per_head_(size_per_head),
+    d_model_(d_model),
     hidden_units_(head_num_ * size_per_head_),
     sparse_(sparse),
     q_scaling_(q_scaling)
@@ -279,6 +322,7 @@ UnfusedAttentionLayer<T>::UnfusedAttentionLayer(UnfusedAttentionLayer<T> const& 
     max_seq_len_(attention_layer.max_seq_len_),
     head_num_(attention_layer.head_num_),
     size_per_head_(attention_layer.size_per_head_),
+    d_model_(attention_layer.d_model_),
     hidden_units_(attention_layer.hidden_units_),
     sparse_(attention_layer.sparse_),
     q_scaling_(attention_layer.q_scaling_)
@@ -333,24 +377,26 @@ void UnfusedAttentionLayer<T>::freeBuffer()
 template<typename T>
 bool UnfusedAttentionLayer<T>::isValidBatchSize(size_t batch_size)
 {
-    if (max_batch_size_ == 0) {
-        max_batch_size_ = batch_size;
+    if (batch_size <= max_batch_size_) {
         return true;
     }
     else {
-        return batch_size <= max_batch_size_;
+        freeBuffer();
+        max_batch_size_ = batch_size * 1.2;
+        return true;
     }
 }
 
 template<typename T>
 bool UnfusedAttentionLayer<T>::isValidSeqLen(size_t seq_len)
 {
-    if (max_seq_len_ == 0) {
-        max_seq_len_ = seq_len;
+    if (seq_len <= max_seq_len_) {
         return true;
     }
     else {
-        return seq_len <= max_seq_len_;
+        freeBuffer();
+        max_seq_len_ = seq_len * 1.2;
+        return true;
     }
 }
 

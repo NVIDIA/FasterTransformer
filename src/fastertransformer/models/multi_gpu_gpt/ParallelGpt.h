@@ -47,7 +47,7 @@ private:
     int end_id_;
     float beam_search_diversity_rate_;
     size_t hidden_units_;
-    
+
     size_t top_k_;
     float top_p_;
     unsigned long long random_seed_;
@@ -66,6 +66,7 @@ private:
 
     const bool is_context_qk_buf_float_ = true;
     size_t vocab_size_padded_;
+    const int int8_mode_ = 0;
 
     ParallelGptDecoder<T>* gpt_decoder_;
     DynamicDecodeBaseLayer* dynamic_decode_;
@@ -135,7 +136,9 @@ public:
                 cublasMMWrapper* cublas_wrapper,
                 IAllocator* allocator,
                 bool is_free_buffer_after_forward,
-                cudaDeviceProp* cuda_device_prop = nullptr);
+                cudaDeviceProp* cuda_device_prop = nullptr,
+                bool sparse = false,
+                int int8_mode = 0);
 
     ParallelGpt(ParallelGpt<T> const& gpt);
 

@@ -129,12 +129,6 @@ class FTDecoder(nn.Module):
     
     def forward(self, inputs, memory, memory_seq_lens, self_cache, mem_cache, sequence_lengths, step):
         dtype = torch.half if self.is_fp16 else torch.float32
-        self_cache_tmp = [ torch.zeros(self_cache[0].size(0), self_cache[0].size(1), self_cache[0].size(2), 
-                                        self_cache[0].size(3), 1, self_cache[0].size(5), dtype=dtype, device='cuda'),
-                            torch.zeros(self_cache[1].size(0), self_cache[1].size(1), self_cache[1].size(2),
-                                        1, self_cache[1].size(4), dtype=dtype, device='cuda') ]
-        self_cache[0] = torch.cat([self_cache[0], self_cache_tmp[0]], 4)
-        self_cache[1] = torch.cat([self_cache[1], self_cache_tmp[1]], 3)
         inputs_shape = inputs.shape
         inputs = inputs.reshape([-1, inputs.shape[-1]])
         output, self_key_cache, self_val_cache, mem_key_cache, mem_val_cache = \

@@ -250,8 +250,9 @@ def bert_example(args):
                 t.start()
             for t in thread_list:
                 t.join()
-                
-        return max(torch.mean(FT_diff), torch.mean(EFF_diff))
+    
+    sys.stdout.flush()            
+    return max(torch.mean(FT_diff), torch.mean(EFF_diff))
 
 
 if __name__ == '__main__':

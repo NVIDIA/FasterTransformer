@@ -117,7 +117,8 @@ public:
         cublasMMWrapper* cublas_wrapper,
         IAllocator* allocator,
         bool is_free_buffer_after_forward,
-        cudaDeviceProp* cuda_device_prop);
+        cudaDeviceProp* cuda_device_prop,
+        bool sparse = false);
 
     Gpt(Gpt<T> const& Gpt);
 

@@ -27,7 +27,8 @@ ParallelGptWeight<T>::ParallelGptWeight(const int hidden_units,
                                         const int tensor_para_size,
                                         const int tensor_para_rank,
                                         const int layer_para_size,
-                                        const int layer_para_rank):
+                                        const int layer_para_rank,
+                                        const int int8_mode):
     hidden_units_(hidden_units),
     inter_size_(inter_size),
     vocab_size_(vocab_size),
@@ -36,13 +37,14 @@ ParallelGptWeight<T>::ParallelGptWeight(const int hidden_units,
     tensor_para_size_(tensor_para_size),
     tensor_para_rank_(tensor_para_rank),
     layer_para_size_(layer_para_size),
-    layer_para_rank_(layer_para_rank)
+    layer_para_rank_(layer_para_rank),
+    int8_mode_(int8_mode)
 {
     decoder_layer_weights.clear();
     for (int l = 0; l < num_layer_; l++) {
         if (isValidLayerParallelId(l)) {
-            decoder_layer_weights.push_back(
-                new ParallelGptDecoderLayerWeight<T>(hidden_units_, inter_size_, tensor_para_size_, tensor_para_rank_));
+            decoder_layer_weights.push_back(new ParallelGptDecoderLayerWeight<T>(
+                hidden_units_, inter_size_, tensor_para_size_, tensor_para_rank_, int8_mode_));
         }
         else {
             // Don't malloc and load these layers since we don't use them.
@@ -179,13 +181,27 @@ bool ParallelGptWeight<T>::isValidLayerParallelId(int l)
 }
 
 template<typename T>
-void ParallelGptWeight<T>::resizeLayer(const int num_layer)
+void ParallelGptWeight<T>::resizeLayer(const int num_layer, const int int8_mode)
 {
+    int8_mode_ = int8_mode;
     num_layer_ = num_layer;
     for (int l = 0; l < num_layer_; l++) {
-        decoder_layer_weights.push_back(new ParallelGptDecoderLayerWeight<T>());
+        decoder_layer_weights.push_back(new ParallelGptDecoderLayerWeight<T>(int8_mode_));
     }
 }
+
+#ifdef SPARSITY_ENABLED
+template<typename T>
+void ParallelGptWeight<T>::compress_weights(cublasMMWrapper& cublas_wrapper)
+{
+    FT_CHECK(decoder_layer_weights.size() == static_cast<size_t>(num_layer_));
+    for (int i = 0; i < num_layer_; ++i) {
+        if (isValidLayerParallelId(i)) {
+            decoder_layer_weights[i]->compress_weights(cublas_wrapper, hidden_units_);
+        }
+    }
+}
+#endif
 
 template struct ParallelGptWeight<float>;
 template struct ParallelGptWeight<half>;

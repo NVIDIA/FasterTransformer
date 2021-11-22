@@ -78,6 +78,8 @@ def main():
                         help='path to sample output file.')
     parser.add_argument('--is_fix_random_seed', type=bool, default=True,
                         help='is fixing the random seed.')
+    parser.add_argument('--int8_mode', type=int, default=0,
+                        help='int8 mode.')
 
     args = parser.parse_args()
 
@@ -96,6 +98,7 @@ def main():
     max_batch_size = args.max_batch_size
     max_seq_len = args.max_seq_len
     repetition_penalty = args.repetition_penalty
+    int8_mode = args.int8_mode
 
     print("\n=============== Arguments ===============")
     for arg in vars(args):
@@ -131,7 +134,7 @@ def main():
     # Prepare model.
     gpt = ParallelGPT(head_num, size_per_head, vocab_size, start_id, end_id,
               layer_num, top_k, top_p, random_seed, temperature, output_len, max_seq_len,
-              tensor_para_size, pipeline_para_size, max_batch_size, repetition_penalty, lib_path=args.lib_path)
+              tensor_para_size, pipeline_para_size, max_batch_size, repetition_penalty, lib_path=args.lib_path, int8_mode=args.int8_mode)
     if not gpt.load(ckpt_path=args.ckpt_path):
         print("[WARNING] Checkpoint file not found. Model loading is skipped.")
     if args.fp16:

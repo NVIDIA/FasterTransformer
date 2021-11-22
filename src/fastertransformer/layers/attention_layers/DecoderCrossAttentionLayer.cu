@@ -316,6 +316,7 @@ void cross_attention_dispatch(T* query_buf,
                               const int step,
                               const int seq_len,
                               const bool batch_major_cache,
+                              const float q_scaling,
                               cudaStream_t stream)
 {
     if (!batch_major_cache) {
@@ -447,7 +448,7 @@ void cross_attention_dispatch(T* query_buf,
         params.timestep = step - 1;
         params.num_heads = head_num;
         params.hidden_size_per_head = size_per_head;
-        params.inv_sqrt_dh = 1.F / sqrtf((float)params.hidden_size_per_head);
+        params.inv_sqrt_dh = 1.F / (sqrtf((float)params.hidden_size_per_head) * q_scaling);
 
         cross_multihead_attention(params, stream);
     }
@@ -469,6 +470,7 @@ template void cross_attention_dispatch(float* query_buf,
                                        const int step,
                                        const int seq_len,
                                        const bool batch_major_cache,
+                                       const float q_scaling,
                                        cudaStream_t stream);
 
 template void cross_attention_dispatch(half* query_buf,
@@ -487,6 +489,7 @@ template void cross_attention_dispatch(half* query_buf,
                                        const int step,
                                        const int seq_len,
                                        const bool batch_major_cache,
+                                       const float q_scaling,
                                        cudaStream_t stream);
 
 // Currently need to transpose at the first step in Cross attention
@@ -622,25 +625,49 @@ void DecoderCrossAttentionLayer<T>::freeBuffer()
 template<typename T>
 bool DecoderCrossAttentionLayer<T>::isValidBatchSize(size_t batch_size)
 {
-    if (max_batch_size_ == 0) {
-        max_batch_size_ = batch_size;
+    if (batch_size <= max_batch_size_) {
         return true;
     }
     else {
-        return batch_size <= max_batch_size_;
+        freeBuffer();
+        max_batch_size_ = batch_size * 1.2;
+        return true;
     }
 }
 
 template<typename T>
 bool DecoderCrossAttentionLayer<T>::isValidSeqLen(size_t seq_len)
 {
-    if (max_mem_seq_len_ == 0) {
-        max_mem_seq_len_ = seq_len;
+    if (seq_len <= max_mem_seq_len_) {
         return true;
     }
     else {
-        return seq_len <= max_mem_seq_len_;
+        freeBuffer();
+        max_mem_seq_len_ = seq_len * 1.2;
+        return true;
     }
+}
+
+template<typename T>
+DecoderCrossAttentionLayer<T>::DecoderCrossAttentionLayer(size_t max_batch_size,
+                                                          size_t head_num,
+                                                          size_t size_per_head,
+                                                          size_t d_model,
+                                                          const float q_scaling,
+                                                          cudaStream_t stream,
+                                                          cublasMMWrapper* cublas_wrapper,
+                                                          IAllocator* allocator,
+                                                          bool is_free_buffer_after_forward):
+    BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
+    max_batch_size_(max_batch_size),
+    head_num_(head_num),
+    size_per_head_(size_per_head),
+    hidden_units_(head_num_ * size_per_head_),
+    d_model_(d_model),
+    q_scaling_(q_scaling)
+{
+    FT_CHECK(size_per_head_ == 32 || size_per_head_ == 64 || size_per_head_ == 96 || size_per_head_ == 128
+             || size_per_head_ == 160 || size_per_head_ == 192 || size_per_head_ == 224 || size_per_head_ == 256);
 }
 
 template<typename T>
@@ -651,14 +678,37 @@ DecoderCrossAttentionLayer<T>::DecoderCrossAttentionLayer(size_t max_batch_size,
                                                           cublasMMWrapper* cublas_wrapper,
                                                           IAllocator* allocator,
                                                           bool is_free_buffer_after_forward):
-    BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
-    max_batch_size_(max_batch_size),
-    head_num_(head_num),
-    size_per_head_(size_per_head),
-    hidden_units_(head_num_ * size_per_head_)
+    DecoderCrossAttentionLayer<T>(max_batch_size,
+                                  head_num,
+                                  size_per_head,
+                                  head_num * size_per_head,
+                                  1.0f,
+                                  stream,
+                                  cublas_wrapper,
+                                  allocator,
+                                  is_free_buffer_after_forward)
 {
-    FT_CHECK(size_per_head_ == 32 || size_per_head_ == 64 || size_per_head_ == 96 || size_per_head_ == 128
-             || size_per_head_ == 160 || size_per_head_ == 192 || size_per_head_ == 224 || size_per_head_ == 256);
+}
+
+template<typename T>
+DecoderCrossAttentionLayer<T>::DecoderCrossAttentionLayer(size_t max_batch_size,
+                                                          size_t head_num,
+                                                          size_t size_per_head,
+                                                          const float q_scaling,
+                                                          cudaStream_t stream,
+                                                          cublasMMWrapper* cublas_wrapper,
+                                                          IAllocator* allocator,
+                                                          bool is_free_buffer_after_forward):
+    DecoderCrossAttentionLayer<T>(max_batch_size,
+                                  head_num,
+                                  size_per_head,
+                                  head_num * size_per_head,
+                                  q_scaling,
+                                  stream,
+                                  cublas_wrapper,
+                                  allocator,
+                                  is_free_buffer_after_forward)
+{
 }
 
 template<typename T>
@@ -670,7 +720,9 @@ DecoderCrossAttentionLayer<T>::DecoderCrossAttentionLayer(DecoderCrossAttentionL
     max_batch_size_(attention_layer.max_batch_size_),
     head_num_(attention_layer.head_num_),
     size_per_head_(attention_layer.size_per_head_),
-    hidden_units_(attention_layer.hidden_units_)
+    hidden_units_(attention_layer.hidden_units_),
+    d_model_(attention_layer.d_model_),
+    q_scaling_(attention_layer.q_scaling_)
 {
     FT_CHECK(size_per_head_ == 32 || size_per_head_ == 64 || size_per_head_ == 96 || size_per_head_ == 128
              || size_per_head_ == 160 || size_per_head_ == 192 || size_per_head_ == 224 || size_per_head_ == 256);
@@ -689,14 +741,14 @@ void DecoderCrossAttentionLayer<T>::forward(std::vector<fastertransformer::Tenso
                                             const AttentionWeight<T>* attention_weights)
 {
     // input tensors:
-    //      attention_input [batch_size, hidden_dimension],
-    //      encoder_output [batch_size, mem_max_seq_len, memory_hidden_dimension],
+    //      attention_input [batch_size, d_model],
+    //      encoder_output [batch_size, mem_max_seq_len, memory_d_model],
     //      encoder_sequence_length [batch_size],
     //      finished [batch_size],
     //      step [1] on cpu
 
     // output tensors:
-    //      decoder_layer_output [batch_size, hidden_dimension],
+    //      decoder_layer_output [batch_size, d_model],
     //      key_mem_cache [batch_size, mem_max_seq_len, hidden_dimension],
     //      value_mem_cache [batch_size, mem_max_seq_len, hidden_dimension]
 
@@ -722,13 +774,14 @@ void DecoderCrossAttentionLayer<T>::forward(std::vector<fastertransformer::Tenso
                           CUBLAS_OP_N,
                           hidden_units_,  // n
                           batch_size,
-                          hidden_units_,  // k
+                          d_model_,  // k
                           attention_weights->query_weight.kernel,
                           hidden_units_,  // n
                           attention_input,
-                          hidden_units_,  // k
+                          d_model_,  // k
                           q_buf_,
                           hidden_units_ /* n */);
+
     if (step == 1) {
         if (is_batch_major_cache_) {
             cublas_wrapper_->Gemm(CUBLAS_OP_N,
@@ -793,6 +846,7 @@ void DecoderCrossAttentionLayer<T>::forward(std::vector<fastertransformer::Tenso
                                   hidden_units_);
         }
     }
+    sync_check_cuda_error();
 
     cross_attention_dispatch<T>(q_buf_,
                                 attention_weights->query_weight.bias,
@@ -810,19 +864,20 @@ void DecoderCrossAttentionLayer<T>::forward(std::vector<fastertransformer::Tenso
                                 step,
                                 mem_max_seq_len,
                                 is_batch_major_cache_,
+                                q_scaling_,
                                 stream_);
     sync_check_cuda_error();
     cublas_wrapper_->Gemm(CUBLAS_OP_N,
                           CUBLAS_OP_N,
-                          hidden_units_,  // n
+                          d_model_,  // n
                           batch_size,
                           hidden_units_,  // k
                           attention_weights->attention_output_weight.kernel,
-                          hidden_units_,  // n
+                          d_model_,  // n
                           context_buf_,
                           hidden_units_,  // k
                           attention_out,
-                          hidden_units_ /* n */);
+                          d_model_ /* n */);
     if (is_free_buffer_after_forward_ == true) {
         freeBuffer();
     }

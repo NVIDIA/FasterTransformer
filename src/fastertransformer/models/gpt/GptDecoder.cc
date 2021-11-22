@@ -27,7 +27,8 @@ void GptDecoder<T>::initialize()
                                                              stream_,
                                                              cublas_wrapper_,
                                                              allocator_,
-                                                             is_free_buffer_after_forward_);
+                                                             is_free_buffer_after_forward_,
+                                                             sparse_);
 
     ffn_layer_ = new GeluFfnLayer<T>(max_batch_size_,
                                      1,
@@ -37,7 +38,8 @@ void GptDecoder<T>::initialize()
                                      stream_,
                                      cublas_wrapper_,
                                      allocator_,
-                                     is_free_buffer_after_forward_);
+                                     is_free_buffer_after_forward_,
+                                     sparse_);
 }
 
 template<typename T>
@@ -90,8 +92,9 @@ GptDecoder<T>::GptDecoder(size_t max_batch_size,
                           cudaStream_t stream,
                           cublasMMWrapper* cublas_wrapper,
                           IAllocator* allocator,
-                          bool is_free_buffer_after_forward):
-    BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
+                          bool is_free_buffer_after_forward,
+                          bool sparse):
+    BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, nullptr, sparse),
     max_batch_size_(max_batch_size),
     head_num_(head_num),
     size_per_head_(size_per_head),

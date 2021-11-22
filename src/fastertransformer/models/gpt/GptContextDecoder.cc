@@ -29,7 +29,8 @@ void GptContextDecoder<T>::initialize()
                                                             cublas_wrapper_,
                                                             allocator_,
                                                             is_free_buffer_after_forward_,
-                                                            is_qk_buf_float_);
+                                                            is_qk_buf_float_,
+                                                            sparse_);
 
     ffn_layer_ = new GeluFfnLayer<T>(max_batch_size_,
                                      max_seq_len_,
@@ -39,7 +40,8 @@ void GptContextDecoder<T>::initialize()
                                      stream_,
                                      cublas_wrapper_,
                                      allocator_,
-                                     is_free_buffer_after_forward_);
+                                     is_free_buffer_after_forward_,
+                                     sparse_);
 }
 
 template<typename T>
@@ -106,8 +108,9 @@ GptContextDecoder<T>::GptContextDecoder(size_t max_batch_size,
                                         cublasMMWrapper* cublas_wrapper,
                                         IAllocator* allocator,
                                         bool is_free_buffer_after_forward,
-                                        bool is_qk_buf_float):
-    BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
+                                        bool is_qk_buf_float,
+                                        bool sparse):
+    BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, nullptr, sparse),
     max_batch_size_(max_batch_size),
     max_seq_len_(max_seq_len),
     head_num_(head_num),

@@ -39,7 +39,9 @@ public:
                                cudaStream_t stream,
                                cublasMMWrapper* cublas_wrapper,
                                IAllocator* allocator,
-                               bool is_free_buffer_after_forward);
+                               bool is_free_buffer_after_forward,
+                               bool is_sparse = false,
+                               int int8_mode = 0);
 
     TensorParallelGeluFfnLayer(TensorParallelGeluFfnLayer<T> const& ffn_layer);
 

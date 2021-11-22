@@ -25,15 +25,16 @@ template<typename T>
 void invokeAddBiasResidual(T* output, const T* input, const T* bias, const int m, const int n, cudaStream_t stream);
 
 template<typename T>
-void invokeAddBiasAttentionFfnResidual(
-  T* block_output,
-  const T* ffn_output,
-  const T* attn_output,
-  const T* block_input,
-  const T* bias,
-  const int m,
-  const int n,
-  cudaStream_t stream
-);
+void invokeT5AddResidual(T* output, const T* input, const int m, const int n, cudaStream_t stream);
+
+template<typename T>
+void invokeAddBiasAttentionFfnResidual(T* block_output,
+                                       const T* ffn_output,
+                                       const T* attn_output,
+                                       const T* block_input,
+                                       const T* bias,
+                                       const int m,
+                                       const int n,
+                                       cudaStream_t stream);
 
 }  // namespace fastertransformer

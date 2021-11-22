@@ -30,10 +30,13 @@ def generate_gpt_config(args):
         "top_p": "{}".format(args['sampling_topp']),
         "temperature": "{}".format(args['temperature']),
         "tensor_para_size": "{}".format(args['tensor_para_size']),
-        "layer_para_size": "{}".format(args['layer_para_size']),
+        "pipeline_para_size": "{}".format(args['pipeline_para_size']),
         "is_half": "{}".format(is_half),
         "model_name": "tmp_model",
-        "model_path_prefix": "{}".format(args['model_path_prefix']),
+        "model_dir": "{}".format(args['model_dir']),
+        "repetition_penalty": "{}".format(args['repetition_penalty']),
+        "len_penalty": "{}".format(args['len_penalty']),
+        "beam_search_diversity_rate": "{}".format(args['beam_search_diversity_rate']),
     }
 
     config["request"] = {
@@ -44,6 +47,7 @@ def generate_gpt_config(args):
     config["tmp_model"] = {
         "head_num": "{}".format(args['head_number']),
         "size_per_head": "{}".format(args['size_per_head']),
+        "inter_size": "{}".format(args['inter_size']),
         "vocab_size": "{}".format(args['vocab_size']),
         "decoder_layers": "{}".format(args['num_layer']),
         "start_id": "{}".format(args['start_id']),
@@ -80,9 +84,9 @@ if __name__ == "__main__":
                         help='Probability (p) value of top p sampling in decoding. Default is 0.0.')
     parser.add_argument('-tensor_para_size', '--tensor_para_size', type=int, default=1, metavar='NUMBER',
                         help='tensor parallelism size. Default is 1.')
-    parser.add_argument('-layer_para_size', '--layer_para_size', type=int, default=1, metavar='NUMBER',
+    parser.add_argument('-pipeline_para_size', '--pipeline_para_size', type=int, default=1, metavar='NUMBER',
                         help='layer parallelism size. Default is 1.')
-    parser.add_argument('--model_path_prefix', type=str, default="./models/", metavar='STRING',
+    parser.add_argument('--model_dir', type=str, default="./models/", metavar='STRING',
                         help='Model path prfix. Default is "./models".')
     parser.add_argument('-temperature', '--temperature', type=float, default=1.0, metavar='NUMBER',
                         help='temperature of penalty. Default is 1.0.')
@@ -94,6 +98,12 @@ if __name__ == "__main__":
                         help='start id (default: 50256)')
     parser.add_argument('-end_id', '--end_id', type=int, default=50256, metavar='NUMBER',
                         help='end id (default: 50256)')
+    parser.add_argument('-repetition_penalty', '--repetition_penalty', type=float, default=1.0, metavar='NUMBER',
+                        help='repetition_penalty (default: 1.0)')
+    parser.add_argument('-len_penalty', '--len_penalty', type=float, default=1.0, metavar='NUMBER',
+                        help='len_penalty (default: 1.0)')
+    parser.add_argument('-beam_search_diversity_rate', '--beam_search_diversity_rate', type=float, default=0.0, metavar='NUMBER',
+                        help='beam_search_diversity_rate (default: 0.0)')
 
     args = parser.parse_args()
     generate_gpt_config(vars(args))

@@ -160,7 +160,7 @@ GptJTritonModel<T>::createModelInstance(int device_id,
         cublas_handle, cublaslt_handle, stream, cublas_algo_map.get(), cublas_wrapper_mutex.get(), allocator.get()));
 
     std::unique_ptr<cudaDeviceProp> cuda_device_prop_ptr(new cudaDeviceProp);
-    ft::check_cuda_error(cudaGetDeviceProperties(cuda_device_prop_ptr.get(), 0));
+    ft::check_cuda_error(cudaGetDeviceProperties(cuda_device_prop_ptr.get(), device_id));
 
     if (std::is_same<T, half>::value) {
         cublas_wrapper->setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
@@ -243,16 +243,28 @@ std::string GptJTritonModel<T>::toString()
 }
 
 template<typename T>
-std::vector<ncclUniqueId> GptJTritonModel<T>::createNcclIds(const uint32_t world_size)
+std::vector<ncclUniqueId> GptJTritonModel<T>::createNcclIds(const uint32_t world_size, bool multi_instances)
 {
-    if (world_size != tensor_para_size_ * pipeline_para_size_) {
-        printf("[ERROR] world_size (%d) should equal to tensor_para_size_ * pipeline_para_size_ (%ld * %ld here) \n",
-               world_size,
-               tensor_para_size_,
-               pipeline_para_size_);
-        ft::FT_CHECK(world_size == tensor_para_size_ * pipeline_para_size_);
-    }
     std::vector<ncclUniqueId> nccl_ids(tensor_para_size_ + pipeline_para_size_);
+    if (multi_instances)
+    {
+        if (tensor_para_size_ * pipeline_para_size_ != 1) {
+            printf("[ERROR] Multiple Instances currently only support tensor_para_size_ and  pipeline_para_size_ both 1\n");
+            ft::FT_CHECK(tensor_para_size_ == 1 && pipeline_para_size_ == 1);
+        }
+        nccl_ids.resize(2);
+    }
+    else
+    {
+        if (world_size != tensor_para_size_ * pipeline_para_size_) {
+            printf("[ERROR] world_size (%d) should equal to tensor_para_size_ * pipeline_para_size_ (%ld * %ld here) \n",
+                    world_size,
+                    tensor_para_size_,
+                    pipeline_para_size_);
+            ft::FT_CHECK(world_size == tensor_para_size_ * pipeline_para_size_);
+        }
+    }
+    
     for (uint32_t i = 0; i < nccl_ids.size(); i++) {
         NCCLCHECK(ncclGetUniqueId(&nccl_ids[i]));
     }
@@ -261,26 +273,40 @@ std::vector<ncclUniqueId> GptJTritonModel<T>::createNcclIds(const uint32_t world
 
 template<typename T>
 std::pair<std::vector<ncclComm_t>, std::vector<ncclComm_t>>
-GptJTritonModel<T>::createNcclComms(std::vector<ncclUniqueId> nccl_ids, const int node_id)
+GptJTritonModel<T>::createNcclComms(std::vector<ncclUniqueId> nccl_ids, const int node_id, bool multi_instances, int instance_id)
 {
-    const int gpu_count = ft::getDeviceCount();
+      const int gpu_count = ft::getDeviceCount();
     std::vector<ncclComm_t> tensor_para_comms(gpu_count);
     std::vector<ncclComm_t> pipeline_para_comms(gpu_count);
+    if (multi_instances) 
+    {
+        ncclUniqueId tensor_para_nccl_uid = nccl_ids[0];
+        ncclUniqueId pipeline_para_nccl_uid = nccl_ids[1];
+        size_t tensor_para_rank = 0;
+        size_t pipeline_para_rank = 0;
 
-    NCCLCHECK(ncclGroupStart());
-    for (int gid = 0; gid < gpu_count; gid++) {
-        int rank = node_id * gpu_count + gid;
-        size_t tensor_para_rank = rank % tensor_para_size_;
-        size_t pipeline_para_rank = rank / tensor_para_size_;
-        ncclUniqueId tensor_para_nccl_uid = nccl_ids[pipeline_para_rank];
-        ncclUniqueId pipeline_para_nccl_uid = nccl_ids[pipeline_para_size_ + tensor_para_rank];
-
-        ft::check_cuda_error(cudaSetDevice(gid));
-        NCCLCHECK(ncclCommInitRank(&tensor_para_comms[gid], tensor_para_size_, tensor_para_nccl_uid, tensor_para_rank));
+        ft::check_cuda_error(cudaSetDevice(instance_id));
+        NCCLCHECK(ncclCommInitRank(&tensor_para_comms[instance_id], tensor_para_size_, tensor_para_nccl_uid, tensor_para_rank));
         NCCLCHECK(ncclCommInitRank(
-            &pipeline_para_comms[gid], pipeline_para_size_, pipeline_para_nccl_uid, pipeline_para_rank));
+            &pipeline_para_comms[instance_id], pipeline_para_size_, pipeline_para_nccl_uid, pipeline_para_rank));
     }
-    NCCLCHECK(ncclGroupEnd());
+    else
+    {
+        NCCLCHECK(ncclGroupStart());
+        for (int gid = 0; gid < gpu_count; gid++) {
+            int rank = node_id * gpu_count + gid;
+            size_t tensor_para_rank = rank % tensor_para_size_;
+            size_t pipeline_para_rank = rank / tensor_para_size_;
+            ncclUniqueId tensor_para_nccl_uid = nccl_ids[pipeline_para_rank];
+            ncclUniqueId pipeline_para_nccl_uid = nccl_ids[pipeline_para_size_ + tensor_para_rank];
+
+            ft::check_cuda_error(cudaSetDevice(gid));
+            NCCLCHECK(ncclCommInitRank(&tensor_para_comms[gid], tensor_para_size_, tensor_para_nccl_uid, tensor_para_rank));
+            NCCLCHECK(ncclCommInitRank(
+                &pipeline_para_comms[gid], pipeline_para_size_, pipeline_para_nccl_uid, pipeline_para_rank));
+        }
+        NCCLCHECK(ncclGroupEnd());
+    }
     return std::pair<std::vector<ncclComm_t>, std::vector<ncclComm_t>>(tensor_para_comms, pipeline_para_comms);
 }
 

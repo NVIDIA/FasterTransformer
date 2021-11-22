@@ -178,8 +178,13 @@ In the experiments of decoding, we updated the following parameters:
 
 ### Changelog
 
+November 2021
+- Add GPT-3 INT8 weight only qauntization for batch size <= 2.
+- Support multi-node multi-gpu support on T5.
+- Enhance the multi-node multi-gpu supporting in GPT-3. 
+
 August 2021
-- **Release the FasterTransformer 5.0**
+- **Release the FasterTransformer 5.0 beta**
   - Refactor the repo and codes
   - And special thanks to NAVER Corp. for contributing a lot to this version, as listed below.
     - Bugs fix

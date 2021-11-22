@@ -40,7 +40,8 @@ void Gpt<T>::initialize()
                                                     cublas_wrapper_,
                                                     allocator_,
                                                     is_free_buffer_after_forward_,
-                                                    is_context_qk_buf_float_);
+                                                    is_context_qk_buf_float_,
+                                                    sparse_);
 
     gpt_decoder_ = new GptDecoder<T>(max_batch_size_ * beam_width_,
                                      head_num_,
@@ -50,7 +51,8 @@ void Gpt<T>::initialize()
                                      stream_,
                                      cublas_wrapper_,
                                      allocator_,
-                                     is_free_buffer_after_forward_);
+                                     is_free_buffer_after_forward_,
+                                     sparse_);
 
     if (beam_width_ > 1) {
         if (beam_width_ < 16) {
@@ -286,8 +288,9 @@ Gpt<T>::Gpt(size_t max_batch_size,
             cublasMMWrapper* cublas_wrapper,
             IAllocator* allocator,
             bool is_free_buffer_after_forward,
-            cudaDeviceProp* cuda_device_prop):
-    BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, cuda_device_prop),
+            cudaDeviceProp* cuda_device_prop,
+            bool sparse):
+    BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, cuda_device_prop, sparse),
     max_batch_size_(max_batch_size),
     max_seq_len_(max_seq_len + 1),
     max_input_len_(max_input_len),
@@ -644,19 +647,19 @@ void Gpt<T>::forward(std::vector<Tensor>* output_tensors,
                              stream_);
 
             //transpose and take output_parent_ids as inter buffer
-            invokeTransposeAxis01((int*)output_tensors->at(0).data, 
-                                  (int*)output_tensors->at(1).data, 
+            invokeTransposeAxis01((int*)output_tensors->at(0).data,
+                                  (int*)output_tensors->at(1).data,
                                   max_output_seq_len - 1, batch_size * beam_width_, 1, stream_);
 
             cudaD2Dcpy((int*)output_tensors->at(1).data,
                        parent_ids_buf_ + batch_size * beam_width_,
                        batch_size * beam_width_ * (max_output_seq_len - 1));
-            
+
         }
         else {
             // For sampling, only transpose the results to output_tensor
-            invokeTransposeAxis01((int*)output_tensors->at(0).data, 
-                                  output_ids_buf_ + batch_size * beam_width_, 
+            invokeTransposeAxis01((int*)output_tensors->at(0).data,
+                                  output_ids_buf_ + batch_size * beam_width_,
                                   max_output_seq_len - 1, batch_size * beam_width_, 1, stream_);
         }
     }
@@ -674,19 +677,19 @@ void Gpt<T>::forward(std::vector<Tensor>* output_tensors,
                              stream_);
 
             //transpose and take output_parent_ids as inter buffer
-            invokeTransposeAxis01((int*)output_tensors->at(0).data, 
-                                  (int*)output_tensors->at(1).data, 
+            invokeTransposeAxis01((int*)output_tensors->at(0).data,
+                                  (int*)output_tensors->at(1).data,
                                   max_output_seq_len, batch_size * beam_width_, 1, stream_);
 
             cudaD2Dcpy((int*)output_tensors->at(1).data,
                        parent_ids_buf_,
                        batch_size * beam_width_ * max_output_seq_len);
-            
+
         }
         else {
             // For sampling, only transpose the results to output_tensor
-            invokeTransposeAxis01((int*)output_tensors->at(0).data, 
-                                  output_ids_buf_, 
+            invokeTransposeAxis01((int*)output_tensors->at(0).data,
+                                  output_ids_buf_,
                                   max_output_seq_len, batch_size * beam_width_, 1, stream_);
         }
     }

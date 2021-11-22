@@ -27,7 +27,7 @@ target_link_libraries(FusedAttentionLayer PUBLIC -lcublas -lcudart cublasMMWrapp
 add_library(DecoderCrossAttentionLayer STATIC DecoderCrossAttentionLayer.cu)
 set_property(TARGET DecoderCrossAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET DecoderCrossAttentionLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(DecoderCrossAttentionLayer PUBLIC -lcublas -lcudart cublasMMWrapper memory_utils)
+target_link_libraries(DecoderCrossAttentionLayer PUBLIC -lcublas -lcudart cublasMMWrapper memory_utils decoder_masked_multihead_attention)
 
 add_library(LongformerAttentionLayer STATIC LongformerAttentionLayer.cc)
 set_property(TARGET LongformerAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -37,7 +37,7 @@ target_link_libraries(LongformerAttentionLayer PUBLIC -lcublas -lcudart cublasMM
 add_library(DecoderSelfAttentionLayer STATIC DecoderSelfAttentionLayer.cc)
 set_property(TARGET DecoderSelfAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET DecoderSelfAttentionLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(DecoderSelfAttentionLayer PUBLIC -lcublas -lcudart cublasMMWrapper memory_utils decoder_masked_multihead_attention)
+target_link_libraries(DecoderSelfAttentionLayer PUBLIC -lcublas -lcudart cublasMMWrapper memory_utils decoder_masked_multihead_attention matrix_vector_multiplication)
 
 add_library(GptContextAttentionLayer STATIC GptContextAttentionLayer.cc)
 set_property(TARGET GptContextAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -50,8 +50,18 @@ if(BUILD_GPT)
     set_property(TARGET TensorParallelDecoderSelfAttentionLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
     target_link_libraries(TensorParallelDecoderSelfAttentionLayer PUBLIC -lcudart DecoderSelfAttentionLayer nccl_utils)
 
+    add_library(TensorParallelDecoderCrossAttentionLayer STATIC TensorParallelDecoderCrossAttentionLayer.cu)
+    set_property(TARGET TensorParallelDecoderCrossAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
+    set_property(TARGET TensorParallelDecoderCrossAttentionLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+    target_link_libraries(TensorParallelDecoderCrossAttentionLayer PUBLIC -lcudart DecoderCrossAttentionLayer nccl_utils)
+
     add_library(TensorParallelGptContextAttentionLayer STATIC TensorParallelGptContextAttentionLayer.cc)
     set_property(TARGET TensorParallelGptContextAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
     set_property(TARGET TensorParallelGptContextAttentionLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
     target_link_libraries(TensorParallelGptContextAttentionLayer PUBLIC -lcudart GptContextAttentionLayer nccl_utils)
+
+    add_library(TensorParallelUnfusedAttentionLayer STATIC TensorParallelUnfusedAttentionLayer.cc)
+    set_property(TARGET TensorParallelUnfusedAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
+    set_property(TARGET TensorParallelUnfusedAttentionLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+    target_link_libraries(TensorParallelUnfusedAttentionLayer PUBLIC -lcudart UnfusedAttentionLayer nccl_utils)
 endif()

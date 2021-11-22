@@ -34,12 +34,16 @@ struct ParallelGptWeight {
                       const int tensor_para_size,
                       const int tensor_para_rank,
                       const int layer_para_size,
-                      const int layer_para_rank);
+                      const int layer_para_rank,
+                      const int int8_mode = 0);
     ~ParallelGptWeight();
     ParallelGptWeight(const ParallelGptWeight& other);
     ParallelGptWeight& operator=(const ParallelGptWeight& other);
     void loadModel(std::string dir_path);
-    void resizeLayer(const int num_layer);
+    void resizeLayer(const int num_layer, const int int8_mode = 0);
+#ifdef SPARSITY_ENABLED
+    void compress_weights(cublasMMWrapper& cublas_wrapper);
+#endif
 
     std::vector<ParallelGptDecoderLayerWeight<T>*> decoder_layer_weights;
     const T* position_encoding_table = nullptr;
@@ -61,6 +65,7 @@ private:
     int tensor_para_rank_;
     int layer_para_size_;
     int layer_para_rank_;
+    int int8_mode_ = 0;
     bool is_maintain_buffer = false;
     T* weights_ptr[5];
 };

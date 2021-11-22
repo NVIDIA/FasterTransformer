@@ -70,7 +70,10 @@ public:
           const float repetition_penalty,
           const int tensor_para_size,
           const int pipeline_para_size,
-          const vector<th::Tensor> weights):
+          const int int8_mode,
+          const vector<th::Tensor> weights,
+          const vector<th::Tensor> int8_weights,
+          const vector<th::Tensor> scale):
         max_batch_size_(max_batch_size),
         max_seq_len_(max_seq_len),
         beam_width_(beam_width),
@@ -89,7 +92,10 @@ public:
         repetition_penalty_(repetition_penalty),
         tensor_para_size_(tensor_para_size),
         pipeline_para_size_(pipeline_para_size),
-        weights_(weights)
+        int8_mode_(int8_mode),
+        weights_(weights),
+        int8_weights_(int8_weights),
+        scale_(scale)
     {
         check_cuda_error(cublasLtCreate(&cublasltHandle_));
         cublas_algo_map_ = new ft::cublasAlgoMap("gemm_config.in");
@@ -124,6 +130,25 @@ public:
                 get_ptr<T>(weights_[i + 10 * layer_num_]);
             gpt_weights_.decoder_layer_weights[i]->ffn_weights.output_weight.bias =
                 get_ptr<T>(weights_[i + 11 * layer_num_]);
+
+            if (int8_mode_ != 0) {
+                gpt_weights_.decoder_layer_weights[i]->self_attention_weights.query_weight.int8_kernel =
+                    get_ptr<int8_t>(int8_weights_[i + 0 * layer_num_]);
+                gpt_weights_.decoder_layer_weights[i]->self_attention_weights.query_weight.scale =
+                    get_ptr<float>(scale_[i + 0 * layer_num_]);
+                gpt_weights_.decoder_layer_weights[i]->self_attention_weights.attention_output_weight.int8_kernel =
+                    get_ptr<int8_t>(int8_weights_[i + 1 * layer_num_]);
+                gpt_weights_.decoder_layer_weights[i]->self_attention_weights.attention_output_weight.scale =
+                    get_ptr<float>(scale_[i + 1 * layer_num_]);
+                gpt_weights_.decoder_layer_weights[i]->ffn_weights.intermediate_weight.int8_kernel =
+                    get_ptr<int8_t>(int8_weights_[i + 2 * layer_num_]);
+                gpt_weights_.decoder_layer_weights[i]->ffn_weights.intermediate_weight.scale =
+                    get_ptr<float>(scale_[i + 2 * layer_num_]);
+                gpt_weights_.decoder_layer_weights[i]->ffn_weights.output_weight.int8_kernel =
+                    get_ptr<int8_t>(int8_weights_[i + 3 * layer_num_]);
+                gpt_weights_.decoder_layer_weights[i]->ffn_weights.output_weight.scale =
+                    get_ptr<float>(scale_[i + 3 * layer_num_]);
+            }
         }
 
         gpt_weights_.post_decoder_layernorm.gamma = get_ptr<T>(weights_[12 * layer_num_ + 0]);
@@ -143,7 +168,10 @@ public:
             MPICHECK(MPI_Bcast(&random_seed_, 1, MPI_UNSIGNED_LONG_LONG, 0, MPI_COMM_WORLD));
         }
 
-        check_cuda_error(cudaGetDeviceProperties(&prop_, 0));
+        int device_id = 0;
+        check_cuda_error(cudaGetDevice(&device_id));
+        check_cuda_error(cudaGetDeviceProperties(&prop_, device_id));
+        printf("Device %s\n", prop_.name);
     }
 
     ~FTGpt() override
@@ -236,8 +264,8 @@ public:
         cublasHandle_t cublasHandle = at::cuda::getCurrentCUDABlasHandle();
         cublasSetStream(cublasHandle, stream);
         fastertransformer::Allocator<AllocatorType::TH> allocator = fastertransformer::Allocator<AllocatorType::TH>();
-        ft::cublasMMWrapper cublas_wrapper =
-            ft::cublasMMWrapper(cublasHandle, cublasltHandle_, stream, cublas_algo_map_, cublas_wrapper_mutex_, &allocator);
+        ft::cublasMMWrapper cublas_wrapper = ft::cublasMMWrapper(
+            cublasHandle, cublasltHandle_, stream, cublas_algo_map_, cublas_wrapper_mutex_, &allocator);
 
         if (std::is_same<T, half>::value) {
             cublas_wrapper.setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
@@ -278,7 +306,9 @@ public:
                                             &cublas_wrapper,
                                             &allocator,
                                             false,
-                                            &prop_);
+                                            &prop_,
+                                            false,
+                                            int8_mode_);
 
         std::vector<Tensor> input_tensors =
             std::vector<Tensor>{Tensor{MEMORY_GPU,
@@ -340,8 +370,13 @@ private:
     const float len_penalty_;
     const float repetition_penalty_;
 
+    const int int8_mode_ = 0;
+
     size_t tensor_para_size_;
     size_t pipeline_para_size_;
+
+    std::vector<th::Tensor> int8_weights_;
+    std::vector<th::Tensor> scale_;
     std::vector<th::Tensor> weights_;
 
     size_t tensor_para_rank_;
@@ -379,7 +414,10 @@ public:
                   const double repetition_penalty,
                   const int64_t tensor_para_size,
                   const int64_t pipeline_para_size,
-                  const vector<th::Tensor> weights);
+                  const int64_t int8_mode,
+                  const vector<th::Tensor> weights,
+                  const vector<th::Tensor> int8_weights,
+                  const vector<th::Tensor> scale);
 
     ~ParallelGptOp();
 

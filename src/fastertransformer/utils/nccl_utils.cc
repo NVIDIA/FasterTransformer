@@ -130,11 +130,17 @@ template<typename T>
 void ftNcclBroadCast(T* buff, const int data_size, const int root, ncclComm_t comm, cudaStream_t stream)
 {
     ncclDataType_t nccl_data_type;
-    if (std::is_same<T, bool>::value) {
-        nccl_data_type = ncclInt8;
+    if (std::is_same<T, float>::value) {
+        nccl_data_type = ncclFloat;
+    }
+    else if (std::is_same<T, half>::value) {
+        nccl_data_type = ncclHalf;
     }
     else if (std::is_same<T, int>::value) {
         nccl_data_type = ncclInt;
+    }
+    else if (std::is_same<T, bool>::value) {
+        nccl_data_type = ncclInt8;
     }
     else {
         printf("[ERROR] ftNcclBroadCast only support bool and int. \n");
@@ -146,6 +152,8 @@ void ftNcclBroadCast(T* buff, const int data_size, const int root, ncclComm_t co
 
 template void ftNcclBroadCast(bool* buff, const int data_size, const int root, ncclComm_t comm, cudaStream_t stream);
 template void ftNcclBroadCast(int* buff, const int data_size, const int root, ncclComm_t comm, cudaStream_t stream);
+template void ftNcclBroadCast(float* buff, const int data_size, const int root, ncclComm_t comm, cudaStream_t stream);
+template void ftNcclBroadCast(half* buff, const int data_size, const int root, ncclComm_t comm, cudaStream_t stream);
 
 template void
 ftNcclAllReduceSum(const float* send_buf, float* recv_buf, const int data_size, ncclComm_t comm, cudaStream_t stream);

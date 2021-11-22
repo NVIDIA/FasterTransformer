@@ -17,6 +17,7 @@
 #pragma once
 
 #include "src/fastertransformer/kernels/activation_kernels.h"
+#include "src/fastertransformer/kernels/matrix_vector_multiplication.h"
 #include "src/fastertransformer/layers/BaseLayer.h"
 #include "src/fastertransformer/layers/FfnWeight.h"
 #include "src/fastertransformer/utils/memory_utils.h"
@@ -40,6 +41,9 @@ private:
     size_t head_num_;
     size_t size_per_head_;
 
+    // int8_mode_ == 1 for weight quantized only gemm for GPT
+    int int8_mode_ = 0;
+
     // calculated data
     size_t hidden_units_;
 
@@ -50,7 +54,6 @@ private:
 protected:
     T* inter_buf_;
     size_t inter_size_;
-    bool sparse_;
     virtual void invokeAddBiasActivation(const int m, const T* bias) = 0;
 
 public:
@@ -63,7 +66,8 @@ public:
              cublasMMWrapper* cublas_wrapper,
              IAllocator* allocator,
              bool is_free_buffer_after_forward,
-             bool sparse);
+             bool sparse = false,
+             int int8_mode = 0);
 
     FfnLayer(FfnLayer<T> const& ffn_layer);
 
@@ -86,7 +90,8 @@ public:
                  cublasMMWrapper* cublas_wrapper,
                  IAllocator* allocator,
                  bool is_free_buffer_after_forward,
-                 bool sparse = false);
+                 bool sparse = false,
+                 int int8_mode = 0);
 
     GeluFfnLayer(GeluFfnLayer<T> const& ffn_layer);
 

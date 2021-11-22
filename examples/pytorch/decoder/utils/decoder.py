@@ -41,7 +41,7 @@ def init_op_cache(layer_num, batch_size, beam_width, max_seq_len, \
                        torch.zeros(layer_num, 0, batch_size * beam_width, hidden_dim, dtype=dtype, device='cuda') ]
     
     # always use old format for cross attention for now
-    mem_cache = torch.zeros(layer_num, 2, batch_size * beam_width, max_seq_len, hidden_dim, dtype=dtype, device='cuda')
+    mem_cache = torch.zeros(2, layer_num, batch_size * beam_width, max_seq_len, hidden_dim, dtype=dtype, device='cuda')
 
     return self_cache, mem_cache
 

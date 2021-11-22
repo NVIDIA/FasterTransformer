@@ -31,6 +31,22 @@ namespace fastertransformer {
         }                                                                                                              \
     } while (0)
 
+struct NcclParam {
+    int rank_{0};
+    int world_size_{1};
+    ncclComm_t nccl_comm_;
+
+    // int layers_per_group{0};
+    // bool is_valid(int i)
+    // {
+    //     if (i >= layers_per_group * rank && i < layers_per_group * (rank + 1))
+    //         return true;
+    //     else
+    //         return false;
+    // }
+    // int local_batch_size{-1};
+};
+
 template<typename T>
 void ftNcclAllReduceSum(const T* send_buf, T* recv_buf, const int data_size, ncclComm_t comm, cudaStream_t stream);
 

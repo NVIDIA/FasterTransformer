@@ -253,6 +253,7 @@ static auto fasterTransformerDecodingTHS =
                 int end_id = state[28][7].item().to<int>();
                 int top_k = state[28][8].item().to<int>();
 
+                // TODO(bhsueh) Here may have bugs
                 double beam_search_diversity_rate = state[33][0].item().to<double>();
                 double top_p = state[33][1].item().to<double>();
                 double temperature = state[33][2].item().to<double>();

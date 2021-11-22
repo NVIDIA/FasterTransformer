@@ -143,8 +143,12 @@ class CustomDecoding(nn.Module):
                                                                     inter_size, mem_hidden_dim, layer_num, vocab_size, start_id, end_id,
                                                                     beam_search_diversity_rate, top_k, top_p, temperature,
                                                                     len_penalty, repetition_penalty, *weights.w)
-    
+        self.is_clean_cache = False
     def forward(self, batch_size, beam_size, seq_len, memory, memory_seq_lens):
+        if self.is_clean_cache == False:
+            torch.cuda.empty_cache()
+            self.is_clean_cache = True
+
         extended_memory = tile(memory, beam_size)
         extended_memory_seq_lens = tile(memory_seq_lens, beam_size)
         output_ids, parent_ids, out_seq_lens = self.decoding.forward(beam_size, seq_len, extended_memory, extended_memory_seq_lens)

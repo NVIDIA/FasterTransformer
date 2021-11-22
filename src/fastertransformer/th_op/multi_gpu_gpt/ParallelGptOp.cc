@@ -15,6 +15,7 @@
  */
 
 #include "src/fastertransformer/th_op/multi_gpu_gpt/ParallelGptOp.h"
+#include "src/fastertransformer/th_op/multi_gpu_gpt/WeightTransposeCalibrateQuantizeOp.h"
 
 namespace th = torch;
 namespace torch_ext {
@@ -38,7 +39,10 @@ ParallelGptOp::ParallelGptOp(const int64_t max_batch_size,
                              const double repetition_penalty,
                              const int64_t tensor_para_size,
                              const int64_t pipeline_para_size,
-                             const std::vector<th::Tensor> weights):
+                             const int64_t int8_mode,
+                             const std::vector<th::Tensor> weights,
+                             const std::vector<th::Tensor> int8_weights,
+                             const std::vector<th::Tensor> scale):
     st_(weights[0].scalar_type())
 {
     for (auto t : weights) {
@@ -66,7 +70,10 @@ ParallelGptOp::ParallelGptOp(const int64_t max_batch_size,
                                      repetition_penalty,
                                      tensor_para_size,
                                      pipeline_para_size,
-                                     weights);
+                                     int8_mode,
+                                     weights,
+                                     int8_weights,
+                                     scale);
             break;
         case at::ScalarType::Half:
             ftgpt = new FTGpt<half>((size_t)max_batch_size,
@@ -88,7 +95,10 @@ ParallelGptOp::ParallelGptOp(const int64_t max_batch_size,
                                     repetition_penalty,
                                     tensor_para_size,
                                     pipeline_para_size,
-                                    weights);
+                                    int8_mode,
+                                    weights,
+                                    int8_weights,
+                                    scale);
             break;
         default:
             throw std::runtime_error("Wrong Tensor type.");
@@ -145,5 +155,11 @@ static auto fasterTransformerGptTHS = torch::jit::class_<torch_ext::ParallelGptO
                                                                 double,
                                                                 int64_t,
                                                                 int64_t,
+                                                                int64_t,
+                                                                std::vector<th::Tensor>,
+                                                                std::vector<th::Tensor>,
                                                                 std::vector<th::Tensor>>())
                                           .def("forward", &torch_ext::ParallelGptOp::forward);
+
+static auto weight_transpose_calibrate_quantize = torch::RegisterOperators(
+    "fastertransformer::weight_transpose_calibrate_quantize", &torch_ext::weight_transpose_calibrate_quantize);

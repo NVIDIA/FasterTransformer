@@ -26,12 +26,20 @@ template<typename T>
 struct GptWeight {
 
     GptWeight() = default;
-    GptWeight(
-        const int hidden_units, const int inter_size, const int vocab_size, const int num_layer, const int max_seq_len);
+    GptWeight(const int hidden_units,
+              const int inter_size,
+              const int vocab_size,
+              const int num_layer,
+              const int max_seq_len);
     ~GptWeight();
     GptWeight(const GptWeight& other);
     GptWeight& operator=(const GptWeight& other);
     void loadModel(std::string dir_path);
+#ifdef SPARSITY_ENABLED
+    // Currently the name convention is followed by BERT's sparsity case,
+    // but it will be fixed later.
+    void compress_weights(cublasMMWrapper& cublas_wrapper);
+#endif
 
     std::vector<GptDecoderLayerWeight<T>> decoder_layer_weights;
     const T* position_encoding_table = nullptr;

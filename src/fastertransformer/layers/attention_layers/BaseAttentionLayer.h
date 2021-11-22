@@ -38,10 +38,10 @@ enum class AttentionType
 };
 
 template<typename T>
-AttentionType getAttentionType(size_t size_per_head, const int sm, const bool remove_padding, const int max_seq_len)
+AttentionType getAttentionType(size_t size_per_head, const int sm, const bool remove_padding, const int max_seq_len, const bool is_fuse = true)
 {
     if (std::is_same<T, half>::value && (sm == kSM_70 || sm == kSM_86 || sm == kSM_80 || sm == kSM_75 || sm == kSM_72)
-        && size_per_head == 64 && max_seq_len <= 384) {
+        && size_per_head == 64 && max_seq_len <= 384 && is_fuse == true) {
         return remove_padding ? AttentionType::FUSED_MHA : AttentionType::FUSED_PADDED_MHA;
     }
     else {
@@ -64,6 +64,7 @@ AttentionType getAttentionTypeINT8(
 
 template<typename T>
 class BaseAttentionLayer: public BaseLayer {
+
 public:
     virtual void forward(std::vector<fastertransformer::Tensor>* output_tensors,
                          const std::vector<fastertransformer::Tensor>* input_tensors,
@@ -71,8 +72,9 @@ public:
     BaseAttentionLayer(cudaStream_t stream,
                        cublasMMWrapper* cublas_wrapper,
                        IAllocator* allocator,
-                       bool is_free_buffer_after_forward):
-        BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward)
+                       bool is_free_buffer_after_forward,
+                       bool sparse = false):
+        BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, nullptr, sparse)
     {
     }
     virtual ~BaseAttentionLayer() = default;

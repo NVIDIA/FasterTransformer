@@ -80,6 +80,8 @@ void multi_gpu_gpt_example(const INIReader reader)
     const float temperature = reader.GetFloat("ft_instance_hyperparameter", "temperature");
     const float repetition_penalty = reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty");
     const std::string model_dir = std::string(reader.Get("ft_instance_hyperparameter", "model_dir"));
+    const bool sparse = static_cast<bool>(reader.GetInteger("ft_instance_hyperparameter", "sparse"));
+    const int int8_mode = reader.GetInteger("ft_instance_hyperparameter", "int8_mode");
 
     const int tensor_para_size = reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size");
     const int pipeline_para_size = reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size");
@@ -218,13 +220,25 @@ void multi_gpu_gpt_example(const INIReader reader)
     cublasCreate(&cublas_handle);
     cublasLtCreate(&cublaslt_handle);
     cublasSetStream(cublas_handle, stream);
-    cublasAlgoMap* cublas_algo_map = new cublasAlgoMap("gemm_config.in");
+#ifdef SPARSITY_ENABLED
+    cusparseLtHandle_t cusparselt_handle;
+    CHECK_CUSPARSE(cusparseLtInit(&cusparselt_handle));
+    cublasAlgoMap* cublas_algo_map = new cublasAlgoMap(GEMM_CONFIG, SPGEMM_CONFIG);
+#else
+    cublasAlgoMap* cublas_algo_map = new cublasAlgoMap(GEMM_CONFIG);
+#endif
 
     Allocator<AllocatorType::CUDA> allocator(getDevice());
 
     std::mutex* cublas_wrapper_mutex = new std::mutex();
+#ifdef SPARSITY_ENABLED
+    cublasMMWrapper cublas_wrapper = cublasMMWrapper(
+        cublas_handle, cublaslt_handle, cusparselt_handle, stream, cublas_algo_map, cublas_wrapper_mutex, &allocator);
+#else
     cublasMMWrapper cublas_wrapper =
         cublasMMWrapper(cublas_handle, cublaslt_handle, stream, cublas_algo_map, cublas_wrapper_mutex, &allocator);
+#endif
+
     if (std::is_same<T, half>::value) {
         cublas_wrapper.setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
     }
@@ -240,8 +254,16 @@ void multi_gpu_gpt_example(const INIReader reader)
                                                         tensor_para_size,
                                                         tensor_para_rank,
                                                         pipeline_para_size,
-                                                        pipeline_para_rank);
+                                                        pipeline_para_rank,
+                                                        int8_mode);
     gpt_weights.loadModel(model_dir);
+#ifdef SPARSITY_ENABLED
+    if (sparse) {
+        printf("[INFO] Compress weights for sparse inference\n");
+        gpt_weights.compress_weights(cublas_wrapper);
+    }
+#endif
+
     unsigned long long random_seed;
     if (rank == 0) {
         random_seed = (unsigned long long)(0);
@@ -277,7 +299,9 @@ void multi_gpu_gpt_example(const INIReader reader)
                                         &cublas_wrapper,
                                         &allocator,
                                         false,
-                                        &prop);
+                                        &prop,
+                                        sparse,
+                                        int8_mode);
 
     int* d_output_ids;
     int* d_parent_ids;
@@ -397,6 +421,9 @@ void multi_gpu_gpt_example(const INIReader reader)
     ncclCommDestroy(tensor_para_nccl_comm);
     ncclCommDestroy(pipeline_para_nccl_comm);
 
+#ifdef SPARSITY_ENABLED
+    cusparseLtDestroy(&cusparselt_handle);
+#endif
     delete cublas_algo_map;
     delete cublas_wrapper_mutex;
     return;

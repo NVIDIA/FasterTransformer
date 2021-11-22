@@ -582,12 +582,12 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
 
     // Trigger the loads from the Q and K bias buffers.
     Qk_vec q_bias; zero(q_bias);
-    q_bias = (Dh == Dh_MAX || tidx*QK_VEC_SIZE < Dh)? 
+    q_bias = (Dh == Dh_MAX || tidx*QK_VEC_SIZE < Dh) && params.q_bias != nullptr? 
               *reinterpret_cast<const Qk_vec*>(&params.q_bias[qk_bias_offset]) : q_bias;
     Qk_vec k_bias; zero(k_bias);
 
     if (!DO_CROSS_ATTENTION || (DO_CROSS_ATTENTION && params.timestep == 0)) {
-      k_bias = (Dh == Dh_MAX || tidx*QK_VEC_SIZE < Dh)? 
+      k_bias = (Dh == Dh_MAX || tidx*QK_VEC_SIZE < Dh) && params.k_bias != nullptr? 
                 *reinterpret_cast<const Qk_vec*>(&params.k_bias[qk_bias_offset]) : k_bias;
     }
 
@@ -661,6 +661,14 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
     // Normalize qk.
     qk *= params.inv_sqrt_dh;
 
+    if(params.relative_attention_bias_float != nullptr) {
+      qk = qk + params.relative_attention_bias_float[hi * params.relative_attention_bias_stride * params.relative_attention_bias_stride
+                                                      + tlength * params.relative_attention_bias_stride + tlength];
+    }
+    else if(params.relative_attention_bias_half != nullptr) {
+      qk = qk + (float)params.relative_attention_bias_half[hi * params.relative_attention_bias_stride * params.relative_attention_bias_stride
+                                                      + tlength * params.relative_attention_bias_stride + tlength];
+    }
     qk_max = qk;
     qk_smem[tlength] = qk;
     //qk_smem[params.timestep] = qk;
@@ -745,6 +753,14 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
     // Store the product to shared memory. There's one qk value per timestep. Update the max.
     //if( ti < params.timestep && tidx % THREADS_PER_KEY == 0 ) {
     if( ti < tlength && tidx % THREADS_PER_KEY == 0 ) {
+      if(params.relative_attention_bias_float != nullptr) {
+        qk = qk + params.relative_attention_bias_float[hi * params.relative_attention_bias_stride * params.relative_attention_bias_stride
+                                                        + tlength * params.relative_attention_bias_stride + ti];
+      }
+      else if(params.relative_attention_bias_half != nullptr) {
+        qk = qk + (float)params.relative_attention_bias_half[hi * params.relative_attention_bias_stride * params.relative_attention_bias_stride
+                                                              + tlength * params.relative_attention_bias_stride + ti];
+      }
       qk_max = is_mask ? qk_max : fmaxf(qk_max, qk);
       qk_smem[ti] = qk;
     }
@@ -827,7 +843,9 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
     if (!DO_CROSS_ATTENTION || (DO_CROSS_ATTENTION && params.timestep == 0)) {
       if( vo == tlength % V_PER_ITER ) {
         // Trigger the loads from the V bias buffer.
-        v_bias = *reinterpret_cast<const V_vec*>(&params.v_bias[hi*Dh + vi]);
+        if (params.v_bias != nullptr) {
+          v_bias = *reinterpret_cast<const V_vec*>(&params.v_bias[hi*Dh + vi]);
+        }
         if (DO_CROSS_ATTENTION)
         {
           *reinterpret_cast<V_vec*>(&bias_smem[vi]) = v_bias;

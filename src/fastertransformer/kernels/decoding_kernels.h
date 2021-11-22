@@ -59,6 +59,14 @@ void invokePaddingEmbedding(T* padded_embedding_kernel,
                             const int vocab_size_padded,
                             cudaStream_t stream);
 
+template<typename T>
+void invokePaddingEmbeddingKernel(T* padded_embedding_kernel,
+                                  const T* embedding_kernel,
+                                  const int hidden_unit,
+                                  const int vocab_size,
+                                  const int vocab_size_padded,
+                                  cudaStream_t stream);
+
 void invokeGatherTree(int* beams,
                       int* max_sequence_lengths,
                       const int max_time,
