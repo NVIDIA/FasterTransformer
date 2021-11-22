@@ -29,7 +29,9 @@ void ParallelGptDecoder<T>::initialize()
                                                                            stream_,
                                                                            cublas_wrapper_,
                                                                            allocator_,
-                                                                           is_free_buffer_after_forward_);
+                                                                           is_free_buffer_after_forward_,
+                                                                           sparse_,
+                                                                           int8_mode_);
 
     ffn_layer_ = new TensorParallelGeluFfnLayer<T>(max_batch_size_,
                                                    1,
@@ -41,7 +43,9 @@ void ParallelGptDecoder<T>::initialize()
                                                    stream_,
                                                    cublas_wrapper_,
                                                    allocator_,
-                                                   is_free_buffer_after_forward_);
+                                                   is_free_buffer_after_forward_,
+                                                   sparse_,
+                                                   int8_mode_);
     allocateBuffer();
 }
 
@@ -60,8 +64,10 @@ ParallelGptDecoder<T>::ParallelGptDecoder(size_t max_batch_size,
                                           cudaStream_t stream,
                                           cublasMMWrapper* cublas_wrapper,
                                           IAllocator* allocator,
-                                          bool is_free_buffer_after_forward):
-    BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
+                                          bool is_free_buffer_after_forward,
+                                          bool sparse,
+                                          int int8_mode):
+    BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, nullptr, sparse),
     max_batch_size_(max_batch_size),
     head_num_(head_num),
     size_per_head_(size_per_head),
@@ -73,14 +79,20 @@ ParallelGptDecoder<T>::ParallelGptDecoder(size_t max_batch_size,
     tensor_para_comm_(tensor_para_comm),
     layer_para_size_(layer_para_size),
     layer_para_rank_(layer_para_rank),
-    layer_para_comm_(layer_para_comm)
+    layer_para_comm_(layer_para_comm),
+    int8_mode_(int8_mode)
 {
     initialize();
 }
 
 template<typename T>
 ParallelGptDecoder<T>::ParallelGptDecoder(ParallelGptDecoder<T> const& decoder):
-    BaseLayer(decoder.stream_, decoder.cublas_wrapper_, decoder.allocator_, decoder.is_free_buffer_after_forward_),
+    BaseLayer(decoder.stream_,
+              decoder.cublas_wrapper_,
+              decoder.allocator_,
+              decoder.is_free_buffer_after_forward_,
+              decoder.cuda_device_prop_,
+              decoder.sparse_),
     max_batch_size_(decoder.max_batch_size_),
     head_num_(decoder.head_num_),
     size_per_head_(decoder.size_per_head_),
@@ -92,7 +104,8 @@ ParallelGptDecoder<T>::ParallelGptDecoder(ParallelGptDecoder<T> const& decoder):
     tensor_para_comm_(decoder.tensor_para_comm_),
     layer_para_size_(decoder.layer_para_size_),
     layer_para_rank_(decoder.layer_para_rank_),
-    layer_para_comm_(decoder.layer_para_comm_)
+    layer_para_comm_(decoder.layer_para_comm_),
+    int8_mode_(decoder.int8_mode_)
 {
     initialize();
 }

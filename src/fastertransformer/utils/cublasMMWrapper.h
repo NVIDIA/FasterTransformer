@@ -105,6 +105,20 @@ public:
               void* C,
               const int ldc);
 
+    void Gemm(cublasOperation_t transa,
+              cublasOperation_t transb,
+              const int m,
+              const int n,
+              const int k,
+              const void* A,
+              const int lda,
+              const void* B,
+              const int ldb,
+              void* C,
+              const int ldc,
+              float f_alpha,
+              float f_beta);
+
     void setFP32GemmConfig();
     void setFP16GemmConfig();
 
@@ -175,6 +189,7 @@ public:
                 const void* B,
                 void* C);
 
+    size_t getSparseMatrixSize(int m, int k);
     void compressMatrix(const void* input, void* output, const int m, const int k);
 
     bool isUseSparse(const int batch_count, const int m, const int n, const int k);

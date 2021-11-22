@@ -21,6 +21,8 @@
 #include "src/fastertransformer/kernels/layernorm_kernels.h"
 #include "src/fastertransformer/layers/FfnWeight.h"
 #include "src/fastertransformer/layers/attention_layers/AttentionWeight.h"
+#include "src/fastertransformer/utils/cublasMMWrapper.h"
+
 
 namespace fastertransformer {
 
@@ -33,7 +35,9 @@ public:
     GptDecoderLayerWeight(const GptDecoderLayerWeight& other);
     GptDecoderLayerWeight& operator=(const GptDecoderLayerWeight& other);
     void loadModel(std::string dir_path);
-
+#ifdef SPARSITY_ENABLED
+    void compress_weights(cublasMMWrapper& cublas_wrapper, int hidden_dim);
+#endif
     LayerNormWeight<T> pre_layernorm_weights;
     AttentionWeight<T> self_attention_weights;
     LayerNormWeight<T> self_attn_layernorm_weights;
@@ -44,6 +48,10 @@ private:
     int inter_size_;
     bool is_maintain_buffer = false;
     T* weights_ptr[12];
+#ifdef SPARSITY_ENABLED
+    T* sp_weights_ptr[4];
+    bool is_maintain_sp_buffer = false;
+#endif
 
     void setWeightPtr();
     void mallocWeights();

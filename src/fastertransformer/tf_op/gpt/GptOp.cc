@@ -312,7 +312,7 @@ public:
         std::vector<ft::Tensor> output_tensors = std::vector<ft::Tensor>{
             ft::Tensor{ft::MEMORY_GPU,
                        ft::TYPE_INT32,
-                       {(size_t)total_output_length, batch_size, (size_t)beam_width_},
+                       {batch_size, (size_t)beam_width_, (size_t)total_output_length},
                        output_ids},
             ft::Tensor{ft::MEMORY_GPU,
                        ft::TYPE_INT32,

@@ -50,6 +50,7 @@ private:
 
 protected:
     using BaseAttentionLayer<T>::stream_;
+    using BaseAttentionLayer<T>::sparse_;
     T* qkv_buf_;
     T* q_buf_2_;
     T* k_buf_2_;
@@ -68,7 +69,8 @@ public:
                              cublasMMWrapper* cublas_wrapper,
                              IAllocator* allocator,
                              bool is_free_buffer_after_forward,
-                             bool is_qk_buf_float);
+                             bool is_qk_buf_float,
+                             bool sparse = false);
 
     GptContextAttentionLayer(size_t max_batch_size,
                              size_t max_seq_len,
@@ -79,7 +81,8 @@ public:
                              cublasMMWrapper* cublas_wrapper,
                              IAllocator* allocator,
                              bool is_free_buffer_after_forward,
-                             bool is_qk_buf_float);
+                             bool is_qk_buf_float,
+                             bool sparse = false);
 
     GptContextAttentionLayer(size_t max_batch_size,
                              size_t max_seq_len,
@@ -91,7 +94,8 @@ public:
                              cublasMMWrapper* cublas_wrapper,
                              IAllocator* allocator,
                              bool is_free_buffer_after_forward,
-                             bool is_qk_buf_float);
+                             bool is_qk_buf_float,
+                             bool sparse = false);
 
     GptContextAttentionLayer(GptContextAttentionLayer<T> const& attention_layer);
 

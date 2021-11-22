@@ -42,6 +42,10 @@ add_library(quantize_weight STATIC quantize_weight.cu)
 set_property(TARGET quantize_weight PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET quantize_weight PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
+add_library(calibrate_quantize_weight_kernels STATIC calibrate_quantize_weight_kernels.cu)
+set_property(TARGET calibrate_quantize_weight_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET calibrate_quantize_weight_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
 add_library(softmax_int8_kernels STATIC softmax_int8_kernels.cu)
 set_property(TARGET softmax_int8_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET softmax_int8_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
@@ -49,6 +53,10 @@ set_property(TARGET softmax_int8_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  O
 add_library(transpose_int8_kernels STATIC transpose_int8_kernels.cu)
 set_property(TARGET transpose_int8_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET transpose_int8_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+add_library(matrix_transpose_kernels STATIC matrix_transpose_kernels.cu)
+set_property(TARGET matrix_transpose_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET matrix_transpose_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
 add_library(unfused_attention_int8_kernels STATIC unfused_attention_int8_kernels.cu)
 set_property(TARGET unfused_attention_int8_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -118,3 +126,7 @@ set_property(TARGET sampling_topp_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  
 add_library(sampling_penalty_kernels STATIC sampling_penalty_kernels.cu)
 set_property(TARGET sampling_penalty_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET sampling_penalty_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+add_library(matrix_vector_multiplication STATIC matrix_vector_multiplication.cu)
+set_property(TARGET matrix_vector_multiplication PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET matrix_vector_multiplication PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)

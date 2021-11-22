@@ -63,7 +63,8 @@ public:
                cudaStream_t stream,
                cublasMMWrapper* cublas_wrapper,
                IAllocator* allocator,
-               bool is_free_buffer_after_forward);
+               bool is_free_buffer_after_forward,
+               bool sparse);
 
     GptDecoder(GptDecoder<T> const& decoder);
 

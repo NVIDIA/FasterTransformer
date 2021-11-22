@@ -223,7 +223,8 @@ def bert_example(args_dict):
             for t in thread_list:
                 t.join()
 
-        return max_diff
+    sys.stdout.flush()
+    return max_diff
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

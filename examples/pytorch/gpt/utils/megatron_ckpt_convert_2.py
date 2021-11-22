@@ -227,7 +227,7 @@ def convert_checkpoint(args):
     main_loop = min(t_gpu_num, i_gpu_num)
     
     torch.multiprocessing.set_start_method("spawn")
-    pool = multiprocessing.Pool(8)
+    pool = multiprocessing.Pool(args.processes)
     for i in range(main_loop):
         for j in range(model_args.pipeline_model_parallel_size):
             if model_args.pipeline_model_parallel_size == 1:
@@ -283,6 +283,7 @@ if __name__ == "__main__":
     parser.add_argument("-saved_dir", "-o", type=str, help="file name of output file", required=True)
     parser.add_argument("-in_file", "-i", type=str, help="file name of input checkpoint file", required=True)
     parser.add_argument("-infer_gpu_num", "-i_g", type=int, help="How many gpus for inference", required=True)
+    parser.add_argument("-processes", "-p", type=int, help="How many processes to spawn for conversion (default: 64)", default=64)
     args = parser.parse_args()
     print("\n=============== Argument ===============")
     for key in vars(args):

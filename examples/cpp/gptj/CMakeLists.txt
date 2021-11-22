@@ -11,6 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
+
 if(BUILD_GPT)
 add_executable(gptj_example gptj_example.cc)
 target_link_libraries(gptj_example PUBLIC -lcublas -lcublasLt -lcudart

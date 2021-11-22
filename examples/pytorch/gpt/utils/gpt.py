@@ -22,8 +22,11 @@ import torch.distributed as dist
 
 
 class GPTWeights(object):
-    def __init__(self, head_num, size_per_head, layer_num, vocab_size, max_seq_len, tensor_para_size, pipeline_para_size):
+    def __init__(self, head_num, size_per_head, layer_num, vocab_size, max_seq_len, tensor_para_size, pipeline_para_size, int8_mode = 0):
         assert(head_num % tensor_para_size == 0)
+        
+        if int8_mode != 0:
+            self.weight_transpose_calibrate_quantize = torch.ops.fastertransformer.weight_transpose_calibrate_quantize
 
         self.head_num = head_num
         self.size_per_head = size_per_head
@@ -45,8 +48,12 @@ class GPTWeights(object):
         self.local_hidden_units = local_hidden_units
         self.global_hidden_units = global_hidden_units
         self.local_inter_size = local_inter_size
+        
+        self.int8_mode = int8_mode
 
         self.w = []
+        self.int8_w = []
+        self.scale = []
         # Transformer blocks
         self.w.extend([torch.zeros(global_hidden_units)] * layer_num)   # self_layernorm_gamma
         self.w.extend([torch.zeros(global_hidden_units)] * layer_num)   # self_layernorm_beta
@@ -70,6 +77,18 @@ class GPTWeights(object):
         # Initialization
         self._map(lambda w: torch.nn.init.normal_(w, mean=0., std=1.))
 
+        if (self.int8_mode != 0):
+            self.int8_w.extend([torch.zeros(global_hidden_units, local_hidden_units * 3, dtype=torch.int8)] * layer_num)   # self_int8_kernel
+            self.scale.extend([torch.zeros(local_hidden_units * 3, dtype=torch.float)] * layer_num)   # self_scale
+            self.int8_w.extend([torch.zeros(local_hidden_units, global_hidden_units, dtype=torch.int8)] * layer_num)   # self_output_int8_kernel
+            self.scale.extend([torch.zeros(global_hidden_units, dtype=torch.float)] * layer_num)   # self_output_scale
+            self.int8_w.extend([torch.zeros(global_hidden_units, local_inter_size, dtype=torch.int8)] * layer_num)   # ffn_int8_kernel1
+            self.scale.extend([torch.zeros(local_inter_size, dtype=torch.float)] * layer_num)   # ffn_scale1
+            self.int8_w.extend([torch.zeros(local_inter_size, global_hidden_units, dtype=torch.int8)] * layer_num)   # ffn_int8_kernel2
+            self.scale.extend([torch.zeros(global_hidden_units, dtype=torch.float)] * layer_num)   # ffn_scale2
+            
+            
+
     def __getitem__(self, idx):
         return self.w[idx]
 
@@ -86,6 +105,22 @@ class GPTWeights(object):
                     self.w[i][j] = func(self.w[i][j])
             else:
                 self.w[i] = func(self.w[i])
+
+    def _map_int8(self, func):
+        for i in range(len(self.int8_w)):
+            if isinstance(self.int8_w[i], list):
+                for j in range(len(self.int8_w[i])):
+                    self.int8_w[i][j] = func(self.int8_w[i][j])
+                    
+            else:
+                self.int8_w[i] = func(self.int8_w[i])
+        for i in range(len(self.scale)):
+            if isinstance(self.scale[i], list):
+                for j in range(len(self.scale[i])):
+                    self.scale[i][j] = func(self.scale[i][j])
+                    
+            else:
+                self.scale[i] = func(self.scale[i])
 
     def load(self, ckpt_path, tensor_para_rank, pipeline_para_rank):
         if not os.path.exists(ckpt_path):
@@ -142,12 +177,29 @@ class GPTWeights(object):
             raise RuntimeError(
                 "head_num, size_per_head, vocab_size, and max_seq_len must be the same as the ones during training.")
 
+        #transpose calibrate quantize the kernel
+        layer_num = self.layer_num
+        if self.int8_mode != 0:
+            for i in range(layer_num):
+                self.int8_w[i + 0*layer_num], self.scale[i + 0*layer_num] = self.weight_transpose_calibrate_quantize(self.w[2*layer_num + i])
+                self.int8_w[i + 1*layer_num], self.scale[i + 1*layer_num] = self.weight_transpose_calibrate_quantize(self.w[4*layer_num + i])
+                self.int8_w[i + 2*layer_num], self.scale[i + 2*layer_num] = self.weight_transpose_calibrate_quantize(self.w[8*layer_num + i])
+                self.int8_w[i + 3*layer_num], self.scale[i + 3*layer_num] = self.weight_transpose_calibrate_quantize(self.w[10*layer_num + i])
+                
         return True
 
 
 class GPT(nn.Module):
-    def __init__(self, head_num, size_per_head, vocab_size, start_id, end_id, layer_num, top_k, top_p, random_seed, temperature,
-                 output_len, max_seq_len, tensor_para_size, pipeline_para_size, max_batch_size, repetition_penalty, lib_path):
+    def __init__(self,
+                 head_num, size_per_head,
+                 vocab_size, start_id, end_id, layer_num,
+                 top_k, top_p, random_seed, temperature,
+                 output_len, max_seq_len,
+                 tensor_para_size, pipeline_para_size,
+                 max_batch_size,
+                 repetition_penalty,
+                 lib_path,
+				 int8_mode = 0):
         super().__init__()
         self.beam_width = 1
         self.head_num = head_num
@@ -167,16 +219,22 @@ class GPT(nn.Module):
         self.pipeline_para_size = pipeline_para_size
         self.max_batch_size = max_batch_size
         self.repetition_penalty = repetition_penalty
+        self.use_sparse_gemm = False
         self.build_model = False
+        self.int8_mode = int8_mode
 
         assert torch.cuda.is_available(), "CUDA is required for this model."
 
         assert head_num % tensor_para_size == 0, "head_num must be a multiple of tensor_para_size."
         assert layer_num % pipeline_para_size == 0, "layer_num must be a multiple of pipeline_para_size."
 
+        # Load the C++ model into Pytorch model.
+        torch.classes.load_library(os.path.abspath(lib_path))
+
         # Prepare weights
         self.weights = GPTWeights(head_num, size_per_head, layer_num, vocab_size,
-                                  max_seq_len, tensor_para_size, pipeline_para_size)
+                                  max_seq_len, tensor_para_size, pipeline_para_size, 
+                                  int8_mode)
 
         # Prepare for tensor/pipeline parallel
         try:
@@ -194,9 +252,6 @@ class GPT(nn.Module):
         self.tensor_para_rank = self.rank % self.tensor_para_size
         self.pipeline_para_rank = self.rank // self.tensor_para_size
 
-        # Load the C++ model into Pytorch model.
-        torch.classes.load_library(os.path.abspath(lib_path))
-
         # Create and copy model to the device.
         self.cuda()
 
@@ -210,20 +265,32 @@ class GPT(nn.Module):
         self.weights._map(lambda w: w.half())
         self.cuda()
 
+    def sparse(self):
+        if not self.use_sparse_gemm:
+            self.use_sparse_gemm = True
+            self.cuda()
+
     def cuda(self):
         self.weights._map(lambda w: w.cuda(self.device))
-        if self.build_model == True:
+        if self.int8_mode != 0:
+            self.weights._map_int8(lambda w: w.cuda(self.device))
+            
+        if self.build_model:
             del self.model
             self.build_model = False
-        self.model = torch.classes.FasterTransformer.GptOp(self.max_batch_size,
-                                                           self.max_seq_len, self.beam_width,
-                                                           self.head_num, self.size_per_head, 4 * self.head_num * self.size_per_head,
-                                                           self.layer_num, self.vocab_size, self.start_id, self.end_id,
-                                                           self.beam_search_diversity_rate, self.top_k, self.top_p, self.random_seed, self.temperature, 1.0,
-                                                           self.repetition_penalty, self.weights.w)
+        self.model = torch.classes.FasterTransformer.GptOp(
+            self.max_batch_size,
+            self.max_seq_len, self.beam_width,
+            self.head_num, self.size_per_head, 4 * self.head_num * self.size_per_head,
+            self.layer_num, self.vocab_size, self.start_id, self.end_id,
+            self.beam_search_diversity_rate, self.top_k, self.top_p, self.random_seed, self.temperature, 1.0,
+            self.repetition_penalty,
+            self.use_sparse_gemm,
+            self.weights.w)
         self.build_model = True
+
     def forward(self, start_ids, start_lengths, batch_first=True):
-        if self.build_model == False:
+        if not self.build_model:
             self.cuda()
         batch_size = start_ids.size(0)
         assert batch_size <= self.max_batch_size, "batch_size must not exceed max_batch_size."

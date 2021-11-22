@@ -25,6 +25,8 @@ add_subdirectory(decoder)
 add_subdirectory(decoding)
 add_subdirectory(gpt)
 add_subdirectory(longformer)
+
 if(BUILD_GPT)
+    add_subdirectory(t5)
     add_subdirectory(multi_gpu_gpt)
 endif()

@@ -53,19 +53,37 @@ void FfnLayer<T>::forward(std::vector<fastertransformer::Tensor>* output_tensors
                                 ffn_weights->intermediate_weight.sp_kernel,
                                 input_tensor,
                                 inter_buf_);
-    } else {
+    }
+    else {
 #endif
-    cublas_wrapper_->Gemm(CUBLAS_OP_N,
-                          CUBLAS_OP_N,
-                          inter_size_,
-                          m,
-                          hidden_units_,
-                          ffn_weights->intermediate_weight.kernel,
-                          inter_size_,
-                          input_tensor,
-                          hidden_units_,
-                          inter_buf_,
-                          inter_size_);
+        if (int8_mode_ == 1 && m <= 2) {
+            FT_CHECK(ffn_weights->intermediate_weight.int8_kernel != NULL
+                     && ffn_weights->intermediate_weight.scale != NULL);
+            int8WeightPerChannelLdkMultiplicationLauncher(ffn_weights->intermediate_weight.int8_kernel,
+                                                          input_tensor,
+                                                          ffn_weights->intermediate_weight.scale,
+                                                          inter_buf_,
+                                                          m,
+                                                          inter_size_,
+                                                          hidden_units_,
+                                                          stream_);
+        }
+        else {
+            if (int8_mode_ == 1) {
+                printf("[WARNING][FfnLayer<T>::forward] int8 gpt doesn't support m > 2, run fp gpt instead.\n");
+            }
+            cublas_wrapper_->Gemm(CUBLAS_OP_N,
+                                  CUBLAS_OP_N,
+                                  inter_size_,
+                                  m,
+                                  hidden_units_,
+                                  ffn_weights->intermediate_weight.kernel,
+                                  inter_size_,
+                                  input_tensor,
+                                  hidden_units_,
+                                  inter_buf_,
+                                  inter_size_);
+        }
 #ifdef SPARSITY_ENABLED
     }
 #endif
@@ -83,19 +101,33 @@ void FfnLayer<T>::forward(std::vector<fastertransformer::Tensor>* output_tensors
                                 ffn_weights->output_weight.sp_kernel,
                                 inter_buf_,
                                 output_tensor);
-    } else {
+    }
+    else {
 #endif
-    cublas_wrapper_->Gemm(CUBLAS_OP_N,
-                          CUBLAS_OP_N,
-                          hidden_units_,
-                          m,
-                          inter_size_,
-                          ffn_weights->output_weight.kernel,
-                          hidden_units_,
-                          inter_buf_,
-                          inter_size_,
-                          output_tensor,
-                          hidden_units_);
+        if (int8_mode_ == 1 && m <= 2) {
+            FT_CHECK(ffn_weights->output_weight.int8_kernel != NULL && ffn_weights->output_weight.scale != NULL);
+            int8WeightPerChannelLdkMultiplicationLauncher(ffn_weights->output_weight.int8_kernel,
+                                                          inter_buf_,
+                                                          ffn_weights->output_weight.scale,
+                                                          output_tensor,
+                                                          m,
+                                                          hidden_units_,
+                                                          inter_size_,
+                                                          stream_);
+        }
+        else {
+            cublas_wrapper_->Gemm(CUBLAS_OP_N,
+                                  CUBLAS_OP_N,
+                                  hidden_units_,
+                                  m,
+                                  inter_size_,
+                                  ffn_weights->output_weight.kernel,
+                                  hidden_units_,
+                                  inter_buf_,
+                                  inter_size_,
+                                  output_tensor,
+                                  hidden_units_);
+        }
 #ifdef SPARSITY_ENABLED
     }
 #endif
@@ -116,27 +148,32 @@ FfnLayer<T>::FfnLayer(size_t max_batch_size,
                       cublasMMWrapper* cublas_wrapper,
                       IAllocator* allocator,
                       bool is_free_buffer_after_forward,
-                      bool sparse):
-    BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
+                      bool sparse,
+                      int int8_mode):
+    BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, nullptr, sparse),
     max_token_num_(max_batch_size * max_seq_len),
     head_num_(head_num),
     size_per_head_(size_per_head),
     hidden_units_(head_num * size_per_head),
     inter_size_(inter_size),
-    sparse_(sparse)
+    int8_mode_(int8_mode)
 {
 }
 
 template<typename T>
 FfnLayer<T>::FfnLayer(FfnLayer<T> const& ffn_layer):
-    BaseLayer(
-        ffn_layer.stream_, ffn_layer.cublas_wrapper_, ffn_layer.allocator_, ffn_layer.is_free_buffer_after_forward_),
+    BaseLayer(ffn_layer.stream_,
+              ffn_layer.cublas_wrapper_,
+              ffn_layer.allocator_,
+              ffn_layer.is_free_buffer_after_forward_,
+              ffn_layer.cuda_device_prop_,
+              ffn_layer.sparse_),
     max_token_num_(ffn_layer.max_token_num_),
     head_num_(ffn_layer.head_num_),
     size_per_head_(ffn_layer.size_per_head_),
     hidden_units_(ffn_layer.hidden_units_),
     inter_size_(ffn_layer.inter_size_),
-    sparse_(ffn_layer.sparse_)
+    int8_mode_(ffn_layer.int8_mode_)
 {
 }
 
@@ -191,7 +228,8 @@ GeluFfnLayer<T>::GeluFfnLayer(size_t max_batch_size,
                               cublasMMWrapper* cublas_wrapper,
                               IAllocator* allocator,
                               bool is_free_buffer_after_forward,
-                              bool sparse):
+                              bool sparse,
+                              int int8_mode):
     FfnLayer<T>(max_batch_size,
                 max_seq_len,
                 head_num,
@@ -201,7 +239,8 @@ GeluFfnLayer<T>::GeluFfnLayer(size_t max_batch_size,
                 cublas_wrapper,
                 allocator,
                 is_free_buffer_after_forward,
-                sparse)
+                sparse,
+                int8_mode)
 {
 }
 

@@ -37,7 +37,9 @@ set(xlnet_gemm_func_files
   xlnet_gemm_func.cc
 )
 
-
+set(t5_gemm_func_files
+  t5_gemm_func.cc
+)
 
 add_library(gemm_func STATIC ${gemm_func_files})
 target_link_libraries(gemm_func PUBLIC -lcublas -lcublasLt -lcudart)
@@ -64,7 +66,11 @@ set_property(TARGET decoding_gemm_func PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET decoding_gemm_func PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
 add_library(gpt_gemm_func STATIC ${gpt_gemm_func_files})
-target_link_libraries(gpt_gemm_func PUBLIC -lcublas -lcublasLt -lcudart gemm_func)
+if (SPARSITY_SUPPORT)
+  target_link_libraries(gpt_gemm_func PUBLIC -lcublas -lcublasLt -lcudart gemm_func -lcusparse -lcusparseLt)
+else()
+  target_link_libraries(gpt_gemm_func PUBLIC -lcublas -lcublasLt -lcudart gemm_func)
+endif()
 set_property(TARGET gpt_gemm_func PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET gpt_gemm_func PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
@@ -73,3 +79,11 @@ target_link_libraries(xlnet_gemm_func PUBLIC -lcublas -lcublasLt -lcudart gemm_f
 set_property(TARGET xlnet_gemm_func PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET xlnet_gemm_func PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
+add_library(t5_gemm_func STATIC ${t5_gemm_func_files})
+if (SPARSITY_SUPPORT)
+  target_link_libraries(t5_gemm_func PUBLIC -lcublas -lcublasLt -lcudart gemm_func -lcusparse -lcusparseLt)
+else()
+  target_link_libraries(t5_gemm_func PUBLIC -lcublas -lcublasLt -lcudart gemm_func)
+endif()
+set_property(TARGET t5_gemm_func PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(TARGET t5_gemm_func PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)

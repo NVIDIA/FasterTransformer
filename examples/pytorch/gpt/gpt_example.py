@@ -79,7 +79,8 @@ def main():
                         help='path to sample output file.')
     parser.add_argument('--is_fix_random_seed', type=bool, default=True,
                         help='is fixing the random seed.')
-
+    parser.add_argument('--sparse', action='store_true', dest='sparse',
+                        help='Enable sparse matrix multiplication. (Need SM 8.0 or 8.6 and SPARSITY_SUPPORT=ON)')
     args = parser.parse_args()
 
     layer_num = args.layer_num
@@ -139,6 +140,9 @@ def main():
         print("[WARNING] Checkpoint file not found. Model loading is skipped.")
     if args.fp16:
         gpt.half()
+
+    if args.sparse:
+        gpt.sparse()
 
     with torch.no_grad():
         # Generate tokens.

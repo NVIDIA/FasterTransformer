@@ -124,6 +124,7 @@ class cudaProfiler:
       raise Exception("cudaProfilerStop() return %d " %ret)
     
 def print_abs_mean(node, tensor, info = ""):
-  return tf.Print(node, ["[INFO] {} abs mean".format(info), 
+  return tf.Print(node, ["[INFO] {} abs mean".format(info),
+                         tf.shape(tensor),
                          tf.reduce_mean(tf.abs(tensor)),
                          tf.reduce_sum(tf.abs(tensor))])

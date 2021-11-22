@@ -26,12 +26,14 @@ template<typename T>
 class DecoderCrossAttentionLayer: public BaseAttentionLayer<T> {
 private:
     // metadata
-    size_t head_num_;
-    size_t size_per_head_;
+    const size_t head_num_;
+    const size_t size_per_head_;
+    const size_t d_model_;
     bool is_batch_major_cache_ = true;
 
     // calculated params
-    size_t hidden_units_;
+    const size_t hidden_units_;
+    const float q_scaling_;
 
     // buffer handling
     size_t max_batch_size_ = 0;
@@ -42,13 +44,13 @@ private:
     bool isValidBatchSize(size_t batch_size);
     bool isValidSeqLen(size_t seq_len);
 
+protected:
     using BaseAttentionLayer<T>::stream_;
     using BaseAttentionLayer<T>::is_free_buffer_after_forward_;
     using BaseAttentionLayer<T>::is_allocate_buffer_;
     using BaseAttentionLayer<T>::cublas_wrapper_;
     using BaseAttentionLayer<T>::allocator_;
 
-protected:
     T* q_buf_;
     T* context_buf_;
     T* mem_cache_buf_;
@@ -57,6 +59,25 @@ public:
     DecoderCrossAttentionLayer(size_t max_batch_size,
                                size_t head_num,
                                size_t size_per_head,
+                               cudaStream_t stream,
+                               cublasMMWrapper* cublas_wrapper,
+                               IAllocator* allocator,
+                               bool is_free_buffer_after_forward);
+
+    DecoderCrossAttentionLayer(size_t max_batch_size,
+                               size_t head_num,
+                               size_t size_per_head,
+                               const float q_scaling,
+                               cudaStream_t stream,
+                               cublasMMWrapper* cublas_wrapper,
+                               IAllocator* allocator,
+                               bool is_free_buffer_after_forward);
+
+    DecoderCrossAttentionLayer(size_t max_batch_size,
+                               size_t head_num,
+                               size_t size_per_head,
+                               size_t d_model,
+                               const float q_scaling,
                                cudaStream_t stream,
                                cublasMMWrapper* cublas_wrapper,
                                IAllocator* allocator,

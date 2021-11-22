@@ -137,6 +137,20 @@ void GptWeight<T>::loadModel(std::string dir_path)
     }
 }
 
+#ifdef SPARSITY_ENABLED
+template<typename T>
+void GptWeight<T>::compress_weights(cublasMMWrapper& cublas_wrapper)
+{
+    // Assertion to prevent invalid attributes. By now, gpt_weight may not
+    // have proper attribute values, because one can directly modify decoder
+    // layer weights from outside.
+    FT_CHECK(decoder_layer_weights.size() == static_cast<size_t>(num_layer_));
+    for (int i = 0; i < num_layer_; ++i) {
+        decoder_layer_weights[i].compress_weights(cublas_wrapper, hidden_units_);
+    }
+}
+#endif
+
 template struct GptWeight<float>;
 template struct GptWeight<half>;
 

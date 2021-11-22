@@ -38,7 +38,8 @@ public:
                                            cublasMMWrapper* cublas_wrapper,
                                            IAllocator* allocator,
                                            bool is_free_buffer_after_forward,
-                                           bool is_qk_buf_float);
+                                           bool is_qk_buf_float,
+                                           bool sparse = false);
 
     TensorParallelGptContextAttentionLayer(size_t max_batch_size,
                                            size_t max_seq_len,
@@ -51,7 +52,8 @@ public:
                                            cublasMMWrapper* cublas_wrapper,
                                            IAllocator* allocator,
                                            bool is_free_buffer_after_forward,
-                                           bool is_qk_buf_float);
+                                           bool is_qk_buf_float,
+                                           bool sparse = false);
 
     TensorParallelGptContextAttentionLayer(TensorParallelGptContextAttentionLayer<T> const& attention_layer);
 

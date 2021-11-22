@@ -31,8 +31,8 @@
 
 #include "3rdparty/INIReader.h"
 #include "src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.h"
-#include "src/fastertransformer/utils/nvtx_utils.h"
 #include "src/fastertransformer/utils/mpi_utils.h"
+#include "src/fastertransformer/utils/nvtx_utils.h"
 
 static bool USE_ASYNC = true;
 const int START_TOKEN_ID = 50256;
@@ -406,9 +406,6 @@ int main(int argc, char* argv[])
 {
     MPICHECK(MPI_Init(&argc, &argv));
     srand(0);
-    struct cudaDeviceProp prop;
-    check_cuda_error(cudaGetDeviceProperties(&prop, 0));
-    printf("Device %s\n", prop.name);
 
     std::string ini_name;
     if (argc >= 2) {
@@ -532,6 +529,8 @@ void multi_gpu_gpt_example(const INIReader reader)
 
     const int tensor_para_size = reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size");
     const int pipeline_para_size = reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size");
+
+    const int int8_mode = reader.GetInteger("ft_instance_hyperparameter", "int8_mode");
 
     const size_t head_num = reader.GetInteger(model_name, "head_num");
     const size_t size_per_head = reader.GetInteger(model_name, "size_per_head");
@@ -704,7 +703,8 @@ void multi_gpu_gpt_example(const INIReader reader)
                                                         tensor_para_size,
                                                         tensor_para_rank,
                                                         pipeline_para_size,
-                                                        pipeline_para_rank);
+                                                        pipeline_para_rank,
+                                                        int8_mode);
     gpt_weights.loadModel(model_dir);
     ParallelGpt<T> gpt = ParallelGpt<T>(0,  // max_batch_size, FT will adjust the buffer automatically.
                                         0,  // max_seq_len, FT will adjust the buffer automatically.
@@ -734,7 +734,9 @@ void multi_gpu_gpt_example(const INIReader reader)
                                         &cublas_wrapper,
                                         &allocator,
                                         false,
-                                        &prop);
+                                        &prop,
+                                        false,
+                                        int8_mode);
 
     int* d_output_ids;
     int* d_parent_ids;
@@ -746,7 +748,7 @@ void multi_gpu_gpt_example(const INIReader reader)
     std::vector<Tensor> input_tensors = std::vector<Tensor>{
         Tensor{MEMORY_GPU,
                TYPE_INT32,
-               std::vector<size_t>{request_batch_size, beam_width, (size_t)max_input_len},
+               std::vector<size_t>{request_batch_size * beam_width, (size_t)max_input_len},
                d_input_ids},
         Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size * beam_width}, d_input_lengths},
         Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{1}, &total_output_len}};
@@ -761,7 +763,10 @@ void multi_gpu_gpt_example(const INIReader reader)
                std::vector<size_t>{(size_t)total_output_len, request_batch_size, beam_width},
                d_parent_ids},
         Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size, beam_width}, d_sequence_lengths},
-        Tensor{MEMORY_GPU, TYPE_FP32, std::vector<size_t>{(size_t)request_output_len, request_batch_size, beam_width}, nullptr}};
+        Tensor{MEMORY_GPU,
+               TYPE_FP32,
+               std::vector<size_t>{(size_t)request_output_len, request_batch_size, beam_width},
+               nullptr}};
 
     print_mem_usage();
 

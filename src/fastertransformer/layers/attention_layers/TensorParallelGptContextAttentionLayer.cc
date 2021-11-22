@@ -58,7 +58,8 @@ TensorParallelGptContextAttentionLayer<T>::TensorParallelGptContextAttentionLaye
     cublasMMWrapper* cublas_wrapper,
     IAllocator* allocator,
     bool is_free_buffer_after_forward,
-    bool is_qk_buf_float
+    bool is_qk_buf_float,
+    bool sparse
 ):
     GptContextAttentionLayer<T>(max_batch_size,
                                 max_seq_len,
@@ -69,10 +70,12 @@ TensorParallelGptContextAttentionLayer<T>::TensorParallelGptContextAttentionLaye
                                 cublas_wrapper,
                                 allocator,
                                 is_free_buffer_after_forward,
-                                is_qk_buf_float),
+                                is_qk_buf_float,
+                                sparse),
     tensor_para_size_(tensor_para_size),
     tensor_para_comm_(tensor_para_comm)
 {
+    FT_CHECK(head_num % tensor_para_size == 0);
 }
 
 template<typename T>
@@ -88,7 +91,8 @@ TensorParallelGptContextAttentionLayer<T>::TensorParallelGptContextAttentionLaye
     cublasMMWrapper* cublas_wrapper,
     IAllocator* allocator,
     bool is_free_buffer_after_forward,
-    bool is_qk_buf_float
+    bool is_qk_buf_float,
+    bool sparse
 ):
     GptContextAttentionLayer<T>(max_batch_size,
                                 max_seq_len,
@@ -100,7 +104,8 @@ TensorParallelGptContextAttentionLayer<T>::TensorParallelGptContextAttentionLaye
                                 cublas_wrapper,
                                 allocator,
                                 is_free_buffer_after_forward,
-                                is_qk_buf_float),
+                                is_qk_buf_float,
+                                sparse),
     tensor_para_size_(tensor_para_size),
     tensor_para_comm_(tensor_para_comm)
 {

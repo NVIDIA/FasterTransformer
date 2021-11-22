@@ -102,10 +102,12 @@ struct AbstractTransformerModelInstance {
 struct AbstractTransformerModel {
     static std::shared_ptr<AbstractTransformerModel> createGptModel(std::string inifile);
     static std::shared_ptr<AbstractTransformerModel> createGptJModel(std::string inifile);
-    virtual std::vector<ncclUniqueId> createNcclIds(const uint32_t world_size) = 0;
+
+    static std::shared_ptr<AbstractTransformerModel> createT5Model(const int max_batch_size, std::string model_dir);
+    virtual std::vector<ncclUniqueId> createNcclIds(const uint32_t world_size, bool multi_instances = false) = 0;
 
     virtual std::pair<std::vector<ncclComm_t>, std::vector<ncclComm_t>>
-    createNcclComms(std::vector<ncclUniqueId> nccl_ids, const int node_id) = 0;
+    createNcclComms(std::vector<ncclUniqueId> nccl_ids, const int node_id, bool multi_instances = false, int instance_id = 0) = 0;
 
     virtual std::unique_ptr<AbstractTransformerModelInstance>
     createModelInstance(int deviceId,

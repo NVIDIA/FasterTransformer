@@ -134,11 +134,25 @@ void cublasMMWrapper::Gemm(cublasOperation_t transa,
                            void* C,
                            const int ldc)
 {
-    float f_alpha = static_cast<float>(1.0f);
-    float f_beta = static_cast<float>(0.0f);
+    Gemm(transa, transb, m, n, k, A, lda, B, ldb, C, ldc, 1.0f, 0.0f);
+}
 
-    half h_alpha = (half)1.0f;
-    half h_beta = (half)0.0f;
+void cublasMMWrapper::Gemm(cublasOperation_t transa,
+                           cublasOperation_t transb,
+                           const int m,
+                           const int n,
+                           const int k,
+                           const void* A,
+                           const int lda,
+                           const void* B,
+                           const int ldb,
+                           void* C,
+                           const int ldc,
+                           float f_alpha,
+                           float f_beta)
+{
+    half h_alpha = (half)(f_alpha);
+    half h_beta = (half)(f_beta);
 
     mu_->lock();
     int is_fp16_computeType = computeType_ == CUDA_R_16F ? 1 : 0;
@@ -149,7 +163,8 @@ void cublasMMWrapper::Gemm(cublasOperation_t transa,
     const void* alpha = is_fp16_computeType ? reinterpret_cast<void*>(&h_alpha) : reinterpret_cast<void*>(&f_alpha);
     const void* beta = is_fp16_computeType ? reinterpret_cast<void*>(&h_beta) : reinterpret_cast<void*>(&f_beta);
 
-    int findAlgo = cublas_algo_map_->isExist(batch_count, m, n, k, (Atype_ == CUDA_R_16F) ? HALF_DATATYPE : FLOAT_DATATYPE);
+    int findAlgo =
+        cublas_algo_map_->isExist(batch_count, m, n, k, (Atype_ == CUDA_R_16F) ? HALF_DATATYPE : FLOAT_DATATYPE);
 
     cublasLtMatmulAlgo_info info =
         cublas_algo_map_->getAlgo(batch_count, m, n, k, (Atype_ == CUDA_R_16F) ? HALF_DATATYPE : FLOAT_DATATYPE);
@@ -326,7 +341,8 @@ void cublasMMWrapper::stridedBatchedGemm(cublasOperation_t transa,
 
     mu_->lock();
     int is_fp16_computeType = computeType_ == CUDA_R_16F ? 1 : 0;
-    const void* alpha = is_fp16_computeType ? reinterpret_cast<void*>(&h_alpha) : reinterpret_cast<const void*>(&f_alpha);
+    const void* alpha =
+        is_fp16_computeType ? reinterpret_cast<void*>(&h_alpha) : reinterpret_cast<const void*>(&f_alpha);
     const void* beta = is_fp16_computeType ? reinterpret_cast<void*>(&h_beta) : reinterpret_cast<const void*>(&f_beta);
     cublasLtMatmulAlgo_info info =
         cublas_algo_map_->getAlgo(batch_count, m, n, k, (Atype_ == CUDA_R_16F) ? HALF_DATATYPE : FLOAT_DATATYPE);
@@ -385,7 +401,8 @@ void cublasMMWrapper::stridedBatchedGemm(cublasOperation_t transa,
 
     mu_->lock();
     int is_fp16_computeType = computeType == CUDA_R_16F ? 1 : 0;
-    const void* alpha = is_fp16_computeType ? reinterpret_cast<void*>(&h_alpha) : reinterpret_cast<const void*>(&f_alpha);
+    const void* alpha =
+        is_fp16_computeType ? reinterpret_cast<void*>(&h_alpha) : reinterpret_cast<const void*>(&f_alpha);
     const void* beta = is_fp16_computeType ? reinterpret_cast<void*>(&h_beta) : reinterpret_cast<const void*>(&f_beta);
     cublasLtMatmulAlgo_info info =
         cublas_algo_map_->getAlgo(batch_count, m, n, k, (AType == CUDA_R_16F) ? HALF_DATATYPE : FLOAT_DATATYPE);
@@ -490,8 +507,15 @@ void cublasMMWrapper::SpGemm(cublasOperation_t transa,
                              const void* B,
                              void* C)
 {
-    if (Atype_ != CUDA_R_16F || Btype_ != CUDA_R_16F || Ctype_ != CUDA_R_16F || computeType_ != CUDA_R_16F) {
+    if (Atype_ != CUDA_R_16F || Btype_ != CUDA_R_16F || Ctype_ != CUDA_R_16F) {
         throw std::runtime_error("\n[FT][ERROR] sparse GEMM only supports FP16 data type now.");
+    }
+    static bool not_printed_fp32_accumulation_warning = true;
+    if (computeType_ != CUDA_R_16F && not_printed_fp32_accumulation_warning) {
+        printf("[FT][WRANING] cublasMMWrapper sets to FP32 compute type, "
+               "but sparse gemm will use FP16 compute type since cusparselt "
+               "supports FP16 accumulation only.\n");
+        not_printed_fp32_accumulation_warning = false;
     }
     cusparseOrder_t order = CUSPARSE_ORDER_COL;
     cusparseOperation_t opA = (transa == CUBLAS_OP_N) ? CUSPARSE_OPERATION_NON_TRANSPOSE : CUSPARSE_OPERATION_TRANSPOSE;
@@ -577,6 +601,32 @@ void cublasMMWrapper::SpGemm(cublasOperation_t transa,
     CHECK_CUSPARSE(cusparseLtMatmulPlanDestroy(&plan))
     sync_check_cuda_error();
     mu_->unlock();
+}
+
+size_t cublasMMWrapper::getSparseMatrixSize(int m, int k) {
+    // Get a compressed matrix size of shape (m, k) used in cusparselt.
+    auto Atype_ = CUDA_R_16F;
+    cusparseOrder_t order = CUSPARSE_ORDER_COL;
+    unsigned alignment = 16;
+    int num_A_rows = m;
+    int num_A_cols = k;
+    int lda = num_A_rows;
+
+    cusparseLtMatDescriptor_t matA;
+    CHECK_CUSPARSE(cusparseLtStructuredDescriptorInit(&cusparselt_handle_,
+                                                      &matA,
+                                                      num_A_rows,
+                                                      num_A_cols,
+                                                      lda,
+                                                      alignment,
+                                                      Atype_,
+                                                      order,
+                                                      CUSPARSELT_SPARSITY_50_PERCENT));
+    size_t compressed_size = 0;
+    CHECK_CUSPARSE(cusparseLtSpMMACompressedSize2(&cusparselt_handle_,
+                                                  &matA,
+                                                  &compressed_size));
+    return compressed_size;
 }
 
 void cublasMMWrapper::compressMatrix(const void* input, void* output, const int m, const int k)

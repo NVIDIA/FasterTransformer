@@ -135,4 +135,12 @@ void invokeTranspose4dBatchMajor(T* k_dst,
                                  const int local_head_num,
                                  cudaStream_t stream);
 
+template<typename T>
+void invokeAddRelativeAttentionBias(T* qk_buf,
+                                    const T* relative_attention_bias,
+                                    const int batch_size,
+                                    const int head_num,
+                                    const int seq_len,
+                                    cudaStream_t stream);
+
 }  // namespace fastertransformer

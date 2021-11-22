@@ -14,25 +14,33 @@
 
 import argparse
 
-parser = argparse.ArgumentParser()
-parser.add_argument('infile', type=str)
-parser.add_argument('outfile', type=str)
-args = parser.parse_args()
-
-with open(args.infile, 'r') as infile:
-    with open(args.outfile, 'w') as outfile:
-        for line in infile.readlines():
-            line = line.strip().split()
-            if line[-1] == '</s>':
-                line.pop()
-            if line[0][0] == '▁':
-                s = line[0][1:]
+def recover_bpe(src):
+    dst = []
+    for line in src:
+        line = line.strip().split()
+        if line[-1] == '</s>':
+            line.pop()
+        if line[0][0] == '▁':
+            s = line[0][1:]
+        else:
+            s = line[0]
+        for w in line[1:]:
+            if w[0] == '▁':
+                s += ' ' + w[1:]
             else:
-                s = line[0]
-            for w in line[1:]:
-                if w[0] == '▁':
-                    s += ' ' + w[1:]
-                else:
-                    s += w
-            s += '\n'
-            outfile.write(s)
+                s += w
+        s += '\n'
+        dst.append(s)
+    return dst
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument('infile', type=str)
+    parser.add_argument('outfile', type=str)
+    args = parser.parse_args()
+
+    with open(args.infile, 'r') as infile:
+        with open(args.outfile, 'w') as outfile:
+            dst = recover_bpe(infile.readlines())
+            for line in dst:
+                outfile.write(line)

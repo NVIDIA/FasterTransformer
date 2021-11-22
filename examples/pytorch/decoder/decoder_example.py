@@ -111,7 +111,7 @@ def main():
         output2 = inp
 
         for i in range(step):
-            output1 = onmt_decoder(output1, mem, src_pad_mask, cache, 0)
+            output1 = onmt_decoder(output1, mem, src_pad_mask, cache, i)
             output2, self_cache, mem_cache = custom_decoder(output2, mem, mem_seq_lens, self_cache, mem_cache, torch.ones(args.batch_size, dtype=torch.int32).cuda() * i, i)
             epsilon = 1e-6
             if args.data_type == 'fp16':

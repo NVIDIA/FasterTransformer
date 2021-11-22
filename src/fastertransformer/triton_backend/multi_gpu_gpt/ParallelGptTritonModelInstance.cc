@@ -98,7 +98,7 @@ ParallelGptTritonModelInstance<T>::convert_outputs(const std::vector<ft::Tensor>
     // change output.shape to [batch_size, beam_width, total_output_len]
     return std::shared_ptr<std::vector<triton::Tensor>>(new std::vector<triton::Tensor>{
         triton::Tensor{triton::MEMORY_GPU,
-                       triton::TYPE_INT32,
+                       triton::TYPE_UINT32,
                        output_tensors[0].shape,
                        d_output_ids_}});
 }

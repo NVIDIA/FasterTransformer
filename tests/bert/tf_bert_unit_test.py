@@ -113,7 +113,7 @@ class TestEncoder(unittest.TestCase):
             max_diff = bert_example(args_dict)
             self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
 
-    def test_head_fp32(self):
+    def test_head_fp16(self):
         args_dict = copy.deepcopy(self.common_args_dict)
         args_dict['data_type'] = 'fp16'
         args_dict['size_per_head'] = 64
@@ -183,6 +183,39 @@ class TestEncoder(unittest.TestCase):
                                                             args_dict['data_type'] == 'fp16'))
             max_diff = bert_example(args_dict)
             self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
+
+    def test_large_model_fp32(self):
+        args_dict = copy.deepcopy(self.common_args_dict)
+        args_dict['data_type'] = 'fp32'
+        args_dict['num_layer'] = 4
+        
+        for p in [tuple([32, 64]), tuple([64, 64]), tuple([32, 128])]:
+            args_dict['head_number'] = p[0]
+            args_dict['size_per_head'] = p[1]
+            args_dict['inter_size'] = p[0] * p[1] * 4
+            tf.reset_default_graph()
+            os.system("./bin/bert_gemm {} {} {} {} {} 0".format(args_dict['batch_size'], args_dict['max_seq_len'],
+                                                            args_dict['head_number'], args_dict['size_per_head'],
+                                                            args_dict['data_type'] == 'fp16'))
+            max_diff = bert_example(args_dict)
+            self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
+    
+    def test_large_model_fp16(self):
+        args_dict = copy.deepcopy(self.common_args_dict)
+        args_dict['data_type'] = 'fp16'
+        args_dict['num_layer'] = 4
+        threshold = 0.08 # Use larger threshold for larger model, need to check it makse sense or not
+
+        for p in [tuple([32, 64]), tuple([64, 64]), tuple([32, 128])]:
+            args_dict['head_number'] = p[0]
+            args_dict['size_per_head'] = p[1]
+            args_dict['inter_size'] = p[0] * p[1] * 4
+            tf.reset_default_graph()
+            os.system("./bin/bert_gemm {} {} {} {} {} 0".format(args_dict['batch_size'], args_dict['max_seq_len'],
+                                                            args_dict['head_number'], args_dict['size_per_head'],
+                                                            args_dict['data_type'] == 'fp16'))
+            max_diff = bert_example(args_dict)
+            self.assertTrue(max_diff < threshold)
 
 if __name__ == "__main__":
     unittest.main()

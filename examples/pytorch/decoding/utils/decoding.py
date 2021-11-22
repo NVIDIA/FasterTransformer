@@ -390,9 +390,9 @@ class TransformerDecoder(DecoderBase):
             self.state['cache']['mem'] = [torch.zeros(self.transformer_layers[0].layer_num, batch_size, max_seq_len, depth, dtype=dtype, device='cuda'),
                                            torch.zeros(self.transformer_layers[0].layer_num, batch_size, max_seq_len, depth, dtype=dtype, device='cuda')]
             self.state['cache']['self'] = [ torch.zeros(self.transformer_layers[0].layer_num, batch_size, self.head_num, self.size_per_head // self.op_cache_dim_x, 
-                                                        0, self.op_cache_dim_x, dtype=dtype, device='cuda'),
+                                                        max_seq_len, self.op_cache_dim_x, dtype=dtype, device='cuda'),
                                             torch.zeros(self.transformer_layers[0].layer_num, batch_size, self.head_num, 
-                                                        0, self.size_per_head, dtype=dtype, device='cuda') ]
+                                                        max_seq_len, self.size_per_head, dtype=dtype, device='cuda') ]
 
     def update_dropout(self, dropout, attention_dropout):
         self.embeddings.update_dropout(dropout)

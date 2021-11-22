@@ -35,25 +35,25 @@ __global__ void trt_add_QKV_bias(half2* qkv_buf,
     // const int seq_id = blockIdx.x % valid_word_num;
     // const int qkv_id = (blockIdx.x - seq_id) / valid_word_num;
     const int seq_id = blockIdx.x;
-    const int size_id = threadIdx.x % size_per_head;
-    const int head_id = (threadIdx.x - size_id) / size_per_head;
 
-    const int target_offset = blockIdx.x * head_num * 3 * size_per_head + head_id * 3 * size_per_head;
+    for (int index = threadIdx.x; index < head_num * size_per_head; index += blockDim.x) {
+        const int size_id = index % size_per_head;
+        const int head_id = (index - size_id) / size_per_head;
 
-    qkv_buf[target_offset + 0 * size_per_head + size_id] = Q[seq_id * blockDim.x + threadIdx.x] + bias_Q[threadIdx.x];
+        const int target_offset = blockIdx.x * head_num * 3 * size_per_head + head_id * 3 * size_per_head;
+        const int src_id = seq_id * head_num * size_per_head + index;
 
-    qkv_buf[target_offset + 1 * size_per_head + size_id] = K[seq_id * blockDim.x + threadIdx.x] + bias_K[threadIdx.x];
-
-    qkv_buf[target_offset + 2 * size_per_head + size_id] = V[seq_id * blockDim.x + threadIdx.x] + bias_V[threadIdx.x];
+        qkv_buf[target_offset + 0 * size_per_head + size_id] = Q[src_id] + bias_Q[index];
+        qkv_buf[target_offset + 1 * size_per_head + size_id] = K[src_id] + bias_K[index];
+        qkv_buf[target_offset + 2 * size_per_head + size_id] = V[src_id] + bias_V[index];
+    }
 }
 
 template<typename T>
 void FusedAttentionLayer<T>::invokeTrtAddQkvBias(size_t token_num, const AttentionWeight<T>* attention_weights)
 {
     dim3 grid(token_num);
-    dim3 block(head_num_ * size_per_head_ / 2);
-
-    assert(block.x <= 1024);
+    dim3 block(min((int)(head_num_ * size_per_head_ / 2), 512));
 
     trt_add_QKV_bias<<<grid, block, 0, stream_>>>((half2*)qkv_buf_,
                                                   (const half2*)q_buf_,
@@ -171,6 +171,7 @@ void FusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* out
 #endif
 
     invokeTrtAddQkvBias(m, attention_weights);
+    sync_check_cuda_error();
 
     int S = dispatcher_fp16->getSFromMaxSeqLen(request_seq_len);
     FT_CHECK(dispatcher_fp16->isValid(S));

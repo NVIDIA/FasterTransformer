@@ -30,12 +30,14 @@ public:
               cublasMMWrapper* cublas_wrapper,
               IAllocator* allocator,
               bool is_free_buffer_after_forward,
-              cudaDeviceProp* cuda_device_prop = nullptr):
+              cudaDeviceProp* cuda_device_prop = nullptr,
+              bool sparse = false):
         stream_(stream),
         cublas_wrapper_(cublas_wrapper),
         allocator_(allocator),
         cuda_device_prop_(cuda_device_prop),
-        is_free_buffer_after_forward_(is_free_buffer_after_forward) {};
+        is_free_buffer_after_forward_(is_free_buffer_after_forward),
+        sparse_(sparse) {};
     virtual ~BaseLayer() = default;
 
 protected:
@@ -50,6 +52,7 @@ protected:
 
     bool is_free_buffer_after_forward_;
     bool is_allocate_buffer_ = false;
+    bool sparse_;
 };
 
 }  // namespace fastertransformer

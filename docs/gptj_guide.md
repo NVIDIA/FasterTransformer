@@ -31,7 +31,7 @@ With 6 billion parameters, GPT-J is one of the largest GPT-like publicly release
 * Get the code and install all dependencies:
 
     ```bash
-    git clone git clone https://gitlab-master.nvidia.com/zehuanw/FasterTransformer -b v5.0-dev-gptj
+    git clone https://github.com/NVIDIA/FasterTransformer.git
     mkdir -p FasterTransformer/build
     cd FasterTransformer/build
     git submodule init && git submodule update
@@ -57,7 +57,7 @@ To run the GPT on c, users need to convert the checkpoint of TensorFlow or PyTor
 
     ```bash
     wget https://the-eye.eu/public/AI/GPT-J-6B/step_383500_slim.tar.gz
-    tar -axf step_383500_slim.tar.zstd
+    tar -axf step_383500_slim.tar.gz
     python3 ../examples/pytorch/gptj/utils/gptj_ckpt_convert.py --output-dir ../models/j6b_ckpt --ckpt-dir ./step_383500 
     ```
 

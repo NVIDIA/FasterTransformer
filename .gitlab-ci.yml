@@ -8,9 +8,8 @@ build_pyt_release:
     - fastertransformer
   stage: build
   only:
-    - master
-    - v4.1
     - main
+    - merge_requests
   artifacts:
     paths:
       - ${CI_PROJECT_DIR}/build/
@@ -27,9 +26,8 @@ build_pyt_release_sparse:
     - fastertransformer
   stage: build
   only:
-    - master
-    - v4.1
     - main
+    - merge_requests
   artifacts:
     paths:
       - ${CI_PROJECT_DIR}/build/
@@ -48,9 +46,8 @@ build_tf_release:
     - fastertransformer
   stage: build
   only:
-    - master
-    - v4.1
     - main
+    - merge_requests
   artifacts:
     paths:
       - ${CI_PROJECT_DIR}/build/
@@ -72,9 +69,8 @@ pyt_gpt_test:
     - fastertransformer
   stage: test
   only:
-    - master
-    - v4.1
     - main
+    - merge_requests
   needs:
     - job: build_pyt_release
       artifacts: true
@@ -106,9 +102,8 @@ tf_test:
     - fastertransformer
   stage: test
   only:
-    - master
-    - v4.1
     - main
+    - merge_requests
   needs:
     - job: build_tf_release
       artifacts: true
@@ -120,6 +115,8 @@ tf_test:
     - export CUDA_VISIBLE_DEVICES=0
     - bash ${CI_PROJECT_DIR}/examples/tensorflow/decoding/utils/translation/download_model_data.sh
     - mkdir -p ${CI_PROJECT_DIR}/translation/ckpt_fp16
+    - python ${CI_PROJECT_DIR}/tests/bert/tf_bert_unit_test.py
+    - python ${CI_PROJECT_DIR}/tests/bert/tf_encoder_unit_test.py
     - python ${CI_PROJECT_DIR}/examples/tensorflow/ckpt_type_convert.py --init_checkpoint=${CI_PROJECT_DIR}/translation/ckpt/model.ckpt-500000 --fp16_checkpoint=${CI_PROJECT_DIR}/translation/ckpt_fp16/model.ckpt-500000
     - python ${CI_PROJECT_DIR}/tests/decoding/tf_decoding_unit_test.py
   timeout: 4h 30m
@@ -133,6 +130,7 @@ tf_xlnet_test:
     - master
     - v4.1
     - main
+    - merge_requests
   needs:
     - job: build_tf_release
       artifacts: true
@@ -147,9 +145,8 @@ pyt_sp_test:
     - fastertransformer
   stage: test
   only:
-    - master
-    - v4.1
     - main
+    - merge_requests
   needs:
     - job: build_pyt_release_sparse
       artifacts: true
@@ -173,9 +170,8 @@ pyt_longformer_test:
     - fastertransformer
   stage: test
   only:
-    - master
-    - v4.1
     - main
+    - merge_requests
   needs:
     - job: build_pyt_release
       artifacts: true
@@ -198,9 +194,8 @@ pyt_decoding_test:
     - fastertransformer
   stage: test
   only:
-    - master
-    - v4.1
     - main
+    - merge_requests
   needs:
     - job: build_pyt_release
       artifacts: true
@@ -232,3 +227,30 @@ pyt_decoding_test:
     - python ../examples/pytorch/decoding/translate_example.py --batch_size 128 --beam_size 4 --model_type torch_decoding_with_decoder_ext --decoder_ths_path ./lib/libth_decoder.so --data_type fp16 --output_file output.txt
     - python ../examples/pytorch/decoding/utils/recover_bpe.py output.txt debpe_output.txt
     - cat debpe_output.txt | sacrebleu debpe_ref.txt
+  timeout: 4h
+
+t5_test:
+  image: nvcr.io/nvidia/pytorch:21.02-py3
+  tags:
+    - fastertransformer
+  stage: test
+  only:
+    - main
+    - merge_requests
+  needs:
+    - job: build_pyt_release
+      artifacts: true
+  script:
+    - cd ${CI_PROJECT_DIR}/build/
+    - export PYTHONPATH="${CI_PROJECT_DIR}/:$PYTHONPATH"
+    - export NVIDIA_TF32_OVERRIDE=0 # Disable the TF32
+    - export CUDA_VISIBLE_DEVICES=0
+    - apt-get update && apt-get install bc
+    - pip install transformers huggingface_hub tokenizers sacrebleu SentencePiece
+    - python ../examples/pytorch/t5/translate_example.py -batch 32 -time 0123
+    - python ../examples/pytorch/t5/translate_example.py -batch 32 -time 0123 -d fp16
+    - python ../examples/pytorch/t5/translate_example.py -batch 4 -time 0123 -d fp16 --model t5-3b
+    - export CUDA_VISIBLE_DEVICES=0,2
+    - mpirun -n 2 --allow-run-as-root python ../examples/pytorch/t5/translate_example.py -batch 4 -time 13 -d fp16 --model t5-3b --tensor_para_size 2
+    - mpirun -n 2 --allow-run-as-root python ../examples/pytorch/t5/translate_example.py -batch 4 -time 13 -d fp16 --model t5-3b --pipeline_para_size 2
+  timeout: 4h

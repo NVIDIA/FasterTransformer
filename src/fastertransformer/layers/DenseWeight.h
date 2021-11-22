@@ -15,7 +15,7 @@
  */
 
 #pragma once
-
+#include "stdlib.h"
 namespace fastertransformer {
 
 template<typename T>
@@ -23,6 +23,9 @@ struct DenseWeight {
     const T* kernel = nullptr;
     const T* bias = nullptr;
     const T* sp_kernel = nullptr;
+    // for int8 kernel
+    const int8_t* int8_kernel = nullptr;
+    const float* scale = nullptr;
 };
 
 }  // namespace fastertransformer

@@ -40,8 +40,11 @@ template<typename T>
 __global__ void addBiasGelu(T* out, const T* __restrict bias, int m, int n)
 {
     for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        T reg_bias = __ldg(&bias[id % n]);
-        T val = out[id] + reg_bias;
+        T val = out[id];
+        if (bias != nullptr) {
+            T reg_bias = __ldg(&bias[id % n]);
+            val = val + reg_bias;
+        }
         out[id] = (T)(gelu(val));
     }
 }
@@ -53,8 +56,11 @@ __global__ void addBiasGelu(half* out, const half* __restrict bias, int m, int n
     const half2* bias_ptr = (half2*)bias;
 
     for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        half2 reg_bias = __ldg(&bias_ptr[id % n]);
-        half2 val = out_ptr[id] + reg_bias;
+        half2 val = out_ptr[id];
+        if (bias != nullptr) {
+            half2 reg_bias = __ldg(&bias_ptr[id % n]);
+            val = __hadd2(val, reg_bias);
+        }
         out_ptr[id] = gelu(val);
     }
 }
@@ -82,8 +88,10 @@ template<typename T>
 __global__ void add_bias_relu(T* out, const T* __restrict bias, int m, int n)
 {
     for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        T reg_bias = __ldg(&bias[id % n]);
-        T val = out[id] + reg_bias;
+        T val = out[id];
+        if (bias != nullptr) {
+            val = val + __ldg(&bias[id % n]);
+        }
         out[id] = (T)(val > 0.0f ? val : 0.0f);
     }
 }
@@ -95,8 +103,10 @@ __global__ void add_bias_relu(half* out, const half* __restrict bias, int m, int
     const half2* bias_ptr = (half2*)bias;
 
     for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        half2 reg_bias = __ldg(&bias_ptr[id % n]);
-        half2 val = out_ptr[id] + reg_bias;
+        half2 val = out_ptr[id];
+        if (bias != nullptr) {
+            val = val + __ldg(&bias_ptr[id % n]);
+        }
         val.x = val.x > (half)0.0f ? val.x : (half)0.0f;
         val.y = val.y > (half)0.0f ? val.y : (half)0.0f;
         out_ptr[id] = val;

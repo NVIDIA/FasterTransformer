@@ -46,7 +46,9 @@ TensorParallelGeluFfnLayer<T>::TensorParallelGeluFfnLayer(size_t max_batch_size,
                                                           cudaStream_t stream,
                                                           cublasMMWrapper* cublas_wrapper,
                                                           IAllocator* allocator,
-                                                          bool is_free_buffer_after_forward):
+                                                          bool is_free_buffer_after_forward,
+                                                          bool is_sparse,
+                                                          int int8_mode):
     GeluFfnLayer<T>(max_batch_size,
                     max_seq_len,
                     head_num,
@@ -55,10 +57,13 @@ TensorParallelGeluFfnLayer<T>::TensorParallelGeluFfnLayer(size_t max_batch_size,
                     stream,
                     cublas_wrapper,
                     allocator,
-                    is_free_buffer_after_forward),
+                    is_free_buffer_after_forward,
+                    is_sparse,
+                    int8_mode),
     tensor_para_size_(tensor_para_size),
     tensor_para_comm_(tensor_para_comm)
 {
+    FT_CHECK(inter_size % tensor_para_size == 0);
 }
 
 template<typename T>

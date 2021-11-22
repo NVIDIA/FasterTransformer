@@ -418,4 +418,92 @@ template void invokeTopkBeamSearch(void* workspace,
                                    const int end_id,
                                    cudaStream_t stream);
 
+template<typename T>
+__global__ void tileEncoderResults(T* tiled_output,
+                                   int* tiled_sequence_length,
+                                   const T* output,
+                                   const int* sequence_length,
+                                   const uint batch_size,
+                                   const uint beam_width,
+                                   const uint d_model)
+{
+    if (blockIdx.x == 0) {
+        for (uint i = threadIdx.x; i < batch_size * beam_width; i += blockDim.x) {
+            tiled_sequence_length[i] = sequence_length[i / beam_width];
+        }
+    }
+
+    int tgt_offset =
+        blockIdx.x * gridDim.y * gridDim.z * d_model + blockIdx.y * gridDim.z * d_model + blockIdx.z * d_model;
+    int src_offset = blockIdx.x * gridDim.z * d_model + blockIdx.z * d_model;
+    for (uint i = threadIdx.x; i < d_model; i += blockDim.x) {
+        tiled_output[i + tgt_offset] = output[i + src_offset];
+    }
+}
+
+template<typename T>
+void invokeTileEncoderResults(T* tiled_output,
+                              int* tiled_sequence_length,
+                              const T* output,
+                              const int* sequence_length,
+                              const size_t batch_size,
+                              const size_t beam_width,
+                              const size_t mem_max_seq_len,
+                              const size_t d_model,
+                              cudaStream_t stream)
+{
+    // tiled_output: [batch_size, beam_width, mem_max_seq_len, d_model]
+    // tiled_sequence_length: [batch_size, beam_width]
+
+    // output: [batch_size, mem_max_seq_len, d_model]
+    // sequence_length [batch_size]
+
+    dim3 grid(batch_size, beam_width, mem_max_seq_len);
+
+    if (d_model % 2 == 0 && std::is_same<T, half>::value) {
+        dim3 block(min(512, (int)(d_model / 2)));
+        tileEncoderResults<half2><<<grid, block, 0, stream>>>((half2*)tiled_output,
+                                                       tiled_sequence_length,
+                                                       (const half2*)output,
+                                                       sequence_length,
+                                                       batch_size,
+                                                       beam_width,
+                                                       d_model / 2);
+    }
+    else {
+        dim3 block(min(512, (int)d_model));
+        tileEncoderResults<T><<<grid, block, 0, stream>>>(
+            tiled_output, tiled_sequence_length, output, sequence_length, batch_size, beam_width, d_model);
+    }
+}
+
+template void invokeTileEncoderResults(float* tiled_output,
+                                       int* tiled_sequence_length,
+                                       const float* output,
+                                       const int* sequence_length,
+                                       const size_t batch_size,
+                                       const size_t beam_width,
+                                       const size_t mem_max_seq_len,
+                                       const size_t d_model,
+                                       cudaStream_t stream);
+
+template void invokeTileEncoderResults(half* tiled_output,
+                                       int* tiled_sequence_length,
+                                       const half* output,
+                                       const int* sequence_length,
+                                       const size_t batch_size,
+                                       const size_t beam_width,
+                                       const size_t mem_max_seq_len,
+                                       const size_t d_model,
+                                       cudaStream_t stream);
+
+template void invokeTileEncoderResults(half2* tiled_output,
+                                       int* tiled_sequence_length,
+                                       const half2* output,
+                                       const int* sequence_length,
+                                       const size_t batch_size,
+                                       const size_t beam_width,
+                                       const size_t mem_max_seq_len,
+                                       const size_t d_model,
+                                       cudaStream_t stream);
 }  // namespace fastertransformer

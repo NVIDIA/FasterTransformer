@@ -59,4 +59,11 @@ template<typename T>
 void invokeGeneralLayerNorm(
     T* out, const T* input, const T* gamma, const T* beta, const int m, const int n, cudaStream_t stream);
 
+template<typename T>
+void invokeGeneralT5LayerNorm(T* out, const T* input, const T* gamma, const int m, const int n, cudaStream_t stream);
+
+template<typename T>
+void invokeGeneralAddResidualT5PreLayerNorm(
+    T* output, T* norm_output, const T* input, const T* gamma, int m, int n, cudaStream_t stream);
+
 }  // namespace fastertransformer

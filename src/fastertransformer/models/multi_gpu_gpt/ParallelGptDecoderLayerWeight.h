@@ -18,9 +18,11 @@
 
 #include <string>
 
+#include "src/fastertransformer/kernels/calibrate_quantize_weight_kernels.h"
 #include "src/fastertransformer/kernels/layernorm_kernels.h"
 #include "src/fastertransformer/layers/FfnWeight.h"
 #include "src/fastertransformer/layers/attention_layers/AttentionWeight.h"
+#include "src/fastertransformer/utils/cublasMMWrapper.h"
 
 namespace fastertransformer {
 
@@ -28,11 +30,20 @@ template<typename T>
 struct ParallelGptDecoderLayerWeight {
 public:
     ParallelGptDecoderLayerWeight() = default;
-    ParallelGptDecoderLayerWeight(const int hidden_units, const int inter_size, const int tensor_para_size, const int tensor_para_rank);
+    ParallelGptDecoderLayerWeight(const int int8_mode);
+    ParallelGptDecoderLayerWeight(const int hidden_units,
+                                  const int inter_size,
+                                  const int tensor_para_size,
+                                  const int tensor_para_rank,
+                                  const int int8_mode = 0);
     ~ParallelGptDecoderLayerWeight();
     ParallelGptDecoderLayerWeight(const ParallelGptDecoderLayerWeight& other);
     ParallelGptDecoderLayerWeight& operator=(const ParallelGptDecoderLayerWeight& other);
     void loadModel(std::string dir_path);
+#ifdef SPARSITY_ENABLED
+    void compress_weights(cublasMMWrapper& cublas_wrapper, int hidden_dim);
+#endif
+    void transposeCalibrateQuantizeWeight();
 
     LayerNormWeight<T> pre_layernorm_weights;
     AttentionWeight<T> self_attention_weights;
@@ -49,7 +60,17 @@ protected:
     size_t tensor_para_size_ = 1;
     size_t tensor_para_rank_ = 0;
     bool is_maintain_buffer = false;
+    int int8_mode_ = 0;
     T* weights_ptr[12];
+
+    int8_t* int8_weights_ptr[4];
+    float* scale_ptr[4];
+    cudaStream_t stream_ = 0;
+
+#ifdef SPARSITY_ENABLED
+    T* sp_weights_ptr[4];
+    bool is_maintain_sp_buffer = false;
+#endif
 };
 
 }  // namespace fastertransformer

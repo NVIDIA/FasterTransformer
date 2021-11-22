@@ -39,6 +39,8 @@ private:
     size_t inter_size_;
     size_t num_layer_;
 
+    int int8_mode_ = 0;
+
     // calculated data
     size_t hidden_units_;
 
@@ -83,7 +85,9 @@ public:
                        cudaStream_t stream,
                        cublasMMWrapper* cublas_wrapper,
                        IAllocator* allocator,
-                       bool is_free_buffer_after_forward);
+                       bool is_free_buffer_after_forward,
+                       bool sparse = false,
+                       int int8_mode = 0);
 
     ParallelGptDecoder(ParallelGptDecoder<T> const& decoder);
 

@@ -21,6 +21,7 @@ add_subdirectory(gpt)
 add_subdirectory(xlnet)
 
 if(BUILD_GPT)
+    add_subdirectory(t5)
     add_subdirectory(gptj)
     add_subdirectory(multi_gpu_gpt)
 endif()

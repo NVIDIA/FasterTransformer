@@ -52,4 +52,14 @@ template<typename T>
 void invokeRemovePadding(
     T* dst, const T* src, const int* padding_offset, const int token_num, const int hidden_dim, cudaStream_t stream);
 
+template<typename T>
+void invokeBuildRelativeAttentionBias(T* relative_attention_bias,
+                                      const T* relative_attention_bias_table,
+                                      const int head_num,
+                                      const int seq_len,
+                                      const int num_bucket,
+                                      const bool is_bidirectional,
+                                      const int max_distance,
+                                      cudaStream_t stream);
+
 }  // namespace fastertransformer
