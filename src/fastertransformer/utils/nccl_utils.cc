@@ -170,6 +170,9 @@ template void ftNcclAllGather(
 size_t getLocalBatchSize(const size_t batch_size, const size_t seq_len, const size_t pipeline_para_size)
 {
     size_t local_batch_size = batch_size;
+    if (pipeline_para_size == 1) {
+        return local_batch_size;
+    }
     if (local_batch_size % pipeline_para_size == 0) {
         local_batch_size /= pipeline_para_size;
     }
