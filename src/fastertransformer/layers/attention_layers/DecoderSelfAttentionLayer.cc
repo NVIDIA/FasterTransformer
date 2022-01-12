@@ -76,6 +76,7 @@ void fusedQKV_masked_attention_dispatch(const T* qkv_buf,
     params.length_per_sample = sequence_lengths;
     params.timestep = step - 1;
     params.num_heads = head_num;
+    params.rotary_embedding_dim = rotary_embedding_dim;
     params.hidden_size_per_head = size_per_head;
     params.inv_sqrt_dh = 1.F / (sqrtf((float)params.hidden_size_per_head) * q_scaling);
 
