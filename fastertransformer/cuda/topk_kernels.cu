@@ -388,7 +388,7 @@ __global__ void topk_stage_2_opt3_sampling(const int* __restrict topk_tmp_id_buf
         for(int i = 0; i < k; i++)
         {
             rand_num = rand_num - (float)s_val2[s_id[i]];
-            if(rand_num <= 0.0f)
+            if(rand_num <= 0.0f || k - 1 == i)
             {
                 ids[batch_id] = topk_tmp_id_buf[batch_id * size + s_id[i]]  % vocab_size;
                 break;
@@ -1455,7 +1455,7 @@ __global__ void topk_topp_sampling_kernel_v2(const int* __restrict topk_tmp_id_b
         for(int i = 0; i < k; i++)
         {
             rand_num = rand_num - (float)s_val2[s_id[i]];
-            if(rand_num <= 0.0f)
+            if(rand_num <= 0.0f || k - 1 == i)
             {
                 ids[batch_id] = topk_tmp_id_buf[batch_id * size + s_id[i]]  % vocab_size;
                 break;
