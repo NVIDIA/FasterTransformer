@@ -267,6 +267,13 @@ python ../examples/onnx/multi_gpu_gpt/onnx_ckpt_convert.py -i gpt2-10.onnx -o ..
 python ../examples/onnx/multi_gpu_gpt/onnx_ckpt_convert.py -i gpt2-10.onnx -o ../models/onnx-models/c-model/124m/ -i_g 4
 ```
 
+* Download huggingface model and convert
+
+```bash
+git clone https://huggingface.co/gpt2-xl
+python ../examples/pytorch/gpt/utils/huggingface_gpt_convert.py -i gpt2-xl/pytorch_model.bin -o ../models/huggingface-models/c-model/gpt2-xl -i_g 1
+```
+
 ### Run GPT
 
 1. Run GPT under on C++ with multiple gpu
