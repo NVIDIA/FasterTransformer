@@ -290,7 +290,7 @@ void add_QKV_bias_transpose_kernelLauncher(
     if(sizeof(T) == 4)
     {
       const int m = batch_size * seq_len;
-      const int word_per_block = 4;
+      const int word_per_block = 1;
       dim3 block;
       if(k % 512 == 0)
         block.x = 512;
@@ -312,7 +312,7 @@ void add_QKV_bias_transpose_kernelLauncher(
     else
     {
       const int m = batch_size * seq_len;
-      const int word_per_block = 4;
+      const int word_per_block = 1;
       const int half_k = k / 2;
       dim3 block;
       if(half_k % 512 == 0)
