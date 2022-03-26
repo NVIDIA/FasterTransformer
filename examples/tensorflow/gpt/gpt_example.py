@@ -236,6 +236,7 @@ def ft_gpt_op(var_dict,
 
     output_ids, parent_ids, sequence_length, cum_log_probs = gpt_op_module.gpt(
         extended_input_ids, # 0
+        extended_input_lengths, # 1
         [tf.cast(var_dict["model/h%d/ln_1/b:0" % l], data_type) for l in range(decoder_args.num_layer)], # 2
         [tf.cast(var_dict["model/h%d/ln_1/g:0" % l], data_type) for l in range(decoder_args.num_layer)], # 3
         [tf.cast(var_dict["model/h%d/attn/c_attn/w:0" % l], data_type) for l in range(decoder_args.num_layer)], # 4
