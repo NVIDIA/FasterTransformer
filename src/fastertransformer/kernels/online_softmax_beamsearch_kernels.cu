@@ -14,10 +14,17 @@
  * limitations under the License.
  */
 
+#ifndef CUDART_VERSION
+#error CUDART_VERSION Undefined!
+#elif (CUDART_VERSION >= 11050)
+#include <cub/cub.cuh>
+#else
 #include "3rdparty/cub/cub.cuh"
+#endif
 
 #include "src/fastertransformer/kernels/online_softmax_beamsearch_kernels.h"
 #include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
+#include "src/fastertransformer/utils/cuda_utils.h"
 
 namespace fastertransformer {
 
@@ -84,8 +91,10 @@ __launch_bounds__(THREADBLOCK_SIZE) __global__ void batch_topk_kernel(const int*
                                                                       const T* __restrict y,
                                                                       int* __restrict z,
                                                                       float* __restrict v,
+                                                                      float* output_log_probs,
                                                                       int V,
                                                                       int K,
+                                                                      int vocab_size,
                                                                       T diversity_rate)
 {
     int thread_id = threadIdx.x;
@@ -120,6 +129,9 @@ __launch_bounds__(THREADBLOCK_SIZE) __global__ void batch_topk_kernel(const int*
         for (int i = 0; i < MAX_K; ++i) {
             if (i < K) {
                 z[i] = x[total.p[i]];
+                if (output_log_probs != nullptr) {
+                    output_log_probs[vector_id * K + i] = (float)y[total.p[i]] - v[(z[i] / vocab_size) % K];
+                }
                 v[i] = (float)y[total.p[i]];
             }
         }
@@ -167,7 +179,7 @@ __launch_bounds__(THREADBLOCK_SIZE) __global__ void beam_online_softmax_topk_ker
                                                                                     T* __restrict v,
                                                                                     int V,
                                                                                     int K,
-                                                                                    int E)
+                                                                                    const int* __restrict end_ids)
 {
     int thread_id = threadIdx.x;
     int vector_id = blockIdx.x;
@@ -192,7 +204,7 @@ __launch_bounds__(THREADBLOCK_SIZE) __global__ void beam_online_softmax_topk_ker
 
     if (finish) {
         for (int elem_id = thread_id; elem_id < V; elem_id += THREADBLOCK_SIZE) {
-            float elem = (elem_id == E) ? MAX_T_VAL : -MAX_T_VAL;
+            float elem = (elem_id == end_ids[vector_id / K]) ? MAX_T_VAL : -MAX_T_VAL;
             MD new_elem{elem, 1.0F};
             partial.md = reduce_md_op(partial.md, new_elem);
             partial.topk.insert(elem, elem_id);
@@ -236,7 +248,7 @@ __launch_bounds__(THREADBLOCK_SIZE, 1) __global__
                                                 float* __restrict t,
                                                 int V,
                                                 int K,
-                                                int E)
+                                                const int* __restrict end_ids)
 {
     int thread_id = threadIdx.x;
     int vector_id = blockIdx.x;
@@ -278,7 +290,7 @@ __launch_bounds__(THREADBLOCK_SIZE, 1) __global__
     if (finish) {
 #pragma unroll 1
         for (int elem_id = section_start + thread_id; elem_id < section_end; elem_id += THREADBLOCK_SIZE) {
-            float elem = (elem_id == E) ? MAX_T_VAL : -MAX_T_VAL;
+            float elem = (elem_id == end_ids[vector_id / K]) ? MAX_T_VAL : -MAX_T_VAL;
             MD new_elem{elem, 1.0F};
             partial.md = reduce_md_op(partial.md, new_elem);
             partial.topk.insert(elem, elem_id);
@@ -417,13 +429,14 @@ void topK_softMax_kernelLauncher(const T* log_probs,
                                  const T* bias,
                                  const bool* finished,
                                  float* cum_log_probs,
+                                 float* output_log_probs,
                                  int* ids,
                                  void* temp_storage,
                                  const int temp_storage_size,
                                  const int batch_size,
                                  const int beam_width,
                                  const int vocab_size,
-                                 const int end_id,
+                                 const int* end_ids,
                                  T diversity_rate,
                                  cudaStream_t stream)
 {
@@ -451,7 +464,7 @@ void topK_softMax_kernelLauncher(const T* log_probs,
                          cudaFuncAttributePreferredSharedMemoryCarveout,
                          cudaSharedmemCarveoutMaxL1);
     beam_online_softmax_topk_stage1_kernel<T, items_per_thread, MAX_K, block_sz>
-        <<<grid, block_sz, 0, stream>>>(log_probs, bias, finished, tmp_buffer, vocab_size, beam_width, end_id);
+        <<<grid, block_sz, 0, stream>>>(log_probs, bias, finished, tmp_buffer, vocab_size, beam_width, end_ids);
 #endif
     if (beam_width > 1) {
 #ifdef DO_SPLIT_SMALL_TOP_K_SOFTMAX
@@ -467,25 +480,33 @@ void topK_softMax_kernelLauncher(const T* log_probs,
                                                                topk_tmp_val_buf,
                                                                vocab_size,
                                                                beam_width,
-                                                               end_id);
+                                                               end_ids);
 #endif
 #if 0
             // wrong result with diversity_rate != 0.f
             batch_topK_kernel<T, MAX_K, 32><<<batch_size, 32, 0, stream>>>
                                 (topk_tmp_id_buf, topk_tmp_val_buf, ids, cum_log_probs);
 #else
-        batch_topk_kernel<T, MAX_K, 32><<<batch_size, 32, 0, stream>>>(
-            topk_tmp_id_buf, topk_tmp_val_buf, ids, cum_log_probs, beam_width * beam_width, beam_width, diversity_rate);
+        batch_topk_kernel<T, MAX_K, 32><<<batch_size, 32, 0, stream>>>(topk_tmp_id_buf,
+                                                                       topk_tmp_val_buf,
+                                                                       ids,
+                                                                       cum_log_probs,
+                                                                       output_log_probs,
+                                                                       beam_width * beam_width,
+                                                                       beam_width,
+                                                                       vocab_size,
+                                                                       diversity_rate);
 #endif
     }
     else {
+        FT_CHECK(false);
 #ifdef DO_SPLIT_SMALL_TOP_K_SOFTMAX
         beam_online_softmax_topk_stage2_kernelLauncher<float, MAX_K>(
             tmp_buffer, cum_log_probs, ids, cum_log_probs, batch_size, beam_width, voc_parts, stream);
 #else
         beam_online_softmax_topk_kernel<T, items_per_thread, MAX_K, block_sz>
             <<<batch_size * beam_width, block_sz, 0, stream>>>(
-                log_probs, bias, cum_log_probs, finished, ids, cum_log_probs, vocab_size, beam_width, end_id);
+                log_probs, bias, cum_log_probs, finished, ids, cum_log_probs, vocab_size, beam_width, end_ids);
 #endif
     }
 }
@@ -495,13 +516,14 @@ void invokeTopkSoftMax(const T* log_probs,
                        const T* bias,
                        const bool* finished,
                        float* cum_log_probs,
+                       float* output_log_probs,
                        int* ids,
                        void* temp_storage,
                        const int temp_storage_size,
                        const int batch_size,
                        const int beam_width,
                        const int vocab_size,
-                       const int end_id,
+                       const int* end_ids,
                        const float diversity_rate,
                        cudaStream_t stream)
 {
@@ -511,13 +533,14 @@ void invokeTopkSoftMax(const T* log_probs,
                                               bias,
                                               finished,
                                               cum_log_probs,
+                                              output_log_probs,
                                               ids,
                                               temp_storage,
                                               temp_storage_size,
                                               batch_size,
                                               beam_width,
                                               vocab_size,
-                                              end_id,
+                                              end_ids,
                                               diversity_rate,
                                               stream);
             break;
@@ -526,13 +549,14 @@ void invokeTopkSoftMax(const T* log_probs,
                                               bias,
                                               finished,
                                               cum_log_probs,
+                                              output_log_probs,
                                               ids,
                                               temp_storage,
                                               temp_storage_size,
                                               batch_size,
                                               beam_width,
                                               vocab_size,
-                                              end_id,
+                                              end_ids,
                                               diversity_rate,
                                               stream);
             break;
@@ -541,13 +565,14 @@ void invokeTopkSoftMax(const T* log_probs,
                                               bias,
                                               finished,
                                               cum_log_probs,
+                                              output_log_probs,
                                               ids,
                                               temp_storage,
                                               temp_storage_size,
                                               batch_size,
                                               beam_width,
                                               vocab_size,
-                                              end_id,
+                                              end_ids,
                                               diversity_rate,
                                               stream);
             break;
@@ -556,13 +581,14 @@ void invokeTopkSoftMax(const T* log_probs,
                                               bias,
                                               finished,
                                               cum_log_probs,
+                                              output_log_probs,
                                               ids,
                                               temp_storage,
                                               temp_storage_size,
                                               batch_size,
                                               beam_width,
                                               vocab_size,
-                                              end_id,
+                                              end_ids,
                                               diversity_rate,
                                               stream);
             break;
@@ -571,13 +597,14 @@ void invokeTopkSoftMax(const T* log_probs,
                                               bias,
                                               finished,
                                               cum_log_probs,
+                                              output_log_probs,
                                               ids,
                                               temp_storage,
                                               temp_storage_size,
                                               batch_size,
                                               beam_width,
                                               vocab_size,
-                                              end_id,
+                                              end_ids,
                                               diversity_rate,
                                               stream);
             break;
@@ -586,13 +613,14 @@ void invokeTopkSoftMax(const T* log_probs,
                                                bias,
                                                finished,
                                                cum_log_probs,
+                                               output_log_probs,
                                                ids,
                                                temp_storage,
                                                temp_storage_size,
                                                batch_size,
                                                beam_width,
                                                vocab_size,
-                                               end_id,
+                                               end_ids,
                                                diversity_rate,
                                                stream);
             break;
@@ -601,13 +629,14 @@ void invokeTopkSoftMax(const T* log_probs,
                                                bias,
                                                finished,
                                                cum_log_probs,
+                                               output_log_probs,
                                                ids,
                                                temp_storage,
                                                temp_storage_size,
                                                batch_size,
                                                beam_width,
                                                vocab_size,
-                                               end_id,
+                                               end_ids,
                                                diversity_rate,
                                                stream);
             break;
@@ -622,13 +651,14 @@ template void invokeTopkSoftMax<float>(const float* log_probs,
                                        const float* bias,
                                        const bool* finished,
                                        float* cum_log_probs,
+                                       float* output_log_probs,
                                        int* ids,
                                        void* tmp_storage,
                                        const int temp_storage_size,
                                        const int batch_size,
                                        const int beam_width,
                                        const int vocab_size,
-                                       const int end_id,
+                                       const int* end_ids,
                                        const float diversity_rate,
                                        cudaStream_t stream);
 
@@ -636,13 +666,14 @@ template void invokeTopkSoftMax<half>(const half* log_probs,
                                       const half* bias,
                                       const bool* finished,
                                       float* cum_log_probs,
+                                      float* output_log_probs,
                                       int* ids,
                                       void* tmp_storage,
                                       const int temp_storage_size,
                                       const int batch_size,
                                       const int beam_width,
                                       const int vocab_size,
-                                      const int end_id,
+                                      const int* end_ids,
                                       const float diversity_rate,
                                       cudaStream_t stream);
 

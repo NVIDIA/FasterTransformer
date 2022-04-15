@@ -18,7 +18,9 @@ from sacrebleu import corpus_bleu
 
 def bleu_score(pred_file, ref_file):
     with tf.io.gfile.GFile(pred_file) as pred_stream, tf.io.gfile.GFile(ref_file) as ref_stream:
-        bleu = corpus_bleu(pred_stream, [ref_stream], force=True)
+        pred_stream_txt = pred_stream.readlines()
+        ref_stream_txt = ref_stream.readlines()
+        bleu = corpus_bleu(pred_stream_txt, [ref_stream_txt], force=True)
         print("       bleu score: {:6.2f}".format(bleu.score))
         print("       bleu counts: {}".format(bleu.counts))
         print("       bleu totals: {}".format(bleu.totals))

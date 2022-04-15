@@ -24,8 +24,9 @@ void ldnCalibrateWeightPerChannel(float* scale_out, const T* weight, const int k
         float amax = 0.0f;
         for (int k_i = 0; k_i < k; k_i++) {
             float val = fabs(weight[k_i * n + n_i]);
-            if (amax < val)
+            if (amax < val) {
                 amax = val;
+            }
         }
         scale_out[n_i] = amax / 127.0f;
     }
@@ -66,8 +67,9 @@ std::vector<Tensor> weight_transpose_calibrate_quantize(Tensor weight)
 
         auto stream = at::cuda::getCurrentCUDAStream().stream();
 
-        invokeLdnCalibrateWeightPerChannel(scale_out, weight_, k, n, stream);
-        invokeLdnTransposeQuantizeWeightPerChannel(int8_weight_out, scale_out, weight_, k, n, stream);
+        fastertransformer::invokeLdnCalibrateWeightPerChannel(scale_out, weight_, k, n, stream);
+        fastertransformer::invokeLdnTransposeQuantizeWeightPerChannel(
+            int8_weight_out, scale_out, weight_, k, n, stream);
 
         return std::vector<Tensor>{int8_weight, scale};
     }

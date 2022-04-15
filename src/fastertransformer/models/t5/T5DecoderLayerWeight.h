@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@
 #include "src/fastertransformer/kernels/layernorm_kernels.h"
 #include "src/fastertransformer/layers/FfnWeight.h"
 #include "src/fastertransformer/layers/attention_layers/AttentionWeight.h"
+#include "src/fastertransformer/utils/cuda_utils.h"
 #include <string>
 
 namespace fastertransformer {
@@ -33,7 +34,8 @@ struct T5DecoderLayerWeight {
                          const size_t inter_size,
                          const size_t mem_d_model,
                          const size_t tensor_para_size,
-                         const size_t tensor_para_rank);
+                         const size_t tensor_para_rank,
+                         const bool t5_with_bias);
     ~T5DecoderLayerWeight();
     T5DecoderLayerWeight(const T5DecoderLayerWeight& other);
     T5DecoderLayerWeight& operator=(const T5DecoderLayerWeight& other);
@@ -44,8 +46,11 @@ struct T5DecoderLayerWeight {
     AttentionWeight<T> cross_attention_weights;
     LayerNormWeight<T> cross_attn_layernorm_weights;
     FfnWeight<T> ffn_weights;
+    bool t5_with_bias_;
 
-    void loadModel(std::string dir_path);
+    void loadModel(std::string dir_path, FtCudaDataType model_file_type);
+
+    void setT5WithBias(bool t5_with_bias_para);
 
 private:
     void setWeightPtr();
@@ -61,7 +66,9 @@ private:
     size_t tensor_para_rank_;
     bool is_maintain_buffer = false;
 
-    const static int weights_num_ = 11;
+    int real_weights_num_;
+
+    const static int weights_num_ = 22;
     T* weights_ptr[weights_num_];
     size_t weights_size[weights_num_];
 };

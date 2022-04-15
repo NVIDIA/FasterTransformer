@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,8 +23,8 @@ int main(int argc, char* argv[])
 {
     if (argc != 9 && argc != 10) {
         printf(
-            "[ERROR] gpt_gemm batch_size beam_width max_input_len head_number size_per_head inter_size vocab_size is_fp16 tensor_para_size\n");
-        printf("e.g. ./bin/gpt_gemm 8 4 32 96 128 49152 51200 8 1\n");
+            "[ERROR] gpt_gemm batch_size beam_width max_input_len head_number size_per_head inter_size vocab_size data_type tensor_para_size\n");
+        printf("e.g. ./bin/gpt_gemm 8 4 32 96 128 49152 51200 1 8\n");
         return 0;
     }
 
@@ -35,9 +35,13 @@ int main(int argc, char* argv[])
     const int size_per_head = atoi(argv[5]);
     const int inter_size = atoi(argv[6]);
     const int vocab_size = atoi(argv[7]);
-    const int is_fp16 = atoi(argv[8]);
+    const ft::CublasDataType data_type = static_cast<ft::CublasDataType>(atoi(argv[8]));  // 0 FP32, 1 FP16, 2 BF 16
     const int tensor_para_size = argc <= 9 ? 1 : atoi(argv[9]);
-    const int is_fp16_compute_type = argc <= 10 ? 0 : atoi(argv[10]);
+    int is_fp16_compute_type = argc <= 10 ? 0 : atoi(argv[10]);
+    if (data_type == ft::BFLOAT16_DATATYPE && is_fp16_compute_type != 0) {
+        printf("[ERROR] BFLOAT16_DATATYPE does not support is_fp16_compute_type = True\n");
+        return 0;
+    }
 
     printf("[INFO] arguments: \n");
     printf("  batch_size: %d \n", batch_size);
@@ -47,7 +51,7 @@ int main(int argc, char* argv[])
     printf("  size_per_head: %d \n", size_per_head);
     printf("  inter_size: %d \n", inter_size);
     printf("  vocab_size: %d \n", vocab_size);
-    printf("  is_fp16: %d \n", is_fp16);
+    printf("  data_type: %d \n", data_type);
     printf("  tensor_para_size: %d \n", tensor_para_size);
     std::cout << std::endl;
 
@@ -60,7 +64,7 @@ int main(int argc, char* argv[])
                                                               inter_size,
                                                               vocab_size,
                                                               tensor_para_size,
-                                                              is_fp16);
+                                                              data_type);
     size_t total, free;
     ft::check_cuda_error(cudaMemGetInfo(&free, &total));
     if (free < buf_size_in_byte + 10 * 1024 * 1024) {
@@ -75,7 +79,7 @@ int main(int argc, char* argv[])
         ft::deviceMalloc(reinterpret_cast<char**>(&gemm_test_buf), buf_size_in_byte, false);
     }
 
-    if (is_fp16 == 0) {
+    if (data_type == ft::FLOAT_DATATYPE) {
         ft::generate_gpt_gemm_config<float>(batch_size,
                                             beam_width,
                                             max_input_len,
@@ -87,7 +91,7 @@ int main(int argc, char* argv[])
                                             gemm_test_buf,
                                             false);
     }
-    else if (is_fp16 == 1) {
+    else if (data_type == ft::HALF_DATATYPE) {
         ft::generate_gpt_gemm_config<half>(batch_size,
                                            beam_width,
                                            max_input_len,
@@ -99,8 +103,22 @@ int main(int argc, char* argv[])
                                            gemm_test_buf,
                                            false);
     }
+#ifdef ENABLE_BF16
+    else if (data_type == ft::BFLOAT16_DATATYPE) {
+        ft::generate_gpt_gemm_config<__nv_bfloat16>(batch_size,
+                                                    beam_width,
+                                                    max_input_len,
+                                                    head_num,
+                                                    size_per_head,
+                                                    inter_size,
+                                                    vocab_size,
+                                                    tensor_para_size,
+                                                    gemm_test_buf,
+                                                    false);
+    }
+#endif
     else {
-        printf("[ERROR] is_fp16 should be 0 (use float) or 1 (use half). \n");
+        printf("[ERROR] data type only supports fp32(0), fp16(1), bf16(2). \n");
         return -1;
     }
 

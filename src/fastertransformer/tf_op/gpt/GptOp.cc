@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  * Copyright (c) 2021, NAVER Corp.  Authored by CLOVA.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/models/gpt/Gpt.h"
+#include "src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.h"
 #include "src/fastertransformer/tf_op/BaseOp.h"
 
 namespace ft = fastertransformer;
@@ -65,7 +65,7 @@ REGISTER_OP("Gpt")
     .Attr("temperature: float")
     .Attr("len_penalty: float")
     .Attr("repetition_penalty: float")
-    .Attr("output_cum_log_probs: bool = false")
+    .Attr("output_log_probs: bool = false")
     .Attr("request_output_length: int")
     .SetShapeFn([](tf::shape_inference::InferenceContext* c) {
         int beam_width, max_seq_len, request_output_length;
@@ -78,19 +78,17 @@ REGISTER_OP("Gpt")
 
         // calculate batch size
         tf::shape_inference::DimensionOrConstant max_seq_dim(max_seq_len);
-        tf::shape_inference::DimensionOrConstant beam_width_dim(beam_width);
-        tf::shape_inference::DimensionHandle batchxbeam_dim = c->Dim(c->input(0), 0);
-        tf::shape_inference::DimensionHandle batch_dim;
-        TF_RETURN_IF_ERROR(c->Divide(batchxbeam_dim, beam_width_dim, true, &batch_dim));
+        tf::shape_inference::DimensionOrConstant beam_dim(beam_width);
+        tf::shape_inference::DimensionHandle batch_dim = c->Dim(c->input(0), 0);
 
         if (beam_width > 1) {
-            c->set_output(0, c->MakeShape({max_seq_len, batch_dim, beam_width_dim}));
-            c->set_output(1, c->MakeShape({max_seq_len, batch_dim, beam_width_dim}));
-            c->set_output(2, c->MakeShape({batch_dim, beam_width_dim}));
+            c->set_output(0, c->MakeShape({batch_dim, beam_dim, max_seq_len}));
+            c->set_output(1, c->MakeShape({max_seq_len, batch_dim, beam_dim}));
+            c->set_output(2, c->MakeShape({batch_dim, beam_dim}));
         }
         else {
-            c->set_output(0, c->MakeShape({max_seq_len, batch_dim}));
-            c->set_output(1, c->MakeShape({max_seq_len, batch_dim}));
+            c->set_output(0, c->MakeShape({batch_dim, max_seq_len}));
+            c->set_output(1, c->MakeShape({max_seq_len, batch_dim, 1}));
             c->set_output(2, c->MakeShape({batch_dim}));
             c->set_output(3, c->MakeShape({request_output_length, batch_dim}));
         }
@@ -113,6 +111,14 @@ public:
     typedef half DataType;
 };
 
+#ifdef ENABLE_BF16
+template<>
+class TFTraits<Eigen::bfloat16> {
+public:
+    typedef __nv_bfloat16 DataType;
+};
+#endif
+
 template<typename Device, typename T>
 class GptOp: public BaseOp<T> {
 public:
@@ -134,7 +140,7 @@ public:
             OP_REQUIRES_OK(context, context->GetAttr("temperature", &temperature_));
             OP_REQUIRES_OK(context, context->GetAttr("len_penalty", &len_penalty_));
             OP_REQUIRES_OK(context, context->GetAttr("repetition_penalty", &repetition_penalty_));
-            OP_REQUIRES_OK(context, context->GetAttr("output_cum_log_probs", &output_cum_log_probs_));
+            OP_REQUIRES_OK(context, context->GetAttr("output_log_probs", &output_log_probs_));
             OP_REQUIRES_OK(context, context->GetAttr("request_output_length", &request_output_length_));
             cublas_algo_map_ = new ft::cublasAlgoMap("gemm_config.in");
             ft::check_cuda_error(cudaGetDeviceProperties(&prop_, 0));
@@ -155,7 +161,7 @@ public:
                     context->num_inputs() == (num_layer_ * 12) + 7,
                     tf::errors::InvalidArgument("[ERROR] More or Less input arguments"));
 
-        const size_t batch_size = (size_t)(context->input(0).dim_size(0) / beam_width_);
+        const size_t batch_size = (size_t)context->input(0).dim_size(0);
         const size_t vocab_size = (size_t)(context->input(2 + num_layer_ * 12 + 3).dim_size(0));
         const size_t max_input_length = (size_t)(context->input(0).dim_size(1));
 
@@ -173,51 +179,56 @@ public:
         if (std::is_same<T, Eigen::half>::value) {
             cublas_wrapper.setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
         }
+#ifdef ENABLE_BF16
+        else if (std::is_same<T, Eigen::bfloat16>::value) {
+            cublas_wrapper.setBF16GemmConfig();
+        }
+#endif
         else if (std::is_same<T, float>::value) {
             cublas_wrapper.setFP32GemmConfig();
         }
 
-        ft::GptWeight<DataType> gpt_weidghts;
-        gpt_weidghts.decoder_layer_weights.resize(num_layer_);
+        ft::ParallelGptWeight<DataType> gpt_weidghts;
+        gpt_weidghts.resizeLayer(num_layer_);
 
         for (int i = 0; i < num_layer_; i++) {
-            this->get_tensor(context, 2 + i, &gpt_weidghts.decoder_layer_weights[i].pre_layernorm_weights.beta);
+            this->get_tensor(context, 2 + i, &gpt_weidghts.decoder_layer_weights[i]->pre_layernorm_weights.beta);
             this->get_tensor(
-                context, 2 + num_layer_ * 1 + i, &gpt_weidghts.decoder_layer_weights[i].pre_layernorm_weights.gamma);
+                context, 2 + num_layer_ * 1 + i, &gpt_weidghts.decoder_layer_weights[i]->pre_layernorm_weights.gamma);
 
             this->get_tensor(context,
                              2 + num_layer_ * 2 + i,
-                             &gpt_weidghts.decoder_layer_weights[i].self_attention_weights.query_weight.kernel);
+                             &gpt_weidghts.decoder_layer_weights[i]->self_attention_weights.query_weight.kernel);
             this->get_tensor(context,
                              2 + num_layer_ * 3 + i,
-                             &gpt_weidghts.decoder_layer_weights[i].self_attention_weights.query_weight.bias);
+                             &gpt_weidghts.decoder_layer_weights[i]->self_attention_weights.query_weight.bias);
             this->get_tensor(
                 context,
                 2 + num_layer_ * 4 + i,
-                &gpt_weidghts.decoder_layer_weights[i].self_attention_weights.attention_output_weight.kernel);
+                &gpt_weidghts.decoder_layer_weights[i]->self_attention_weights.attention_output_weight.kernel);
             this->get_tensor(
                 context,
                 2 + num_layer_ * 5 + i,
-                &gpt_weidghts.decoder_layer_weights[i].self_attention_weights.attention_output_weight.bias);
+                &gpt_weidghts.decoder_layer_weights[i]->self_attention_weights.attention_output_weight.bias);
             this->get_tensor(context,
                              2 + num_layer_ * 6 + i,
-                             &gpt_weidghts.decoder_layer_weights[i].self_attn_layernorm_weights.beta);
+                             &gpt_weidghts.decoder_layer_weights[i]->self_attn_layernorm_weights.beta);
             this->get_tensor(context,
                              2 + num_layer_ * 7 + i,
-                             &gpt_weidghts.decoder_layer_weights[i].self_attn_layernorm_weights.gamma);
+                             &gpt_weidghts.decoder_layer_weights[i]->self_attn_layernorm_weights.gamma);
 
             this->get_tensor(context,
                              2 + num_layer_ * 8 + i,
-                             &gpt_weidghts.decoder_layer_weights[i].ffn_weights.intermediate_weight.kernel);
+                             &gpt_weidghts.decoder_layer_weights[i]->ffn_weights.intermediate_weight.kernel);
             this->get_tensor(context,
                              2 + num_layer_ * 9 + i,
-                             &gpt_weidghts.decoder_layer_weights[i].ffn_weights.intermediate_weight.bias);
+                             &gpt_weidghts.decoder_layer_weights[i]->ffn_weights.intermediate_weight.bias);
             this->get_tensor(context,
                              2 + num_layer_ * 10 + i,
-                             &gpt_weidghts.decoder_layer_weights[i].ffn_weights.output_weight.kernel);
+                             &gpt_weidghts.decoder_layer_weights[i]->ffn_weights.output_weight.kernel);
             this->get_tensor(context,
                              2 + num_layer_ * 11 + i,
-                             &gpt_weidghts.decoder_layer_weights[i].ffn_weights.output_weight.bias);
+                             &gpt_weidghts.decoder_layer_weights[i]->ffn_weights.output_weight.bias);
         }
 
         this->get_tensor(context, 2 + num_layer_ * 12 + 0, &gpt_weidghts.post_decoder_layernorm.beta);
@@ -225,27 +236,30 @@ public:
         this->get_tensor(context, 2 + num_layer_ * 12 + 2, &gpt_weidghts.position_encoding_table);
         this->get_tensor(context, 2 + num_layer_ * 12 + 3, &gpt_weidghts.pre_decoder_embedding_table);
         this->get_tensor(context, 2 + num_layer_ * 12 + 4, &gpt_weidghts.post_decoder_embedding.kernel);
+        int total_output_length = request_output_length_ + (int)max_input_length;
 
         tf::Tensor* output_id_tensor = nullptr;
         tf::Tensor* parent_id_tensor = nullptr;
         tf::Tensor* sequence_length_tensor = nullptr;
         tf::Tensor* cum_log_probs = nullptr;
         if (beam_width_ > 1) {
-            OP_REQUIRES_OK(context,
-                           context->allocate_output(
-                               0,
-                               {(long long int)max_seq_len_, (long long int)batch_size, (long long int)beam_width_},
-                               &output_id_tensor));
-            OP_REQUIRES_OK(context,
-                           context->allocate_output(
-                               1,
-                               {(long long int)max_seq_len_, (long long int)batch_size, (long long int)beam_width_},
-                               &parent_id_tensor));
+            OP_REQUIRES_OK(
+                context,
+                context->allocate_output(
+                    0,
+                    {(long long int)batch_size, (long long int)beam_width_, (long long int)total_output_length},
+                    &output_id_tensor));
+            OP_REQUIRES_OK(
+                context,
+                context->allocate_output(
+                    1,
+                    {(long long int)total_output_length, (long long int)batch_size, (long long int)beam_width_},
+                    &parent_id_tensor));
             OP_REQUIRES_OK(context,
                            context->allocate_output(
                                2, {(long long int)batch_size, (long long int)beam_width_}, &sequence_length_tensor));
 
-            if (this->output_cum_log_probs_) {
+            if (this->output_log_probs_) {
                 OP_REQUIRES_OK(
                     context,
                     context->allocate_output(
@@ -260,12 +274,12 @@ public:
         else {
             OP_REQUIRES_OK(context,
                            context->allocate_output(
-                               0, {(long long int)max_seq_len_, (long long int)batch_size}, &output_id_tensor));
+                               0, {(long long int)batch_size, (long long int)total_output_length}, &output_id_tensor));
             OP_REQUIRES_OK(context,
                            context->allocate_output(
-                               1, {(long long int)max_seq_len_, (long long int)batch_size}, &parent_id_tensor));
+                               1, {(long long int)total_output_length, (long long int)batch_size}, &parent_id_tensor));
             OP_REQUIRES_OK(context, context->allocate_output(2, {(long long int)batch_size}, &sequence_length_tensor));
-            if (this->output_cum_log_probs_) {
+            if (this->output_log_probs_) {
                 OP_REQUIRES_OK(
                     context,
                     context->allocate_output(
@@ -278,52 +292,90 @@ public:
         int* output_ids = (int*)(output_id_tensor->flat<int>().data());
         int* parent_ids = (int*)(parent_id_tensor->flat<int>().data());
         int* sequence_length = (int*)(sequence_length_tensor->flat<int>().data());
-        int total_output_length = request_output_length_ + (int)max_input_length;
 
-        ft::Gpt<DataType> gpt = ft::Gpt<DataType>(batch_size,
-                                                  max_seq_len_,
-                                                  max_input_length,
-                                                  beam_width_,
-                                                  head_num_,
-                                                  size_per_head_,
-                                                  inter_size_,
-                                                  num_layer_,
-                                                  vocab_size,
-                                                  start_id_,
-                                                  end_id_,
-                                                  beam_search_diversity_rate_,
-                                                  top_k_,
-                                                  top_p_,
-                                                  0,
-                                                  temperature_,
-                                                  len_penalty_,
-                                                  repetition_penalty_,
-                                                  stream,
-                                                  &cublas_wrapper,
-                                                  &allocator,
-                                                  false,
-                                                  &prop_);
+        ft::NcclParam tensor_para;
+        ft::NcclParam pipeline_para;
 
-        std::vector<ft::Tensor> input_tensors =
-            std::vector<ft::Tensor>{this->convert_int_tensor(context->input(0)),
-                                    this->convert_int_tensor(context->input(1)),
-                                    ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, {1}, &total_output_length}};
+        ft::ParallelGpt<DataType> gpt = ft::ParallelGpt<DataType>(batch_size,
+                                                                  total_output_length,
+                                                                  max_input_length,
+                                                                  beam_width_,
+                                                                  head_num_,
+                                                                  size_per_head_,
+                                                                  inter_size_,
+                                                                  num_layer_,
+                                                                  vocab_size,
+                                                                  start_id_,
+                                                                  end_id_,
+                                                                  beam_search_diversity_rate_,
+                                                                  top_k_,
+                                                                  top_p_,
+                                                                  0,
+                                                                  temperature_,
+                                                                  len_penalty_,
+                                                                  repetition_penalty_,
+                                                                  tensor_para,
+                                                                  pipeline_para,
+                                                                  stream,
+                                                                  &cublas_wrapper,
+                                                                  &allocator,
+                                                                  false,
+                                                                  &prop_,
+                                                                  false,
+                                                                  0);
 
-        std::vector<ft::Tensor> output_tensors = std::vector<ft::Tensor>{
-            ft::Tensor{ft::MEMORY_GPU,
-                       ft::TYPE_INT32,
-                       {batch_size, (size_t)beam_width_, (size_t)total_output_length},
-                       output_ids},
-            ft::Tensor{ft::MEMORY_GPU,
-                       ft::TYPE_INT32,
-                       {(size_t)total_output_length, batch_size, (size_t)beam_width_},
-                       parent_ids},
-            ft::Tensor{ft::MEMORY_GPU, ft::TYPE_INT32, {batch_size, (size_t)beam_width_}, sequence_length},
-            ft::Tensor{ft::MEMORY_GPU,
-                       ft::TYPE_FP32,
-                       {(size_t)request_output_length_, (size_t)batch_size, (size_t)beam_width_},
-                       output_cum_log_probs_ ? reinterpret_cast<float*>(cum_log_probs->flat<float>().data()) :
-                                               nullptr}};
+        std::unordered_map<std::string, ft::Tensor> input_tensors = std::unordered_map<std::string, ft::Tensor>{
+            {"input_ids", this->convert_int_tensor(context->input(0))},
+            {"input_lengths", this->convert_int_tensor(context->input(1))},
+            {"max_output_seq_len",
+             ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &total_output_length}}};
+        if (top_k_ == 0 && top_p_ == 0.0f) {
+            ft::FT_CHECK(beam_width_ > 1);
+            input_tensors.insert(
+                {"beam_search_diversity_rate",
+                 ft::Tensor{ft::MEMORY_CPU, ft::TYPE_FP32, std::vector<size_t>{1}, &beam_search_diversity_rate_}});
+        }
+        else {
+            if (top_p_ != 0.0f) {
+                input_tensors.insert(
+                    {"runtime_top_p", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_FP32, std::vector<size_t>{1}, &top_p_}});
+            }
+            if (top_k_ != 0) {
+                input_tensors.insert(
+                    {"runtime_top_k", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &top_k_}});
+            }
+        }
+        input_tensors.insert(
+            {"temperature", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_FP32, std::vector<size_t>{1}, &temperature_}});
+        input_tensors.insert(
+            {"len_penalty", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_FP32, std::vector<size_t>{1}, &len_penalty_}});
+        input_tensors.insert({"repetition_penalty",
+                              ft::Tensor{ft::MEMORY_CPU, ft::TYPE_FP32, std::vector<size_t>{1}, &repetition_penalty_}});
+        uint64_t random_seed = 0;
+        input_tensors.insert(
+            {"random_seed", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_UINT64, std::vector<size_t>{1}, &random_seed}});
+
+        std::unordered_map<std::string, ft::Tensor> output_tensors = std::unordered_map<std::string, ft::Tensor>{
+            {"output_ids",
+             ft::Tensor{ft::MEMORY_GPU,
+                        ft::TYPE_INT32,
+                        std::vector<size_t>{batch_size, (size_t)beam_width_, (size_t)total_output_length},
+                        output_ids}},
+            {"parent_ids",
+             ft::Tensor{ft::MEMORY_GPU,
+                        ft::TYPE_INT32,
+                        std::vector<size_t>{(size_t)total_output_length, batch_size, (size_t)beam_width_},
+                        parent_ids}},
+            {"sequence_length",
+             ft::Tensor{ft::MEMORY_GPU,
+                        ft::TYPE_INT32,
+                        std::vector<size_t>{batch_size, (size_t)beam_width_},
+                        sequence_length}},
+            {"output_log_probs",
+             ft::Tensor{ft::MEMORY_GPU,
+                        ft::TYPE_FP32,
+                        {(size_t)request_output_length_, (size_t)batch_size, (size_t)beam_width_},
+                        output_log_probs_ ? reinterpret_cast<float*>(cum_log_probs->flat<float>().data()) : nullptr}}};
 
         try {
             gpt.forward(&output_tensors, &input_tensors, &gpt_weidghts);
@@ -348,7 +400,7 @@ private:
     float repetition_penalty_;
     int top_k_ = 0;
     float top_p_ = 0.0f;
-    bool output_cum_log_probs_;
+    bool output_log_probs_;
     int request_output_length_;
     ft::cublasAlgoMap* cublas_algo_map_;
     struct cudaDeviceProp prop_;

@@ -26,17 +26,15 @@ template<typename T>
 struct GptJWeight {
 
     GptJWeight() = default;
-    GptJWeight(
-        const int hidden_units,
-        const int inter_size,
-        const int vocab_size,
-        const int num_layer,
-        const int max_seq_len,
-        const int tensor_para_size = 1,
-        const int tensor_para_rank = 0,
-        const int layer_para_size  = 1,
-        const int layer_para_rank  = 0
-    );
+    GptJWeight(const int hidden_units,
+               const int inter_size,
+               const int vocab_size,
+               const int num_layer,
+               const int max_seq_len,
+               const int tensor_para_size = 1,
+               const int tensor_para_rank = 0,
+               const int layer_para_size = 1,
+               const int layer_para_rank = 0);
 
     ~GptJWeight();
     GptJWeight(const GptJWeight& other);
@@ -46,7 +44,7 @@ struct GptJWeight {
 
     std::vector<GptJDecoderLayerWeight<T>> decoder_layer_weights;
     const T* pre_decoder_embedding_table = nullptr;
-    // GPT-J does not use embedding table, but we leave the ptr such that 
+    // GPT-J does not use embedding table, but we leave the ptr such that
     // GptJ::forward and Gpt::forward become identical
     const T* position_encoding_table = nullptr;
 

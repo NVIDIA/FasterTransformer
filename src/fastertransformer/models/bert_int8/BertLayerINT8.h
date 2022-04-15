@@ -18,16 +18,16 @@
 
 #include <vector>
 
-#include "src/fastertransformer/models/bert_int8/BertLayerINT8Weight.h"
 #include "src/fastertransformer/kernels/layernorm_int8_kernels.h"
 #include "src/fastertransformer/kernels/layout_transformer_int8_kernels.h"
 #include "src/fastertransformer/kernels/quantization_int8_kernels.h"
 #include "src/fastertransformer/layers/FfnLayerINT8.h"
 #include "src/fastertransformer/layers/attention_layers_int8/FusedAttentionLayerINT8.h"
 #include "src/fastertransformer/layers/attention_layers_int8/UnfusedAttentionLayerINT8.h"
+#include "src/fastertransformer/models/bert_int8/BertLayerINT8Weight.h"
+#include "src/fastertransformer/utils/ScaleList.h"
 #include "src/fastertransformer/utils/Tensor.h"
 #include "src/fastertransformer/utils/allocator.h"
-#include "src/fastertransformer/utils/ScaleList.h"
 
 namespace fastertransformer {
 
@@ -80,7 +80,7 @@ public:
                   IAllocator* allocator,
                   bool is_free_buffer_after_forward,
                   AttentionType attention_type = AttentionType::UNFUSED_PADDED_MHA,
-                  bool sparse=false);
+                  bool sparse = false);
 
     BertLayerINT8(BertLayerINT8<T> const& bert_layer);
 

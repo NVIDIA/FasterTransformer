@@ -37,6 +37,7 @@ private:
     const size_t rotary_embedding_dim_;
 
     void allocateBuffer() override;
+    void allocateBuffer(size_t batch_size, size_t seq_len);
     void freeBuffer() override;
     bool isValidBatchSize(size_t batch_size);
     bool isValidSeqLen(size_t seq_len);
@@ -51,14 +52,14 @@ private:
 protected:
     using BaseAttentionLayer<T>::stream_;
     using BaseAttentionLayer<T>::sparse_;
-    T* qkv_buf_;
-    T* q_buf_2_;
-    T* k_buf_2_;
-    T* v_buf_2_;
-    T* qk_buf_;
-    float* qk_buf_float_;
-    T* qkv_buf_2_;
-    T* qkv_buf_3_;
+    T* qkv_buf_ = nullptr;
+    T* q_buf_2_ = nullptr;
+    T* k_buf_2_ = nullptr;
+    T* v_buf_2_ = nullptr;
+    T* qk_buf_ = nullptr;
+    float* qk_buf_float_ = nullptr;
+    T* qkv_buf_2_ = nullptr;
+    T* qkv_buf_3_ = nullptr;
 
 public:
     GptContextAttentionLayer(size_t max_batch_size,

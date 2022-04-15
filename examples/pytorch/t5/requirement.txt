@@ -1,0 +1,5 @@
+transformers==4.10.0
+tokenizers==0.10.1
+omegaconf
+SentencePiece
+sacrebleu

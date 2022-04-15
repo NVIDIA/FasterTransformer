@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -202,21 +202,22 @@ def build_base_model(model_opt, fields, gpu, args, checkpoint=None, gpu_id=None)
 
         if args.model_type != 'torch_decoding':
             encoder_weights = EncoderWeights(model_opt.enc_layers, model_opt.enc_rnn_size, checkpoint['model'])
-            encoder_weights.to_cuda()
             if args.data_type == 'fp16':
                 encoder_weights.to_half()
+            encoder_weights.to_cuda()
             encoder = CustomEncoder(model_opt.enc_layers, model_opt.heads, model_opt.enc_rnn_size // model_opt.heads, encoder_weights,
                                     path=args.encoder_ths_path, embedding=model.encoder.embeddings)
             model.encoder = encoder
+
         if args.model_type == 'decoding_ext':
             vocab_size = len(fields["tgt"].base_field.vocab)
             bos_idx = fields["tgt"].base_field.vocab.stoi[fields["tgt"].base_field.init_token]
             eos_idx = fields["tgt"].base_field.vocab.stoi[fields["tgt"].base_field.eos_token]
             decoding_weights = DecodingWeights(model_opt.dec_layers, model_opt.dec_rnn_size, vocab_size, checkpoint)
-            decoding_weights.to_cuda()
             ft_decoding_weights = FtDecodingWeights(model_opt.dec_layers, model_opt.dec_rnn_size, decoding_weights.w)
             if args.data_type == 'fp16':
                 ft_decoding_weights.to_half()
+            ft_decoding_weights.to_cuda()
             model.decoder = CustomDecoding(model_opt.heads, model_opt.dec_rnn_size // model_opt.heads,
                                            model_opt.dec_rnn_size * 4, model_opt.dec_rnn_size, model_opt.dec_layers, 
                                            vocab_size, bos_idx, eos_idx, args.beam_search_diversity_rate,
@@ -233,7 +234,6 @@ def build_base_model(model_opt, fields, gpu, args, checkpoint=None, gpu_id=None)
                                             vocab_size, bos_idx, eos_idx, decoding_weights, args=args)
         else:
             raise ValueError("Wrong model_type argument, must be one of [decoding_ext, torch_decoding, torch_decoding_with_decoder_ext]")
-
     else:
         if model_opt.param_init != 0.0:
             for p in model.parameters():

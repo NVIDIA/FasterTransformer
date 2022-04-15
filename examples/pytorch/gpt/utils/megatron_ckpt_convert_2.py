@@ -1,4 +1,4 @@
-# Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import argparse
+import configparser
 from datetime import datetime
 import multiprocessing
 from pathlib import Path
@@ -20,8 +21,26 @@ from pathlib import Path
 import numpy as np
 import torch  # pytype: disable=import-error
 
+def _gpu_map_location(storage, loc):
+    if loc.startswith("cuda"):
+        training_gpu_idx = int(loc.split(":")[1])
+        inference_gpu_idx = training_gpu_idx % torch.cuda.device_count()
+        return storage.cuda(inference_gpu_idx)
+    elif loc.startswith("cpu"):
+        return storage.cpu()
+    else:
+        raise NotImplementedError(f"Not handled {loc}")
+
+def get_weight_data_type(data_type):
+    if data_type == "fp32":
+        return np.float32
+    elif data_type == "fp16":
+        return np.float16
+    else:
+        assert False, f"Invalid weight data type {data_type}"
+
 # This tool is used to support the new megatron model trained by pipeline parallel + tensor parallel
-def merge_and_convert_process(i, pipeline_para_rank, saved_dir, factor, key, model_args, transformer_model_list, ckpt_ver):
+def merge_and_convert_process(i, pipeline_para_rank, saved_dir, factor, key, model_args, transformer_model_list, ckpt_ver, np_weight_data_type):
     saved_dir = Path(saved_dir)
     if key.find("layers.") != -1:
         layer_index = (int)(key[7 : key.find(".", 7)])
@@ -49,21 +68,21 @@ def merge_and_convert_process(i, pipeline_para_rank, saved_dir, factor, key, mod
         if i == 0:
             val = transformer_model_list[0][key].T.float().cpu().numpy()
             saved_path = saved_dir / f"model.{saved_key}.bin"
-            np.squeeze(val).astype(np.float32).tofile(saved_path)
+            np.squeeze(val).astype(np_weight_data_type).tofile(saved_path)
 
     elif key.find("attention.dense.weight") != -1 or key.find("mlp.dense_4h_to_h.weight") != -1:
         vals = []
         for k in range(factor):
             vals.append(transformer_model_list[k][key].T.float().to(major_device))
         saved_path = saved_dir / f"model.{saved_key}.{i:d}.bin"
-        torch.cat(vals, dim=0).cpu().numpy().astype(np.float32).tofile(saved_path)
+        torch.cat(vals, dim=0).cpu().numpy().astype(np_weight_data_type).tofile(saved_path)
 
     elif key.find("mlp.dense_h_to_4h.weight") != -1 or key.find("mlp.dense_h_to_4h.bias") != -1:
         vals = []
         for k in range(factor):
             vals.append(transformer_model_list[k][key].T.float().to(major_device))
         saved_path = saved_dir / f"model.{saved_key}.{i:d}.bin"
-        torch.cat(vals, dim=-1).cpu().numpy().astype(np.float32).tofile(saved_path)
+        torch.cat(vals, dim=-1).cpu().numpy().astype(np_weight_data_type).tofile(saved_path)
 
     elif key.find("attention.query_key_value.bias") != -1:
         vals = []
@@ -80,7 +99,7 @@ def merge_and_convert_process(i, pipeline_para_rank, saved_dir, factor, key, mod
             vals.append(val.to(major_device))
 
         saved_path = saved_dir / f"model.{saved_key}.{i:d}.bin"
-        torch.cat(vals, dim=-1).cpu().numpy().astype(np.float32).tofile(saved_path)
+        torch.cat(vals, dim=-1).cpu().numpy().astype(np_weight_data_type).tofile(saved_path)
 
     elif key.find("attention.query_key_value.weight") != -1:
         vals = []
@@ -99,13 +118,13 @@ def merge_and_convert_process(i, pipeline_para_rank, saved_dir, factor, key, mod
             vals.append(val.to(major_device))
 
         saved_path = saved_dir / f"model.{saved_key}.{i:d}.bin"
-        torch.cat(vals, dim=-1).cpu().numpy().astype(np.float32).tofile(saved_path)
+        torch.cat(vals, dim=-1).cpu().numpy().astype(np_weight_data_type).tofile(saved_path)
         
     else:
         print(f"[ERROR] cannot find key '{key}'")
         
-def split_and_convert_process(i, pipeline_para_rank, saved_dir, factor, key, model_args, transformer_model_list, ckpt_ver):
-    val = transformer_model_list[0][key].T.float().cpu().numpy().astype(np.float32)
+def split_and_convert_process(i, pipeline_para_rank, saved_dir, factor, key, model_args, transformer_model_list, ckpt_ver, np_weight_data_type):
+    val = transformer_model_list[0][key].T.float().cpu().numpy().astype(np_weight_data_type)
     if key.find("layers.") != -1:
         layer_index = (int)(key[7 : key.find(".", 7)])
         saved_key = key.replace(
@@ -192,9 +211,9 @@ def convert_checkpoint(args):
 
     # load position_embedding from rank 0
     if (prefix / "mp_rank_00").is_dir():
-        model_00 = torch.load((prefix / "mp_rank_00" / ckpt_name).as_posix())
+        model_00 = torch.load((prefix / "mp_rank_00" / ckpt_name).as_posix(), map_location=_gpu_map_location)
     elif (prefix / "mp_rank_00_000").is_dir():
-        model_00 = torch.load((prefix / "mp_rank_00_000" / ckpt_name).as_posix())
+        model_00 = torch.load((prefix / "mp_rank_00_000" / ckpt_name).as_posix(), map_location=_gpu_map_location)
     else:
         print(f"[ERROR] Cannot find checkpoint in {prefix}.")
         exit(1)
@@ -204,8 +223,19 @@ def convert_checkpoint(args):
         for k, v in vars(model_args).items():
             f.write("{}:{} \n".format(k, v))
     
+    config = configparser.ConfigParser()
+    config["gpt"] = {}
+    for key in vars(args):
+        config["gpt"][key] = f"{vars(args)[key]}"
+    for k, v in vars(model_args).items():
+        config["gpt"][k] = f"{v}"
+    config["gpt"]["weight_data_type"] = args.weight_data_type
+    with open((saved_dir / f"config.ini").as_posix(), 'w') as configfile:
+        config.write(configfile)
+    np_weight_data_type = get_weight_data_type(args.weight_data_type)
+
     model_00["model"]["language_model"]["embedding"]["position_embeddings"]["weight"].float().cpu().numpy().astype(
-        np.float32
+        np_weight_data_type
     ).tofile(
         (saved_dir / "model.wpe.bin").as_posix()
     )  # not weight, do not need transpose
@@ -238,13 +268,13 @@ def convert_checkpoint(args):
             transformer_models = []
             if is_merge_ckpt == True:
                 for k in range(factor):
-                    m = torch.load((prefix / f"mp_rank_{i * factor + k:02d}{layer_rank_num}" / ckpt_name).as_posix())
+                    m = torch.load((prefix / f"mp_rank_{i * factor + k:02d}{layer_rank_num}" / ckpt_name).as_posix(), map_location=_gpu_map_location)
                     transformer_models.append(m["model"]["language_model"]["encoder"])
 
                     if j == 0:
-                        w_e_list.append(m["model"]["language_model"]["embedding"]["word_embeddings"]["weight"].float().cpu().numpy().astype(np.float32))
+                        w_e_list.append(m["model"]["language_model"]["embedding"]["word_embeddings"]["weight"].float().cpu().numpy().astype(np_weight_data_type))
             else:
-                m = torch.load(prefix / f"mp_rank_{i:02d}{layer_rank_num}/" / ckpt_name)
+                m = torch.load(prefix / f"mp_rank_{i:02d}{layer_rank_num}/" / ckpt_name, map_location=_gpu_map_location)
             
                 if j == 0:
                     w_e_list.append(
@@ -252,7 +282,7 @@ def convert_checkpoint(args):
                         .float()
                         .cpu()
                         .numpy()
-                        .astype(np.float32)
+                        .astype(np_weight_data_type)
                     )
                 transformer_models.append(m["model"]["language_model"]["encoder"])
 
@@ -268,6 +298,7 @@ def convert_checkpoint(args):
                         model_args,
                         transformer_models,
                         m["checkpoint_version"],
+                        np_weight_data_type,
                     )
                     for (k, v) in transformer_models[0].items()
                 ],
@@ -284,6 +315,7 @@ if __name__ == "__main__":
     parser.add_argument("-in_file", "-i", type=str, help="file name of input checkpoint file", required=True)
     parser.add_argument("-infer_gpu_num", "-i_g", type=int, help="How many gpus for inference", required=True)
     parser.add_argument("-processes", "-p", type=int, help="How many processes to spawn for conversion (default: 64)", default=64)
+    parser.add_argument("-weight_data_type", type=str, default="fp32", choices=["fp32", "fp16"])
     args = parser.parse_args()
     print("\n=============== Argument ===============")
     for key in vars(args):

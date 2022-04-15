@@ -15,18 +15,11 @@
  */
 
 #include "src/fastertransformer/models/bert_int8/BertINT8.h"
-
-#include <cuda_fp16.h>
-#include <iostream>
-#include <nvToolsExt.h>
-#include <vector>
-
-#include "torch/csrc/cuda/Stream.h"
-#include <torch/custom_class.h>
-#include <torch/script.h>
-
-#include "src/fastertransformer/th_op/th_traits.h"
 #include "src/fastertransformer/th_op/th_utils.h"
+
+#ifndef CUDART_VERSION
+#error CUDART_VERSION Undefined!
+#endif
 
 namespace ft = fastertransformer;
 namespace th = torch;
@@ -62,11 +55,12 @@ public:
         _sparse(sparse)
     {
 #ifndef SPARSITY_ENABLED
-        if (sparse)
+        if (sparse) {
             std::cout << "[WARNING] Sparsity support is not enabled. Will use dense GEMM instead.\n" << std::flush;
+        }
 #endif
         int hidden_dim = _head_num * _head_size;
-        check_cuda_error(cublasLtCreate(&_cublasltHandle));
+        ft::check_cuda_error(cublasLtCreate(&_cublasltHandle));
         sm_ = ft::getSMVersion();
 #ifdef SPARSITY_ENABLED
         if (sparse) {
@@ -74,7 +68,7 @@ public:
         }
 #endif
         _use_ORDER_COL32_2R_4R4 = false;
-#ifdef CUDA11_MODE
+#if (CUDART_VERSION >= 11000)
         if (sm_ >= 80) {
             _use_ORDER_COL32_2R_4R4 = true;
         }
@@ -173,8 +167,8 @@ public:
                 _cublasltHandle, stream, cublas_algo_map_, cublas_wrapper_mutex_, _use_ORDER_COL32_2R_4R4);
 #endif
 
-        fastertransformer::Allocator<AllocatorType::TH>* allocator =
-            new fastertransformer::Allocator<AllocatorType::TH>();
+        fastertransformer::Allocator<ft::AllocatorType::TH>* allocator =
+            new fastertransformer::Allocator<ft::AllocatorType::TH>();
         ft::AttentionType attention_type =
             ft::getAttentionTypeINT8<T>(_head_size, sm_, removing_padding, seq_len, _int8_mode);
 
@@ -200,8 +194,10 @@ public:
                        data_type,
                        std::vector<size_t>{(size_t)batch_size, (size_t)seq_len, (size_t)(_head_num * _head_size)},
                        get_ptr<T>(input)},
-            ft::Tensor{
-                ft::MEMORY_GPU, ft::TYPE_INT32, std::vector<size_t>{(size_t)batch_size}, get_ptr<int>(sequence_lengths)}};
+            ft::Tensor{ft::MEMORY_GPU,
+                       ft::TYPE_INT32,
+                       std::vector<size_t>{(size_t)batch_size},
+                       get_ptr<int>(sequence_lengths)}};
 
         std::vector<ft::Tensor> output_tensors = std::vector<ft::Tensor>{
             ft::Tensor{ft::MEMORY_GPU,

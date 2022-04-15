@@ -8,7 +8,7 @@ VOCAB_FILE=../models/gpt2-vocab.json
 MERGE_FILE=../models/gpt2-merges.txt
 CHECKPOINT=../models/megatron-models/345m/
 
-python ../examples/pytorch/gpt/evaluate_zeroshot_gpt.py \
+python -m torch.distributed.run --nproc_per_node 1 ../examples/pytorch/gpt/evaluate_zeroshot_gpt.py \
                --task $TASK \
                --valid-data $VALID_DATA \
                --tokenizer-type GPT2BPETokenizer \
@@ -34,7 +34,9 @@ python ../examples/pytorch/gpt/evaluate_zeroshot_gpt.py \
                --top_k 1 \
                --top_p 0.0
 
-python ../examples/pytorch/gpt/evaluate_zeroshot_gpt.py \
+sleep 20
+
+python -m torch.distributed.run --nproc_per_node 1 ../examples/pytorch/gpt/evaluate_zeroshot_gpt.py \
                --task $TASK \
                --valid-data $VALID_DATA \
                --tokenizer-type GPT2BPETokenizer \

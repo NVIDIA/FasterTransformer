@@ -16,9 +16,9 @@
 
 #pragma once
 
+#include "int8_utils.cuh"
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
-#include "int8_utils.cuh"
 
 namespace fastertransformer {
 
@@ -26,7 +26,14 @@ namespace fastertransformer {
 // 0: row major
 // 1: CUBLASLT_ORDER_COL32_2R_4R4
 // 2: CUBLASLT_ORDER_COL4_4R2_8C
-template <typename T>
-void invokeQuantizeWeight(int8_t* dst, const T* src, const float* amax, const int n, const int k, const int format, cudaStream_t stream);
+template<typename T>
+void invokeQuantizeWeight(int8_t* dst,
+                          const T* src,
+                          const float* amax,
+                          const int n,
+                          const int k,
+                          const int format,
+                          cudaStream_t stream,
+                          const int scale_is_vector = 1);
 
 }  // namespace fastertransformer

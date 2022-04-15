@@ -15,7 +15,13 @@
  */
 #include <cmath>
 
+#ifndef CUDART_VERSION
+#error CUDART_VERSION Undefined!
+#elif (CUDART_VERSION >= 11050)
+#include <cub/cub.cuh>
+#else
 #include "3rdparty/cub/cub.cuh"
+#endif
 
 #include "longformer_kernels.h"
 #include "src/fastertransformer/utils/cuda_utils.h"
@@ -65,9 +71,11 @@ void invokeLocalAttnMaskShift(T* local_attn_mask, T* out, int batch_size, int se
         local_attn_mask, out, thread_block_repeat, batch_size * seq_len);
 }
 
-template void invokeLocalAttnMaskShift(float* local_attn_mask, float* out, int batch_size, int seq_len, cudaStream_t stream);
+template void
+invokeLocalAttnMaskShift(float* local_attn_mask, float* out, int batch_size, int seq_len, cudaStream_t stream);
 
-template void invokeLocalAttnMaskShift(half* local_attn_mask, half* out, int batch_size, int seq_len, cudaStream_t stream);
+template void
+invokeLocalAttnMaskShift(half* local_attn_mask, half* out, int batch_size, int seq_len, cudaStream_t stream);
 
 template<typename T>
 void invokeInitLongformerIdx(T* global_attn_mask,
@@ -116,21 +124,25 @@ template void invokeInitLongformerIdx(half* global_attn_mask,
                                       cudaStream_t stream);
 
 // Apply softmax to local and global attention. Rewrite the result to the same buffer in-place
-template <typename T, int blockSize>
-__launch_bounds__(blockSize)
-__global__ void longformerMHASoftmaxKernel(const T* global_attn,
-                                          const int* global_idx, const int* global_token_nums,
-                                          void* input_ptrs, const T* attn_mask, float scaler,
-                                          int seq_len, int head_num, int attn_window_size)
+template<typename T, int blockSize>
+__launch_bounds__(blockSize) __global__ void longformerMHASoftmaxKernel(const T* global_attn,
+                                                                        const int* global_idx,
+                                                                        const int* global_token_nums,
+                                                                        void* input_ptrs,
+                                                                        const T* attn_mask,
+                                                                        float scaler,
+                                                                        int seq_len,
+                                                                        int head_num,
+                                                                        int attn_window_size)
 {
     typedef cub::BlockReduce<float, blockSize> BlockReduce;
     __shared__ typename BlockReduce::TempStorage breduce_temp;
 
-    size_t* p_inputs        = (size_t*) (input_ptrs);
+    size_t* p_inputs = (size_t*)(input_ptrs);
     // use input buffer as output buffer
-    size_t* p_outputs       = (size_t*) (input_ptrs);
-    size_t* input_sizes     = (size_t*) (input_ptrs)  + 5;
-    size_t* input_strides   = (size_t*) (input_ptrs)  + 10;
+    size_t* p_outputs = (size_t*)(input_ptrs);
+    size_t* input_sizes = (size_t*)(input_ptrs) + 5;
+    size_t* input_strides = (size_t*)(input_ptrs) + 10;
 
     int tid = threadIdx.x;
     const int batch_idx = blockIdx.x / (seq_len * head_num);
@@ -144,9 +156,9 @@ __global__ void longformerMHASoftmaxKernel(const T* global_attn,
 
     T* inputs[5];
     T* outputs[5];
-    for (int i = 0; i < 5; ++i)  {
-        inputs[i]  = (T*) p_inputs[i] + batch_idx * head_num * input_sizes[i];
-        outputs[i] = (T*) p_outputs[i] + batch_idx * head_num * input_sizes[i];
+    for (int i = 0; i < 5; ++i) {
+        inputs[i] = (T*)p_inputs[i] + batch_idx * head_num * input_sizes[i];
+        outputs[i] = (T*)p_outputs[i] + batch_idx * head_num * input_sizes[i];
     }
 
     int col_start = 0;
@@ -161,26 +173,32 @@ __global__ void longformerMHASoftmaxKernel(const T* global_attn,
         col_end = row_idx + attn_window_size + 1;
     }
 
-    if (col_start < 0) col_start = 0;
-    if (col_end > seq_len) col_end = seq_len;
+    if (col_start < 0) {
+        col_start = 0;
+    }
+    if (col_end > seq_len) {
+        col_end = seq_len;
+    }
 
     // if mask is set then set everything to zero to match Python implementation
-    if (mask_blk[row_idx] != (T) 0.f) {
+    if (mask_blk[row_idx] != (T)0.f) {
         if (is_local_row) {
             T* output_blk = nullptr;
             T* output_glb = nullptr;
             int local_offset = row_idx % attn_window_size;
             int local_start = 0;
-            int local_end   = 3 * attn_window_size;
-            if (row_idx < attn_window_size)  {
+            int local_end = 3 * attn_window_size;
+            if (row_idx < attn_window_size) {
                 local_start = 0;
-                local_end   = 2 * attn_window_size;
+                local_end = 2 * attn_window_size;
                 output_blk = outputs[0] + row_idx * input_strides[0] + head_idx * input_sizes[0];
-            } else if (row_idx < seq_len - attn_window_size)  {
+            }
+            else if (row_idx < seq_len - attn_window_size) {
                 output_blk = outputs[1] + (row_idx - attn_window_size) * input_strides[1] + head_idx * input_sizes[1];
-            } else {
+            }
+            else {
                 local_start = 0;
-                local_end   = 2 * attn_window_size;
+                local_end = 2 * attn_window_size;
                 output_blk = outputs[2] + local_offset * input_strides[2] + head_idx * input_sizes[2];
             }
 
@@ -197,11 +215,12 @@ __global__ void longformerMHASoftmaxKernel(const T* global_attn,
                     output_glb[i] = 0;
                 }
             }
-
-        } else {
+        }
+        else {
             T* output_blk = outputs[4];
-            for (int i = tid; i < seq_len; i += blockSize)
+            for (int i = tid; i < seq_len; i += blockSize) {
                 output_blk[i] = 0;
+            }
         }
         return;
     }
@@ -221,17 +240,19 @@ __global__ void longformerMHASoftmaxKernel(const T* global_attn,
         int local_end = local_start + 2 * attn_window_size + 1;
         int zero_start = 0;
         int zero_end = 3 * attn_window_size;
-        if (row_idx < attn_window_size)  {
+        if (row_idx < attn_window_size) {
             local_start = 0;
-            local_end   = local_offset + attn_window_size + 1;
+            local_end = local_offset + attn_window_size + 1;
             zero_end = 2 * attn_window_size;
 
             input_blk = inputs[0] + row_idx * input_strides[0] + head_idx * input_sizes[0];
             output_blk = outputs[0] + row_idx * input_strides[0] + head_idx * input_sizes[0];
-        } else if (row_idx < seq_len - attn_window_size)  {
+        }
+        else if (row_idx < seq_len - attn_window_size) {
             input_blk = inputs[1] + (row_idx - attn_window_size) * input_strides[1] + head_idx * input_sizes[1];
             output_blk = outputs[1] + (row_idx - attn_window_size) * input_strides[1] + head_idx * input_sizes[1];
-        } else {
+        }
+        else {
             local_start = local_offset;
             local_end = 2 * attn_window_size;
             zero_end = 2 * attn_window_size;
@@ -242,33 +263,38 @@ __global__ void longformerMHASoftmaxKernel(const T* global_attn,
 
         const T* input_glb = nullptr;
         int local_global = row_idx - attn_window_size;
-        if (local_global > global_num) local_global = global_num;
+        if (local_global > global_num) {
+            local_global = global_num;
+        }
         if (local_global > 0) {
-            input_glb  = inputs[3]  + (row_idx - attn_window_size) * input_strides[3] + head_idx * input_sizes[3];
+            input_glb = inputs[3] + (row_idx - attn_window_size) * input_strides[3] + head_idx * input_sizes[3];
         }
 
-
         if (row_idx < attn_window_size) {
-            output_glb = (T*) outputs[0] + row_idx * input_strides[0] + head_idx * input_sizes[0];
-        } else if (row_idx < 2*attn_window_size) {
+            output_glb = (T*)outputs[0] + row_idx * input_strides[0] + head_idx * input_sizes[0];
+        }
+        else if (row_idx < 2 * attn_window_size) {
             output_glb = outputs[1] + (row_idx - attn_window_size) * input_strides[1] + head_idx * input_sizes[1];
-        } else {
+        }
+        else {
             output_glb = outputs[3] + (row_idx - attn_window_size) * input_strides[3] + head_idx * input_sizes[3];
         }
 
         for (int i = local_start + tid, ii = col_start + tid; i < local_end; i += blockSize, ii += blockSize) {
             float x = (float)input_blk[i];
             x = x * scaler + (float)mask_blk[ii];
-            if (max_input < x)
+            if (max_input < x) {
                 max_input = x;
+            }
         }
 
         if (input_glb != nullptr) {
             for (int i = tid; i < local_global; i += blockSize) {
                 float x = (float)input_glb[global_idx_blk[i]];
                 x = x * scaler + (float)mask_blk[global_idx_blk[i]];
-                if (max_input < x)
+                if (max_input < x) {
                     max_input = x;
+                }
             }
         }
 
@@ -322,16 +348,18 @@ __global__ void longformerMHASoftmaxKernel(const T* global_attn,
                 output_glb[i] = (T)(recip_sum * x);
             }
         }
-    } else {
+    }
+    else {
         // global tokens
-        const T* input_blk = inputs[4]  + row_idx * input_strides[4] + head_idx * input_sizes[4];
-        T* output_blk      = outputs[4] + row_idx * input_strides[4] + head_idx * input_sizes[4];
+        const T* input_blk = inputs[4] + row_idx * input_strides[4] + head_idx * input_sizes[4];
+        T* output_blk = outputs[4] + row_idx * input_strides[4] + head_idx * input_sizes[4];
 
         for (int i = tid; i < seq_len; i += blockSize) {
             float x = (float)input_blk[i];
             x = x * scaler + (float)mask_blk[i];
-            if (max_input < x)
+            if (max_input < x) {
                 max_input = x;
+            }
         }
 
         float max_blk = BlockReduce(breduce_temp).Reduce(max_input, cub::Max());

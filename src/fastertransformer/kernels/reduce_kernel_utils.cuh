@@ -16,7 +16,11 @@
 #pragma once
 #include <array>
 #include <assert.h>
+#if ((__CUDACC_VER_MAJOR__ > 11) || (__CUDACC_VER_MAJOR__ == 11 && __CUDACC_VER_MINOR__ >= 0))
 #include <cooperative_groups/reduce.h>
+#else
+#include <cooperative_groups.h>
+#endif
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
@@ -109,7 +113,7 @@ __inline__ __device__ T warpReduceSumV2(T* val)
 template<typename T, int NUM>
 __inline__ __device__ T blockReduceSumV2(T* val)
 {
-    static __shared__ T shared[32][NUM];
+    static __shared__ T shared[NUM][33];
     int lane = threadIdx.x & 0x1f;
     int wid = threadIdx.x >> 5;
 
@@ -118,7 +122,7 @@ __inline__ __device__ T blockReduceSumV2(T* val)
     if (lane == 0) {
 #pragma unroll
         for (int i = 0; i < NUM; i++) {
-            shared[wid][i] = val[i];
+            shared[i][wid] = val[i];
         }
     }
 
@@ -127,7 +131,7 @@ __inline__ __device__ T blockReduceSumV2(T* val)
     bool is_mask = threadIdx.x < (blockDim.x / 32.f);
 #pragma unroll
     for (int i = 0; i < NUM; i++) {
-        val[i] = is_mask ? shared[lane][i] : (T)(0.0f);
+        val[i] = is_mask ? shared[i][lane] : (T)(0.0f);
     }
     warpReduceSumV2<T, NUM>(val);
     return (T)0.0f;
@@ -185,7 +189,15 @@ __inline__ __device__ void cgBlockReduceSumElements(float* element_list, float* 
     const int tid = cta.thread_rank();
     const int blockz = blockDim.x;
     for (int i = 0; i < NUM; i++) {
+#if ((__CUDACC_VER_MAJOR__ > 11) || (__CUDACC_VER_MAJOR__ == 11 && __CUDACC_VER_MINOR__ >= 0))
         cgBlockReduceSumElements_shm[i * blockz + tid] = cg::reduce(tile, element_list[i], cg::plus<float>());
+#else
+        // TODO Add implementation here
+        if (threadIdx.x == 0 && blockIdx.x == 0) {
+            printf("[ERROR] Not support cgBlockReduceSumElements when CUDA < 11 \n");
+            assert(false);
+        }
+#endif
     }
     cg::sync(cta);
     if (tid == 0) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,10 @@
 
 #include "encoder_gemm_func.h"
 
+#ifndef CUDART_VERSION
+#error CUDART_VERSION Undefined!
+#endif
+
 namespace fastertransformer {
 
 // Utility function to print customMatmulPerf_t structure
@@ -28,7 +32,7 @@ int printPerfStructure(int batch_size,
                        int k,
                        const customMatmulPerf_t& perf,
                        FILE* fout,
-                       int is_fp16,
+                       CublasDataType data_type,
                        int hasPrint)
 {
     int algoId, tile, swizzle, customOption, numSplitsK, reductionScheme, stages;
@@ -44,7 +48,7 @@ int printPerfStructure(int batch_size,
         matmulAlgo, CUBLASLT_ALGO_CONFIG_CTA_SWIZZLING, &swizzle, sizeof(swizzle), NULL);
     cublasLtMatmulAlgoConfigGetAttribute(
         matmulAlgo, CUBLASLT_ALGO_CONFIG_CUSTOM_OPTION, &customOption, sizeof(customOption), NULL);
-#ifdef CUDA11_MODE
+#if (CUDART_VERSION >= 11000)
     cublasLtMatmulAlgoConfigGetAttribute(matmulAlgo, CUBLASLT_ALGO_CONFIG_STAGES_ID, &stages, sizeof(stages), NULL);
 #else
     stages = 0;
@@ -73,7 +77,7 @@ int printPerfStructure(int batch_size,
                 seq_len,
                 head_num,
                 size_per_head,
-                is_fp16 ? HALF_DATATYPE : FLOAT_DATATYPE,
+                data_type,
                 1,
                 m,
                 n,
@@ -199,7 +203,7 @@ int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
     cublasStatus_t status = CUBLAS_STATUS_SUCCESS;
     cudaEvent_t startEvent;
     cudaEvent_t stopEvent;
-    int is_fp16 = (sizeof(T) == sizeof(half) ? 1 : 0);
+    CublasDataType data_type;
 
     cublasLtMatmulDesc_t operationDesc = NULL;
     cublasLtMatrixLayout_t Adesc = NULL, Bdesc = NULL, Cdesc = NULL;
@@ -221,22 +225,30 @@ int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
     int algoIdA[ALGO_IDS];                                 // 	Array containing the algorithm IDs returned by
                                                            // cublasLtMatmulAlgoGetIds function.
     cudaDataType_t Atype, Btype, Ctype, scaleType;
-#ifdef CUDA11_MODE
+#if (CUDART_VERSION >= 11000)
     cublasComputeType_t computeType;
 #else
     cudaDataType_t computeType;
 #endif
 
-    if (sizeof(T) == sizeof(float)) {
+    if (std::is_same<T, float>::value) {
+        data_type = FLOAT_DATATYPE;
         Atype = CUDA_R_32F, Btype = CUDA_R_32F, Ctype = CUDA_R_32F;
     }
-    else {
+    else if (std::is_same<T, half>::value) {
+        data_type = HALF_DATATYPE;
         Atype = CUDA_R_16F, Btype = CUDA_R_16F, Ctype = CUDA_R_16F;
     }
+#ifdef ENABLE_BF16
+    else if (std::is_same<T, __nv_bfloat16>::value) {
+        data_type = BFLOAT16_DATATYPE;
+        Atype = CUDA_R_16BF, Btype = CUDA_R_16BF, Ctype = CUDA_R_16BF;
+    }
+#endif
 
     if (sizeof(scaleT) == sizeof(float)) {
         scaleType = CUDA_R_32F;
-#ifdef CUDA11_MODE
+#if (CUDART_VERSION >= 11000)
         computeType = CUBLAS_COMPUTE_32F;
 #else
         computeType = CUDA_R_32F;
@@ -244,7 +256,7 @@ int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
     }
     else {
         scaleType = CUDA_R_16F;
-#ifdef CUDA11_MODE
+#if (CUDART_VERSION >= 11000)
         computeType = CUBLAS_COMPUTE_16F;
 #else
         computeType = CUDA_R_16F;
@@ -254,27 +266,31 @@ int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
 // Create operation descriptor; see cublasLtMatmulDescAttributes_t for
 // details about defaults; here we just need to set the transforms for A and
 // B
-#ifdef CUDA11_MODE
+#if (CUDART_VERSION >= 11000)
     status = cublasLtMatmulDescCreate(&operationDesc, computeType,
                                       scaleType);  //  creates a matrix multiply descriptor
 #else
     status = cublasLtMatmulDescCreate(&operationDesc, computeType);
 #endif
-    if (status != CUBLAS_STATUS_SUCCESS)
+    if (status != CUBLAS_STATUS_SUCCESS) {
         goto CLEANUP;
+    }
 
     // Create matrix descriptors. We are good with the details here so no need
     // to set any extra attributes
     status = cublasLtMatrixLayoutCreate(&Adesc, Atype, m, k, m);
-    if (status != CUBLAS_STATUS_SUCCESS)
+    if (status != CUBLAS_STATUS_SUCCESS) {
         goto CLEANUP;
+    }
     status = cublasLtMatrixLayoutCreate(&Bdesc, Btype, k, n, k);
-    if (status != CUBLAS_STATUS_SUCCESS)
+    if (status != CUBLAS_STATUS_SUCCESS) {
         goto CLEANUP;
+    }
 
     status = cublasLtMatrixLayoutCreate(&Cdesc, Ctype, m, n, m);
-    if (status != CUBLAS_STATUS_SUCCESS)
+    if (status != CUBLAS_STATUS_SUCCESS) {
         goto CLEANUP;
+    }
 
     // Create CUDA event to time the execution time of each algo
     if (cudaEventCreate(&startEvent, cudaEventBlockingSync) != cudaSuccess) {
@@ -287,8 +303,9 @@ int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
     // Request the 100 first AlgoId available
     status = cublasLtMatmulAlgoGetIds(
         ltHandle, computeType, scaleType, Atype, Btype, Ctype, Ctype, ALGO_IDS, algoIdA, &nbAlgoIds);
-    if (status != CUBLAS_STATUS_SUCCESS)
+    if (status != CUBLAS_STATUS_SUCCESS) {
         goto CLEANUP;
+    }
 
     // Loop over the Algo IDs
     for (int idx = 0; (idx < nbAlgoIds) && (AlgoCount < AlgoCombinations); idx++) {
@@ -308,7 +325,7 @@ int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
             tileA[0] = CUBLASLT_MATMUL_TILE_UNDEFINED;
             nbTiles = 1;
         }
-#ifdef CUDA11_MODE
+#if (CUDART_VERSION >= 11000)
         cublasLtMatmulAlgoCapGetAttribute(&algo, CUBLASLT_ALGO_CAP_STAGES_IDS, NULL, 0, &sizeWritten);
         int nbStages = int(sizeWritten / sizeof(int));
         std::vector<int> stagesA(nbStages == 0 ? 1 : nbStages);
@@ -337,7 +354,7 @@ int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
 
         /* Loop over the different tiles */
         for (int tileIdx = 0; tileIdx < nbTiles; tileIdx++) {
-#ifdef CUDA11_MODE
+#if (CUDART_VERSION >= 11000)
             /* Loop over different stages count */
             for (int stagesIdx = 0; stagesIdx < nbStages; stagesIdx++) {
                 cublasLtMatmulAlgoConfigSetAttribute(
@@ -431,7 +448,7 @@ int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
                         }  // end l
                     }      // end k
                 }          // end customOption
-#ifdef CUDA11_MODE
+#if (CUDART_VERSION >= 11000)
             }  // end stagesIdx
 #endif
         }  // end tileIdx
@@ -512,8 +529,9 @@ int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
                                          startEvent,
                                          stopEvent);
                 perfResults[AlgoCount].status = status;
-                if (status == CUBLAS_STATUS_SUCCESS)
+                if (status == CUBLAS_STATUS_SUCCESS) {
                     AlgoCount++;
+                }
             }
         }
 
@@ -541,8 +559,9 @@ int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
                                      startEvent,
                                      stopEvent);
             perfResults[AlgoCount].status = status;
-            if (status == CUBLAS_STATUS_SUCCESS)
+            if (status == CUBLAS_STATUS_SUCCESS) {
                 AlgoCount++;
+            }
         }
     }
 
@@ -552,23 +571,29 @@ int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
     for (int i = 0, hasPrint = 1; i < AlgoCount; i++) {
         printf("result %03d : ", i);
         hasPrint = printPerfStructure(
-            batch_size, seq_len, head_num, size_per_head, m, n, k, perfResults[i], fout, is_fp16, hasPrint);
+            batch_size, seq_len, head_num, size_per_head, m, n, k, perfResults[i], fout, data_type, hasPrint);
     }
 
 CLEANUP:
     // Descriptors are no longer needed as all GPU work was already enqueued
-    if (Cdesc)
+    if (Cdesc) {
         cublasLtMatrixLayoutDestroy(Cdesc);
-    if (Bdesc)
+    }
+    if (Bdesc) {
         cublasLtMatrixLayoutDestroy(Bdesc);
-    if (Adesc)
+    }
+    if (Adesc) {
         cublasLtMatrixLayoutDestroy(Adesc);
-    if (operationDesc)
+    }
+    if (operationDesc) {
         cublasLtMatmulDescDestroy(operationDesc);
-    if (startEvent)
+    }
+    if (startEvent) {
         cudaEventDestroy(startEvent);
-    if (stopEvent)
+    }
+    if (stopEvent) {
         cudaEventDestroy(stopEvent);
+    }
     return status == CUBLAS_STATUS_SUCCESS ? 0 : 1;
 }
 
@@ -610,6 +635,27 @@ template int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
                                customMatmulPerf_t perfResults[],
                                int AlgoCombinations);
 
+#ifdef ENABLE_BF16
+template int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
+                               int batch_size,
+                               int seq_len,
+                               int head_num,
+                               int size_per_head,
+                               int m,
+                               int n,
+                               int k,
+                               const float* alpha, /* host pointer */
+                               const __nv_bfloat16* A,
+                               const __nv_bfloat16* B,
+                               const float* beta, /* host pointer */
+                               __nv_bfloat16* C,
+                               void* workSpace,
+                               size_t workSpaceSize,
+                               FILE* fout,
+                               customMatmulPerf_t perfResults[],
+                               int AlgoCombinations);
+#endif
+
 template int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
                                int batch_size,
                                int seq_len,
@@ -636,7 +682,7 @@ size_t calGemmTestBufSizeInByte(int batch_size,
                                 int inter_size,
                                 int vocab_size,
                                 int int8_mode,
-                                int is_fp16)
+                                CublasDataType data_type)
 {
     size_t buf_size_in_byte;
     if (int8_mode > 0) {
@@ -662,7 +708,8 @@ size_t calGemmTestBufSizeInByte(int batch_size,
         int m = batch_size * seq_len;
         int n = head_num * size_per_head;
         int k = n;
-        int wordSize = (is_fp16 == 1 ? sizeof(half) : sizeof(float));
+        // TODO need to add bfloat16 here
+        int wordSize = (data_type == FLOAT_DATATYPE ? sizeof(float) : sizeof(half));
         size_t size1 = 3 * (m * k + k * n + m * n) * wordSize;
         size_t size2 =
             batch_size * head_num * (seq_len * seq_len + seq_len * size_per_head + seq_len * size_per_head) * wordSize;
@@ -671,7 +718,8 @@ size_t calGemmTestBufSizeInByte(int batch_size,
         buf_size_in_byte = size1 > size2 ? size1 : size2;
         buf_size_in_byte = buf_size_in_byte > size3 ? buf_size_in_byte : size3;
         buf_size_in_byte = buf_size_in_byte > size4 ? buf_size_in_byte : size4;
-        buf_size_in_byte += ((is_fp16 == 1) ? CUBLAS_WORKSPACE_SIZE : 0);
+        buf_size_in_byte +=
+            ((data_type == HALF_DATATYPE || data_type == BFLOAT16_DATATYPE) ? CUBLAS_WORKSPACE_SIZE : 0);
     }
     return buf_size_in_byte;
 }

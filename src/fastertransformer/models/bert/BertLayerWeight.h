@@ -17,10 +17,10 @@
 #pragma once
 
 #include "src/fastertransformer/kernels/layernorm_kernels.h"
-#include "src/fastertransformer/layers/attention_layers/AttentionWeight.h"
 #include "src/fastertransformer/layers/FfnWeight.h"
-#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/fastertransformer/layers/attention_layers/AttentionWeight.h"
 #include "src/fastertransformer/utils/cublasMMWrapper.h"
+#include "src/fastertransformer/utils/memory_utils.h"
 
 namespace fastertransformer {
 
@@ -28,8 +28,7 @@ template<typename T>
 struct BertLayerWeight {
 
     BertLayerWeight() = default;
-    BertLayerWeight(const int hidden_units, const int inter_size):
-        hidden_units_(hidden_units), inter_size_(inter_size)
+    BertLayerWeight(const int hidden_units, const int inter_size): hidden_units_(hidden_units), inter_size_(inter_size)
     {
         deviceMalloc(&weights_ptr[0], hidden_units_ * hidden_units_);
         deviceMalloc(&weights_ptr[1], hidden_units_);
@@ -54,7 +53,7 @@ struct BertLayerWeight {
     ~BertLayerWeight()
     {
         if (is_maintain_buffer == true) {
-            for(int i = 0; i < 16; i++){
+            for (int i = 0; i < 16; i++) {
                 deviceFree(weights_ptr[i]);
             }
 
@@ -77,7 +76,7 @@ struct BertLayerWeight {
             is_maintain_buffer = false;
         }
         if (is_maintain_sp_buffer == true) {
-            for(int i = 0; i < 6; i++){
+            for (int i = 0; i < 6; i++) {
                 deviceFree(sp_weights_ptr[i]);
             }
             attention_weights.query_weight.sp_kernel = nullptr;
@@ -178,30 +177,14 @@ struct BertLayerWeight {
         deviceMalloc(&sp_weights_ptr[3], hidden_dim * hidden_dim);
         deviceMalloc(&sp_weights_ptr[4], hidden_dim * inter_size);
         deviceMalloc(&sp_weights_ptr[5], inter_size * hidden_dim);
-        cublas_wrapper.compressMatrix(attention_weights.query_weight.kernel,
-                                      sp_weights_ptr[0],
-                                      hidden_dim,
-                                      hidden_dim);
-        cublas_wrapper.compressMatrix(attention_weights.key_weight.kernel,
-                                      sp_weights_ptr[1],
-                                      hidden_dim,
-                                      hidden_dim);
-        cublas_wrapper.compressMatrix(attention_weights.value_weight.kernel,
-                                      sp_weights_ptr[2],
-                                      hidden_dim,
-                                      hidden_dim);
-        cublas_wrapper.compressMatrix(attention_weights.attention_output_weight.kernel,
-                                      sp_weights_ptr[3],
-                                      hidden_dim,
-                                      hidden_dim);
-        cublas_wrapper.compressMatrix(ffn_weights.intermediate_weight.kernel,
-                                      sp_weights_ptr[4],
-                                      inter_size,
-                                      hidden_dim);
-        cublas_wrapper.compressMatrix(ffn_weights.output_weight.kernel,
-                                      sp_weights_ptr[5],
-                                      hidden_dim,
-                                      inter_size);
+        cublas_wrapper.compressMatrix(attention_weights.query_weight.kernel, sp_weights_ptr[0], hidden_dim, hidden_dim);
+        cublas_wrapper.compressMatrix(attention_weights.key_weight.kernel, sp_weights_ptr[1], hidden_dim, hidden_dim);
+        cublas_wrapper.compressMatrix(attention_weights.value_weight.kernel, sp_weights_ptr[2], hidden_dim, hidden_dim);
+        cublas_wrapper.compressMatrix(
+            attention_weights.attention_output_weight.kernel, sp_weights_ptr[3], hidden_dim, hidden_dim);
+        cublas_wrapper.compressMatrix(
+            ffn_weights.intermediate_weight.kernel, sp_weights_ptr[4], inter_size, hidden_dim);
+        cublas_wrapper.compressMatrix(ffn_weights.output_weight.kernel, sp_weights_ptr[5], hidden_dim, inter_size);
         attention_weights.query_weight.sp_kernel = sp_weights_ptr[0];
         attention_weights.key_weight.sp_kernel = sp_weights_ptr[1];
         attention_weights.value_weight.sp_kernel = sp_weights_ptr[2];

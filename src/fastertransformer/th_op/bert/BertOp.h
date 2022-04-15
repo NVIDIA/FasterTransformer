@@ -15,18 +15,6 @@
  */
 
 #include "src/fastertransformer/models/bert/Bert.h"
-
-#include <cuda_fp16.h>
-#include <iostream>
-#include <nvToolsExt.h>
-#include <vector>
-
-#include "torch/csrc/cuda/Stream.h"
-#include <ATen/cuda/CUDAContext.h>
-#include <torch/custom_class.h>
-#include <torch/script.h>
-
-#include "src/fastertransformer/th_op/th_traits.h"
 #include "src/fastertransformer/th_op/th_utils.h"
 
 namespace ft = fastertransformer;
@@ -63,11 +51,12 @@ public:
         _q_scaling(q_scaling)
     {
 #ifndef SPARSITY_ENABLED
-        if (sparse)
+        if (sparse) {
             std::cout << "[WARNING] Sparsity support is not enabled. Will use dense GEMM instead.\n" << std::flush;
+        }
 #endif
         int hidden_dim = _head_num * _head_size;
-        check_cuda_error(cublasLtCreate(&_cublasltHandle));
+        ft::check_cuda_error(cublasLtCreate(&_cublasltHandle));
         sm_ = ft::getSMVersion();
 #ifdef SPARSITY_ENABLED
         if (sparse) {
@@ -83,13 +72,16 @@ public:
         for (int i = 0; i < _layer_num; i++) {
             bert_weights.bert_layer_weights[i].attention_weights.query_weight.kernel =
                 get_ptr<T>(_weights[0]) + hidden_dim * hidden_dim * i;
-            bert_weights.bert_layer_weights[i].attention_weights.query_weight.bias = get_ptr<T>(_weights[1]) + hidden_dim * i;
+            bert_weights.bert_layer_weights[i].attention_weights.query_weight.bias =
+                get_ptr<T>(_weights[1]) + hidden_dim * i;
             bert_weights.bert_layer_weights[i].attention_weights.key_weight.kernel =
                 get_ptr<T>(_weights[2]) + hidden_dim * hidden_dim * i;
-            bert_weights.bert_layer_weights[i].attention_weights.key_weight.bias = get_ptr<T>(_weights[3]) + hidden_dim * i;
+            bert_weights.bert_layer_weights[i].attention_weights.key_weight.bias =
+                get_ptr<T>(_weights[3]) + hidden_dim * i;
             bert_weights.bert_layer_weights[i].attention_weights.value_weight.kernel =
                 get_ptr<T>(_weights[4]) + hidden_dim * hidden_dim * i;
-            bert_weights.bert_layer_weights[i].attention_weights.value_weight.bias = get_ptr<T>(_weights[5]) + hidden_dim * i;
+            bert_weights.bert_layer_weights[i].attention_weights.value_weight.bias =
+                get_ptr<T>(_weights[5]) + hidden_dim * i;
             bert_weights.bert_layer_weights[i].attention_weights.attention_output_weight.kernel =
                 get_ptr<T>(_weights[6]) + hidden_dim * hidden_dim * i;
             bert_weights.bert_layer_weights[i].attention_weights.attention_output_weight.bias =
@@ -98,10 +90,12 @@ public:
             bert_weights.bert_layer_weights[i].attn_layernorm_weights.beta = get_ptr<T>(_weights[9]) + hidden_dim * i;
             bert_weights.bert_layer_weights[i].ffn_weights.intermediate_weight.kernel =
                 get_ptr<T>(_weights[10]) + hidden_dim * hidden_dim * 4 * i;
-            bert_weights.bert_layer_weights[i].ffn_weights.intermediate_weight.bias = get_ptr<T>(_weights[11]) + hidden_dim * 4 * i;
+            bert_weights.bert_layer_weights[i].ffn_weights.intermediate_weight.bias =
+                get_ptr<T>(_weights[11]) + hidden_dim * 4 * i;
             bert_weights.bert_layer_weights[i].ffn_weights.output_weight.kernel =
                 get_ptr<T>(_weights[12]) + hidden_dim * hidden_dim * 4 * i;
-            bert_weights.bert_layer_weights[i].ffn_weights.output_weight.bias = get_ptr<T>(_weights[13]) + hidden_dim * i;
+            bert_weights.bert_layer_weights[i].ffn_weights.output_weight.bias =
+                get_ptr<T>(_weights[13]) + hidden_dim * i;
             bert_weights.bert_layer_weights[i].ffn_layernorm_weights.gamma = get_ptr<T>(_weights[14]) + hidden_dim * i;
             bert_weights.bert_layer_weights[i].ffn_layernorm_weights.beta = get_ptr<T>(_weights[15]) + hidden_dim * i;
         }
@@ -146,8 +140,7 @@ public:
         auto stream = at::cuda::getCurrentCUDAStream().stream();
         cublasHandle_t _cublasHandle = at::cuda::getCurrentCUDABlasHandle();
         cublasSetStream(_cublasHandle, stream);
-        fastertransformer::Allocator<AllocatorType::TH>* allocator =
-            new fastertransformer::Allocator<AllocatorType::TH>();
+        ft::Allocator<ft::AllocatorType::TH>* allocator = new ft::Allocator<ft::AllocatorType::TH>();
         ft::cublasMMWrapper* cublas_wrapper =
 #ifdef SPARSITY_ENABLED
             new ft::cublasMMWrapper(_cublasHandle,

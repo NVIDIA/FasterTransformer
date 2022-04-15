@@ -49,7 +49,7 @@ class TestEncoder(unittest.TestCase):
         for batch in [1, 8, 64, 128]:
             args_dict['batch_size'] = batch
             tf.reset_default_graph()
-            os.system("./bin/bert_gemm {} {} {} {} {} 0".format(args_dict['batch_size'], args_dict['max_seq_len'],
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['max_seq_len'],
                                                             args_dict['head_number'], args_dict['size_per_head'],
                                                             args_dict['data_type'] == 'fp16'))
             max_diff = encoder_example(args_dict)
@@ -62,7 +62,7 @@ class TestEncoder(unittest.TestCase):
         for batch in [1, 8, 64, 128]:
             args_dict['batch_size'] = batch
             tf.reset_default_graph()
-            os.system("./bin/bert_gemm {} {} {} {} {} 0".format(args_dict['batch_size'], args_dict['max_seq_len'],
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['max_seq_len'],
                                                             args_dict['head_number'], args_dict['size_per_head'],
                                                             args_dict['data_type'] == 'fp16'))
             max_diff = encoder_example(args_dict)
@@ -77,7 +77,7 @@ class TestEncoder(unittest.TestCase):
             args_dict['size_per_head'] = size
             args_dict['inter_size'] = 8 * size * 4
             tf.reset_default_graph()
-            os.system("./bin/bert_gemm {} {} {} {} {} 0".format(args_dict['batch_size'], args_dict['max_seq_len'],
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['max_seq_len'],
                                                             args_dict['head_number'], args_dict['size_per_head'],
                                                             args_dict['data_type'] == 'fp16'))
             max_diff = encoder_example(args_dict)
@@ -92,7 +92,7 @@ class TestEncoder(unittest.TestCase):
             args_dict['size_per_head'] = size
             args_dict['inter_size'] = 8 * size * 4
             tf.reset_default_graph()
-            os.system("./bin/bert_gemm {} {} {} {} {} 0".format(args_dict['batch_size'], args_dict['max_seq_len'],
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['max_seq_len'],
                                                             args_dict['head_number'], args_dict['size_per_head'],
                                                             args_dict['data_type'] == 'fp16'))
             max_diff = encoder_example(args_dict)
@@ -107,7 +107,7 @@ class TestEncoder(unittest.TestCase):
             args_dict['head_number'] = h
             args_dict['inter_size'] = h * 64 * 4
             tf.reset_default_graph()
-            os.system("./bin/bert_gemm {} {} {} {} {} 0".format(args_dict['batch_size'], args_dict['max_seq_len'],
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['max_seq_len'],
                                                             args_dict['head_number'], args_dict['size_per_head'],
                                                             args_dict['data_type'] == 'fp16'))
             max_diff = encoder_example(args_dict)
@@ -122,7 +122,7 @@ class TestEncoder(unittest.TestCase):
             args_dict['head_number'] = h
             args_dict['inter_size'] = h * 64 * 4
             tf.reset_default_graph()
-            os.system("./bin/bert_gemm {} {} {} {} {} 0".format(args_dict['batch_size'], args_dict['max_seq_len'],
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['max_seq_len'],
                                                             args_dict['head_number'], args_dict['size_per_head'],
                                                             args_dict['data_type'] == 'fp16'))
             max_diff = encoder_example(args_dict)
@@ -137,7 +137,7 @@ class TestEncoder(unittest.TestCase):
             args_dict['size_per_head'] = p[1]
             args_dict['inter_size'] = p[0] * p[1] * 4
             tf.reset_default_graph()
-            os.system("./bin/bert_gemm {} {} {} {} {} 0".format(args_dict['batch_size'], args_dict['max_seq_len'],
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['max_seq_len'],
                                                             args_dict['head_number'], args_dict['size_per_head'],
                                                             args_dict['data_type'] == 'fp16'))
             max_diff = encoder_example(args_dict)
@@ -152,7 +152,7 @@ class TestEncoder(unittest.TestCase):
             args_dict['size_per_head'] = p[1]
             args_dict['inter_size'] = p[0] * p[1] * 4
             tf.reset_default_graph()
-            os.system("./bin/bert_gemm {} {} {} {} {} 0".format(args_dict['batch_size'], args_dict['max_seq_len'],
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['max_seq_len'],
                                                             args_dict['head_number'], args_dict['size_per_head'],
                                                             args_dict['data_type'] == 'fp16'))
             max_diff = encoder_example(args_dict)
@@ -165,7 +165,7 @@ class TestEncoder(unittest.TestCase):
         for seqlen in [32, 130, 511, 1024, 1536]:
             args_dict['max_seq_len'] = seqlen
             tf.reset_default_graph()
-            os.system("./bin/bert_gemm {} {} {} {} {} 0".format(args_dict['batch_size'], args_dict['max_seq_len'],
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['max_seq_len'],
                                                             args_dict['head_number'], args_dict['size_per_head'],
                                                             args_dict['data_type'] == 'fp16'))
             max_diff = encoder_example(args_dict)
@@ -178,7 +178,7 @@ class TestEncoder(unittest.TestCase):
         for seqlen in [32, 130, 511, 1024, 1536]:
             args_dict['max_seq_len'] = seqlen
             tf.reset_default_graph()
-            os.system("./bin/bert_gemm {} {} {} {} {} 0".format(args_dict['batch_size'], args_dict['max_seq_len'],
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['max_seq_len'],
                                                             args_dict['head_number'], args_dict['size_per_head'],
                                                             args_dict['data_type'] == 'fp16'))
             max_diff = encoder_example(args_dict)

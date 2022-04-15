@@ -16,23 +16,23 @@
 
 #pragma once
 
-#include "src/fastertransformer/models/bert/BertLayerWeight.h"
 #include "src/fastertransformer/layers/FfnINT8Weight.h"
 #include "src/fastertransformer/layers/attention_layers_int8/AttentionINT8Weight.h"
+#include "src/fastertransformer/models/bert/BertLayerWeight.h"
 #include "src/fastertransformer/utils/memory_utils.h"
 
 namespace fastertransformer {
 
 template<typename T>
-struct BertLayerINT8Weight : BertLayerWeight<T> {
+struct BertLayerINT8Weight: BertLayerWeight<T> {
 
     BertLayerINT8Weight() = default;
     BertLayerINT8Weight(const int hidden_units, const int inter_size):
-        hidden_units_(hidden_units), 
-        inter_size_(inter_size) {
-        
-        deviceMalloc(&weights_ptr[0], hidden_units_ * hidden_units_ * 3); // fuse kernel of qkv
-        deviceMalloc(&weights_ptr[1], hidden_units_ * 3); // fuse bias of qkv
+        hidden_units_(hidden_units), inter_size_(inter_size)
+    {
+
+        deviceMalloc(&weights_ptr[0], hidden_units_ * hidden_units_ * 3);  // fuse kernel of qkv
+        deviceMalloc(&weights_ptr[1], hidden_units_ * 3);                  // fuse bias of qkv
         deviceMalloc(&weights_ptr[2], hidden_units_ * hidden_units_);
         deviceMalloc(&weights_ptr[3], hidden_units_);
         deviceMalloc(&weights_ptr[4], hidden_units_);
@@ -42,24 +42,24 @@ struct BertLayerINT8Weight : BertLayerWeight<T> {
         deviceMalloc(&weights_ptr[8], inter_size_ * hidden_units_);
         deviceMalloc(&weights_ptr[9], hidden_units_);
         deviceMalloc(&weights_ptr[10], hidden_units_);
-        deviceMalloc(&weights_ptr[11], hidden_units_); 
-     
-        scale_list_.size_ = ACTIVATION_AMAX_NUM + 9*hidden_units + INT8O_GEMM_NUM + TRT_AMAX_NUM + SCALE_RESERVE_NUM;
-        scale_list_.p3_offset_ = ACTIVATION_AMAX_NUM + 9*hidden_units;
-        scale_list_.p4_offset_ = ACTIVATION_AMAX_NUM + 9*hidden_units + INT8O_GEMM_NUM;
-        deviceMalloc(&scale_list_ptr[0], scale_list_.size_);     
+        deviceMalloc(&weights_ptr[11], hidden_units_);
+
+        scale_list_.size_ = ACTIVATION_AMAX_NUM + 9 * hidden_units + INT8O_GEMM_NUM + TRT_AMAX_NUM + SCALE_RESERVE_NUM;
+        scale_list_.p3_offset_ = ACTIVATION_AMAX_NUM + 9 * hidden_units;
+        scale_list_.p4_offset_ = ACTIVATION_AMAX_NUM + 9 * hidden_units + INT8O_GEMM_NUM;
+        deviceMalloc(&scale_list_ptr[0], scale_list_.size_);
         scale_list_ptr[1] = (float*)malloc(sizeof(float) * scale_list_.size_);
-        
+
         setWeightPtr();
-              
     }
 
-    ~BertLayerINT8Weight() {
+    ~BertLayerINT8Weight()
+    {
         if (is_maintain_buffer == true) {
-            for(int i = 0; i < 12; i++){
+            for (int i = 0; i < 12; i++) {
                 deviceFree(weights_ptr[i]);
             }
-            
+
             deviceFree(scale_list_ptr[0]);
             free(scale_list_ptr[1]);
 
@@ -84,7 +84,7 @@ struct BertLayerINT8Weight : BertLayerWeight<T> {
             is_maintain_buffer = false;
         }
         if (is_maintain_sp_buffer == true) {
-            for(int i = 0; i < 6; i++){
+            for (int i = 0; i < 6; i++) {
                 deviceFree(sp_weights_ptr[i]);
             }
             attention_weights.query_weight.sp_kernel = nullptr;
@@ -97,8 +97,9 @@ struct BertLayerINT8Weight : BertLayerWeight<T> {
         }
     }
 
-    BertLayerINT8Weight(const BertLayerINT8Weight& other): hidden_units_(other.hidden_units_), inter_size_(other.inter_size_)
-    {      
+    BertLayerINT8Weight(const BertLayerINT8Weight& other):
+        hidden_units_(other.hidden_units_), inter_size_(other.inter_size_)
+    {
         deviceMalloc(&weights_ptr[0], hidden_units_ * hidden_units_ * 3);
         cudaD2Dcpy(weights_ptr[0], other.weights_ptr[0], hidden_units_ * hidden_units_ * 3);
         deviceMalloc(&weights_ptr[1], hidden_units_ * 3);
@@ -131,14 +132,14 @@ struct BertLayerINT8Weight : BertLayerWeight<T> {
         cudaD2Dcpy(scale_list_ptr[0], other.scale_list_ptr[0], scale_list_.size_);
         scale_list_ptr[1] = (float*)malloc(sizeof(float) * scale_list_.size_);
         memcpy(scale_list_ptr[1], other.scale_list_ptr[1], sizeof(float) * scale_list_.size_);
-        
+
         setWeightPtr();
     }
 
     BertLayerINT8Weight& operator=(const BertLayerINT8Weight& other)
     {
-        
-        //to be confirmed， free buffer before =
+
+        // to be confirmed， free buffer before =
         /*
         if (is_maintain_buffer) {
             for(int i = 0; i < 16; i++) {
@@ -148,7 +149,7 @@ struct BertLayerINT8Weight : BertLayerWeight<T> {
             free(scale_list_.h_scale_list_);
         }
         */
-        
+
         hidden_units_ = other.hidden_units_;
         inter_size_ = other.inter_size_;
         deviceMalloc(&weights_ptr[0], hidden_units_ * hidden_units_ * 3);
@@ -175,7 +176,7 @@ struct BertLayerINT8Weight : BertLayerWeight<T> {
         cudaD2Dcpy(weights_ptr[10], other.weights_ptr[10], hidden_units_);
         deviceMalloc(&weights_ptr[11], hidden_units_);
         cudaD2Dcpy(weights_ptr[11], other.weights_ptr[11], hidden_units_);
-        
+
         scale_list_.size_ = other.scale_list_.size_;
         scale_list_.p3_offset_ = other.scale_list_.p3_offset_;
         scale_list_.p4_offset_ = other.scale_list_.p4_offset_;
@@ -183,7 +184,7 @@ struct BertLayerINT8Weight : BertLayerWeight<T> {
         cudaD2Dcpy(scale_list_ptr[0], other.scale_list_ptr[0], scale_list_.size_);
         scale_list_ptr[1] = (float*)malloc(sizeof(float) * scale_list_.size_);
         memcpy(scale_list_ptr[1], other.scale_list_ptr[1], sizeof(float) * scale_list_.size_);
-        
+
         setWeightPtr();
     }
 
@@ -194,7 +195,6 @@ struct BertLayerINT8Weight : BertLayerWeight<T> {
     ScaleList scale_list_;
 
 private:
-    
     void setWeightPtr()
     {
         attention_weights.query_weight.kernel = weights_ptr[0];
@@ -226,7 +226,7 @@ private:
     int inter_size_;
     bool is_maintain_buffer = false;
     T* weights_ptr[12];
-    float *scale_list_ptr[2];
+    float* scale_list_ptr[2];
     T* sp_weights_ptr[6];
     bool is_maintain_sp_buffer = false;
 };

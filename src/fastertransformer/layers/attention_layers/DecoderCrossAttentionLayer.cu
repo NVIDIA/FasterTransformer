@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +14,16 @@
  * limitations under the License.
  */
 
+#ifndef CUDART_VERSION
+#error CUDART_VERSION Undefined!
+#elif (CUDART_VERSION >= 11050)
+#include <cub/cub.cuh>
+#else
 #include "3rdparty/cub/cub.cuh"
+#endif
+
+#include "src/fastertransformer/kernels/decoder_masked_multihead_attention.h"
+#include "src/fastertransformer/kernels/decoder_masked_multihead_attention_utils.h"
 #include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
 #include "src/fastertransformer/layers/attention_layers/DecoderCrossAttentionLayer.h"
 
@@ -57,8 +66,9 @@ __global__ void cross_attention_kernel(T* query_buf,
                                        const int seq_len,
                                        const T scalar)
 {
-    if (finished != nullptr && finished[blockIdx.x / head_num] == true)
+    if (finished != nullptr && finished[blockIdx.x / head_num] == true) {
         return;
+    }
     int tid = threadIdx.x;
     int bid = blockIdx.x / head_num;
     int head_id = blockIdx.x % head_num;
@@ -72,8 +82,9 @@ __global__ void cross_attention_kernel(T* query_buf,
     int qkv_id = bid * head_num * size_per_head + head_id * size_per_head + tid;
     int qkv_bias_id = head_id * size_per_head + tid;
 
-    if (tid < size_per_head)
+    if (tid < size_per_head) {
         sq[tid] = query_buf[qkv_id] + Q_bias[qkv_bias_id];
+    }
     __syncthreads();
 
     for (int ite = 0; ite < length; ++ite) {
@@ -91,8 +102,9 @@ __global__ void cross_attention_kernel(T* query_buf,
 
         T val = (tid < size_per_head) ? key * sq[tid] * scalar : (T)(0.0f);
         T qk = blockReduceSum(val);
-        if (threadIdx.x == 0)
+        if (threadIdx.x == 0) {
             logits[ite] = qk;
+        }
         __syncthreads();  // try to remove
     }
     __syncthreads();
@@ -101,19 +113,22 @@ __global__ void cross_attention_kernel(T* query_buf,
 
     float local_i = tid < length ? (float)logits[tid] : -1e20f;
     float max_val = blockReduceMax(local_i);
-    if (tid == 0)
+    if (tid == 0) {
         s_max_val = max_val;
+    }
     __syncthreads();
 
     local_i -= s_max_val;
     float local_o = tid < length ? __expf(local_i) : 0.0f;
     float val = blockReduceSum(local_o);
 
-    if (tid == 0)
+    if (tid == 0) {
         s_sum = val + 1e-6;
+    }
     __syncthreads();
-    if (tid < length)
+    if (tid < length) {
         logits[tid] = local_o / s_sum;
+    }
     __syncthreads();
 
     if (tid < size_per_head) {
@@ -151,8 +166,9 @@ __global__ void cross_attention_kernel_opt(T* __restrict query_buf,
                                            const int seq_len,
                                            const float scalar)
 {
-    if (finished != nullptr && finished[blockIdx.x / head_num] == true)
+    if (finished != nullptr && finished[blockIdx.x / head_num] == true) {
         return;
+    }
     typedef Copy_t<T, size_per_head> copy_t;
     const int elems_per_thread = size_per_head / WARP_SIZE;
     union Access_t {
@@ -235,12 +251,14 @@ __global__ void cross_attention_kernel_opt(T* __restrict query_buf,
 
     __shared__ float s_max_val, s_sum;
     float local_i = -1e20f;
-    for (int i = tid; i < length; i += blockDim.x)
+    for (int i = tid; i < length; i += blockDim.x) {
         local_i = max(local_i, logits[i]);
+    }
 
     float max_val = MaxValBlockReduce(max_val_block_temp_storage).Reduce(local_i, cub::Max());
-    if (tid == 0)
+    if (tid == 0) {
         s_max_val = max_val;
+    }
     __syncthreads();
 
     float local_o = 0.0f;
@@ -250,8 +268,9 @@ __global__ void cross_attention_kernel_opt(T* __restrict query_buf,
     }
     float val = BlockReduce(block_temp_storage).Sum(local_o);
 
-    if (tid == 0)
+    if (tid == 0) {
         s_sum = val + 1e-6;
+    }
     __syncthreads();
 
     float s_sum_inverse = __fdividef(1.0f, s_sum);
@@ -321,7 +340,7 @@ void cross_attention_dispatch(T* query_buf,
 {
     if (!batch_major_cache) {
         const int block_sz = ATTENTION_BLOCK_SIZE;
-        float scalar = 1.f / sqrtf(size_per_head * 1.0f);
+        float scalar = 1.f / (sqrtf(size_per_head * 1.0f) * q_scaling);
 
         dim3 grid(inference_batch_size * head_num);
 
@@ -383,19 +402,25 @@ void cross_attention_dispatch(T* query_buf,
 
                 int block_size = 128;
 
-                if (seq_len <= 64)
+                if (seq_len <= 64) {
                     block_size = 64;
-                else if (seq_len <= 128 && seq_len > size_per_head)
+                }
+                else if (seq_len <= 128 && seq_len > size_per_head) {
                     block_size = 128;
-                else if (seq_len > 128 && seq_len <= 256)
+                }
+                else if (seq_len > 128 && seq_len <= 256) {
                     block_size = 256;
-                else if (seq_len > 256 && seq_len <= 512)
+                }
+                else if (seq_len > 256 && seq_len <= 512) {
                     block_size = 512;
-                else
+                }
+                else {
                     block_size = 1024;
+                }
 
-                if (block_size < size_per_head)
+                if (block_size < size_per_head) {
                     block_size = size_per_head;
+                }
 
                 assert(block_size <= 1024);
                 dim3 block(block_size);
@@ -444,6 +469,9 @@ void cross_attention_dispatch(T* query_buf,
         params.k_cache = reinterpret_cast<DataType*>(key_cache);
         params.v_cache = reinterpret_cast<DataType*>(value_cache);
         params.batch_size = inference_batch_size;
+        // TODO(bhsueh) We can use batch but not batch * beam_width in k/v cache in cross attention
+        // because they are same for all beams.
+        params.beam_width = 1;  // We don't care the beam_width in cross attention, set to 1 is enough.
         params.seq_length = seq_len;
         params.timestep = step - 1;
         params.num_heads = head_num;
@@ -509,8 +537,9 @@ __global__ void transpose_4d_batch_major_mem_k_cache(
 
     const int out_idx = blockIdx.x * blockDim.x + threadIdx.x;
     int size_per_head_div_x = size_per_head / X_ELEMS;
-    if (out_idx >= size_per_head_div_x * max_seq_len)
+    if (out_idx >= size_per_head_div_x * max_seq_len) {
         return;
+    }
 
     int idx = out_idx;
     const int k_seq_len_id = idx % max_seq_len;
@@ -539,8 +568,9 @@ __global__ void transpose_4d_batch_major_mem_v_cache(
 
     constexpr int X_ELEMS = (sizeof(T) == 4) ? 4 : 8;
     const int size_per_head_div_x = size_per_head / X_ELEMS;
-    if (out_idx >= size_per_head_div_x * max_seq_len)
+    if (out_idx >= size_per_head_div_x * max_seq_len) {
         return;
+    }
 
     int idx = out_idx;
     const int v_head_size_id = idx % size_per_head_div_x;
@@ -610,9 +640,24 @@ void DecoderCrossAttentionLayer<T>::allocateBuffer()
 }
 
 template<typename T>
+void DecoderCrossAttentionLayer<T>::allocateBuffer(size_t batch_size, size_t max_mem_seq_len)
+{
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    q_buf_ = reinterpret_cast<T*>(allocator_->reMalloc(q_buf_, sizeof(T) * batch_size * hidden_units_, false));
+    context_buf_ =
+        reinterpret_cast<T*>(allocator_->reMalloc(context_buf_, sizeof(T) * batch_size * hidden_units_, false));
+
+    if (is_batch_major_cache_) {
+        mem_cache_buf_ = reinterpret_cast<T*>(
+            allocator_->reMalloc(mem_cache_buf_, sizeof(T) * batch_size * max_mem_seq_len * hidden_units_, false));
+    }
+    is_allocate_buffer_ = true;
+}
+
+template<typename T>
 void DecoderCrossAttentionLayer<T>::freeBuffer()
 {
-    if (is_allocate_buffer_ == true) {
+    if (is_allocate_buffer_) {
         allocator_->free(q_buf_);
         allocator_->free(context_buf_);
         if (is_batch_major_cache_) {
@@ -756,7 +801,7 @@ void DecoderCrossAttentionLayer<T>::forward(std::vector<fastertransformer::Tenso
     FT_CHECK(output_tensors->size() == 3);
     FT_CHECK(isValidBatchSize(input_tensors->at(0).shape[0]));
     FT_CHECK(isValidSeqLen(input_tensors->at(1).shape[1]));
-    allocateBuffer();
+    allocateBuffer(input_tensors->at(0).shape[0], input_tensors->at(1).shape[1]);
 
     const T* attention_input = reinterpret_cast<const T*>(input_tensors->at(0).data);
     Tensor encoder_output_tensor = input_tensors->at(1);

@@ -14,19 +14,8 @@
  * limitations under the License.
  */
 
-#include <vector>
-
-#include <cuda_fp16.h>
-
-#include "torch/csrc/cuda/Stream.h"
-#include <ATen/cuda/CUDAContext.h>
-#include <torch/custom_class.h>
-#include <torch/script.h>
-
-#include "src/fastertransformer/th_op/th_traits.h"
-#include "src/fastertransformer/th_op/th_utils.h"
-
 #include "src/fastertransformer/models/longformer/LongformerEncoder.h"
+#include "src/fastertransformer/th_op/th_utils.h"
 
 namespace ft = fastertransformer;
 namespace th = torch;
@@ -76,7 +65,7 @@ public:
                    int hidden_units,
                    int intermediate_size,
                    th::Tensor th_weights,
-                   std::vector<LongformerLayerWeight<T>>* weights)
+                   std::vector<ft::LongformerLayerWeight<T>>* weights)
     {
         weights->clear();
         weights->resize(layer_num);

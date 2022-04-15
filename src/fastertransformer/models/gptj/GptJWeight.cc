@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,17 +19,15 @@
 namespace fastertransformer {
 
 template<typename T>
-GptJWeight<T>::GptJWeight(
-    const int hidden_units,
-    const int inter_size,
-    const int vocab_size,
-    const int num_layer,
-    const int max_seq_len,
-    const int tensor_para_size,
-    const int tensor_para_rank,
-    const int layer_para_size,
-    const int layer_para_rank
-):
+GptJWeight<T>::GptJWeight(const int hidden_units,
+                          const int inter_size,
+                          const int vocab_size,
+                          const int num_layer,
+                          const int max_seq_len,
+                          const int tensor_para_size,
+                          const int tensor_para_rank,
+                          const int layer_para_size,
+                          const int layer_para_rank):
     hidden_units_(hidden_units),
     inter_size_(inter_size),
     vocab_size_(vocab_size),
@@ -43,18 +41,12 @@ GptJWeight<T>::GptJWeight(
     for (int l = 0; l < num_layer_; l++) {
         if (isValidLayerParallelId(l)) {
             decoder_layer_weights.push_back(
-                GptJDecoderLayerWeight<T>(
-                    hidden_units_, inter_size_,
-                    tensor_para_size_, tensor_para_rank_
-                )
-            );
+                GptJDecoderLayerWeight<T>(hidden_units_, inter_size_, tensor_para_size_, tensor_para_rank_));
         }
         else {
             // Layer-parallelism: allocate empty layer because
             // this rank does not compute it:
-            decoder_layer_weights.push_back(
-                GptJDecoderLayerWeight<T>(0, 0)
-            );
+            decoder_layer_weights.push_back(GptJDecoderLayerWeight<T>(0, 0));
         }
     }
 
@@ -157,16 +149,21 @@ void GptJWeight<T>::mallocWeights()
 template<typename T>
 void GptJWeight<T>::loadModel(std::string dir_path)
 {
+    // FtCudaDataType model_file_type = getModelFileType(dir_path + "/config.ini");
+    FtCudaDataType model_file_type = FtCudaDataType::FP32;  // only support FP32 now
     FT_CHECK(is_maintain_buffer == true);
 
-    loadWeightFromBin<T>(weights_ptr[0], {vocab_size_ * hidden_units_}, dir_path + "/model.wte.bin");
-    loadWeightFromBin<T>(weights_ptr[1], {hidden_units_}, dir_path + "/model.final_layernorm.bias.bin");
-    loadWeightFromBin<T>(weights_ptr[2], {hidden_units_}, dir_path + "/model.final_layernorm.weight.bin");
-    loadWeightFromBin<T>(weights_ptr[3], {vocab_size_ * hidden_units_}, dir_path + "/model.lm_head.weight.bin");
-    loadWeightFromBin<T>(weights_ptr[4], {vocab_size_}, dir_path + "/model.lm_head.bias.bin");
+    loadWeightFromBin<T>(weights_ptr[0], {vocab_size_ * hidden_units_}, dir_path + "/model.wte.bin", model_file_type);
+    loadWeightFromBin<T>(
+        weights_ptr[1], {hidden_units_}, dir_path + "/model.final_layernorm.bias.bin", model_file_type);
+    loadWeightFromBin<T>(
+        weights_ptr[2], {hidden_units_}, dir_path + "/model.final_layernorm.weight.bin", model_file_type);
+    loadWeightFromBin<T>(
+        weights_ptr[3], {vocab_size_ * hidden_units_}, dir_path + "/model.lm_head.weight.bin", model_file_type);
+    loadWeightFromBin<T>(weights_ptr[4], {vocab_size_}, dir_path + "/model.lm_head.bias.bin", model_file_type);
 
     for (int l = 0; l < num_layer_; l++) {
-        decoder_layer_weights[l].loadModel(dir_path + "/model.layers." + std::to_string(l));
+        decoder_layer_weights[l].loadModel(dir_path + "/model.layers." + std::to_string(l), model_file_type);
     }
 }
 

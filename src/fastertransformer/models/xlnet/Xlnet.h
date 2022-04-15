@@ -45,7 +45,7 @@ private:
 
     bool is_allocate_buffer_ = false;
     FfnLayer<T>* ffn_layer_;
-    
+
     void allocateBuffer();
     void freeBuffer();
     bool isValidBatchSize(size_t batch_size);

@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,6 +21,14 @@ set_property(TARGET layernorm_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 add_library(layernorm_int8_kernels STATIC layernorm_int8_kernels.cu)
 set_property(TARGET layernorm_int8_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET layernorm_int8_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+add_library(ban_bad_words STATIC ban_bad_words.cu)
+set_property(TARGET ban_bad_words PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET ban_bad_words PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+add_library(stop_criteria STATIC stop_criteria_kernels.cu)
+set_property(TARGET stop_criteria PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET stop_criteria PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
 add_library(activation_kernels STATIC activation_kernels.cu)
 set_property(TARGET activation_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -46,9 +54,29 @@ add_library(calibrate_quantize_weight_kernels STATIC calibrate_quantize_weight_k
 set_property(TARGET calibrate_quantize_weight_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET calibrate_quantize_weight_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
+add_library(gen_relative_pos_bias STATIC gen_relative_pos_bias.cu)
+set_property(TARGET gen_relative_pos_bias PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET gen_relative_pos_bias PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+add_library(transform_mask_kernels STATIC transform_mask_kernels.cu)
+set_property(TARGET transform_mask_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET transform_mask_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+add_library(reverse_roll_kernels STATIC reverse_roll_kernels.cu)
+set_property(TARGET reverse_roll_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET reverse_roll_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+add_library(dequantize_kernels STATIC dequantize_kernels.cu)
+set_property(TARGET dequantize_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET dequantize_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
 add_library(softmax_int8_kernels STATIC softmax_int8_kernels.cu)
 set_property(TARGET softmax_int8_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET softmax_int8_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+add_library(logprob_kernels STATIC logprob_kernels.cu)
+set_property(TARGET logprob_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET logprob_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
 add_library(transpose_int8_kernels STATIC transpose_int8_kernels.cu)
 set_property(TARGET transpose_int8_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -130,3 +158,11 @@ set_property(TARGET sampling_penalty_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOL
 add_library(matrix_vector_multiplication STATIC matrix_vector_multiplication.cu)
 set_property(TARGET matrix_vector_multiplication PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET matrix_vector_multiplication PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+add_library(custom_ar_kernels STATIC custom_ar_kernels.cu)
+set_property(TARGET custom_ar_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET custom_ar_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+add_library(vit_kernels STATIC vit_kernels.cu)
+set_property(TARGET vit_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET vit_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)

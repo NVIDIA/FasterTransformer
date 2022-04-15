@@ -29,8 +29,7 @@
 
 namespace fastertransformer {
 
-enum class AttentionType
-{
+enum class AttentionType {
     UNFUSED_MHA,
     UNFUSED_PADDED_MHA,
     FUSED_MHA,
@@ -38,7 +37,8 @@ enum class AttentionType
 };
 
 template<typename T>
-AttentionType getAttentionType(size_t size_per_head, const int sm, const bool remove_padding, const int max_seq_len, const bool is_fuse = true)
+AttentionType getAttentionType(
+    size_t size_per_head, const int sm, const bool remove_padding, const int max_seq_len, const bool is_fuse = true)
 {
     if (std::is_same<T, half>::value && (sm == kSM_70 || sm == kSM_86 || sm == kSM_80 || sm == kSM_75 || sm == kSM_72)
         && size_per_head == 64 && max_seq_len <= 384 && is_fuse == true) {

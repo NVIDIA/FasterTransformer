@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,3 +14,6 @@
 
 add_executable(decoding_example decoding_example.cc)
 target_link_libraries(decoding_example PUBLIC -lcublasLt Decoding nvtx_utils)
+
+add_executable(layernorm_test layernorm_test.cc)
+target_link_libraries(layernorm_test PUBLIC -lcublasLt layernorm_kernels memory_utils)

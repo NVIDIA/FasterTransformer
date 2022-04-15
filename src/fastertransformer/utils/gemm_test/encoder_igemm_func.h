@@ -29,7 +29,6 @@
 #include <unistd.h>
 #include <vector>
 
-
 namespace fastertransformer {
 
 /* CAUTION : must match cublasLtMatmulTile_t */
@@ -41,5 +40,41 @@ const char* const matmulTileName[] = {
 
 int generate_encoder_igemm_config(
     int batch_size, int seq_len, int head_num, int size_per_head, void* buffer, bool isAppend = true);
+
+int printPerfStructure(int m, int n, int k, const customMatmulPerf_t& perf, FILE* fout, int hasPrint);
+
+int printBatchPerfStructure(
+    int batchCount, int m, int n, int k, const customMatmulPerf_t& perf, FILE* fout, int hasPrint);
+
+template<typename T, typename scaleT>
+int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
+                      int m,
+                      int n,
+                      int k,
+                      const scaleT* alpha, /* host pointer */
+                      const int8_t* A,
+                      const int8_t* B,
+                      const scaleT* beta, /* host pointer */
+                      T* C,
+                      void* workSpace,
+                      size_t workSpaceSize,
+                      FILE* fout);
+
+template<typename T, typename scaleT>
+int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
+                           int batchCount,
+                           int m,
+                           int n,
+                           int k,
+                           const scaleT* alpha, /* host pointer */
+                           const int8_t* A,
+                           const int8_t* B,
+                           const scaleT* beta, /* host pointer */
+                           T* C,
+                           void* workSpace,
+                           size_t workSpaceSize,
+                           FILE* fout);
+
+void matInit(int rows, int cols, int8_t* p, int ld);
 
 }  // namespace fastertransformer

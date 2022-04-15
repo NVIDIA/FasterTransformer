@@ -16,20 +16,22 @@
 
 #pragma once
 
+#include "int8_utils.cuh"
 #include <assert.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
-#include "int8_utils.cuh"
 
 namespace fastertransformer {
 
-template <typename T>
+template<typename T>
 void invokeTransposeMatrixCOL32ToColMajor(T* dst, const T* src, const int m, const int n, cudaStream_t stream);
 
-template <typename T>
+template<typename T>
 void invokeTransposeMatrixColMajorToCOL32(T* dst, const T* src, const int m, const int n, cudaStream_t stream);
 
-template <typename T>
-void invokeTransposeMatrixColMajorToCOL32Quantize(int8_t* dst, const T* src, const int m, const int n, const float* scale_ptr, cudaStream_t stream);
+template<typename T>
+void invokeTransposeMatrixColMajorToCOL32Quantize(
+    int8_t* dst, const T* src, const int m, const int n, const float* scale_ptr, cudaStream_t stream);
 
+void invokeRowMajorToCOL32(int8_t* dst, const int8_t* src, const int m, const int n, cudaStream_t stream);
 }  // namespace fastertransformer

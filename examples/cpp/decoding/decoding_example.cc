@@ -148,9 +148,9 @@ int decodingExample(const size_t batch_size,
                                        0.0f,
                                        top_k,
                                        top_p,
-                                       1.0, // temperature
+                                       1.0,   // temperature
                                        1.0f,  // len_penalty,
-                                       1.0, // repetition_penalty
+                                       1.0,   // repetition_penalty
                                        stream,
                                        &cublas_wrapper,
                                        &allocator,
@@ -179,18 +179,11 @@ int decodingExample(const size_t batch_size,
                getTensorType<T>(),
                std::vector<size_t>{batch_size * beam_width, memory_max_seq_len, memory_hidden_units},
                d_memory_tensor},
-        Tensor{
-            MEMORY_GPU, TYPE_INT32, std::vector<size_t>{batch_size * beam_width}, d_memory_sequence_lengths}};
+        Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{batch_size * beam_width}, d_memory_sequence_lengths}};
 
     std::vector<Tensor> output_tensors = std::vector<Tensor>{
-        Tensor{MEMORY_GPU,
-               TYPE_INT32,
-               std::vector<size_t>{(size_t)max_seq_len, batch_size, beam_width},
-               d_output_ids},
-        Tensor{MEMORY_GPU,
-               TYPE_INT32,
-               std::vector<size_t>{(size_t)max_seq_len, batch_size, beam_width},
-               d_parent_ids},
+        Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{(size_t)max_seq_len, batch_size, beam_width}, d_output_ids},
+        Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{(size_t)max_seq_len, batch_size, beam_width}, d_parent_ids},
         Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{batch_size, beam_width}, d_sequence_lengths}};
     print_mem_usage();
 

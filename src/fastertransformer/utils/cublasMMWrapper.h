@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -121,8 +121,29 @@ public:
 
     void setFP32GemmConfig();
     void setFP16GemmConfig();
+#ifdef ENABLE_BF16
+    void setBF16GemmConfig();
+#endif
+    void setStream(cudaStream_t stream);
 
     void setGemmConfig(cudaDataType_t aType, cudaDataType_t bType, cudaDataType_t cType, cudaDataType_t computeType);
+
+    CublasDataType getCublasDataType(cudaDataType_t data_type);
+
+#if (CUDART_VERSION >= 11000)
+    void Gemm(cublasOperation_t transa,
+              cublasOperation_t transb,
+              const int m,
+              const int n,
+              const int k,
+              const void* A,
+              const int lda,
+              const void* B,
+              const int ldb,
+              const void* bias,
+              void* C,
+              const int ldc);
+#endif
 
     void stridedBatchedGemm(cublasOperation_t transa,
                             cublasOperation_t transb,

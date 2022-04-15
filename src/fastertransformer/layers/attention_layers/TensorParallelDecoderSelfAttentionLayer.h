@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 #pragma once
 
 #include "src/fastertransformer/layers/attention_layers/DecoderSelfAttentionLayer.h"
+#include "src/fastertransformer/utils/custom_ar_comm.h"
 #include "src/fastertransformer/utils/nccl_utils.h"
 
 namespace fastertransformer {
@@ -24,8 +25,9 @@ namespace fastertransformer {
 template<typename T>
 class TensorParallelDecoderSelfAttentionLayer: public DecoderSelfAttentionLayer<T> {
 private:
-    size_t tensor_para_size_;
-    ncclComm_t tensor_para_comm_;
+    NcclParam tensor_para_;
+    std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm_;
+    int enable_custom_all_reduce_;
 
 protected:
 public:
@@ -35,53 +37,57 @@ public:
                                             size_t rotary_embedding_dim,
                                             size_t d_model,
                                             float q_scaling,
-                                            size_t tensor_para_size,
-                                            ncclComm_t tensor_para_comm,
+                                            NcclParam tensor_para,
                                             cudaStream_t stream,
                                             cublasMMWrapper* cublas_wrapper,
                                             IAllocator* allocator,
                                             bool is_free_buffer_after_forward,
                                             bool is_sparse = false,
-                                            int int8_mode = 0);
+                                            int int8_mode = 0,
+                                            std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm = nullptr,
+                                            int enable_custom_all_reduce = 0);
 
     TensorParallelDecoderSelfAttentionLayer(size_t max_batch_size,
                                             size_t head_num,
                                             size_t size_per_head,
-                                            size_t tensor_para_size,
-                                            ncclComm_t tensor_para_comm,
+                                            NcclParam tensor_para,
                                             cudaStream_t stream,
                                             cublasMMWrapper* cublas_wrapper,
                                             IAllocator* allocator,
                                             bool is_free_buffer_after_forward,
                                             bool is_sparse = false,
-                                            int int8_mode = 0);
+                                            int int8_mode = 0,
+                                            std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm = nullptr,
+                                            int enable_custom_all_reduce = 0);
 
     TensorParallelDecoderSelfAttentionLayer(size_t max_batch_size,
                                             size_t head_num,
                                             size_t size_per_head,
                                             size_t d_model,
                                             float q_scaling,
-                                            size_t tensor_para_size,
-                                            ncclComm_t tensor_para_comm,
+                                            NcclParam tensor_para,
                                             cudaStream_t stream,
                                             cublasMMWrapper* cublas_wrapper,
                                             IAllocator* allocator,
                                             bool is_free_buffer_after_forward,
                                             bool sparse = false,
-                                            int int8_mode = 0);
+                                            int int8_mode = 0,
+                                            std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm = nullptr,
+                                            int enable_custom_all_reduce = 0);
 
     TensorParallelDecoderSelfAttentionLayer(size_t max_batch_size,
                                             size_t head_num,
                                             size_t size_per_head,
                                             size_t rotary_embedding_dim,
-                                            size_t tensor_para_size,
-                                            ncclComm_t tensor_para_comm,
+                                            NcclParam tensor_para,
                                             cudaStream_t stream,
                                             cublasMMWrapper* cublas_wrapper,
                                             IAllocator* allocator,
                                             bool is_free_buffer_after_forward,
                                             bool sparse = false,
-                                            int int8_mode = 0);
+                                            int int8_mode = 0,
+                                            std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm = nullptr,
+                                            int enable_custom_all_reduce = 0);
 
     TensorParallelDecoderSelfAttentionLayer(TensorParallelDecoderSelfAttentionLayer<T> const& attention_layer);
 

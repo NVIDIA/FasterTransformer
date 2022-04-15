@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include <stdio.h>
 #include "mpi.h"
+#include <stdio.h>
 
 namespace fastertransformer {
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,44 +21,67 @@ namespace fastertransformer {
 template<typename T>
 void T5Decoder<T>::initialize()
 {
-    self_attention_layer_ = new TensorParallelDecoderSelfAttentionLayer<T>(
-        max_batch_size_,
-        head_num_,
-        size_per_head_,
-        d_model_,
-        (1.0f / sqrtf((float)size_per_head_)),  // make the scaling to be 1
-        tensor_para_.world_size_,
-        tensor_para_.nccl_comm_,
-        stream_,
-        cublas_wrapper_,
-        allocator_,
-        is_free_buffer_after_forward_);
+    self_attention_layer_ =
+        new TensorParallelDecoderSelfAttentionLayer<T>(max_batch_size_,
+                                                       head_num_,
+                                                       size_per_head_,
+                                                       d_model_,
+                                                       q_scaling_,  // adjust according to checkpoint structure
+                                                       tensor_para_,
+                                                       stream_,
+                                                       cublas_wrapper_,
+                                                       allocator_,
+                                                       is_free_buffer_after_forward_,
+                                                       false,
+                                                       0,
+                                                       custom_all_reduce_comm_,
+                                                       enable_custom_all_reduce_);
+    // (1.0f/ sqrtf((float)size_per_head_))
+    cross_attention_layer_ =
+        new TensorParallelDecoderCrossAttentionLayer<T>(max_batch_size_,
+                                                        head_num_,
+                                                        size_per_head_,
+                                                        d_model_,
+                                                        q_scaling_,  // adjust according to checkpoint structure
+                                                        tensor_para_,
+                                                        stream_,
+                                                        cublas_wrapper_,
+                                                        allocator_,
+                                                        is_free_buffer_after_forward_,
+                                                        custom_all_reduce_comm_,
+                                                        enable_custom_all_reduce_);
 
-    cross_attention_layer_ = new TensorParallelDecoderCrossAttentionLayer<T>(
-        max_batch_size_,
-        head_num_,
-        size_per_head_,
-        d_model_,
-        (1.0f / sqrtf((float)size_per_head_)),  // make the scaling to be 1
-        tensor_para_.world_size_,
-        tensor_para_.nccl_comm_,
-        stream_,
-        cublas_wrapper_,
-        allocator_,
-        is_free_buffer_after_forward_);
-
-    ffn_layer_ = new TensorParallelReluFfnLayer<T>(max_batch_size_,
-                                                   1,
-                                                   1,
-                                                   d_model_,
-                                                   inter_size_,
-                                                   tensor_para_.world_size_,
-                                                   tensor_para_.nccl_comm_,
-                                                   stream_,
-                                                   cublas_wrapper_,
-                                                   allocator_,
-                                                   is_free_buffer_after_forward_,
-                                                   false);
+    if (activation_type_ == ActivationType::Gelu) {
+        ffn_layer_ = new TensorParallelGeluFfnLayer<T>(max_batch_size_,
+                                                       1,
+                                                       1,
+                                                       d_model_,
+                                                       inter_size_,
+                                                       tensor_para_,
+                                                       stream_,
+                                                       cublas_wrapper_,
+                                                       allocator_,
+                                                       is_free_buffer_after_forward_,
+                                                       false,
+                                                       0,
+                                                       custom_all_reduce_comm_,
+                                                       enable_custom_all_reduce_);
+    }
+    else {
+        ffn_layer_ = new TensorParallelReluFfnLayer<T>(max_batch_size_,
+                                                       1,
+                                                       1,
+                                                       d_model_,
+                                                       inter_size_,
+                                                       tensor_para_,
+                                                       stream_,
+                                                       cublas_wrapper_,
+                                                       allocator_,
+                                                       is_free_buffer_after_forward_,
+                                                       false,
+                                                       custom_all_reduce_comm_,
+                                                       enable_custom_all_reduce_);
+    }
 }
 
 template<typename T>
@@ -75,6 +98,25 @@ void T5Decoder<T>::allocateBuffer()
         decoder_layer_output_ = reinterpret_cast<T*>(allocator_->malloc(sizeof(T) * max_batch_size_ * d_model_, false));
         is_allocate_buffer_ = true;
     }
+}
+
+template<typename T>
+void T5Decoder<T>::allocateBuffer(size_t batch_size)
+{
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    decoder_normed_input_ =
+        reinterpret_cast<T*>(allocator_->reMalloc(decoder_normed_input_, sizeof(T) * batch_size * d_model_, false));
+    self_attn_output_ =
+        reinterpret_cast<T*>(allocator_->reMalloc(self_attn_output_, sizeof(T) * batch_size * d_model_, false));
+    normed_self_attn_output_ =
+        reinterpret_cast<T*>(allocator_->reMalloc(normed_self_attn_output_, sizeof(T) * batch_size * d_model_, false));
+    cross_attn_output_ =
+        reinterpret_cast<T*>(allocator_->reMalloc(cross_attn_output_, sizeof(T) * batch_size * d_model_, false));
+    normed_cross_attn_output_ =
+        reinterpret_cast<T*>(allocator_->reMalloc(normed_cross_attn_output_, sizeof(T) * batch_size * d_model_, false));
+    decoder_layer_output_ =
+        reinterpret_cast<T*>(allocator_->reMalloc(decoder_layer_output_, sizeof(T) * batch_size * d_model_, false));
+    is_allocate_buffer_ = true;
 }
 
 template<typename T>
@@ -116,7 +158,11 @@ T5Decoder<T>::T5Decoder(size_t max_batch_size,
                         IAllocator* allocator,
                         bool is_free_buffer_after_forward,
                         NcclParam tensor_para,
-                        NcclParam pipeline_para):
+                        NcclParam pipeline_para,
+                        ActivationType activation_type,
+                        float q_scaling,
+                        std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
+                        int enable_custom_all_reduce):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     max_batch_size_(max_batch_size),
     head_num_(head_num),
@@ -126,7 +172,11 @@ T5Decoder<T>::T5Decoder(size_t max_batch_size,
     num_layer_(num_layer),
     hidden_units_(head_num_ * size_per_head),
     tensor_para_(tensor_para),
-    pipeline_para_(pipeline_para)
+    pipeline_para_(pipeline_para),
+    activation_type_(activation_type),
+    q_scaling_(q_scaling),
+    custom_all_reduce_comm_(custom_all_reduce_comm),
+    enable_custom_all_reduce_(enable_custom_all_reduce)
 {
     initialize();
 }
@@ -142,7 +192,11 @@ T5Decoder<T>::T5Decoder(T5Decoder<T> const& decoder):
     num_layer_(decoder.num_layer_),
     hidden_units_(decoder.hidden_units_),
     tensor_para_(decoder.tensor_para_),
-    pipeline_para_(decoder.pipeline_para_)
+    pipeline_para_(decoder.pipeline_para_),
+    activation_type_(decoder.activation_type_),
+    q_scaling_(decoder.q_scaling_),
+    custom_all_reduce_comm_(decoder.custom_all_reduce_comm_),
+    enable_custom_all_reduce_(decoder.enable_custom_all_reduce_)
 {
     initialize();
 }
@@ -154,6 +208,15 @@ T5Decoder<T>::~T5Decoder()
     delete cross_attention_layer_;
     delete ffn_layer_;
     freeBuffer();
+}
+
+template<typename T>
+void T5Decoder<T>::setStream(cudaStream_t stream)
+{
+    self_attention_layer_->setStream(stream);
+    cross_attention_layer_->setStream(stream);
+    ffn_layer_->setStream(stream);
+    BaseLayer::setStream(stream);
 }
 
 template<typename T>
@@ -199,6 +262,9 @@ void T5Decoder<T>::forward(std::vector<Tensor>* output_tensors,
     //      sequence_lengths [local_batch_size]
     //      relative_attention_bias [1, head_num, step, step] or [1, head_num, max_seq_len, max_seq_len]
     //      ite [1] on cpu
+    //      cache_indirection [local_batch_size / beam_width, beam_width, max_seq_len]
+    //              Here, local_batch_size contains the beam_width, so local_batch_size / beam_width
+    //              is real local_batch_size.
 
     // output tensors:
     //      decoder_output [local_batch_size, d_model_],
@@ -207,12 +273,12 @@ void T5Decoder<T>::forward(std::vector<Tensor>* output_tensors,
     //      key_mem_cache [num_layer / pipeline_para_.world_size_, batch_size, mem_max_seq_len, hidden_dimension],
     //      value_mem_cache [num_layer / pipeline_para_.world_size_, batch_size, mem_max_seq_len, hidden_dimension]
 
-    FT_CHECK(input_tensors->size() == 8);
+    FT_CHECK(input_tensors->size() == 9);
     FT_CHECK(output_tensors->size() == 5);
     isValidBatchSize(input_tensors->at(0).shape[0]);
-    allocateBuffer();
-
     const size_t local_batch_size = input_tensors->at(0).shape[0];
+    allocateBuffer(local_batch_size);
+
     const size_t mem_max_seq_len = (size_t)input_tensors->at(1).shape[1];
     const uint ite = *((uint*)(input_tensors->at(7).data));
     const DataType data_type = getTensorType<T>();
@@ -241,19 +307,19 @@ void T5Decoder<T>::forward(std::vector<Tensor>* output_tensors,
 
         if (isFirstLayerParallelId(l) == true && pipeline_para_.rank_ != 0 && pipeline_para_.world_size_ > 1) {
             // ftNcclRecv(decoder_input, local_batch_size * d_model_, pipeline_para_.rank_ - 1,
-            // pipeline_para_.nccl_comm_, stream_);
+            // pipeline_para_, stream_);
 
             ftNcclRecv(decoder_input + local_batch_size * d_model_ / tensor_para_.world_size_ * tensor_para_.rank_,
                        local_batch_size * d_model_ / tensor_para_.world_size_,
                        pipeline_para_.rank_ - 1,
-                       pipeline_para_.nccl_comm_,
+                       pipeline_para_,
                        stream_);
             if (tensor_para_.world_size_ > 1) {
                 ftNcclAllGather(decoder_input,
                                 decoder_input,
                                 (int)local_batch_size * d_model_ / tensor_para_.world_size_,
                                 tensor_para_.rank_,
-                                tensor_para_.nccl_comm_,
+                                tensor_para_,
                                 stream_);
             }
         }
@@ -281,6 +347,7 @@ void T5Decoder<T>::forward(std::vector<Tensor>* output_tensors,
         invokeGeneralT5LayerNorm(decoder_normed_input_,
                                  decoder_input,
                                  decoder_layer_weight->at(l)->pre_layernorm_weights.gamma,
+                                 decoder_layer_weight->at(l)->pre_layernorm_weights.beta,
                                  local_batch_size,
                                  d_model_,
                                  stream_);
@@ -294,6 +361,7 @@ void T5Decoder<T>::forward(std::vector<Tensor>* output_tensors,
             Tensor{MEMORY_GPU, TYPE_INT32, {local_batch_size}, (T*)nullptr},
             Tensor{MEMORY_CPU, TYPE_INT32, {1}, &tmp_0},
             input_tensors->at(4),
+            input_tensors->at(8),
             input_tensors->at(6)};
         std::vector<Tensor> self_attention_output_tensors{
             Tensor{MEMORY_GPU, data_type, {local_batch_size, d_model_}, self_attn_output_},
@@ -301,15 +369,18 @@ void T5Decoder<T>::forward(std::vector<Tensor>* output_tensors,
             Tensor{MEMORY_GPU, data_type, self_v_cache_shape, ((const T*)output_tensors->at(2).data) + cache_offset}};
         self_attention_layer_->forward(&self_attention_output_tensors,
                                        &self_attention_input_tensors,
-                                       &decoder_layer_weight->at(l)->self_attention_weights);
+                                       &decoder_layer_weight->at(l)->self_attention_weights);  // NOTEs
 
-        invokeGeneralAddResidualT5PreLayerNorm(self_attn_output_,
-                                               normed_self_attn_output_,
-                                               decoder_input,
-                                               decoder_layer_weight->at(l)->self_attn_layernorm_weights.gamma,
-                                               local_batch_size,
-                                               d_model_,
-                                               stream_);
+        invokeGeneralAddBiasResidualT5PreLayerNorm(
+            self_attn_output_,
+            normed_self_attn_output_,
+            decoder_input,
+            decoder_layer_weight->at(l)->self_attn_layernorm_weights.gamma,
+            decoder_layer_weight->at(l)->self_attn_layernorm_weights.beta,
+            decoder_layer_weight->at(l)->self_attention_weights.attention_output_weight.bias,
+            local_batch_size,
+            d_model_,
+            stream_);
         sync_check_cuda_error();
 
         std::vector<Tensor> cross_attention_input_tensors{
@@ -326,13 +397,16 @@ void T5Decoder<T>::forward(std::vector<Tensor>* output_tensors,
                                         &cross_attention_input_tensors,
                                         &decoder_layer_weight->at(l)->cross_attention_weights);
 
-        invokeGeneralAddResidualT5PreLayerNorm(cross_attn_output_,
-                                               normed_cross_attn_output_,
-                                               self_attn_output_,
-                                               decoder_layer_weight->at(l)->cross_attn_layernorm_weights.gamma,
-                                               local_batch_size,
-                                               d_model_,
-                                               stream_);
+        invokeGeneralAddBiasResidualT5PreLayerNorm(
+            cross_attn_output_,
+            normed_cross_attn_output_,
+            self_attn_output_,
+            decoder_layer_weight->at(l)->cross_attn_layernorm_weights.gamma,
+            decoder_layer_weight->at(l)->cross_attn_layernorm_weights.beta,
+            decoder_layer_weight->at(l)->cross_attention_weights.attention_output_weight.bias,
+            local_batch_size,
+            d_model_,
+            stream_);
         sync_check_cuda_error();
 
         std::vector<Tensor> ffn_input_tensors{
@@ -341,18 +415,23 @@ void T5Decoder<T>::forward(std::vector<Tensor>* output_tensors,
             Tensor{MEMORY_GPU, data_type, {local_batch_size, d_model_}, decoder_output}};
         ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &decoder_layer_weight->at(l)->ffn_weights);
 
-        invokeT5AddResidual(decoder_output, cross_attn_output_, local_batch_size, d_model_, stream_);
+        invokeT5AddBiasResidual(decoder_output,
+                                cross_attn_output_,
+                                decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
+                                local_batch_size,
+                                d_model_,
+                                stream_);
         sync_check_cuda_error();
 
         if (isLastLayerParallelId(l) == true && pipeline_para_.rank_ != pipeline_para_.world_size_ - 1
             && pipeline_para_.world_size_ > 1) {
             // ftNcclSend(decoder_output, local_batch_size * d_model_, pipeline_para_.rank_ + 1,
-            // pipeline_para_.nccl_comm_, stream_);
+            // pipeline_para_, stream_);
 
             ftNcclSend(decoder_output + local_batch_size * d_model_ / tensor_para_.world_size_ * tensor_para_.rank_,
                        local_batch_size * d_model_ / tensor_para_.world_size_,
                        pipeline_para_.rank_ + 1,
-                       pipeline_para_.nccl_comm_,
+                       pipeline_para_,
                        stream_);
         }
     }

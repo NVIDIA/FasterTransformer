@@ -39,6 +39,7 @@ private:
     void freeBuffer() override;
     bool isValidBatchSize(size_t batch_size);
     bool isValidSeqLen(size_t seq_len);
+    void allocateBuffer(size_t batch_size, size_t seq_len);
 
 protected:
     using BaseAttentionLayer<T>::stream_;
@@ -47,19 +48,19 @@ protected:
     using BaseAttentionLayer<T>::cublas_wrapper_;
     using BaseAttentionLayer<T>::allocator_;
 
-    T* q_buf_;
-    T* k_buf_;
-    T* v_buf_;
-    T* q_buf_2_;
-    T* k_buf_2_;
-    T* v_buf_2_;
-    T* qk_buf_;
-    T* qkv_buf_;
-    T* qkv_buf_2_;
+    T* q_buf_ = nullptr;
+    T* k_buf_ = nullptr;
+    T* v_buf_ = nullptr;
+    T* q_buf_2_ = nullptr;
+    T* k_buf_2_ = nullptr;
+    T* v_buf_2_ = nullptr;
+    T* qk_buf_ = nullptr;
+    T* qkv_buf_ = nullptr;
+    T* qkv_buf_2_ = nullptr;
 
-    T** batch_qkv_kernel_ptr_;
-    T** batch_qkv_input_ptr_;
-    T** batch_qkv_buf_ptr_;
+    T** batch_qkv_kernel_ptr_ = nullptr;
+    T** batch_qkv_input_ptr_ = nullptr;
+    T** batch_qkv_buf_ptr_ = nullptr;
 
 public:
     UnfusedAttentionLayer(size_t max_batch_size,

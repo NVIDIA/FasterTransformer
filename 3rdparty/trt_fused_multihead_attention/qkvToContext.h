@@ -68,8 +68,14 @@ public:
         mNumMats = B * mNumHeads;
     }
 
+    virtual void setup(const int S, const int B, const int window_num)
+    {
+        setup(S, B);
+    }
+
     virtual void run(const void* input, const void* mask, void* workspace, void* output, cudaStream_t stream) = 0; 
     virtual void run(const void* input, const void* mask, const void* seqlen, void* workspace, void* output, cudaStream_t stream) = 0; 
+    virtual void run(const void* input, const void* mask, const void* relatice_position_bias, const int actual_seqlen, void* workspace, void* output, cudaStream_t stream) = 0;
 
     virtual void setScaleList(const float scaleQkv, const float dqProbs, const float scaleCtx) = 0;
 
@@ -102,9 +108,11 @@ public:
     ~FusedMHARunnerFP16v2() = default; // for pimpl
 
     virtual void setup(const int S, const int B) override;
+    virtual void setup(const int S, const int B, const int window_num) override;
 
     void run(const void* input, const void* mask, void* workspace, void* output, cudaStream_t stream);
     void run(const void* input, const void* mask, const void* seqlen, void* workspace, void* output, cudaStream_t stream) override;
+    void run(const void* input, const void* mask, const void* relatice_position_bias, const int actual_seqlen, void* workspace, void* output, cudaStream_t stream) override;
 
     void setScaleList(const float scaleQkv, const float dqProbs, const float scaleCtx) override; 
 
@@ -129,9 +137,11 @@ public:
     void setScaleList(const float scaleQkv, const float dqProbs, const float scaleCtx);
 
     virtual void setup(const int S, const int B) override;
+    virtual void setup(const int S, const int B, const int window_num) override;
 
     void run(const void* input, const void* mask, void* workspace, void* output, cudaStream_t stream);
     void run(const void* input, const void* mask, const void* seqlen, void* workspace, void* output, cudaStream_t stream) override;
+    void run(const void* input, const void* mask, const void* relatice_position_bias, const int actual_seqlen, void* workspace, void* output, cudaStream_t stream) override;
 
     size_t getWorkspaceSize() const override;
 

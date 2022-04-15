@@ -21,7 +21,7 @@ namespace fastertransformer {
 template<typename T>
 void BertLayerINT8<T>::initialize()
 {
-    if ((attention_type_ == AttentionType::FUSED_MHA || attention_type_ == AttentionType::FUSED_PADDED_MHA) 
+    if ((attention_type_ == AttentionType::FUSED_MHA || attention_type_ == AttentionType::FUSED_PADDED_MHA)
         && max_seq_len_ <= 384) {
         attention_layer_ = new FusedAttentionLayerINT8<T>(max_batch_size_,
                                                           max_seq_len_,
@@ -91,7 +91,8 @@ BertLayerINT8<T>::BertLayerINT8(size_t max_batch_size,
     hidden_units_(head_num_ * size_per_head),
     attention_type_(attention_type),
     int8_mode_(int8_mode),
-    sparse_(sparse) {
+    sparse_(sparse)
+{
     initialize();
 }
 
@@ -111,7 +112,8 @@ BertLayerINT8<T>::BertLayerINT8(BertLayerINT8<T> const& bert_layer):
     hidden_units_(bert_layer.hidden_units_),
     attention_type_(bert_layer.attention_type_),
     int8_mode_(bert_layer.int8_mode_),
-    sparse_(bert_layer.sparse_) {
+    sparse_(bert_layer.sparse_)
+{
     initialize();
 }
 
@@ -127,20 +129,20 @@ template<typename T>
 void BertLayerINT8<T>::allocateBuffer()
 {
     if (is_allocate_buffer_ == false) {
-        attn_out_buf_ =
-            reinterpret_cast<int32_t*>(allocator_->malloc(sizeof(int32_t) * max_batch_size_ * max_seq_len_ * hidden_units_, false));
-        
-        int8_buf_ = 
-            reinterpret_cast<int8_t*>(allocator_->malloc(sizeof(int8_t) * max_batch_size_ * max_seq_len_ * hidden_units_, false));
-            
-        layer_norm_tmp_buf_ = 
-            reinterpret_cast<T*>(allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false)); 
-            
-        transformer_out_tmp_DataType_ = 
-            reinterpret_cast<T*>(allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false)); 
-            
-        //re-use transformer_out_tmp_DataType_ as col32_from_tensor_
-        col32_from_tensor_ = transformer_out_tmp_DataType_;    
+        attn_out_buf_ = reinterpret_cast<int32_t*>(
+            allocator_->malloc(sizeof(int32_t) * max_batch_size_ * max_seq_len_ * hidden_units_, false));
+
+        int8_buf_ = reinterpret_cast<int8_t*>(
+            allocator_->malloc(sizeof(int8_t) * max_batch_size_ * max_seq_len_ * hidden_units_, false));
+
+        layer_norm_tmp_buf_ =
+            reinterpret_cast<T*>(allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false));
+
+        transformer_out_tmp_DataType_ =
+            reinterpret_cast<T*>(allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false));
+
+        // re-use transformer_out_tmp_DataType_ as col32_from_tensor_
+        col32_from_tensor_ = transformer_out_tmp_DataType_;
         is_allocate_buffer_ = true;
     }
 }
@@ -157,10 +159,10 @@ void BertLayerINT8<T>::freeBuffer()
     }
 }
 
-//for layer_idx == 0, the data_type of input should be T, we need to quantize the input;
-//for layer_idx == 0, the layout of input should be row-major, we need to transform the input;
-//for layer_idx != 0, the data_type of input should be int8 for int8_mode=2/3, and T for int8_mode=1 (we need to quantize for int8_mode=1);
-//for layer_idx != 0, the layout of input should be COL32.
+// for layer_idx == 0, the data_type of input should be T, we need to quantize the input;
+// for layer_idx == 0, the layout of input should be row-major, we need to transform the input;
+// for layer_idx != 0, the data_type of input should be int8 for int8_mode=2/3, and T for int8_mode=1 (we need to
+// quantize for int8_mode=1); for layer_idx != 0, the layout of input should be COL32.
 
 template<typename T>
 void BertLayerINT8<T>::forward(std::vector<Tensor>* output_tensors,
@@ -169,7 +171,7 @@ void BertLayerINT8<T>::forward(std::vector<Tensor>* output_tensors,
 {
     const BertLayerINT8Weight<T>* bert_layer_int8_weight = (const BertLayerINT8Weight<T>*)bert_layer_weight;
     const ScaleList* scale_list = &(bert_layer_int8_weight->scale_list_);
-    
+
     // input_tensors: [input_query (token_num, hidden_dimension),
     //                 attention_mask (batch, 1, seqlen, seqlen),
     //                 padding_offset (token_num),
@@ -198,173 +200,202 @@ void BertLayerINT8<T>::forward(std::vector<Tensor>* output_tensors,
     std::vector<Tensor> attn_output_tensors{
         Tensor{MEMORY_GPU, getTensorType<int>(), std::vector<size_t>{m, n}, attn_out_buf_},
     };
-    
+
     if (int8_mode_ == 1) {
-        
+
         if (layer_idx == 0) {
             invokeTransposeMatrixColMajorToCOL32(col32_from_tensor_, from_tensor, n, m, stream_);
             from_tensor = col32_from_tensor_;
         }
-        invokeQuantization(int8_buf_, from_tensor, m*n, &(scale_list->d_scale_list_[3]), stream_);
-        std::vector<Tensor> int8_input_tensors{
-            Tensor{MEMORY_GPU,
-                   TYPE_INT8,
-                   std::vector<size_t>{m, n},
-                   int8_buf_},
-            input_tensors->at(1),
-            input_tensors->at(2)};
-        attention_layer_->forward(&attn_output_tensors, &int8_input_tensors, &bert_layer_int8_weight->attention_weights);
-        //int32 I ; DataType O
+        invokeQuantization(int8_buf_, from_tensor, m * n, &(scale_list->d_scale_list_[3]), stream_);
+        std::vector<Tensor> int8_input_tensors{Tensor{MEMORY_GPU, TYPE_INT8, std::vector<size_t>{m, n}, int8_buf_},
+                                               input_tensors->at(1),
+                                               input_tensors->at(2)};
+        attention_layer_->forward(
+            &attn_output_tensors, &int8_input_tensors, &bert_layer_int8_weight->attention_weights);
+        // int32 I ; DataType O
 
-        invokeAddBiasResidualLayerNormCol32(layer_norm_tmp_buf_, attn_out_buf_, from_tensor, 
-                                            bert_layer_int8_weight->attention_weights.attention_output_weight.bias, 
-                                            bert_layer_int8_weight->attn_layernorm_weights.gamma, 
-                                            bert_layer_int8_weight->attn_layernorm_weights.beta, 
-                                            m, n, stream_, &(scale_list->d_scale_list_[scale_list->p2_offset_ + 3*hidden_units_]), 
+        invokeAddBiasResidualLayerNormCol32(layer_norm_tmp_buf_,
+                                            attn_out_buf_,
+                                            from_tensor,
+                                            bert_layer_int8_weight->attention_weights.attention_output_weight.bias,
+                                            bert_layer_int8_weight->attn_layernorm_weights.gamma,
+                                            bert_layer_int8_weight->attn_layernorm_weights.beta,
+                                            m,
+                                            n,
+                                            stream_,
+                                            &(scale_list->d_scale_list_[scale_list->p2_offset_ + 3 * hidden_units_]),
                                             &(scale_list->d_scale_list_[36]));
-        invokeQuantization(int8_buf_, layer_norm_tmp_buf_, m*n, &(scale_list->d_scale_list_[44 + 3]), stream_);
-        std::vector<Tensor> ffn_input_tensors{
-        Tensor{MEMORY_GPU,
-            TYPE_INT8,
-            std::vector<size_t>{m, n},
-            int8_buf_}};
-        //reuse attn_output_tensors as ffn_output_tensors
+        invokeQuantization(int8_buf_, layer_norm_tmp_buf_, m * n, &(scale_list->d_scale_list_[44 + 3]), stream_);
+        std::vector<Tensor> ffn_input_tensors{Tensor{MEMORY_GPU, TYPE_INT8, std::vector<size_t>{m, n}, int8_buf_}};
+        // reuse attn_output_tensors as ffn_output_tensors
         ffn_layer_->forward(&attn_output_tensors, &ffn_input_tensors, &bert_layer_int8_weight->ffn_weights);
         if (layer_idx != num_layer - 1) {
-            //int32 I ; DataType O
-            invokeAddBiasResidualLayerNormCol32(out_tensor, attn_out_buf_, layer_norm_tmp_buf_, 
-                                                bert_layer_int8_weight->ffn_weights.output_weight.bias,
-                                                bert_layer_int8_weight->ffn_layernorm_weights.gamma,
-                                                bert_layer_int8_weight->ffn_layernorm_weights.beta,
-                                                m, n, stream_, 
-                                                &(scale_list->d_scale_list_[scale_list->p2_offset_ + 8*hidden_units_]), 
-                                                &(scale_list->d_scale_list_[52]));
+            // int32 I ; DataType O
+            invokeAddBiasResidualLayerNormCol32(
+                out_tensor,
+                attn_out_buf_,
+                layer_norm_tmp_buf_,
+                bert_layer_int8_weight->ffn_weights.output_weight.bias,
+                bert_layer_int8_weight->ffn_layernorm_weights.gamma,
+                bert_layer_int8_weight->ffn_layernorm_weights.beta,
+                m,
+                n,
+                stream_,
+                &(scale_list->d_scale_list_[scale_list->p2_offset_ + 8 * hidden_units_]),
+                &(scale_list->d_scale_list_[52]));
         }
         else {
-            //int32 I ; DataType O
-            invokeAddBiasResidualLayerNormCol32(transformer_out_tmp_DataType_, attn_out_buf_, layer_norm_tmp_buf_, 
-                                                bert_layer_int8_weight->ffn_weights.output_weight.bias,
-                                                bert_layer_int8_weight->ffn_layernorm_weights.gamma,
-                                                bert_layer_int8_weight->ffn_layernorm_weights.beta,
-                                                m, n, stream_, 
-                                                &(scale_list->d_scale_list_[scale_list->p2_offset_ + 8*hidden_units_]), 
-                                                &(scale_list->d_scale_list_[52]));
-                                                
+            // int32 I ; DataType O
+            invokeAddBiasResidualLayerNormCol32(
+                transformer_out_tmp_DataType_,
+                attn_out_buf_,
+                layer_norm_tmp_buf_,
+                bert_layer_int8_weight->ffn_weights.output_weight.bias,
+                bert_layer_int8_weight->ffn_layernorm_weights.gamma,
+                bert_layer_int8_weight->ffn_layernorm_weights.beta,
+                m,
+                n,
+                stream_,
+                &(scale_list->d_scale_list_[scale_list->p2_offset_ + 8 * hidden_units_]),
+                &(scale_list->d_scale_list_[52]));
+
             invokeTransposeMatrixCOL32ToColMajor(out_tensor, transformer_out_tmp_DataType_, m, n, stream_);
         }
-    } 
+    }
     else if (int8_mode_ == 2 || int8_mode_ == 3) {
-        
+
         if (layer_idx == 0) {
 #ifdef SPARSITY_ENABLED
             if (sparse_) {
                 invokeQuantization(int8_buf_, from_tensor, m * n, &(scale_list->d_scale_list_[3]), stream_);
-            } else {
+            }
+            else {
 #endif
-            invokeTransposeMatrixColMajorToCOL32Quantize(int8_buf_, from_tensor, n, m, &(scale_list->d_scale_list_[3]), stream_);
+                invokeTransposeMatrixColMajorToCOL32Quantize(
+                    int8_buf_, from_tensor, n, m, &(scale_list->d_scale_list_[3]), stream_);
 #ifdef SPARSITY_ENABLED
             }
 #endif
-            std::vector<Tensor> int8_input_tensors{
-                Tensor{MEMORY_GPU,
-                       TYPE_INT8,
-                       std::vector<size_t>{m, n},
-                       int8_buf_},
-                input_tensors->at(1),
-                input_tensors->at(2)};
-            attention_layer_->forward(&attn_output_tensors, &int8_input_tensors, &bert_layer_int8_weight->attention_weights);
+            std::vector<Tensor> int8_input_tensors{Tensor{MEMORY_GPU, TYPE_INT8, std::vector<size_t>{m, n}, int8_buf_},
+                                                   input_tensors->at(1),
+                                                   input_tensors->at(2)};
+            attention_layer_->forward(
+                &attn_output_tensors, &int8_input_tensors, &bert_layer_int8_weight->attention_weights);
         }
         else {
             attention_layer_->forward(&attn_output_tensors, input_tensors, &bert_layer_int8_weight->attention_weights);
         }
-       
-        const int8_t *residual = layer_idx == 0 ? int8_buf_ : (const int8_t*)from_tensor;	
-        //int8 IO
+
+        const int8_t* residual = layer_idx == 0 ? int8_buf_ : (const int8_t*)from_tensor;
+        // int8 IO
 #ifdef SPARSITY_ENABLED
         if (sparse_) {
-            invokeAddBiasResidualLayerNormRow((int8_t*)layer_norm_tmp_buf_, (const int8_t*)attn_out_buf_, 
-                                              residual, 
+            invokeAddBiasResidualLayerNormRow((int8_t*)layer_norm_tmp_buf_,
+                                              (const int8_t*)attn_out_buf_,
+                                              residual,
                                               bert_layer_int8_weight->attention_weights.attention_output_weight.bias,
-                                              bert_layer_int8_weight->attn_layernorm_weights.gamma, 
+                                              bert_layer_int8_weight->attn_layernorm_weights.gamma,
                                               bert_layer_int8_weight->attn_layernorm_weights.beta,
-                                              m, n, stream_, &(scale_list->d_scale_list_[40 + 1]),
-                                              &(scale_list->d_scale_list_[0 + 1]), 
+                                              m,
+                                              n,
+                                              stream_,
+                                              &(scale_list->d_scale_list_[40 + 1]),
+                                              &(scale_list->d_scale_list_[0 + 1]),
                                               &(scale_list->d_scale_list_[44 + 3]));
-        } else {
+        }
+        else {
 #endif
-        invokeAddBiasResidualLayerNormCol32((int8_t*)layer_norm_tmp_buf_, (const int8_t*)attn_out_buf_, 
-                                            residual, 
-                                            bert_layer_int8_weight->attention_weights.attention_output_weight.bias,
-                                            bert_layer_int8_weight->attn_layernorm_weights.gamma, 
-                                            bert_layer_int8_weight->attn_layernorm_weights.beta,
-                                            m, n, stream_, &(scale_list->d_scale_list_[40 + 1]),
-                                            &(scale_list->d_scale_list_[0 + 1]), 
-                                            &(scale_list->d_scale_list_[44 + 3]));
+            invokeAddBiasResidualLayerNormCol32((int8_t*)layer_norm_tmp_buf_,
+                                                (const int8_t*)attn_out_buf_,
+                                                residual,
+                                                bert_layer_int8_weight->attention_weights.attention_output_weight.bias,
+                                                bert_layer_int8_weight->attn_layernorm_weights.gamma,
+                                                bert_layer_int8_weight->attn_layernorm_weights.beta,
+                                                m,
+                                                n,
+                                                stream_,
+                                                &(scale_list->d_scale_list_[40 + 1]),
+                                                &(scale_list->d_scale_list_[0 + 1]),
+                                                &(scale_list->d_scale_list_[44 + 3]));
 #ifdef SPARSITY_ENABLED
         }
 #endif
         std::vector<Tensor> ffn_input_tensors{
-        Tensor{MEMORY_GPU,
-            TYPE_INT8,
-            std::vector<size_t>{m, n},
-            layer_norm_tmp_buf_}};
-        //reuse attn_output_tensors as ffn_output_tensors
+            Tensor{MEMORY_GPU, TYPE_INT8, std::vector<size_t>{m, n}, layer_norm_tmp_buf_}};
+        // reuse attn_output_tensors as ffn_output_tensors
         ffn_layer_->forward(&attn_output_tensors, &ffn_input_tensors, &bert_layer_int8_weight->ffn_weights);
-        if (layer_idx != num_layer - 1)
-        {
-            //int8 IO
+        if (layer_idx != num_layer - 1) {
+            // int8 IO
 #ifdef SPARSITY_ENABLED
             if (sparse_) {
-                invokeAddBiasResidualLayerNormRow((int8_t*)out_tensor, (int8_t*)attn_out_buf_, (int8_t*)layer_norm_tmp_buf_, 
-                                                    bert_layer_int8_weight->ffn_weights.output_weight.bias,
-                                                    bert_layer_int8_weight->ffn_layernorm_weights.gamma,
-                                                    bert_layer_int8_weight->ffn_layernorm_weights.beta, 
-                                                    m, n, stream_, 
-                                                    &(scale_list->d_scale_list_[56 + 1]), 
-                                                    &(scale_list->d_scale_list_[44 + 1]), 
-                                                    &(scale_list->d_scale_list_[60 + 3]));
-            } else {
-#endif
-            invokeAddBiasResidualLayerNormCol32((int8_t*)out_tensor, (int8_t*)attn_out_buf_, (int8_t*)layer_norm_tmp_buf_, 
-                                                bert_layer_int8_weight->ffn_weights.output_weight.bias,
-                                                bert_layer_int8_weight->ffn_layernorm_weights.gamma,
-                                                bert_layer_int8_weight->ffn_layernorm_weights.beta, 
-                                                m, n, stream_, 
-                                                &(scale_list->d_scale_list_[56 + 1]), 
-                                                &(scale_list->d_scale_list_[44 + 1]), 
-                                                &(scale_list->d_scale_list_[60 + 3]));
-#ifdef SPARSITY_ENABLED
-            }
-#endif
-        }
-        else
-        {
-#ifdef SPARSITY_ENABLED
-            if (sparse_) {
-                invokeAddBiasResidualLayerNormRow(out_tensor, (int8_t*)attn_out_buf_, (int8_t*)layer_norm_tmp_buf_,
+                invokeAddBiasResidualLayerNormRow((int8_t*)out_tensor,
+                                                  (int8_t*)attn_out_buf_,
+                                                  (int8_t*)layer_norm_tmp_buf_,
                                                   bert_layer_int8_weight->ffn_weights.output_weight.bias,
                                                   bert_layer_int8_weight->ffn_layernorm_weights.gamma,
-                                                  bert_layer_int8_weight->ffn_layernorm_weights.beta, 
-                                                  m, n, stream_,
-                                                  &(scale_list->d_scale_list_[56 + 1]), 
-                                                  &(scale_list->d_scale_list_[44 + 1]));
-            } else {
+                                                  bert_layer_int8_weight->ffn_layernorm_weights.beta,
+                                                  m,
+                                                  n,
+                                                  stream_,
+                                                  &(scale_list->d_scale_list_[56 + 1]),
+                                                  &(scale_list->d_scale_list_[44 + 1]),
+                                                  &(scale_list->d_scale_list_[60 + 3]));
+            }
+            else {
 #endif
-            //int8 I ; DataType O
-            invokeAddBiasResidualLayerNormCol32(transformer_out_tmp_DataType_, (int8_t*)attn_out_buf_, (int8_t*)layer_norm_tmp_buf_,
-                                                bert_layer_int8_weight->ffn_weights.output_weight.bias,
-                                                bert_layer_int8_weight->ffn_layernorm_weights.gamma,
-                                                bert_layer_int8_weight->ffn_layernorm_weights.beta, 
-                                                m, n, stream_,
-                                                &(scale_list->d_scale_list_[56 + 1]), 
-                                                &(scale_list->d_scale_list_[44 + 1]));
-                                                
-            invokeTransposeMatrixCOL32ToColMajor(out_tensor, transformer_out_tmp_DataType_, m, n, stream_);  
+                invokeAddBiasResidualLayerNormCol32((int8_t*)out_tensor,
+                                                    (int8_t*)attn_out_buf_,
+                                                    (int8_t*)layer_norm_tmp_buf_,
+                                                    bert_layer_int8_weight->ffn_weights.output_weight.bias,
+                                                    bert_layer_int8_weight->ffn_layernorm_weights.gamma,
+                                                    bert_layer_int8_weight->ffn_layernorm_weights.beta,
+                                                    m,
+                                                    n,
+                                                    stream_,
+                                                    &(scale_list->d_scale_list_[56 + 1]),
+                                                    &(scale_list->d_scale_list_[44 + 1]),
+                                                    &(scale_list->d_scale_list_[60 + 3]));
 #ifdef SPARSITY_ENABLED
             }
 #endif
         }
-    } 
+        else {
+#ifdef SPARSITY_ENABLED
+            if (sparse_) {
+                invokeAddBiasResidualLayerNormRow(out_tensor,
+                                                  (int8_t*)attn_out_buf_,
+                                                  (int8_t*)layer_norm_tmp_buf_,
+                                                  bert_layer_int8_weight->ffn_weights.output_weight.bias,
+                                                  bert_layer_int8_weight->ffn_layernorm_weights.gamma,
+                                                  bert_layer_int8_weight->ffn_layernorm_weights.beta,
+                                                  m,
+                                                  n,
+                                                  stream_,
+                                                  &(scale_list->d_scale_list_[56 + 1]),
+                                                  &(scale_list->d_scale_list_[44 + 1]));
+            }
+            else {
+#endif
+                // int8 I ; DataType O
+                invokeAddBiasResidualLayerNormCol32(transformer_out_tmp_DataType_,
+                                                    (int8_t*)attn_out_buf_,
+                                                    (int8_t*)layer_norm_tmp_buf_,
+                                                    bert_layer_int8_weight->ffn_weights.output_weight.bias,
+                                                    bert_layer_int8_weight->ffn_layernorm_weights.gamma,
+                                                    bert_layer_int8_weight->ffn_layernorm_weights.beta,
+                                                    m,
+                                                    n,
+                                                    stream_,
+                                                    &(scale_list->d_scale_list_[56 + 1]),
+                                                    &(scale_list->d_scale_list_[44 + 1]));
+
+                invokeTransposeMatrixCOL32ToColMajor(out_tensor, transformer_out_tmp_DataType_, m, n, stream_);
+#ifdef SPARSITY_ENABLED
+            }
+#endif
+        }
+    }
 
     sync_check_cuda_error();
     if (is_free_buffer_after_forward_ == true) {

@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "src/fastertransformer/kernels/gen_relative_pos_bias.h"
 #include "src/fastertransformer/models/t5/T5EncoderLayerWeight.h"
 
 namespace fastertransformer {
@@ -30,22 +31,28 @@ struct T5EncoderWeight {
                     const size_t inter_size,
                     const size_t vocab_size,
                     const size_t num_layer,
-                    const size_t num_bucket,
+                    const size_t num_bucket_or_max_seq_len,
                     const size_t tensor_para_size,
                     const size_t tensor_para_rank,
                     const size_t pipeline_para_size,
-                    const size_t pipeline_para_rank);
+                    const size_t pipeline_para_rank,
+                    const bool t5_with_bias_para = false,
+                    const PositionEmbeddingType pe_type = PositionEmbeddingType::relative);
     ~T5EncoderWeight();
     T5EncoderWeight(const T5EncoderWeight& other);
     T5EncoderWeight& operator=(const T5EncoderWeight& other);
 
     std::vector<T5EncoderLayerWeight<T>*> t5_encoder_layer_weights;
     LayerNormWeight<T> post_transformer_layernorm_weights;
-    T* relative_attention_bias;
-    T* embedding_table;
+    T* absolute_or_relative_position_embedding = nullptr;
+    T* embedding_table = nullptr;
+    bool t5_with_bias = false;
+    PositionEmbeddingType position_embedding_type = PositionEmbeddingType::relative;
 
     void loadModel(std::string dir_path);
     void resizeLayer(const int num_layer);
+    void setT5StructureDiff(bool t5_with_bias_para, PositionEmbeddingType position_embedding_type_para);
+
 private:
     void setWeightPtr();
     void mallocWeights();
@@ -58,7 +65,9 @@ private:
     size_t inter_size_;
     size_t vocab_size_;
     size_t num_layer_;
-    size_t num_bucket_;
+    // refer to num_buckt if using relative position embedding
+    // refer to max_seq_len if using absoulte position embedding
+    size_t num_bucket_or_max_seq_len_;
     size_t tensor_para_size_;
     size_t tensor_para_rank_;
     size_t pipeline_para_size_;
@@ -66,7 +75,9 @@ private:
 
     bool is_maintain_buffer = false;
 
-    const static int weights_num_ = 3;
+    int real_weights_num_;
+
+    const static int weights_num_ = 4;
     T* weights_ptr[weights_num_];
     size_t weights_size[weights_num_];
 };

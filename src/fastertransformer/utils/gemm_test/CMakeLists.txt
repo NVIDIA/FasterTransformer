@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -41,6 +41,14 @@ set(t5_gemm_func_files
   t5_gemm_func.cc
 )
 
+set(swin_igemm_func_files
+  swin_igemm_func.cc
+)
+
+set(swin_gemm_func_files
+  swin_gemm_func.cc
+)
+
 add_library(gemm_func STATIC ${gemm_func_files})
 target_link_libraries(gemm_func PUBLIC -lcublas -lcublasLt -lcudart)
 set_property(TARGET gemm_func PROPERTY POSITION_INDEPENDENT_CODE ON)
@@ -56,7 +64,11 @@ set_property(TARGET encoder_gemm_func PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET encoder_gemm_func PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
 add_library(encoder_igemm_func STATIC ${encoder_igemm_func_files})
+if (SPARSITY_SUPPORT)
+target_link_libraries(encoder_igemm_func PUBLIC -lcublas -lcublasLt -lcudart -lcusparse -lcusparseLt)
+else()
 target_link_libraries(encoder_igemm_func PUBLIC -lcublas -lcublasLt -lcudart)
+endif()
 set_property(TARGET encoder_igemm_func PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET encoder_igemm_func PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 
@@ -87,3 +99,13 @@ else()
 endif()
 set_property(TARGET t5_gemm_func PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET t5_gemm_func PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+
+add_library(swin_igemm_func STATIC ${swin_igemm_func_files})
+target_link_libraries(swin_igemm_func PUBLIC -lcublas -lcublasLt -lcudart gemm_func encoder_igemm_func)
+set_property(TARGET swin_igemm_func PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(TARGET swin_igemm_func PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+
+add_library(swin_gemm_func STATIC ${swin_gemm_func_files})
+target_link_libraries(swin_gemm_func PUBLIC -lcublas -lcublasLt -lcudart gemm_func)
+set_property(TARGET swin_gemm_func PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(TARGET swin_gemm_func PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)

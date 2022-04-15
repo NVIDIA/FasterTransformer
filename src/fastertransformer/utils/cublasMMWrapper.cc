@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,10 @@
  */
 
 #include "cublasMMWrapper.h"
+
+#ifndef CUDART_VERSION
+#error CUDART_VERSION Undefined!
+#endif
 
 namespace fastertransformer {
 cublasMMWrapper::cublasMMWrapper(cublasHandle_t cublas_handle,
@@ -155,6 +159,7 @@ void cublasMMWrapper::Gemm(cublasOperation_t transa,
     half h_beta = (half)(f_beta);
 
     mu_->lock();
+    // TODO: default cublas libs
     int is_fp16_computeType = computeType_ == CUDA_R_16F ? 1 : 0;
     bool using_cublasLt = (Atype_ == CUDA_R_16F) ? true : false;
     int batch_count = 1;
@@ -163,30 +168,30 @@ void cublasMMWrapper::Gemm(cublasOperation_t transa,
     const void* alpha = is_fp16_computeType ? reinterpret_cast<void*>(&h_alpha) : reinterpret_cast<void*>(&f_alpha);
     const void* beta = is_fp16_computeType ? reinterpret_cast<void*>(&h_beta) : reinterpret_cast<void*>(&f_beta);
 
-    int findAlgo =
-        cublas_algo_map_->isExist(batch_count, m, n, k, (Atype_ == CUDA_R_16F) ? HALF_DATATYPE : FLOAT_DATATYPE);
+    int findAlgo = cublas_algo_map_->isExist(batch_count, m, n, k, getCublasDataType(Atype_));
 
-    cublasLtMatmulAlgo_info info =
-        cublas_algo_map_->getAlgo(batch_count, m, n, k, (Atype_ == CUDA_R_16F) ? HALF_DATATYPE : FLOAT_DATATYPE);
+    cublasLtMatmulAlgo_info info = cublas_algo_map_->getAlgo(batch_count, m, n, k, getCublasDataType(Atype_));
     if (findAlgo) {
-        if (info.stages != -1)
+        if (info.stages != -1) {
             using_cublasLt = true;
-        else
+        }
+        else {
             using_cublasLt = false;
+        }
     }
 
     if (using_cublasLt) {
         cublasLtMatmulDesc_t operationDesc = NULL;
         cublasLtMatrixLayout_t Adesc = NULL, Bdesc = NULL, Cdesc = NULL;
         cudaDataType_t scaleType;
-#ifdef CUDA11_MODE
+#if (CUDART_VERSION >= 11000)
         cublasComputeType_t computeType;
 #else
         cudaDataType_t computeType;
 #endif
 
         if (is_fp16_computeType) {
-#ifdef CUDA11_MODE
+#if (CUDART_VERSION >= 11000)
             computeType = CUBLAS_COMPUTE_16F;
 #else
             computeType = CUDA_R_16F;
@@ -194,7 +199,7 @@ void cublasMMWrapper::Gemm(cublasOperation_t transa,
             scaleType = CUDA_R_16F;
         }
         else {
-#ifdef CUDA11_MODE
+#if (CUDART_VERSION >= 11000)
             computeType = CUBLAS_COMPUTE_32F;
 #else
             computeType = CUDA_R_32F;
@@ -207,7 +212,7 @@ void cublasMMWrapper::Gemm(cublasOperation_t transa,
         cublasLtMatrixLayoutCreate(&Adesc, Atype_, transa == CUBLAS_OP_N ? m : k, transa == CUBLAS_OP_N ? k : m, lda);
         cublasLtMatrixLayoutCreate(&Bdesc, Btype_, transb == CUBLAS_OP_N ? k : n, transb == CUBLAS_OP_N ? n : k, ldb);
         cublasLtMatrixLayoutCreate(&Cdesc, Ctype_, m, n, ldc);
-#ifdef CUDA11_MODE
+#if (CUDART_VERSION >= 11000)
         cublasLtMatmulDescCreate(&operationDesc, computeType, scaleType);
 #else
         cublasLtMatmulDescCreate(&operationDesc, computeType);
@@ -220,8 +225,9 @@ void cublasMMWrapper::Gemm(cublasOperation_t transa,
         void* workSpace = cublas_workspace_;
         int workspaceSize = cublas_workspace_ == NULL ? 0 : CUBLAS_WORKSPACE_SIZE;
         if (findAlgo) {
-            if (info.workspaceSize > workspaceSize)
+            if (info.workspaceSize > workspaceSize) {
                 findAlgo = 0;
+            }
             else {
                 cublasLtMatmulAlgoInit(
                     cublaslt_handle_, computeType, scaleType, Atype_, Btype_, Ctype_, Ctype_, info.algoId, &algo);
@@ -235,7 +241,7 @@ void cublasMMWrapper::Gemm(cublasOperation_t transa,
                     &algo, CUBLASLT_ALGO_CONFIG_CTA_SWIZZLING, &(info.swizzle), sizeof(info.swizzle));
                 cublasLtMatmulAlgoConfigSetAttribute(
                     &algo, CUBLASLT_ALGO_CONFIG_REDUCTION_SCHEME, &(info.reductionScheme), sizeof(int));
-#ifdef CUDA11_MODE
+#if (CUDART_VERSION >= 11000)
                 cublasLtMatmulAlgoConfigSetAttribute(
                     &algo, CUBLASLT_ALGO_CONFIG_STAGES_ID, &(info.stages), sizeof(info.stages));
 #endif
@@ -304,8 +310,18 @@ void cublasMMWrapper::setFP16GemmConfig()
     Atype_ = CUDA_R_16F;
     Btype_ = CUDA_R_16F;
     Ctype_ = CUDA_R_16F;
-    computeType_ = CUDA_R_16F;
+    computeType_ = CUDA_R_32F;
 }
+
+#ifdef ENABLE_BF16
+void cublasMMWrapper::setBF16GemmConfig()
+{
+    Atype_ = CUDA_R_16BF;
+    Btype_ = CUDA_R_16BF;
+    Ctype_ = CUDA_R_16BF;
+    computeType_ = CUDA_R_32F;
+}
+#endif
 
 void cublasMMWrapper::setGemmConfig(cudaDataType_t aType,
                                     cudaDataType_t bType,
@@ -316,6 +332,101 @@ void cublasMMWrapper::setGemmConfig(cudaDataType_t aType,
     Btype_ = bType;
     Ctype_ = cType;
     computeType_ = computeType;
+}
+
+CublasDataType cublasMMWrapper::getCublasDataType(cudaDataType_t data_type)
+{
+    if (data_type == CUDA_R_16F) {
+        return HALF_DATATYPE;
+    }
+    else if (data_type == CUDA_R_32F) {
+        return FLOAT_DATATYPE;
+    }
+#ifdef ENABLE_BF16
+    else if (data_type == CUDA_R_16BF) {
+        return BFLOAT16_DATATYPE;
+    }
+#endif
+    return FLOAT_DATATYPE;
+}
+
+#if (CUDART_VERSION >= 11000)
+// input, weight, output are row-major
+// only works for cublas 11.x
+void cublasMMWrapper::Gemm(cublasOperation_t transa,
+                           cublasOperation_t transb,
+                           const int m,
+                           const int n,
+                           const int k,
+                           const void* A,
+                           const int lda,
+                           const void* B,
+                           const int ldb,
+                           const void* bias,
+                           void* C,
+                           const int ldc)
+{
+    cudaDataType_t Atype, Btype, Ctype;
+    cublasComputeType_t computeType;
+    cudaDataType_t scaleType;
+    float alpha_float = 1.0f;
+    float beta_float = 0.0f;
+    half alpha_half = half(1.0f);
+    half beta_half = half(0.0f);
+    void *alpha, *beta;
+
+    // int is_fp16_computeType = computeType_ == CUDA_R_16F ? 1 : 0;
+    if (Atype_ == CUDA_R_32F) {
+        computeType = CUBLAS_COMPUTE_32F_FAST_TF32;
+        Atype = CUDA_R_32F;
+        Btype = CUDA_R_32F;
+        Ctype = CUDA_R_32F;
+        scaleType = CUDA_R_32F;
+        alpha = &alpha_float;
+        beta = &beta_float;
+    }
+    else if (Atype_ == CUDA_R_16BF) {
+        computeType = CUBLAS_COMPUTE_32F_FAST_TF32;
+        Atype = CUDA_R_16BF;
+        Btype = CUDA_R_16BF;
+        Ctype = CUDA_R_16BF;
+        scaleType = CUDA_R_32F;
+        alpha = &alpha_float;
+        beta = &beta_float;
+    }
+    else {
+        computeType = CUBLAS_COMPUTE_16F;
+        Atype = CUDA_R_16F;
+        Btype = CUDA_R_16F;
+        Ctype = CUDA_R_16F;
+        scaleType = CUDA_R_16F;
+        alpha = &alpha_half;
+        beta = &beta_half;
+    }
+
+    cublasLtMatmulDesc_t operationDesc = NULL;
+    cublasLtMatrixLayout_t Adesc = NULL, Bdesc = NULL, Cdesc = NULL;
+    cublasLtEpilogue_t epi = CUBLASLT_EPILOGUE_BIAS;
+    cublasLtMatrixLayoutCreate(&Adesc, Atype, (transa == CUBLAS_OP_N) ? m : k, (transa == CUBLAS_OP_N) ? k : m, lda);
+    cublasLtMatrixLayoutCreate(&Bdesc, Btype, (transb == CUBLAS_OP_N) ? k : n, (transb == CUBLAS_OP_N) ? n : k, ldb);
+    cublasLtMatrixLayoutCreate(&Cdesc, Ctype, m, n, ldc);
+
+    cublasLtMatmulDescCreate(&operationDesc, computeType, scaleType);
+    cublasLtMatmulDescSetAttribute(operationDesc, CUBLASLT_MATMUL_DESC_TRANSA, &transa, sizeof(cublasOperation_t));
+    cublasLtMatmulDescSetAttribute(operationDesc, CUBLASLT_MATMUL_DESC_TRANSB, &transb, sizeof(cublasOperation_t));
+    cublasLtMatmulDescSetAttribute(operationDesc, CUBLASLT_MATMUL_DESC_EPILOGUE, &epi, sizeof(cublasLtEpilogue_t));
+    cublasLtMatmulDescSetAttribute(operationDesc, CUBLASLT_MATMUL_DESC_BIAS_POINTER, &bias, sizeof(const void*));
+    check_cuda_error(cublasLtMatmul(
+        cublaslt_handle_, operationDesc, alpha, A, Adesc, B, Bdesc, beta, C, Cdesc, C, Cdesc, NULL, NULL, 0, stream_));
+    cublasLtMatrixLayoutDestroy(Adesc);
+    cublasLtMatrixLayoutDestroy(Bdesc);
+    cublasLtMatrixLayoutDestroy(Cdesc);
+    cublasLtMatmulDescDestroy(operationDesc);
+}
+#endif
+void cublasMMWrapper::setStream(cudaStream_t stream)
+{
+    stream_ = stream;
 }
 
 void cublasMMWrapper::stridedBatchedGemm(cublasOperation_t transa,
@@ -344,8 +455,7 @@ void cublasMMWrapper::stridedBatchedGemm(cublasOperation_t transa,
     const void* alpha =
         is_fp16_computeType ? reinterpret_cast<void*>(&h_alpha) : reinterpret_cast<const void*>(&f_alpha);
     const void* beta = is_fp16_computeType ? reinterpret_cast<void*>(&h_beta) : reinterpret_cast<const void*>(&f_beta);
-    cublasLtMatmulAlgo_info info =
-        cublas_algo_map_->getAlgo(batch_count, m, n, k, (Atype_ == CUDA_R_16F) ? HALF_DATATYPE : FLOAT_DATATYPE);
+    cublasLtMatmulAlgo_info info = cublas_algo_map_->getAlgo(batch_count, m, n, k, getCublasDataType(Atype_));
 
     check_cuda_error(cublasGemmStridedBatchedEx(cublas_handle_,
                                                 transa,
@@ -404,8 +514,7 @@ void cublasMMWrapper::stridedBatchedGemm(cublasOperation_t transa,
     const void* alpha =
         is_fp16_computeType ? reinterpret_cast<void*>(&h_alpha) : reinterpret_cast<const void*>(&f_alpha);
     const void* beta = is_fp16_computeType ? reinterpret_cast<void*>(&h_beta) : reinterpret_cast<const void*>(&f_beta);
-    cublasLtMatmulAlgo_info info =
-        cublas_algo_map_->getAlgo(batch_count, m, n, k, (AType == CUDA_R_16F) ? HALF_DATATYPE : FLOAT_DATATYPE);
+    cublasLtMatmulAlgo_info info = cublas_algo_map_->getAlgo(batch_count, m, n, k, getCublasDataType(Atype_));
 
     check_cuda_error(cublasGemmStridedBatchedEx(cublas_handle_,
                                                 transa,
@@ -457,8 +566,7 @@ void cublasMMWrapper::batchedGemm(cublasOperation_t transa,
     int is_fp16_computeType = computeType_ == CUDA_R_16F ? 1 : 0;
     const void* alpha = is_fp16_computeType ? reinterpret_cast<void*>(&h_alpha) : reinterpret_cast<void*>(&f_alpha);
     const void* beta = is_fp16_computeType ? reinterpret_cast<void*>(&h_beta) : reinterpret_cast<void*>(&f_beta);
-    cublasLtMatmulAlgo_info info =
-        cublas_algo_map_->getAlgo(batch_count, m, n, k, (Atype_ == CUDA_R_16F) ? HALF_DATATYPE : FLOAT_DATATYPE);
+    cublasLtMatmulAlgo_info info = cublas_algo_map_->getAlgo(batch_count, m, n, k, getCublasDataType(Atype_));
 
     check_cuda_error(cublasGemmBatchedEx(cublas_handle_,
                                          transa,
@@ -485,7 +593,7 @@ void cublasMMWrapper::batchedGemm(cublasOperation_t transa,
 
 bool cublasMMWrapper::isFuseBatchGemm(const int batch_count, const int m, const int k, const int n)
 {
-    CublasDataType data_type = Atype_ == CUDA_R_16F ? HALF_DATATYPE : FLOAT_DATATYPE;
+    CublasDataType data_type = getCublasDataType(Atype_);
 
     if (cublas_algo_map_->isExist(batch_count, m, k, n, data_type) == false
         || cublas_algo_map_->isExist(1, m, k, n, data_type) == false) {
@@ -603,7 +711,8 @@ void cublasMMWrapper::SpGemm(cublasOperation_t transa,
     mu_->unlock();
 }
 
-size_t cublasMMWrapper::getSparseMatrixSize(int m, int k) {
+size_t cublasMMWrapper::getSparseMatrixSize(int m, int k)
+{
     // Get a compressed matrix size of shape (m, k) used in cusparselt.
     auto Atype_ = CUDA_R_16F;
     cusparseOrder_t order = CUSPARSE_ORDER_COL;
@@ -623,9 +732,7 @@ size_t cublasMMWrapper::getSparseMatrixSize(int m, int k) {
                                                       order,
                                                       CUSPARSELT_SPARSITY_50_PERCENT));
     size_t compressed_size = 0;
-    CHECK_CUSPARSE(cusparseLtSpMMACompressedSize2(&cusparselt_handle_,
-                                                  &matA,
-                                                  &compressed_size));
+    CHECK_CUSPARSE(cusparseLtSpMMACompressedSize2(&cusparselt_handle_, &matA, &compressed_size));
     return compressed_size;
 }
 

@@ -16,8 +16,8 @@
  */
 #pragma once
 
+#include "src/fastertransformer/utils/logger.h"
 #include <curand_kernel.h>
-
 namespace fastertransformer {
 
 template<typename T>
@@ -28,10 +28,11 @@ void invokeTopKSampling(void* workspace,
                         int* sequence_length,
                         bool* finished_buf,
                         float* cum_log_probs,
+                        float* output_log_probs,
                         curandState_t* curandstate,
                         const int top_k,
                         const int vocab_size_padded,
-                        const int end_id,
+                        const int* end_ids,
                         cudaStream_t stream,
                         const int batch_size);
 
@@ -42,7 +43,7 @@ void invokeCurandInitialize(curandState_t* state,
 
 template<typename T>
 void invokeAddBiasEndMask(
-    T* logits, const T* bias, const int end_id, const bool* finished, const int m, const int n, cudaStream_t stream);
+    T* logits, const T* bias, const int* end_ids, const bool* finished, const int m, const int n, cudaStream_t stream);
 
 template<typename T>
 void invokeTopKTopPSampling(void* workspace,
@@ -51,12 +52,14 @@ void invokeTopKTopPSampling(void* workspace,
                             const T* logits,
                             int* sequence_length,
                             bool* finished_buf,
+                            float* cum_log_probs,
+                            float* output_log_probs,
                             curandState_t* curandstate,
                             const int batch_size,
                             const int top_k,
                             const T top_p,
                             const int vocab_size_padded,
-                            const int end_id,
+                            const int* end_ids,
                             cudaStream_t stream);
 
 }  // namespace fastertransformer

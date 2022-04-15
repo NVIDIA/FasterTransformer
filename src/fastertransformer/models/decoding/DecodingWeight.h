@@ -26,8 +26,12 @@ template<typename T>
 struct DecodingWeight {
 
     DecodingWeight() = default;
-    DecodingWeight(
-        const int hidden_units, const int inter_size, const int vocab_size, const int num_layer, const int max_seq_len, const int mem_hidden_units):
+    DecodingWeight(const int hidden_units,
+                   const int inter_size,
+                   const int vocab_size,
+                   const int num_layer,
+                   const int max_seq_len,
+                   const int mem_hidden_units):
         hidden_units_(hidden_units),
         inter_size_(inter_size),
         vocab_size_(vocab_size),

@@ -16,7 +16,7 @@ from __future__ import print_function
 import unittest
 import os
 import copy
-os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3' 
+os.environ['NVIDIA_TF32_OVERRIDE'] = '0'
 import sys
 dir_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(dir_path + "/../..")
@@ -49,7 +49,7 @@ class TestEncoder(unittest.TestCase):
         for batch in [1, 8, 64, 128]:
             args_dict['batch_size'] = batch
             
-            os.system("./bin/bert_gemm {} {} {} {} {} 0".format(args_dict['batch_size'], args_dict['seq_len'],
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['seq_len'],
                                                             args_dict['head_num'], args_dict['head_size'],
                                                             args_dict['fp16'] == True))
             max_diff = encoder_example(args_dict)
@@ -62,7 +62,7 @@ class TestEncoder(unittest.TestCase):
         for batch in [1, 8, 64, 128]:
             args_dict['batch_size'] = batch
             
-            os.system("./bin/bert_gemm {} {} {} {} {} 0".format(args_dict['batch_size'], args_dict['seq_len'],
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['seq_len'],
                                                             args_dict['head_num'], args_dict['head_size'],
                                                             args_dict['fp16'] == True))
             max_diff = encoder_example(args_dict)
@@ -76,7 +76,7 @@ class TestEncoder(unittest.TestCase):
             args_dict['head_size'] = p[1]
             args_dict['inter_size'] = p[0] * p[1] * 4
             
-            os.system("./bin/bert_gemm {} {} {} {} {} 0".format(args_dict['batch_size'], args_dict['seq_len'],
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['seq_len'],
                                                             args_dict['head_num'], args_dict['head_size'],
                                                             args_dict['fp16'] == True))
             max_diff = encoder_example(args_dict)
@@ -91,7 +91,7 @@ class TestEncoder(unittest.TestCase):
             args_dict['head_size'] = p[1]
             args_dict['inter_size'] = p[0] * p[1] * 4
             
-            os.system("./bin/bert_gemm {} {} {} {} {} 0".format(args_dict['batch_size'], args_dict['seq_len'],
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['seq_len'],
                                                             args_dict['head_num'], args_dict['head_size'],
                                                             args_dict['fp16'] == True))
             max_diff = encoder_example(args_dict)
@@ -103,7 +103,7 @@ class TestEncoder(unittest.TestCase):
         for seqlen in [32, 130, 511, 1024, 1536]:
             args_dict['seq_len'] = seqlen
             
-            os.system("./bin/bert_gemm {} {} {} {} {} 0".format(args_dict['batch_size'], args_dict['seq_len'],
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['seq_len'],
                                                             args_dict['head_num'], args_dict['head_size'],
                                                             args_dict['fp16'] == True))
             max_diff = encoder_example(args_dict)
@@ -116,7 +116,7 @@ class TestEncoder(unittest.TestCase):
         for seqlen in [32, 130, 511, 1024, 1536]:
             args_dict['seq_len'] = seqlen
             
-            os.system("./bin/bert_gemm {} {} {} {} {} 0".format(args_dict['batch_size'], args_dict['seq_len'],
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['seq_len'],
                                                             args_dict['head_num'], args_dict['head_size'],
                                                             args_dict['fp16'] == True))
             max_diff = encoder_example(args_dict)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -164,35 +164,45 @@ ParallelGptDecoderLayerWeight<T>::operator=(const ParallelGptDecoderLayerWeight&
 }
 
 template<typename T>
-void ParallelGptDecoderLayerWeight<T>::loadModel(std::string dir_path)
+void ParallelGptDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType model_file_type)
 {
     FT_CHECK(is_maintain_buffer == true);
 
-    loadWeightFromBin<T>(weights_ptr[0], {(int)hidden_units_}, dir_path + ".input_layernorm.bias.bin");
-    loadWeightFromBin<T>(weights_ptr[1], {(int)hidden_units_}, dir_path + ".input_layernorm.weight.bin");
+    loadWeightFromBin<T>(weights_ptr[0], {(int)hidden_units_}, dir_path + ".input_layernorm.bias.bin", model_file_type);
+    loadWeightFromBin<T>(
+        weights_ptr[1], {(int)hidden_units_}, dir_path + ".input_layernorm.weight.bin", model_file_type);
     loadWeightFromBin<T>(weights_ptr[2],
                          {(int)hidden_units_, (int)(3 * hidden_units_ / tensor_para_size_)},
-                         dir_path + ".attention.query_key_value.weight." + std::to_string(tensor_para_rank_) + ".bin");
+                         dir_path + ".attention.query_key_value.weight." + std::to_string(tensor_para_rank_) + ".bin",
+                         model_file_type);
     loadWeightFromBin<T>(weights_ptr[3],
                          {3, (int)(hidden_units_ / tensor_para_size_)},
-                         dir_path + ".attention.query_key_value.bias." + std::to_string(tensor_para_rank_) + ".bin");
+                         dir_path + ".attention.query_key_value.bias." + std::to_string(tensor_para_rank_) + ".bin",
+                         model_file_type);
     loadWeightFromBin<T>(weights_ptr[4],
                          {(int)(hidden_units_ / tensor_para_size_), (int)hidden_units_},
-                         dir_path + ".attention.dense.weight." + std::to_string(tensor_para_rank_) + ".bin");
-    loadWeightFromBin<T>(weights_ptr[5], {(int)hidden_units_}, dir_path + ".attention.dense.bias.bin");
-    loadWeightFromBin<T>(weights_ptr[6], {(int)hidden_units_}, dir_path + ".post_attention_layernorm.bias.bin");
-    loadWeightFromBin<T>(weights_ptr[7], {(int)hidden_units_}, dir_path + ".post_attention_layernorm.weight.bin");
+                         dir_path + ".attention.dense.weight." + std::to_string(tensor_para_rank_) + ".bin",
+                         model_file_type);
+    loadWeightFromBin<T>(weights_ptr[5], {(int)hidden_units_}, dir_path + ".attention.dense.bias.bin", model_file_type);
+    loadWeightFromBin<T>(
+        weights_ptr[6], {(int)hidden_units_}, dir_path + ".post_attention_layernorm.bias.bin", model_file_type);
+    loadWeightFromBin<T>(
+        weights_ptr[7], {(int)hidden_units_}, dir_path + ".post_attention_layernorm.weight.bin", model_file_type);
 
     loadWeightFromBin<T>(weights_ptr[8],
                          {(int)hidden_units_, (int)(inter_size_ / tensor_para_size_)},
-                         dir_path + ".mlp.dense_h_to_4h.weight." + std::to_string(tensor_para_rank_) + ".bin");
+                         dir_path + ".mlp.dense_h_to_4h.weight." + std::to_string(tensor_para_rank_) + ".bin",
+                         model_file_type);
     loadWeightFromBin<T>(weights_ptr[9],
                          {(int)(inter_size_ / tensor_para_size_)},
-                         dir_path + ".mlp.dense_h_to_4h.bias." + std::to_string(tensor_para_rank_) + ".bin");
+                         dir_path + ".mlp.dense_h_to_4h.bias." + std::to_string(tensor_para_rank_) + ".bin",
+                         model_file_type);
     loadWeightFromBin<T>(weights_ptr[10],
                          {(int)(inter_size_ / tensor_para_size_), (int)hidden_units_},
-                         dir_path + ".mlp.dense_4h_to_h.weight." + std::to_string(tensor_para_rank_) + ".bin");
-    loadWeightFromBin<T>(weights_ptr[11], {(int)hidden_units_}, dir_path + ".mlp.dense_4h_to_h.bias.bin");
+                         dir_path + ".mlp.dense_4h_to_h.weight." + std::to_string(tensor_para_rank_) + ".bin",
+                         model_file_type);
+    loadWeightFromBin<T>(
+        weights_ptr[11], {(int)hidden_units_}, dir_path + ".mlp.dense_4h_to_h.bias.bin", model_file_type);
 
     if (int8_mode_ != 0) {
         transposeCalibrateQuantizeWeight();
@@ -324,5 +334,8 @@ void ParallelGptDecoderLayerWeight<T>::transposeCalibrateQuantizeWeight()
 
 template struct ParallelGptDecoderLayerWeight<float>;
 template struct ParallelGptDecoderLayerWeight<half>;
+#ifdef ENABLE_BF16
+template struct ParallelGptDecoderLayerWeight<__nv_bfloat16>;
+#endif
 
 }  // namespace fastertransformer

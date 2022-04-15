@@ -144,6 +144,7 @@ Bert<T>::~Bert()
 template<typename T>
 void Bert<T>::allocateBuffer()
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_ == false) {
         token_num_ = (size_t*)allocator_->malloc(sizeof(size_t) * 1, false);
         padding_offset_ = (int*)allocator_->malloc(sizeof(int) * max_batch_size_ * max_seq_len_, false);
@@ -172,27 +173,53 @@ void Bert<T>::allocateBuffer()
 }
 
 template<typename T>
+void Bert<T>::allocateBuffer(size_t batch_size, size_t seq_len)
+{
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    token_num_ = (size_t*)allocator_->reMalloc(token_num_, sizeof(size_t) * 1, false);
+    padding_offset_ = (int*)allocator_->reMalloc(padding_offset_, sizeof(int) * batch_size * seq_len, false);
+    trt_mha_padding_offset_ =
+        (int*)allocator_->reMalloc(trt_mha_padding_offset_, sizeof(int) * (2 * batch_size + 1), false);
+
+    attention_mask_ = (T*)allocator_->reMalloc(attention_mask_, sizeof(T) * batch_size * seq_len * seq_len, false);
+
+    bert_in_buffer_ =
+        (T*)allocator_->reMalloc(bert_in_buffer_, sizeof(T) * batch_size * seq_len * head_num_ * size_per_head_, false);
+    attn_out_buf_ = (T*)allocator_->reMalloc(attn_out_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
+    bert_out_buffer_ = (T*)allocator_->reMalloc(
+        bert_out_buffer_, sizeof(T) * batch_size * seq_len * head_num_ * size_per_head_, false);
+
+    if (layernorm_type_ == LayerNormType::post_layernorm) {
+        normed_from_tensor_ = nullptr;
+        normed_attn_out_buf_ = nullptr;
+    }
+    else {
+        normed_from_tensor_ =
+            (T*)allocator_->reMalloc(normed_from_tensor_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
+        normed_attn_out_buf_ =
+            (T*)allocator_->reMalloc(normed_attn_out_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
+    }
+}
+
+template<typename T>
 void Bert<T>::freeBuffer()
 {
-    if (is_allocate_buffer_ == true) {
-        allocator_->free(token_num_);
-        allocator_->free(padding_offset_);
-        allocator_->free(trt_mha_padding_offset_);
+    allocator_->free(token_num_);
+    allocator_->free(padding_offset_);
+    allocator_->free(trt_mha_padding_offset_);
 
-        allocator_->free(attention_mask_);
-        allocator_->free(bert_in_buffer_);
-        allocator_->free(attn_out_buf_);
-        allocator_->free(bert_out_buffer_);
+    allocator_->free(attention_mask_);
+    allocator_->free(bert_in_buffer_);
+    allocator_->free(attn_out_buf_);
+    allocator_->free(bert_out_buffer_);
 
-        if (layernorm_type_ == LayerNormType::post_layernorm) {
-            normed_from_tensor_ = nullptr;
-            normed_attn_out_buf_ = nullptr;
-        }
-        else {
-            allocator_->free(normed_from_tensor_);
-            allocator_->free(normed_attn_out_buf_);
-        }
-        is_allocate_buffer_ = false;
+    if (layernorm_type_ == LayerNormType::post_layernorm) {
+        normed_from_tensor_ = nullptr;
+        normed_attn_out_buf_ = nullptr;
+    }
+    else {
+        allocator_->free(normed_from_tensor_);
+        allocator_->free(normed_attn_out_buf_);
     }
 }
 
@@ -215,7 +242,7 @@ void Bert<T>::forward(std::vector<Tensor>* output_tensors,
     FT_CHECK(request_batch_size == input_tensors->at(1).shape[0]);
     FT_CHECK(input_tensors->at(0).shape.size() == 3);
     FT_CHECK(input_tensors->at(1).shape.size() == 1);
-    allocateBuffer();
+    allocateBuffer(request_batch_size, request_seq_len);
 
     const int* sequence_lengths = reinterpret_cast<const int*>(input_tensors->at(1).data);
 
@@ -446,25 +473,19 @@ void Bert<T>::forward(std::vector<Tensor>* output_tensors,
 template<typename T>
 bool Bert<T>::isValidBatchSize(size_t batch_size)
 {
-    if (max_batch_size_ == 0) {
+    if (max_batch_size_ < batch_size) {
         max_batch_size_ = batch_size;
-        return true;
     }
-    else {
-        return batch_size <= max_batch_size_;
-    }
+    return true;
 }
 
 template<typename T>
 bool Bert<T>::isValidSeqLen(size_t seq_len)
 {
-    if (max_seq_len_ == 0) {
+    if (max_seq_len_ < seq_len) {
         max_seq_len_ = seq_len;
-        return true;
     }
-    else {
-        return seq_len <= max_seq_len_;
-    }
+    return true;
 }
 
 template class Bert<float>;

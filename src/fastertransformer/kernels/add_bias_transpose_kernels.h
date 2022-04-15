@@ -16,12 +16,23 @@
 
 namespace fastertransformer {
 
-template <typename T>
-void invokeAddBiasTransposeToMultiHead(const T* matrices, const T* biases, T* output,
-                                       const int batch_size, const int head_num, const int size_per_head,
-                                       const int seq_len, const int matrices_num, const cudaStream_t stream);
+template<typename T>
+void invokeAddBiasTransposeToMultiHead(const T* matrices,
+                                       const T* biases,
+                                       T* output,
+                                       const int batch_size,
+                                       const int head_num,
+                                       const int size_per_head,
+                                       const int seq_len,
+                                       const int matrices_num,
+                                       const cudaStream_t stream);
 
-template <typename T>
-void invokeTransposeMultiHeadToSingle(T* dst, T* src, const int batch_size, const int seq_len,
-                                      const int head_num, const int size_per_head, cudaStream_t stream);
+template<typename T>
+void invokeTransposeMultiHeadToSingle(T* dst,
+                                      T* src,
+                                      const int batch_size,
+                                      const int seq_len,
+                                      const int head_num,
+                                      const int size_per_head,
+                                      cudaStream_t stream);
 }  // namespace fastertransformer

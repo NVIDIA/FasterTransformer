@@ -20,6 +20,10 @@
 #include "nccl.h"
 #include <stdio.h>
 
+#if defined(NCCL_VERSION_CODE) && (NCCL_VERSION_CODE >= 21003)
+#define ENABLE_BF16_NCCL
+#endif
+
 namespace fastertransformer {
 
 #define NCCLCHECK(cmd)                                                                                                 \
@@ -34,7 +38,12 @@ namespace fastertransformer {
 struct NcclParam {
     int rank_{0};
     int world_size_{1};
-    ncclComm_t nccl_comm_;
+    ncclComm_t nccl_comm_ = nullptr;
+
+    NcclParam(): rank_(0), world_size_(1), nccl_comm_(nullptr){};
+    NcclParam(int rank, int world_size, ncclComm_t comm): rank_(rank), world_size_(world_size), nccl_comm_(comm){};
+    NcclParam(NcclParam const& param):
+        rank_(param.rank_), world_size_(param.world_size_), nccl_comm_(param.nccl_comm_){};
 
     // int layers_per_group{0};
     // bool is_valid(int i)
@@ -47,21 +56,25 @@ struct NcclParam {
     // int local_batch_size{-1};
 };
 
+// New APIs
 template<typename T>
-void ftNcclAllReduceSum(const T* send_buf, T* recv_buf, const int data_size, ncclComm_t comm, cudaStream_t stream);
+void ftNcclAllReduceSum(const T* send_buf, T* recv_buf, const int data_size, NcclParam nccl_param, cudaStream_t stream);
 
 template<typename T>
 void ftNcclAllGather(
-    const T* send_buf, T* recv_buf, const int data_size, const int rank, ncclComm_t comm, cudaStream_t stream);
+    const T* send_buf, T* recv_buf, const int data_size, const int rank, NcclParam nccl_param, cudaStream_t stream);
 
 template<typename T>
-void ftNcclBroadCast(T* buff, const int data_size, const int root, ncclComm_t comm, cudaStream_t stream);
+void ftNcclBroadCast(T* buff, const int data_size, const int root, NcclParam nccl_param, cudaStream_t stream);
 
 template<typename T>
-void ftNcclRecv(T* recv_buf, const int data_size, const int peer, ncclComm_t comm, cudaStream_t stream);
+void ftNcclRecv(T* recv_buf, const int data_size, const int peer, NcclParam nccl_param, cudaStream_t stream);
 
 template<typename T>
-void ftNcclSend(const T* send_buf, const int data_size, const int peer, ncclComm_t comm, cudaStream_t stream);
+void ftNcclSend(const T* send_buf, const int data_size, const int peer, NcclParam nccl_param, cudaStream_t stream);
+
+template<typename T>
+ncclDataType_t getNcclDataType();
 
 size_t getLocalBatchSize(const size_t batch_size, const size_t seq_len, const size_t pipeline_para_size);
 

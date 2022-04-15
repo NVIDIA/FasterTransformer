@@ -52,11 +52,9 @@ __global__ void addBiasTransposeToMultiHead(const T* matrices,
                 int head_id = y_offset / size_per_head;
                 int head_y_offset = y_offset % size_per_head;
 
-                int output_offset = matrix_id * batch_size * head_num * seq_len * size_per_head +
-                                    batch_id * head_num * seq_len * size_per_head +
-                                    head_id * seq_len * size_per_head +
-                                    seq_id * size_per_head +
-                                    head_y_offset;
+                int output_offset = matrix_id * batch_size * head_num * seq_len * size_per_head
+                                    + batch_id * head_num * seq_len * size_per_head + head_id * seq_len * size_per_head
+                                    + seq_id * size_per_head + head_y_offset;
 
                 output[output_offset] = matrices[x_offset * head_num * size_per_head + y_offset] + bias_element;
             }

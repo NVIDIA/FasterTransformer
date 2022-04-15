@@ -15,6 +15,7 @@
  */
 
 #pragma once
+#include "src/fastertransformer/kernels/gen_relative_pos_bias.h"
 #include "src/fastertransformer/utils/cuda_utils.h"
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
@@ -60,6 +61,7 @@ void invokeBuildRelativeAttentionBias(T* relative_attention_bias,
                                       const int num_bucket,
                                       const bool is_bidirectional,
                                       const int max_distance,
+                                      const PositionEmbeddingType position_embedding_type,
                                       cudaStream_t stream);
 
 }  // namespace fastertransformer

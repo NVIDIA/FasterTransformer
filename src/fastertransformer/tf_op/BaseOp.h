@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@
 
 #define EIGEN_USE_GPU
 
+#include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
 #include "src/fastertransformer/utils/cuda_utils.h"
 
 #include "tensorflow/core/framework/op.h"
@@ -100,6 +101,14 @@ protected:
             return ft::Tensor{
                 ft::MEMORY_GPU, ft::getTensorType<half>(), convert_shape(tensor), (half*)(tensor.flat<T>().data())};
         }
+#ifdef ENABLE_BF16
+        if (std::is_same<T, Eigen::bfloat16>::value == true) {
+            return ft::Tensor{ft::MEMORY_GPU,
+                              ft::getTensorType<__nv_bfloat16>(),
+                              convert_shape(tensor),
+                              (__nv_bfloat16*)(tensor.flat<T>().data())};
+        }
+#endif
         else if (std::is_same<T, float>::value == true) {
             return ft::Tensor{
                 ft::MEMORY_GPU, ft::getTensorType<float>(), convert_shape(tensor), (float*)(tensor.flat<T>().data())};

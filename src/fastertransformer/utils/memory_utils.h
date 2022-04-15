@@ -45,7 +45,10 @@ template<typename T>
 void cudaRandomUniform(T* buffer, const int size);
 
 template<typename T>
-int loadWeightFromBin(T* ptr, std::vector<int> shape, std::string filename);
+int loadWeightFromBin(T* ptr,
+                      std::vector<int> shape,
+                      std::string filename,
+                      FtCudaDataType model_file_type = FtCudaDataType::FP32);
 
 void invokeCudaD2DcpyHalf2Float(float* dst, half* src, const int size, cudaStream_t stream);
 void invokeCudaD2DcpyFloat2Half(half* dst, float* src, const int size, cudaStream_t stream);

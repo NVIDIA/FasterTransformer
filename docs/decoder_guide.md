@@ -130,10 +130,10 @@ The following section lists the requirements to use FasterTransformer.
 ### Requirements
 
 - CMake >= 3.8 for Tensorflow, CMake >= 3.13 for PyTorch
-- CUDA 10.1 or newer version
+- CUDA 11.0 or newer version
 - Python 3 is recommended because some features are not supported in python 2
-- Tensorflow 1.13 or 1.14 or 1.15
-- PyTorch >= 1.4.0
+- Tensorflow: Verify on 1.15, 1.13 and 1.14 should work.
+- PyTorch: Verify on 1.8.0, >= 1.5.0 should work.
 
 These components are readily available within the NGC TensorFlow Docker image below.
 
@@ -212,7 +212,7 @@ For those unable to use the NGC container, to set up the required environment or
     `./bin/decoding_gemm` can generate the best GEMM configuration. The arguments of `decoding_gemm` are:
 
     ```bash
-    ./bin/decoding_gemm <batch_size> <beam_width> <head_number> <size_per_head> <inter_size> <vocab_size> <max_mem_seq_len> <memory_hidden_units> <is_fp16>
+    ./bin/decoding_gemm <batch_size> <beam_width> <head_number> <size_per_head> <inter_size> <vocab_size> <max_mem_seq_len> <memory_hidden_units> <data_type>
     ```
 
     Assume the settings of decoding are as follows.
@@ -224,7 +224,7 @@ For those unable to use the NGC container, to set up the required environment or
     - `vocabulary_size`=30000
     - `sequence_length`=32
     - `encoder's hidden dimension`=512
-    - `data_type`=FP32
+    - `data_type`=0 (FP32) or 1 (FP16) or 2 (BF16)
 
     Then the following scripts can generate the best GEMM configuration under such settings and record the configuration into the `gemm_config.in` file.
 

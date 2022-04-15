@@ -1,4 +1,4 @@
-# Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -36,10 +36,10 @@ def convert_token(
             end_index = np.where(tokens[max_input_length:] == end_id)[0]
         else:
             end_index = []
-        end_pos = -1
+        end_pos = len(tokens)
         if len(end_index) > 0:
             end_pos = end_index[0]
-        print("[INFO] batch {}: {}".format(batch_num, enc.decode(tokens[:end_pos])))
+        print(f"[INFO] batch {batch_num}: {enc.decode(tokens[:end_pos])}")
     return tokens_batch
 
 if __name__ == "__main__":

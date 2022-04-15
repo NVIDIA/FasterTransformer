@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,7 +19,7 @@ import torch
 
 from transformers import BertConfig
 from transformers.modeling_bert import BertEncoder
-from utils.checkpoint_quantization import checkpoint_quantization
+from .checkpoint_quantization import checkpoint_quantization
 
 class EncoderWeights(object):
     def __init__(self, layer_num, hidden_dim, weights=None, sparse=False):

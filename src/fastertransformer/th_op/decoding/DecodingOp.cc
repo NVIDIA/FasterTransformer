@@ -161,7 +161,10 @@ FasterTransformerDecoding::~FasterTransformerDecoding()
     delete ftdecoding;
 }
 
-std::vector<th::Tensor> FasterTransformerDecoding::forward(int64_t beam_width, int64_t max_seq_len, th::Tensor memory, th::Tensor memory_seq_lens)
+std::vector<th::Tensor> FasterTransformerDecoding::forward(int64_t beam_width,
+                                                           int64_t max_seq_len,
+                                                           th::Tensor memory,
+                                                           th::Tensor memory_seq_lens)
 {
     CHECK_INPUT(memory, _st);
     CHECK_TH_CUDA(memory_seq_lens);
@@ -175,7 +178,8 @@ std::vector<th::Tensor> FasterTransformerDecoding::forward(int64_t beam_width, i
                                    torch::dtype(torch::kInt32).device(torch::kCUDA).requires_grad(false));
     auto out_seq_lens =
         torch::empty({batch_size * beam_width}, torch::dtype(torch::kInt32).device(torch::kCUDA).requires_grad(false));
-    ftdecoding->forward((size_t)beam_width, (size_t)max_seq_len, memory, memory_seq_lens, output_ids, parent_ids, out_seq_lens);
+    ftdecoding->forward(
+        (size_t)beam_width, (size_t)max_seq_len, memory, memory_seq_lens, output_ids, parent_ids, out_seq_lens);
     return std::vector<th::Tensor>{output_ids, parent_ids, out_seq_lens};
 }
 

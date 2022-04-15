@@ -203,13 +203,13 @@ void Xlnet<T>::forward(std::vector<Tensor>* output_tensors,
         std::vector<Tensor> ffn_input_tensors{
             Tensor{MEMORY_GPU,
                    data_type,
-                   std::vector<size_t>{request_batch_size*request_seq_len, hidden_units_},
+                   std::vector<size_t>{request_batch_size * request_seq_len, hidden_units_},
                    out_tensor}};
         std::vector<Tensor> ffn_output_tensors{
-            Tensor{MEMORY_GPU, 
-            data_type, 
-            std::vector<size_t>{request_batch_size*request_seq_len, hidden_units_}, 
-            output_fc2_}};
+            Tensor{MEMORY_GPU,
+                   data_type,
+                   std::vector<size_t>{request_batch_size * request_seq_len, hidden_units_},
+                   output_fc2_}};
         ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &xlnet_layer_weights->at(i).ffn_weights);
 
         invokeAddBiasResidualLayerNorm(out_tensor,

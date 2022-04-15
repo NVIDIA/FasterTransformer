@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,18 +18,19 @@
 
 namespace fastertransformer {
 
-cublasAlgoMap::cublasAlgoMap(const std::string filename, const std::string sp_config_filename)
-    : config_filename_(filename), sp_config_filename_(sp_config_filename)
+cublasAlgoMap::cublasAlgoMap(const std::string filename, const std::string sp_config_filename):
+    config_filename_(filename), sp_config_filename_(sp_config_filename)
 {
     loadGemmConfig();
     loadSpGemmConfig();
 }
 
-cublasAlgoMap::cublasAlgoMap(const cublasAlgoMap& algo_map)
-    : config_filename_(algo_map.config_filename_), sp_config_filename_(algo_map.sp_config_filename_)
+cublasAlgoMap::cublasAlgoMap(const cublasAlgoMap& algo_map):
+    config_filename_(algo_map.config_filename_),
+    sp_config_filename_(algo_map.sp_config_filename_),
+    algo_map_(algo_map.algo_map_),
+    sp_algo_map_(algo_map.sp_algo_map_)
 {
-    loadGemmConfig();
-    loadSpGemmConfig();
 }
 
 cublasAlgoMap::~cublasAlgoMap()
@@ -76,7 +77,8 @@ void cublasAlgoMap::loadGemmConfig()
                   &stages,
                   &exec_time)
            != EOF) {
-        if (dataType != FLOAT_DATATYPE && dataType != HALF_DATATYPE && dataType != INT8_DATATYPE) {
+        if (dataType != FLOAT_DATATYPE && dataType != HALF_DATATYPE && dataType != BFLOAT16_DATATYPE
+            && dataType != INT8_DATATYPE) {
             printf("[WARNING][readAlgoFromConfig] wrong dataType %d!\n", dataType);
             continue;
         }
@@ -150,9 +152,20 @@ void cublasAlgoMap::loadSpGemmConfig()
         printf("[ERROR] fgets fail at %s:%d \n", __FILE__, __LINE__);
         exit(-1);
     }
-    while(fscanf(fd, "%d %d %d %d %d ### %d %d %d %d %d %f\n",
-          &batch_size, &seq_len, &head_num, &size_per_head, &data_type, &batchCount, &m, &n, &k, &algoId, &exec_time)!=EOF)
-    {
+    while (fscanf(fd,
+                  "%d %d %d %d %d ### %d %d %d %d %d %f\n",
+                  &batch_size,
+                  &seq_len,
+                  &head_num,
+                  &size_per_head,
+                  &data_type,
+                  &batchCount,
+                  &m,
+                  &n,
+                  &k,
+                  &algoId,
+                  &exec_time)
+           != EOF) {
         char mark[256];
         sprintf(mark, "%d_%d_%d_%d", batchCount, m, n, k);
         std::string markStr(mark);

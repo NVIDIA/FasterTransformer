@@ -56,7 +56,7 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
     }
 #ifdef SPARSITY_ENABLED
     const int m_padded = m_tmp;
-#endif 
+#endif
 
     if (size_per_head_ % 32 != 0) {
         printf(
@@ -200,12 +200,12 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
                                      stream_);
             invokeAddVBiasTransform(v_buf_,
                                     V_int_buf_,
-                                    attention_weights->key_weight.bias,
+                                    attention_weights->value_weight.bias,
                                     request_batch_size,
                                     request_seq_len,
                                     head_num_,
                                     size_per_head_,
-                                    &(scale_list->d_scale_list_[scale_list->p2_offset_ + hidden_units_]),
+                                    &(scale_list->d_scale_list_[scale_list->p2_offset_ + 2 * hidden_units_]),
                                     &(scale_list->d_scale_list_[2]),
                                     &(scale_list->d_scale_list_[24 + 3]),
                                     cublas_wrapper->getUseOrderCol322R4R4(),
@@ -405,11 +405,11 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
         cublas_wrapper->Gemm(qk_int_buf_,
                              batchCount,
                              request_seq_len,
-                             request_seq_len,
+                             seq_len_padded,
                              size_per_head_,
                              size_per_head_ * request_seq_len,
-                             size_per_head_ * request_seq_len,
-                             request_seq_len * request_seq_len,
+                             size_per_head_ * seq_len_padded,
+                             request_seq_len * seq_len_padded,
                              q_buf_,
                              k_buf_);
 
@@ -429,9 +429,9 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
                              batchCount,
                              request_seq_len,
                              size_per_head_,
-                             request_seq_len,
-                             request_seq_len * request_seq_len,
-                             size_per_head_ * request_seq_len,
+                             seq_len_padded,
+                             request_seq_len * seq_len_padded,
+                             size_per_head_ * seq_len_padded,
                              size_per_head_ * request_seq_len,
                              qk_buf_,
                              v_buf_);
@@ -590,8 +590,9 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
 #endif
     }
 
-    if (is_free_buffer_after_forward_ == true)
+    if (is_free_buffer_after_forward_ == true) {
         freeBuffer();
+    }
     sync_check_cuda_error();
 }
 

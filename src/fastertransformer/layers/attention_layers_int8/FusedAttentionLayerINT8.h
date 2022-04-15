@@ -80,7 +80,7 @@ public:
                             cublasMMWrapper* cublas_wrapper,
                             IAllocator* allocator,
                             bool is_free_buffer_after_forward,
-							bool sparse=false);
+                            bool sparse = false);
 
     FusedAttentionLayerINT8(FusedAttentionLayerINT8<T> const& attention_layer);
 

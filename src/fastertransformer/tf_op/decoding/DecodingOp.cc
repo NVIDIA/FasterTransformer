@@ -152,6 +152,7 @@ public:
 
     void Compute(tf::OpKernelContext* context) override
     {
+        FT_LOG_DEBUG(__PRETTY_FUNCTION__);
         OP_REQUIRES(context,
                     context->num_inputs() == (num_layer_ * 22) + 8,
                     tf::errors::InvalidArgument("[ERROR] More or Less input arguments"));
@@ -331,11 +332,11 @@ public:
         }
         catch (std::runtime_error& error) {
             std::cout << tf::errors::Internal(error.what());
-            exit(-1);
+            ft::FT_CHECK(false);
         }
         catch (...) {
-            std::cout << tf::errors::Internal("Runtime error");
-            exit(-1);
+            std::cout << tf::errors::Internal("Runtime error") << std::endl;
+            ft::FT_CHECK(false);
         }
     }
 

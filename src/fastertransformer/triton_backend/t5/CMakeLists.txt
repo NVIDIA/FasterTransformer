@@ -1,4 +1,4 @@
-# Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,7 +14,6 @@
 
 cmake_minimum_required(VERSION 3.8)
 
-if(BUILD_GPT)
 set(t5_triton_backend_files
     T5TritonModel.cc
     T5TritonModelInstance.cc
@@ -23,4 +22,3 @@ set(t5_triton_backend_files
 add_library(T5TritonBackend SHARED ${t5_triton_backend_files})
 target_link_libraries(T5TritonBackend PRIVATE T5Encoder T5Decoding)
 target_compile_features(T5TritonBackend PRIVATE cxx_std_14)
-endif()

@@ -220,13 +220,17 @@ public:
         size_t hidden_units = (size_t)(head_num_ * size_per_head_);
 
         ft::DataType data_type = ft::getTensorType<DataType>();
-        std::vector<ft::Tensor> input_tensors =
-            std::vector<ft::Tensor>{this->convert_tensor(context->input(0)),
-                                    this->convert_tensor(context->input(1)),
-                                    this->convert_int_tensor(context->input(2)),
-                                    ft::Tensor{ft::MEMORY_GPU, ft::TYPE_BOOL, {batch_size}, nullptr},
-                                    ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, {1}, &step},
-                                    this->convert_int_tensor(sequence_length_tensor)};
+        std::vector<ft::Tensor> input_tensors = std::vector<ft::Tensor>{
+            this->convert_tensor(context->input(0)),
+            this->convert_tensor(context->input(1)),
+            this->convert_int_tensor(context->input(2)),
+            ft::Tensor{ft::MEMORY_GPU, ft::TYPE_BOOL, {batch_size}, nullptr},
+            ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, {1}, &step},
+            this->convert_int_tensor(sequence_length_tensor),
+            ft::Tensor{ft::MEMORY_GPU,
+                       ft::TYPE_INT32,
+                       {batch_size, 1, step},
+                       nullptr}};  // Since we do gather in the Framework, we don't need id of indirection buffer
 
         std::vector<ft::Tensor> output_tensors =
             std::vector<ft::Tensor>{ft::Tensor{ft::MEMORY_GPU, data_type, {batch_size, hidden_units}, out_tensor},

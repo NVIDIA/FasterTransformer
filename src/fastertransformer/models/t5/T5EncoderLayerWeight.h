@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,7 +33,8 @@ struct T5EncoderLayerWeight {
                          const size_t d_model,
                          const size_t inter_size,
                          const size_t tensor_para_size,
-                         const size_t tensor_para_rank);
+                         const size_t tensor_para_rank,
+                         const bool t5_with_bias);
     ~T5EncoderLayerWeight();
     T5EncoderLayerWeight(const T5EncoderLayerWeight& other);
     T5EncoderLayerWeight& operator=(const T5EncoderLayerWeight& other);
@@ -46,8 +47,11 @@ struct T5EncoderLayerWeight {
     LayerNormWeight<T> attn_layernorm_weights;
     FfnWeight<T> ffn_weights;
     LayerNormWeight<T> ffn_layernorm_weights;
+    bool t5_with_bias_;
 
-    void loadModel(std::string dir_path);
+    void loadModel(std::string dir_path, FtCudaDataType model_file_type);
+
+    void setT5WithBias(bool t5_with_bias_para);
 
 private:
     void setWeightPtr();
@@ -61,9 +65,12 @@ private:
     size_t tensor_para_size_;
     size_t tensor_para_rank_;
 
+    int real_weights_num_;
+
     bool is_maintain_buffer = false;
 
-    const static int weights_num_ = 8;
+    // Assume bias added
+    const static int weights_num_ = 16;
     T* weights_ptr[weights_num_];
     size_t weights_size[weights_num_];
 

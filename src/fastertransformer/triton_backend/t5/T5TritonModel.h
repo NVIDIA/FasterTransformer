@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@
 #include "src/fastertransformer/models/t5/T5Encoder.h"
 #include "src/fastertransformer/triton_backend/transformer_triton_backend.hpp"
 #include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/fastertransformer/utils/custom_ar_comm.h"
 #include "src/fastertransformer/utils/nccl_utils.h"
 #include <cuda_fp16.h>
 
@@ -28,20 +29,11 @@ namespace ft = fastertransformer;
 
 template<typename T>
 struct T5TritonModel: public AbstractTransformerModel {
-    T5TritonModel(const int max_batch_size, INIReader reader, std::string model_dir);
+    T5TritonModel(INIReader reader, std::string model_dir);
 
-    T5TritonModel(size_t max_batch_size,
-                  size_t max_decoding_seq_len,
-                  size_t max_encoder_seq_len,
-                  size_t beam_width,
-                  float beam_search_diversity_rate,
-                  size_t top_k,
-                  float top_p,
-                  float temperature,
-                  float len_penalty,
-                  float repetition_penalty,
-                  size_t tensor_para_size,
+    T5TritonModel(size_t tensor_para_size,
                   size_t pipeline_para_size,
+                  int enable_custom_all_reduce,
                   std::string model_dir,
                   int int8_mode);
 
@@ -51,7 +43,11 @@ struct T5TritonModel: public AbstractTransformerModel {
     createModelInstance(int deviceId,
                         int rank,
                         cudaStream_t stream,
-                        std::pair<std::vector<ncclComm_t>, std::vector<ncclComm_t>> nccl_comms) override;
+                        std::pair<std::vector<ncclComm_t>, std::vector<ncclComm_t>> nccl_comms,
+                        std::shared_ptr<ft::AbstractCustomComm> custom_all_reduce_comm = nullptr);
+
+    virtual void createCustomComms(std::vector<std::shared_ptr<ft::AbstractCustomComm>>* custom_all_reduce_comms,
+                                   int world_size) override;
 
     virtual std::pair<std::vector<ncclComm_t>, std::vector<ncclComm_t>>
     createNcclComms(std::vector<ncclUniqueId> nccl_ids,
@@ -61,49 +57,45 @@ struct T5TritonModel: public AbstractTransformerModel {
 
     virtual std::vector<ncclUniqueId> createNcclIds(const uint32_t world_size, bool multi_instances = false) override;
     virtual std::string toString() override;
-    virtual std::pair<uint32_t, uint32_t> getMaxBatchSeqlen() override;
     virtual int getTensorParaSize() override;
     virtual int getPipelineParaSize() override;
 
 private:
-    size_t max_batch_size_;
-
     // encoder
-    size_t max_encoder_seq_len_;
     size_t encoder_head_num_;
     size_t encoder_size_per_head_;
     size_t encoder_d_model_;
     size_t encoder_inter_size_;
     size_t encoder_num_layer_;
     size_t encoder_vocab_size_;
-    size_t encoder_num_bucket_;
+    size_t encoder_num_bucket_or_max_pos_seq_len_;
 
     // decoding
-    size_t max_decoding_seq_len_;
-    size_t beam_width_;
     size_t decoding_head_num_;
     size_t decoding_size_per_head_;
     size_t decoding_d_model_;
     size_t decoding_inter_size_;
     size_t decoding_num_layer_;
     size_t decoding_vocab_size_;
-    size_t decoding_num_bucket_;
+    size_t decoding_num_bucket_or_max_pos_seq_len_;
+
+    float q_scaling_;
 
     size_t max_distance_;
     int start_id_;
     int end_id_;
-    float beam_search_diversity_rate_;
-    size_t top_k_;
-    float top_p_;
-    float temperature_;
-    float len_penalty_;
-    float repetition_penalty_;
 
     size_t tensor_para_size_;
     size_t pipeline_para_size_;
 
+    // t5 structure difference
+    bool t5_with_bias_;
+    ft::PositionEmbeddingType position_embedding_type_;
+
     bool is_fp16_;
     int int8_mode_;
+
+    int enable_custom_all_reduce_ = 0;
 
     std::string model_name_;
     std::string model_dir_;

@@ -39,7 +39,7 @@ public:
     ~ParallelGptDecoderLayerWeight();
     ParallelGptDecoderLayerWeight(const ParallelGptDecoderLayerWeight& other);
     ParallelGptDecoderLayerWeight& operator=(const ParallelGptDecoderLayerWeight& other);
-    void loadModel(std::string dir_path);
+    void loadModel(std::string dir_path, FtCudaDataType model_file_type);
 #ifdef SPARSITY_ENABLED
     void compress_weights(cublasMMWrapper& cublas_wrapper, int hidden_dim);
 #endif

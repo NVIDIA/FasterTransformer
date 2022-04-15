@@ -13,6 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
+#include <cuda_runtime.h>
+
 #pragma once
 
 namespace fastertransformer {
@@ -27,7 +30,7 @@ void invokeTopkBeamSearch(void* workspace,
                           const int beam_width,
                           const int vocab_size_padded_,
                           const T diversity_rate,
-                          const int end_id,
+                          const int* end_ids,
                           cudaStream_t stream);
 
 template<typename T>

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  * Copyright (c) 2021, NAVER Corp.  Authored by CLOVA.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -38,45 +38,16 @@ BaseSamplingLayer<T>::BaseSamplingLayer(size_t max_batch_size,
                                         bool is_free_buffer_after_forward,
                                         cudaDeviceProp* cuda_device_prop):
     DynamicDecodeBaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, cuda_device_prop),
-    max_batch_size_(max_batch_size),
     vocab_size_(vocab_size),
-    vocab_size_padded_(vocab_size_padded),
-    end_id_(end_id),
-    top_k_(top_k),
-    top_p_(top_p),
-    random_seed_(random_seed),
-    temperature_(temperature_),
-    len_penalty_(len_penalty_),
-    repetition_penalty_(repetition_penalty_)
+    vocab_size_padded_(vocab_size_padded)
 {
-}
-
-template<typename T>
-bool BaseSamplingLayer<T>::isValidBatchSize(size_t batch_size)
-{
-    if (batch_size <= max_batch_size_) {
-        return true;
-    }
-    else {
-        freeBuffer();
-        max_batch_size_ = batch_size * 1.2;
-        return true;
-    }
 }
 
 template<typename T>
 BaseSamplingLayer<T>::BaseSamplingLayer(BaseSamplingLayer const& sampling_layer):
     DynamicDecodeBaseLayer(sampling_layer),
-    max_batch_size_(sampling_layer.max_batch_size_),
     vocab_size_(sampling_layer.vocab_size_),
     vocab_size_padded_(sampling_layer.vocab_size_padded_),
-    end_id_(sampling_layer.end_id_),
-    top_k_(sampling_layer.top_k_),
-    top_p_(sampling_layer.top_p_),
-    random_seed_(sampling_layer.random_seed_),
-    temperature_(sampling_layer.temperature_),
-    len_penalty_(sampling_layer.len_penalty_),
-    repetition_penalty_(sampling_layer.repetition_penalty_),
     sampling_workspace_size_(sampling_layer.sampling_workspace_size_)
 {
 }
@@ -96,6 +67,7 @@ void BaseSamplingLayer<T>::forward(std::vector<Tensor>* output_tensors, const st
     //      max_input_length [1] on cpu
     //      input_lengths [local_batch_size]
     //      ite [1] on cpu
+    //      random_seed [1] on cpu, optional
 
     // output_tensors:
     //      output_ids [max_seq_len, batch_size]
@@ -103,38 +75,86 @@ void BaseSamplingLayer<T>::forward(std::vector<Tensor>* output_tensors, const st
     //      sequence_length [local_batch_size]
     //      cum_log_probs [local_batch_size], must be float*
 
-    FT_CHECK(input_tensors->size() == 6);
-    FT_CHECK(output_tensors->size() == 4);
-    isValidBatchSize(output_tensors->at(0).shape[1]); // use batch_size to check
-    allocateBuffer();
-
-    const int batch_size = output_tensors->at(0).shape[1];
-    const int local_batch_size = input_tensors->at(0).shape[0];
-    const int step = *((int*)input_tensors->at(2).data);
-    const int ite = *((int*)input_tensors->at(5).data);
-
-    if (input_tensors->at(1).data != nullptr || temperature_ != 1.0f) {
-        invokeApplyTemperaturePenalty((T*)input_tensors->at(0).data,
-                                    (const T*)(input_tensors->at(1).data),
-                                    temperature_,
-                                    local_batch_size,
-                                    vocab_size_,
-                                    vocab_size_padded_,
-                                    stream_);
-        sync_check_cuda_error();
+    FT_CHECK(false);  // TODO deprecated, need to remove
+    std::unordered_map<std::string, Tensor> input_tensors_map{{"logits", input_tensors->at(0)},
+                                                              {"embedding_bias", input_tensors->at(1)},
+                                                              {"step", input_tensors->at(2)},
+                                                              {"max_input_length", input_tensors->at(3)},
+                                                              {"input_lengths", input_tensors->at(4)},
+                                                              {"ite", input_tensors->at(5)}};
+    if (input_tensors->size() == 7) {
+        input_tensors_map.insert({"random_seed", input_tensors->at(6)});
     }
 
-    if (step > 1 && repetition_penalty_ != 1.0f) {
-        invokeApplyRepetitionPenalty((T*)input_tensors->at(0).data,
-                                     repetition_penalty_,
+    std::unordered_map<std::string, Tensor> output_tensors_map{{"output_ids", output_tensors->at(0)},
+                                                               {"finished", output_tensors->at(1)},
+                                                               {"sequence_length", output_tensors->at(2)},
+                                                               {"cum_log_probs", output_tensors->at(3)}};
+    forward(&output_tensors_map, &input_tensors_map);
+}
+
+template<typename T>
+void BaseSamplingLayer<T>::forward(std::unordered_map<std::string, Tensor>* output_tensors,
+                                   const std::unordered_map<std::string, Tensor>* input_tensors)
+{
+    // input_tensors:
+    //      logits [local_batch_size, vocab_size_padded]
+    //      embedding_bias [vocab_size_padded]
+    //      step [1] on cpu
+    //      max_input_length [1] on cpu
+    //      input_lengths [local_batch_size]
+    //      ite [1] on cpu
+    //      runtime_top_k [1] on cpu, optional.
+    //      runtime_top_p [1] on cpu, optional
+    //      temperature [1] on cpu, optional
+    //      len_penalty [1] on cpu, optional
+    //      repetition_penalty [1] on cpu, optional
+    //      random_seed [1] on cpu, unsigned long long, optional
+
+    // output_tensors:
+    //      output_ids [max_seq_len, batch_size]
+    //      finished [local_batch_size]
+    //      sequence_length [local_batch_size]
+    //      cum_log_probs [batch_size], must be float*
+    //          The cumultative log probability of generated tokens.
+    //      output_log_probs [local_batch_size], must be float*
+    //          The log probs at the current step.
+
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    FT_CHECK(input_tensors->size() >= 6);
+    FT_CHECK(output_tensors->size() >= 3);
+    const int batch_size = output_tensors->at("output_ids").shape[1];
+
+    const int local_batch_size = input_tensors->at("logits").shape[0];
+    const int step = *((int*)input_tensors->at("step").data);
+    const int ite = *((int*)input_tensors->at("ite").data);
+
+    float temperature = input_tensors->count("temperature") ? input_tensors->at("temperature").getVal<float>() : 1.0f;
+
+    if ((const T*)(input_tensors->at("embedding_bias").data) != nullptr || temperature != 1.0f) {
+        invokeApplyTemperaturePenalty((T*)input_tensors->at("logits").data,
+                                      (const T*)(input_tensors->at("embedding_bias").data),
+                                      temperature,
+                                      local_batch_size,
+                                      vocab_size_,
+                                      vocab_size_padded_,
+                                      stream_);
+    }
+    sync_check_cuda_error();
+
+    if (step > 1
+        && (input_tensors->count("repetition_penalty")
+            && input_tensors->at("repetition_penalty").getVal<float>() != 1.0f)) {
+        invokeApplyRepetitionPenalty((T*)input_tensors->at("logits").data,
+                                     input_tensors->at("repetition_penalty").getVal<float>(),
                                      nullptr,
-                                     (int*)output_tensors->at(0).data,
+                                     (int*)output_tensors->at("output_ids").data,
                                      batch_size,
                                      local_batch_size,
                                      vocab_size_,
                                      vocab_size_padded_,
-                                     (int*)input_tensors->at(4).data,
-                                     *((int*)input_tensors->at(3).data),
+                                     (int*)input_tensors->at("input_lengths").data,
+                                     *((int*)input_tensors->at("max_input_length").data),
                                      step,
                                      ite,
                                      stream_);

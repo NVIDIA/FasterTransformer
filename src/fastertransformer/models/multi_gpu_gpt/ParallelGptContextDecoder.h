@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@
 #include "src/fastertransformer/utils/Tensor.h"
 #include "src/fastertransformer/utils/allocator.h"
 #include "src/fastertransformer/utils/cublasMMWrapper.h"
+#include "src/fastertransformer/utils/custom_ar_comm.h"
 
 namespace fastertransformer {
 
@@ -46,12 +47,11 @@ private:
     // calculated data
     size_t hidden_units_;
 
-    size_t tensor_para_size_;
-    size_t tensor_para_rank_;
-    ncclComm_t tensor_para_comm_;
-    size_t layer_para_size_;
-    size_t layer_para_rank_;
-    ncclComm_t layer_para_comm_;
+    NcclParam tensor_para_;
+    NcclParam pipeline_para_;
+
+    std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm_;
+    int enable_custom_all_reduce_;
 
     bool is_qk_buf_float_;
 
@@ -59,6 +59,7 @@ private:
     FfnLayer<T>* ffn_layer_;
 
     void allocateBuffer() override;
+    void allocateBuffer(size_t batch_size, size_t seq_len);
     void freeBuffer() override;
     bool isValidBatchSize(size_t batch_size);
     bool isValidSeqLen(size_t seq_len);
@@ -68,10 +69,10 @@ private:
     bool isLastLayerParallelId(uint l);
     int getFirstLayerParallelId();
 
-    T* decoder_normed_input_;
-    T* self_attn_output_;
-    T* normed_self_attn_output_;
-    T* decoder_layer_output_;
+    T* decoder_normed_input_ = nullptr;
+    T* self_attn_output_ = nullptr;
+    T* normed_self_attn_output_ = nullptr;
+    T* decoder_layer_output_ = nullptr;
 
 protected:
 public:
@@ -81,18 +82,16 @@ public:
                               size_t size_per_head,
                               size_t inter_size,
                               size_t num_layer,
-                              size_t tensor_para_size,
-                              size_t tensor_para_rank,
-                              ncclComm_t tensor_para_comm,
-                              size_t layer_para_size,
-                              size_t layer_para_rank,
-                              ncclComm_t layer_para_comm,
+                              NcclParam tensor_para,
+                              NcclParam pipeline_para,
                               cudaStream_t stream,
                               cublasMMWrapper* cublas_wrapper,
                               IAllocator* allocator,
                               bool is_free_buffer_after_forward,
                               bool is_qk_buf_float,
-                              bool sparse = false);
+                              bool sparse = false,
+                              std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm = nullptr,
+                              int enable_custom_all_reduce_ = 0);
 
     ParallelGptContextDecoder(ParallelGptContextDecoder<T> const& decoder);
 

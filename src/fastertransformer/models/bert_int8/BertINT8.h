@@ -77,7 +77,7 @@ public:
              IAllocator* allocator,
              bool is_free_buffer_after_forward,
              AttentionType attention_type,
-             bool sparse=false);
+             bool sparse = false);
 
     BertINT8(BertINT8<T> const& bert_layer);
 

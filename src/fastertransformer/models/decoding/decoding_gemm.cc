@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ int main(int argc, char* argv[])
 {
     if (argc != 10 && argc != 11) {
         printf(
-            "[ERROR] decoding_gemm batch_size beam_width head_num size_per_head inter_size vocab_size max_mem_seq_len memory_hidden_units is_fp16 \n");
+            "[ERROR] decoding_gemm batch_size beam_width head_num size_per_head inter_size vocab_size max_mem_seq_len memory_hidden_units data_type \n");
         printf("e.g. ./bin/decoding_gemm 32 4 8 64 2048 30000 32 512 0\n");
         return 0;
     }
@@ -36,7 +36,7 @@ int main(int argc, char* argv[])
     const int vocab_size = atoi(argv[6]);
     const int max_mem_seq_len = atoi(argv[7]);
     const int memory_hidden_units = atoi(argv[8]);
-    const int is_fp16 = atoi(argv[9]);
+    const ft::CublasDataType data_type = static_cast<ft::CublasDataType>(atoi(argv[9]));  // 0 FP32, 1 FP16, 2 BF 16
     const bool is_append = argc == 11 ? ((bool)atoi(argv[10])) : false;
 
     printf("[INFO] arguments: \n");
@@ -48,7 +48,7 @@ int main(int argc, char* argv[])
     printf("  vocab_size: %d \n", vocab_size);
     printf("  max_mem_seq_len: %d \n", max_mem_seq_len);
     printf("  memory_hidden_units: %d \n", memory_hidden_units);
-    printf("  is_fp16: %d \n", is_fp16);
+    printf("  data_type: %d \n", data_type);
     std::cout << std::endl;
 
     void* gemm_test_buf;
@@ -60,7 +60,7 @@ int main(int argc, char* argv[])
                                                                    inter_size,
                                                                    memory_hidden_units,
                                                                    vocab_size,
-                                                                   is_fp16);
+                                                                   data_type);
 
     size_t total, free;
     ft::check_cuda_error(cudaMemGetInfo(&free, &total));
@@ -76,7 +76,7 @@ int main(int argc, char* argv[])
         ft::deviceMalloc(reinterpret_cast<char**>(&gemm_test_buf), buf_size_in_byte, false);
     }
 
-    if (is_fp16 == 0) {
+    if (data_type == ft::FLOAT_DATATYPE) {
         ft::generate_decoding_gemm_config<float>(batch_size,
                                                  beam_width,
                                                  max_mem_seq_len,
@@ -88,7 +88,7 @@ int main(int argc, char* argv[])
                                                  gemm_test_buf,
                                                  is_append);
     }
-    else if (is_fp16 == 1) {
+    else if (data_type == ft::HALF_DATATYPE) {
         ft::generate_decoding_gemm_config<half>(batch_size,
                                                 beam_width,
                                                 max_mem_seq_len,
@@ -100,8 +100,22 @@ int main(int argc, char* argv[])
                                                 gemm_test_buf,
                                                 is_append);
     }
+#ifdef ENABLE_BF16
+    else if (data_type == ft::BFLOAT16_DATATYPE) {
+        ft::generate_decoding_gemm_config<__nv_bfloat16>(batch_size,
+                                                         beam_width,
+                                                         max_mem_seq_len,
+                                                         head_num,
+                                                         size_per_head,
+                                                         inter_size,
+                                                         vocab_size,
+                                                         memory_hidden_units,
+                                                         gemm_test_buf,
+                                                         is_append);
+    }
+#endif
     else {
-        printf("[ERROR] is_fp16 should be 0 (use float) or 1 (use half). \n");
+        printf("[ERROR] data type only supports fp32(0), fp16(1), bf16(2). \n");
         return -1;
     }
 

@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/utils/cublasAlgoMap.h"
-#include "src/fastertransformer/layers/attention_layers/AttentionWeight.h"
-#include "src/fastertransformer/utils/cublasMMWrapper.h"
 #include "cuda_utils.h"
+#include "src/fastertransformer/layers/attention_layers/AttentionWeight.h"
+#include "src/fastertransformer/utils/cublasAlgoMap.h"
+#include "src/fastertransformer/utils/cublasMMWrapper.h"
 #include <cublasLt.h>
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
@@ -28,12 +28,19 @@
 #pragma once
 namespace fastertransformer {
 
-class cublasINT8MMWrapper : public cublasMMWrapper {
+class cublasINT8MMWrapper: public cublasMMWrapper {
 private:
     bool use_ORDER_COL32_2R_4R4_;
-public:
 
+public:
     cublasINT8MMWrapper(cublasLtHandle_t cublaslt_handle_,
+                        cudaStream_t stream,
+                        cublasAlgoMap* map,
+                        std::mutex* mu,
+                        bool use_ORDER_COL32_2R_4R4);
+
+    cublasINT8MMWrapper(cublasHandle_t cublas_handle,
+                        cublasLtHandle_t cublaslt_handle,
                         cudaStream_t stream,
                         cublasAlgoMap* map,
                         std::mutex* mu,
@@ -51,27 +58,36 @@ public:
 
     cublasINT8MMWrapper(const cublasINT8MMWrapper& wrapper);
 
-    void Gemm(int *res, int batchCount, int m, int n, int k,
-              int64_t stridea, int64_t strideb, int64_t stridec,
-              const int8_t *ATransform, const int8_t *kernel);
-                       
-    void Gemm(int8_t *res, int batchCount, int m, int n, int k,
-              int64_t stridea, int64_t strideb, int64_t stridec,
-              const float alpha, const int8_t *ATransform, const int8_t *kernel);
+    void Gemm(int* res,
+              int batchCount,
+              int m,
+              int n,
+              int k,
+              int64_t stridea,
+              int64_t strideb,
+              int64_t stridec,
+              const int8_t* ATransform,
+              const int8_t* kernel);
 
-    template <typename T>
-    int getFusedINT8QKVType(const int k, const int n, const AttentionWeight<T> *attention_weights);
-    
+    void Gemm(int8_t* res,
+              int batchCount,
+              int m,
+              int n,
+              int k,
+              int64_t stridea,
+              int64_t strideb,
+              int64_t stridec,
+              const float alpha,
+              const int8_t* ATransform,
+              const int8_t* kernel);
+
+    template<typename T>
+    int getFusedINT8QKVType(const int k, const int n, const AttentionWeight<T>* attention_weights);
+
     bool getUseOrderCol322R4R4();
 
 #ifdef SPARSITY_ENABLED
-    void SpGemm(const int m,
-                const int n,
-                const int k,
-                const float alpha,
-                const void *A,
-                const void *B,
-                void *C);
+    void SpGemm(const int m, const int n, const int k, const float alpha, const void* A, const void* B, void* C);
 #endif
 };
 

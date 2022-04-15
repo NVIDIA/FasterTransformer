@@ -43,7 +43,7 @@ FasterTransformerLongformerEncoder::FasterTransformerLongformerEncoder(int64_t l
     attn_scaler_(attn_scaler),
     hidden_units_(head_num * size_per_head)
 {
-    check_cuda_error(cublasLtCreate(&_cublasltHandle));
+    ft::check_cuda_error(cublasLtCreate(&_cublasltHandle));
     cublas_algo_map_ = new ft::cublasAlgoMap("gemm_config.in");
     cublas_wrapper_mutex_ = new std::mutex();
 }
@@ -63,7 +63,7 @@ th::Tensor FasterTransformerLongformerEncoder::forward(
     CHECK_INPUT(local_attn_mask, scalar_type);
     CHECK_INPUT(global_attn_mask, scalar_type);
 
-    check_cuda_error(cudaSetDevice(device_id));
+    ft::check_cuda_error(cudaSetDevice(device_id));
 
     int batch_size = input.size(0);
     int seq_len = input.size(1);
@@ -76,7 +76,7 @@ th::Tensor FasterTransformerLongformerEncoder::forward(
     cublasHandle_t _cublasHandle = at::cuda::getCurrentCUDABlasHandle();
     cublasSetStream(_cublasHandle, stream);
 
-    fastertransformer::Allocator<AllocatorType::TH>* allocator = new fastertransformer::Allocator<AllocatorType::TH>();
+    ft::Allocator<ft::AllocatorType::TH>* allocator = new ft::Allocator<ft::AllocatorType::TH>();
 
     auto cublas_wrapper = new ft::cublasMMWrapper(
         _cublasHandle, _cublasltHandle, stream, cublas_algo_map_, cublas_wrapper_mutex_, allocator);
@@ -132,7 +132,7 @@ th::Tensor FasterTransformerLongformerEncoder::forward(
                                                         false);
         setWeight<float>(layer_num_, in_dim_, hidden_units_, intermediate_size_, th_weights, encoder->getWeightsPtr());
         encoder->forward(&output_tensors, &input_tensors);
-        check_cuda_error(cudaStreamSynchronize(stream));
+        ft::check_cuda_error(cudaStreamSynchronize(stream));
         delete encoder;
     }
     else if (scalar_type == at::ScalarType::Half) {
@@ -153,7 +153,7 @@ th::Tensor FasterTransformerLongformerEncoder::forward(
                                                        false);
         setWeight<half>(layer_num_, in_dim_, hidden_units_, intermediate_size_, th_weights, encoder->getWeightsPtr());
         encoder->forward(&output_tensors, &input_tensors);
-        check_cuda_error(cudaStreamSynchronize(stream));
+        ft::check_cuda_error(cudaStreamSynchronize(stream));
         delete encoder;
     }
     delete cublas_wrapper;

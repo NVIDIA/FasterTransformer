@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,7 +20,7 @@
 #include <vector>
 
 #include "src/fastertransformer/kernels/decoding_kernels.h"
-#include "src/fastertransformer/layers/DynamicDecodeBaseLayer.h"
+#include "src/fastertransformer/layers/DynamicDecodeLayer.h"
 #include "src/fastertransformer/models/decoder/Decoder.h"
 #include "src/fastertransformer/models/decoding/DecodingWeight.h"
 
@@ -55,8 +55,7 @@ private:
     size_t vocab_size_padded_;
 
     Decoder<T>* decoder_;
-    DynamicDecodeBaseLayer* dynamic_decode_;
-
+    DynamicDecodeLayer<T>* dynamic_decode_layer_;
 
     void allocateBuffer() override;
     void freeBuffer() override;
@@ -67,28 +66,32 @@ private:
     void initialize();
 
 protected:
-    T* padded_embedding_kernel_;
-    T* padded_embedding_bias_;
-    const T* padded_embedding_kernel_ptr_;
-    const T* padded_embedding_bias_ptr_;
+    T* padded_embedding_kernel_ = nullptr;
+    T* padded_embedding_bias_ = nullptr;
+    const T* padded_embedding_kernel_ptr_ = nullptr;
+    const T* padded_embedding_bias_ptr_ = nullptr;
 
-    T* decoder_input_buf_;
-    T* decoder_output_buf_;
-    T* normed_decoder_output_buf_;
-    T* logits_buf_;
-    float* cum_log_probs_;
-    bool* finished_buf_;
-    bool* h_finished_buf_;
+    T* decoder_input_buf_ = nullptr;
+    T* decoder_output_buf_ = nullptr;
+    T* normed_decoder_output_buf_ = nullptr;
+    T* logits_buf_ = nullptr;
+    float* cum_log_probs_ = nullptr;
+    bool* finished_buf_ = nullptr;
+    bool* h_finished_buf_ = nullptr;
 
-    T* key_caches_[2];    // ping-pong buffer
-    T* value_caches_[2];  // ping-pong buffer
-    T* key_mem_caches_;
-    T* value_mem_caches_;
+    int* start_ids_buf_;
+    int* end_ids_buf_;
 
-    T* padded_pos_embedding_bias_;
+    T* key_cache_ = nullptr;
+    T* value_cache_ = nullptr;
+    T* key_mem_cache_ = nullptr;
+    T* value_mem_cache_ = nullptr;
+    int* cache_indirections_[2] = {nullptr, nullptr};
 
-    int* output_ids_buf_;
-    int* parent_ids_buf_;
+    T* padded_pos_embedding_bias_ = nullptr;
+
+    int* output_ids_buf_ = nullptr;
+    int* parent_ids_buf_ = nullptr;
 
 public:
     Decoding(size_t max_batch_size,

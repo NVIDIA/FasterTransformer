@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -47,7 +47,11 @@ void generate_t5_gemm_config(int batch_size,
     void* cublas_workspace;
     void* buffer;
     int workSpaceSize;
+#ifdef ENABLE_BF16
+    if (std::is_same<T, half>::value || std::is_same<T, __nv_bfloat16>::value) {
+#else
     if (std::is_same<T, half>::value) {
+#endif  // ENABLE_BF16
         // cublas_workspace_ should be the start pointer of cudaMalloc()
         // to ensure 16B alignemnet
         cublas_workspace = buffer_in;
@@ -171,8 +175,7 @@ void generate_t5_gemm_config(int batch_size,
 
     // gemm 10
     size_t decoder_vocab_size_padded = ((size_t)ceil(decoder_vocab_size / 1. / tensor_para_size) * tensor_para_size);
-    int is_fp16 = std::is_same<T, half>::value ? 1 : 0;
-    if (is_fp16) {
+    if (!std::is_same<T, float>::value) {
         decoder_vocab_size_padded = ((size_t)ceil(decoder_vocab_size_padded / 8.) * 8);
     }
     M[10] = batch_size * beam_width;
@@ -181,7 +184,7 @@ void generate_t5_gemm_config(int batch_size,
     batchCount[10] = 1;
     strcpy(mess[10], "logits gemm");
 
-    // gemm 11 
+    // gemm 11
     M[11] = batch_size * max_mem_seq_len;
     K[11] = encoder_d_model;
     N[11] = encoder_head_num / tensor_para_size * encoder_size_per_head;
@@ -201,7 +204,9 @@ void generate_t5_gemm_config(int batch_size,
     const int ites = 100;
     struct timeval start, end;
 
-    if (sizeof(T) == sizeof(float)) {
+    CublasDataType data_type;
+    if (std::is_same<T, float>::value) {
+        data_type = FLOAT_DATATYPE;
         AType = CUDA_R_32F;
         BType = CUDA_R_32F;
         CType = CUDA_R_32F;
@@ -209,15 +214,26 @@ void generate_t5_gemm_config(int batch_size,
         startAlgo = (int)CUBLAS_GEMM_DEFAULT;
         endAlgo = (int)CUBLAS_GEMM_ALGO23;
     }
-    else {
+    else if (std::is_same<T, half>::value) {
+        data_type = HALF_DATATYPE;
         AType = CUDA_R_16F;
         BType = CUDA_R_16F;
         CType = CUDA_R_16F;
-        computeType = is_fp16_compute_type ? CUDA_R_16F : CUDA_R_32F;
+        computeType = CUDA_R_32F;
         startAlgo = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
         endAlgo = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
     }
-
+#ifdef ENABLE_BF16
+    else if (std::is_same<T, __nv_bfloat16>::value) {
+        data_type = BFLOAT16_DATATYPE;
+        AType = CUDA_R_16BF;
+        BType = CUDA_R_16BF;
+        CType = CUDA_R_16BF;
+        computeType = CUDA_R_32F;
+        startAlgo = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+        endAlgo = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
+    }
+#endif
     float f_alpha = (float)1.0f;
     float f_beta = (float)0.0f;
 
@@ -247,29 +263,23 @@ void generate_t5_gemm_config(int batch_size,
         T* d_C = d_B + k * n * batchCount[i];
 
         // array of pointer for batchedGemm
-        T *harray[12];
-        harray[0] = (T *)buffer;
-        harray[1] = (T *)((char *)buffer + sizeof(T) * m * k);
-        harray[2] = (T *)((char *)buffer + 2 * sizeof(T) * m * k);
-        harray[4] = (T *)((char *)buffer + 3 * sizeof(T) * m * k);
-        harray[5] =
-            (T *)((char *)buffer + 3 * sizeof(T) * m * k + sizeof(T) * k * n);
-        harray[6] = (T *)((char *)buffer + 3 * sizeof(T) * m * k
-                          + 2 * sizeof(T) * k * n);
-        harray[8] = (T *)((char *)buffer + 3 * sizeof(T) * m * k
-                          + 3 * sizeof(T) * k * n);
-        harray[9] = (T *)((char *)buffer + 3 * sizeof(T) * m * k
-                          + 3 * sizeof(T) * k * n + sizeof(T) * m * n);
-        harray[10] = (T *)((char *)buffer + 3 * sizeof(T) * m * k
-                          + 3 * sizeof(T) * k * n + 2 * sizeof(T) * m * n);
+        T* harray[12];
+        harray[0] = (T*)buffer;
+        harray[1] = (T*)((char*)buffer + sizeof(T) * m * k);
+        harray[2] = (T*)((char*)buffer + 2 * sizeof(T) * m * k);
+        harray[4] = (T*)((char*)buffer + 3 * sizeof(T) * m * k);
+        harray[5] = (T*)((char*)buffer + 3 * sizeof(T) * m * k + sizeof(T) * k * n);
+        harray[6] = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 2 * sizeof(T) * k * n);
+        harray[8] = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 3 * sizeof(T) * k * n);
+        harray[9] = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 3 * sizeof(T) * k * n + sizeof(T) * m * n);
+        harray[10] = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 3 * sizeof(T) * k * n + 2 * sizeof(T) * m * n);
 
-        T **darray = 0;
-        check_cuda_error(cudaMalloc((void **)&darray, sizeof(T *) * 12));
-        cudaMemcpy((void *)darray, (void *)harray, sizeof(T *) * 12,
-                   cudaMemcpyHostToDevice);
-        T **dAarray = darray;
-        T **dBarray = darray + 4;
-        T **dCarray = darray + 8;
+        T** darray = 0;
+        check_cuda_error(cudaMalloc((void**)&darray, sizeof(T*) * 12));
+        cudaMemcpy((void*)darray, (void*)harray, sizeof(T*) * 12, cudaMemcpyHostToDevice);
+        T** dAarray = darray;
+        T** dBarray = darray + 4;
+        T** dCarray = darray + 8;
 
         float exec_time = 99999.0f;
         int fast_algo = 0;
@@ -350,6 +360,27 @@ void generate_t5_gemm_config(int batch_size,
                                                         computeType,
                                                         static_cast<cublasGemmAlgo_t>(algo));
                 }
+                else if (i == 10) {
+                    status = cublasGemmEx(cublas_handle,
+                                          CUBLAS_OP_T,
+                                          CUBLAS_OP_N,
+                                          n,
+                                          m,
+                                          k,
+                                          alpha,
+                                          d_B,
+                                          BType,
+                                          k,
+                                          d_A,
+                                          AType,
+                                          k,
+                                          beta,
+                                          d_C,
+                                          CType,
+                                          n,
+                                          computeType,
+                                          static_cast<cublasGemmAlgo_t>(algo));
+                }
                 else {
                     status = cublasGemmEx(cublas_handle,
                                           CUBLAS_OP_N,
@@ -372,8 +403,9 @@ void generate_t5_gemm_config(int batch_size,
                                           static_cast<cublasGemmAlgo_t>(algo));
                 }
 
-                if (status != CUBLAS_STATUS_SUCCESS)
+                if (status != CUBLAS_STATUS_SUCCESS) {
                     break;
+                }
             }
             cudaDeviceSynchronize();
             gettimeofday(&end, NULL);
@@ -389,15 +421,45 @@ void generate_t5_gemm_config(int batch_size,
 
         printf("fast_algo %d costs %.3f ms\n", fast_algo, exec_time);
 
-        // for fp16, we compare cublasLt
-        if (is_fp16 == 1 && i != 1 && i != 2 && i != 0) {
+        using scaleT = float;
+
+        if (is_fp16_compute_type) {
+            using scaleT = typename ScaleTypeConverter<T, true>::Type;
+        }
+
+        // for fp16 and bf16, we compare cublasLt
+        if (data_type != FLOAT_DATATYPE && i != 1 && i != 2 && i != 0 && i != 10) {
             printf("***cublasLt Gemm Testing Beign***\n");
             // Let try a fixed number of combinations
             int ALGO_COMBINATIONS = 5000;
             customMatmulPerf_t perfResults[ALGO_COMBINATIONS];
 
             // for t5, computeType & scaleType should be FP32
-            if (is_fp16 && !is_fp16_compute_type) {
+            if (is_fp16_compute_type) {
+                using scaleT = typename ScaleTypeConverter<T, true>::Type;
+                scaleT alpha_scale = (scaleT)1.0f;
+                scaleT beta_scale = (scaleT)0.0f;
+
+                LtHgemmCustomFind<T, scaleT>(ltHandle,
+                                             m,
+                                             seq_len,
+                                             head_num,
+                                             size_per_head,
+                                             n,
+                                             m,
+                                             k,
+                                             &(alpha_scale),
+                                             d_B,
+                                             d_A,
+                                             &(beta_scale),
+                                             d_C,
+                                             cublas_workspace,
+                                             workSpaceSize,
+                                             fd,
+                                             perfResults,
+                                             ALGO_COMBINATIONS);
+            }
+            else {
                 LtHgemmCustomFind<T, float>(ltHandle,
                                             m,
                                             seq_len,
@@ -406,10 +468,10 @@ void generate_t5_gemm_config(int batch_size,
                                             n,
                                             m,
                                             k,
-                                            &f_alpha,
+                                            &(f_alpha),
                                             d_B,
                                             d_A,
-                                            &f_beta,
+                                            &(f_beta),
                                             d_C,
                                             cublas_workspace,
                                             workSpaceSize,
@@ -417,29 +479,19 @@ void generate_t5_gemm_config(int batch_size,
                                             perfResults,
                                             ALGO_COMBINATIONS);
             }
-            else {
-                LtHgemmCustomFind<T, T>(ltHandle,
-                                        m,
-                                        seq_len,
-                                        head_num,
-                                        size_per_head,
-                                        n,
-                                        m,
-                                        k,
-                                        (T*)alpha,
-                                        d_B,
-                                        d_A,
-                                        (T*)beta,
-                                        d_C,
-                                        cublas_workspace,
-                                        workSpaceSize,
-                                        fd,
-                                        perfResults,
-                                        ALGO_COMBINATIONS);
-            }
+
             if (perfResults[0].time < exec_time) {
-                printPerfStructure(
-                    batch_size * (i <= 5 || i == 1 ? 1 : beam_width), seq_len, head_num, size_per_head, n, m, k, perfResults[0], fd, is_fp16, 0);
+                printPerfStructure(batch_size * (i <= 5 || i == 1 ? 1 : beam_width),
+                                   seq_len,
+                                   head_num,
+                                   size_per_head,
+                                   n,
+                                   m,
+                                   k,
+                                   perfResults[0],
+                                   fd,
+                                   data_type,
+                                   0);
             }
             else {
                 fprintf(fd,
@@ -448,7 +500,7 @@ void generate_t5_gemm_config(int batch_size,
                         seq_len,
                         head_num,
                         size_per_head,
-                        is_fp16 ? HALF_DATATYPE : FLOAT_DATATYPE,
+                        data_type,
                         batchCount[i],
                         n,
                         m,
@@ -465,7 +517,7 @@ void generate_t5_gemm_config(int batch_size,
                     seq_len,
                     head_num,
                     size_per_head,
-                    is_fp16 ? HALF_DATATYPE : FLOAT_DATATYPE,
+                    data_type,
                     batchCount[i],
                     n,
                     m,
@@ -627,7 +679,7 @@ void generate_t5_gemm_config(int batch_size,
                     seq_len,
                     head_num,
                     size_per_head,
-                    is_fp16 ? HALF_DATATYPE : FLOAT_DATATYPE,
+                    data_type,
                     batchCount[i],
                     m,
                     n,
@@ -680,6 +732,25 @@ template void generate_t5_gemm_config<half>(int batch_size,
                                             bool isAppend,
                                             bool is_fp16_compute_type);
 
+#ifdef ENABLE_BF16
+template void generate_t5_gemm_config<__nv_bfloat16>(int batch_size,
+                                                     int beam_width,
+                                                     int max_mem_seq_len,
+                                                     int encoder_d_model,
+                                                     int encoder_head_num,
+                                                     int encoder_size_per_head,
+                                                     int encoder_inter_size,
+                                                     int decoder_d_model,
+                                                     int decoder_head_num,
+                                                     int decoder_size_per_head,
+                                                     int decoder_inter_size,
+                                                     int decoder_vocab_size,
+                                                     int tensor_para_size,
+                                                     void* buffer_in,
+                                                     bool isAppend,
+                                                     bool is_fp16_compute_type);
+#endif
+
 size_t calT5GemmTestBufSizeInByte(int batch_size,
                                   int beam_width,
                                   int max_mem_seq_len,
@@ -693,7 +764,7 @@ size_t calT5GemmTestBufSizeInByte(int batch_size,
                                   int decoder_inter_size,
                                   int decoder_vocab_size,
                                   int tensor_para_size,
-                                  int is_fp16)
+                                  CublasDataType data_type)
 {
     const size_t local_encoder_head_num = encoder_head_num / tensor_para_size;
     const size_t local_encoder_hidden_units = local_encoder_head_num * encoder_size_per_head;
@@ -727,19 +798,19 @@ size_t calT5GemmTestBufSizeInByte(int batch_size,
                         + m * decoder_d_model);
     // decoder vocab gemm
     size_t decoder_vocab_size_padded = ((size_t)ceil(decoder_vocab_size / 1. / tensor_para_size) * tensor_para_size);
-    if (is_fp16) {
+    if (data_type != FLOAT_DATATYPE) {
         decoder_vocab_size_padded = ((size_t)ceil(decoder_vocab_size_padded / 8.) * 8);
     }
     buff_size.push_back(m * decoder_d_model + decoder_d_model * decoder_vocab_size_padded / tensor_para_size
                         + m * decoder_vocab_size_padded / tensor_para_size);
 
     size_t buf_size_in_byte = 0;
-    int wordSize = (is_fp16 == 1 ? sizeof(half) : sizeof(float));
+    int wordSize = (data_type == FLOAT_DATATYPE ? sizeof(float) : sizeof(half));
     for (auto t : buff_size) {
         buf_size_in_byte = buf_size_in_byte > t ? buf_size_in_byte : t;
     }
     buf_size_in_byte *= wordSize;
-    buf_size_in_byte += ((is_fp16 == 1) ? CUBLAS_WORKSPACE_SIZE : 0);
+    buf_size_in_byte += ((data_type == HALF_DATATYPE || data_type == BFLOAT16_DATATYPE) ? CUBLAS_WORKSPACE_SIZE : 0);
 
     return buf_size_in_byte;
 }

@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,6 +30,10 @@ else()
 target_link_libraries(cublasMMWrapper PUBLIC -lcublas -lcudart -lcurand cublasAlgoMap)
 endif()
 
+add_library(word_list STATIC word_list.cc)
+set_property(TARGET word_list PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET word_list PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
 add_library(nvtx_utils STATIC nvtx_utils.cc)
 set_property(TARGET nvtx_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET nvtx_utils PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
@@ -40,14 +44,30 @@ set_property(TARGET memory_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET memory_utils PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(memory_utils PUBLIC -lnvToolsExt)
 
-if(BUILD_GPT)
-    add_library(nccl_utils STATIC nccl_utils.cc)
-    set_property(TARGET nccl_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)
-    set_property(TARGET nccl_utils PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-    target_link_libraries(nccl_utils PUBLIC -lnccl)
-endif()
+add_library(nccl_utils STATIC nccl_utils.cc)
+set_property(TARGET nccl_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET nccl_utils PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+target_link_libraries(nccl_utils PUBLIC -lnccl)
 
 add_library(cublasINT8MMWrapper STATIC cublasINT8MMWrapper.cc)
 set_property(TARGET cublasINT8MMWrapper PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET cublasINT8MMWrapper PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(cublasINT8MMWrapper PUBLIC -lcublasLt -lcudart -lcurand cublasAlgoMap cublasMMWrapper)
+
+add_library(custom_ar_comm STATIC custom_ar_comm.cc)
+set_property(TARGET custom_ar_comm PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET custom_ar_comm PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+target_link_libraries(custom_ar_comm PUBLIC custom_ar_kernels memory_utils)
+
+add_library(gemm STATIC gemm.cc)
+set_property(TARGET gemm PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET gemm PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+if (SPARSITY_SUPPORT)
+    target_link_libraries(gemm PUBLIC
+                          -lcublas -lcublasLt -lcudart -lcurand -lcusparse -lcusparseLt
+                          cublasAlgoMap memory_utils)
+else()
+    target_link_libraries(gemm PUBLIC
+                          -lcublas -lcublasLt -lcudart -lcurand
+                          cublasAlgoMap memory_utils)
+endif()

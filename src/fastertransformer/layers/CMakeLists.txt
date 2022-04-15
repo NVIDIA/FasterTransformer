@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,14 +30,19 @@ set_property(TARGET FfnLayerINT8 PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET FfnLayerINT8 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(FfnLayerINT8 PUBLIC -lcublasLt -lcublas -lcudart cublasMMWrapper cublasINT8MMWrapper activation_int8_kernels memory_utils)
 
-if(BUILD_GPT)
-    add_library(TensorParallelGeluFfnLayer STATIC TensorParallelGeluFfnLayer.cc)
-    set_property(TARGET TensorParallelGeluFfnLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
-    set_property(TARGET TensorParallelGeluFfnLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-    target_link_libraries(TensorParallelGeluFfnLayer PUBLIC -lcudart FfnLayer)
+add_library(TensorParallelGeluFfnLayer STATIC TensorParallelGeluFfnLayer.cc)
+set_property(TARGET TensorParallelGeluFfnLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET TensorParallelGeluFfnLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+target_link_libraries(TensorParallelGeluFfnLayer PUBLIC -lcudart FfnLayer nccl_utils)
 
-    add_library(TensorParallelReluFfnLayer STATIC TensorParallelReluFfnLayer.cc)
-    set_property(TARGET TensorParallelReluFfnLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
-    set_property(TARGET TensorParallelReluFfnLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-    target_link_libraries(TensorParallelReluFfnLayer PUBLIC -lcudart FfnLayer)
-endif()
+add_library(TensorParallelReluFfnLayer STATIC TensorParallelReluFfnLayer.cc)
+set_property(TARGET TensorParallelReluFfnLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET TensorParallelReluFfnLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+target_link_libraries(TensorParallelReluFfnLayer PUBLIC -lcudart FfnLayer nccl_utils)
+
+add_library(DynamicDecodeLayer STATIC DynamicDecodeLayer.cc)
+set_property(TARGET DynamicDecodeLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET DynamicDecodeLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+target_link_libraries(DynamicDecodeLayer PUBLIC -lcudart 
+                        TopKSamplingLayer TopPSamplingLayer TopKTopPSamplingLayer 
+                        OnlineBeamSearchLayer BeamSearchLayer ban_bad_words stop_criteria)

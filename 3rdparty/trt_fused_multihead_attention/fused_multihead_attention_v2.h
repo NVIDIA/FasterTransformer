@@ -20,14 +20,13 @@
 #include <assert.h>
 #include <stdint.h>
 
-namespace fastertransformer
-{
-struct Fused_multihead_attention_params_v2
-{
+namespace fastertransformer{
+struct Fused_multihead_attention_params_v2{
     // The QKV matrices.
     void* qkv_ptr;
     // The mask to implement drop-out.
     void* packed_mask_ptr;
+    
     // The O matrix (output).
     void* o_ptr;
 
@@ -70,10 +69,17 @@ struct Fused_multihead_attention_params_v2
     bool force_unroll = false;
     bool use_int8_scale_max = false;
 
+    //***The additional paramters for fused_mha_with_relPosBias kernels
+    // The relative position bias.
+    void* packed_relative_position_bias_ptr = nullptr;
+
+    int window_num, actual_seqlen;
+
     void clear()
     {
         qkv_ptr = nullptr;
         packed_mask_ptr = nullptr;
+        packed_relative_position_bias_ptr = nullptr;
         o_ptr = nullptr;
 
         qkv_stride_in_bytes = 0;
@@ -109,6 +115,15 @@ struct Fused_multihead_attention_params_v2
     }
 };
 ////////////////////////////////////////////////////////////////////////////////////////////////////
+extern unsigned char fused_mha_with_relPosBias_fp16_64_32_kernel_sm75_cubin[];
+extern unsigned char fused_mha_with_relPosBias_fp16_64_32_kernel_sm80_cubin[];
+extern unsigned char fused_mha_with_relPosBias_fp16_64_32_kernel_sm86_cubin[];
+extern unsigned char fused_mha_with_relPosBias_fp16_128_32_kernel_sm75_cubin[];
+extern unsigned char fused_mha_with_relPosBias_fp16_128_32_kernel_sm80_cubin[];
+extern unsigned char fused_mha_with_relPosBias_fp16_128_32_kernel_sm86_cubin[];
+extern unsigned char fused_mha_with_relPosBias_fp16_256_32_kernel_sm75_cubin[];
+extern unsigned char fused_mha_with_relPosBias_fp16_256_32_kernel_sm80_cubin[];
+extern unsigned char fused_mha_with_relPosBias_fp16_256_32_kernel_sm86_cubin[];
 extern unsigned char fused_multihead_attention_v2_fp16_128_64_kernel_sm75_cubin[];
 extern unsigned char fused_multihead_attention_v2_fp16_128_64_kernel_sm80_cubin[];
 extern unsigned char fused_multihead_attention_v2_fp16_128_64_kernel_sm86_cubin[];
@@ -130,6 +145,10 @@ extern unsigned char fused_multihead_attention_v2_fp16_128_64_kernel_sm70_cubin[
 extern unsigned char fused_multihead_attention_v2_fp16_256_64_kernel_sm70_cubin[];
 extern unsigned char fused_multihead_attention_v2_fp16_384_64_kernel_sm70_cubin[];
 
+extern unsigned char fused_mha_with_relPosBias_int8_64_32_kernel_sm75_cubin[];
+extern unsigned char fused_mha_with_relPosBias_int8_64_32_kernel_sm80_cubin[];
+extern unsigned char fused_mha_with_relPosBias_int8_256_32_kernel_sm75_cubin[];
+extern unsigned char fused_mha_with_relPosBias_int8_256_32_kernel_sm80_cubin[];
 extern unsigned char fused_multihead_attention_v2_int8_64_64_kernel_sm75_cubin[];
 extern unsigned char fused_multihead_attention_v2_int8_64_64_kernel_sm80_cubin[];
 extern unsigned char fused_multihead_attention_v2_int8_128_64_kernel_cubin[];
@@ -149,6 +168,15 @@ extern unsigned char fused_multihead_attention_v2_int8_384_64_kernel_sm75_cubin[
 extern unsigned char fused_multihead_attention_v2_int8_384_64_kernel_sm80_cubin[];
 extern unsigned char fused_multihead_attention_v2_int8_384_64_kernel_sm86_cubin[];
 
+extern unsigned int fused_mha_with_relPosBias_fp16_64_32_kernel_sm75_cubin_len;
+extern unsigned int fused_mha_with_relPosBias_fp16_64_32_kernel_sm80_cubin_len;
+extern unsigned int fused_mha_with_relPosBias_fp16_64_32_kernel_sm86_cubin_len;
+extern unsigned int fused_mha_with_relPosBias_fp16_128_32_kernel_sm75_cubin_len;
+extern unsigned int fused_mha_with_relPosBias_fp16_128_32_kernel_sm80_cubin_len;
+extern unsigned int fused_mha_with_relPosBias_fp16_128_32_kernel_sm86_cubin_len;
+extern unsigned int fused_mha_with_relPosBias_fp16_256_32_kernel_sm75_cubin_len;
+extern unsigned int fused_mha_with_relPosBias_fp16_256_32_kernel_sm80_cubin_len;
+extern unsigned int fused_mha_with_relPosBias_fp16_256_32_kernel_sm86_cubin_len;
 extern unsigned int fused_multihead_attention_v2_fp16_128_64_kernel_sm75_cubin_len;
 extern unsigned int fused_multihead_attention_v2_fp16_128_64_kernel_sm80_cubin_len;
 extern unsigned int fused_multihead_attention_v2_fp16_128_64_kernel_sm86_cubin_len;
@@ -170,6 +198,10 @@ extern unsigned int fused_multihead_attention_v2_fp16_128_64_kernel_sm70_cubin_l
 extern unsigned int fused_multihead_attention_v2_fp16_256_64_kernel_sm70_cubin_len;
 extern unsigned int fused_multihead_attention_v2_fp16_384_64_kernel_sm70_cubin_len;
 
+extern unsigned int fused_mha_with_relPosBias_int8_64_32_kernel_sm75_cubin_len;
+extern unsigned int fused_mha_with_relPosBias_int8_64_32_kernel_sm80_cubin_len;
+extern unsigned int fused_mha_with_relPosBias_int8_256_32_kernel_sm75_cubin_len;
+extern unsigned int fused_mha_with_relPosBias_int8_256_32_kernel_sm80_cubin_len;
 extern unsigned int fused_multihead_attention_v2_int8_64_64_kernel_sm75_cubin_len;
 extern unsigned int fused_multihead_attention_v2_int8_64_64_kernel_sm80_cubin_len;;
 extern unsigned int fused_multihead_attention_v2_int8_128_64_kernel_cubin_len;
@@ -261,6 +293,24 @@ static const struct FusedMultiHeadAttentionKernelMetaInfoV2
         "fused_multihead_attention_v2_fp16_384_64_kernel_sm70_noloop", 69632, 256, 32, false},
 
     // Turing
+    {DATA_TYPE_FP16, 64, 32, kSM_75, fused_mha_with_relPosBias_fp16_64_32_kernel_sm75_cubin,
+        fused_mha_with_relPosBias_fp16_64_32_kernel_sm75_cubin_len,
+        "fused_mha_with_relPosBias_fp16_64_32_kernel_sm75", 12288, 128, 0, false},
+    {DATA_TYPE_FP16, 64, 32, kSM_75, fused_mha_with_relPosBias_fp16_64_32_kernel_sm75_cubin,
+        fused_mha_with_relPosBias_fp16_64_32_kernel_sm75_cubin_len,
+        "fused_mha_with_relPosBias_fp16_64_32_kernel_sm75_noloop", 10240, 128, 32, false},
+     {DATA_TYPE_FP16, 128, 32, kSM_75, fused_mha_with_relPosBias_fp16_128_32_kernel_sm75_cubin,
+        fused_mha_with_relPosBias_fp16_128_32_kernel_sm75_cubin_len,
+        "fused_mha_with_relPosBias_fp16_128_32_kernel_sm75", 16384, 128, 0, false},
+    {DATA_TYPE_FP16, 128, 32, kSM_75, fused_mha_with_relPosBias_fp16_128_32_kernel_sm75_cubin,
+        fused_mha_with_relPosBias_fp16_128_32_kernel_sm75_cubin_len,
+        "fused_mha_with_relPosBias_fp16_128_32_kernel_sm75_noloop", 10240, 128, 32, false},
+    {DATA_TYPE_FP16, 256, 32, kSM_75, fused_mha_with_relPosBias_fp16_256_32_kernel_sm75_cubin,
+        fused_mha_with_relPosBias_fp16_256_32_kernel_sm75_cubin_len,
+        "fused_mha_with_relPosBias_fp16_256_32_kernel_sm75", 18432, 128, 0, false},
+    {DATA_TYPE_FP16, 256, 32, kSM_75, fused_mha_with_relPosBias_fp16_256_32_kernel_sm75_cubin,
+        fused_mha_with_relPosBias_fp16_256_32_kernel_sm75_cubin_len,
+        "fused_mha_with_relPosBias_fp16_256_32_kernel_sm75_noloop", 18432, 128, 32, false},
     {DATA_TYPE_FP16, 64, 64, kSM_75, fused_multihead_attention_v2_fp16_64_64_kernel_sm75_cubin,
         fused_multihead_attention_v2_fp16_64_64_kernel_sm75_cubin_len,
         "fused_multihead_attention_v2_fp16_64_64_kernel_sm75", 24576, 128, 0, false},
@@ -286,6 +336,12 @@ static const struct FusedMultiHeadAttentionKernelMetaInfoV2
         fused_multihead_attention_v2_fp16_384_64_kernel_sm75_cubin_len,
         "fused_multihead_attention_v2_fp16_384_64_kernel_sm75", 53248, 256, 0, false},
 
+    {DATA_TYPE_INT8, 64, 32, kSM_75, fused_mha_with_relPosBias_int8_64_32_kernel_sm75_cubin,
+        fused_mha_with_relPosBias_int8_64_32_kernel_sm75_cubin_len,
+        "fused_mha_with_relPosBias_int8_64_32_kernel_sm75", 10240, 128, 0, false},
+    {DATA_TYPE_INT8, 256, 32, kSM_75, fused_mha_with_relPosBias_int8_256_32_kernel_sm75_cubin,
+        fused_mha_with_relPosBias_int8_256_32_kernel_sm75_cubin_len,
+        "fused_mha_with_relPosBias_int8_256_32_kernel_sm75", 10240, 128, 0, false},
     {DATA_TYPE_INT8, 64, 64, kSM_75, fused_multihead_attention_v2_int8_64_64_kernel_sm75_cubin,
         fused_multihead_attention_v2_int8_64_64_kernel_sm75_cubin_len,
         "fused_multihead_attention_v2_int8_64_64_kernel_sm75", 20480, 128, 0, false},
@@ -340,6 +396,24 @@ static const struct FusedMultiHeadAttentionKernelMetaInfoV2
 
 #if CUDA_VERSION >= 11000
     // Ampere
+    {DATA_TYPE_FP16, 64, 32, kSM_80, fused_mha_with_relPosBias_fp16_64_32_kernel_sm80_cubin,
+     fused_mha_with_relPosBias_fp16_64_32_kernel_sm80_cubin_len,
+     "fused_mha_with_relPosBias_fp16_64_32_kernel_sm80", 12288, 128, 0, false},
+    {DATA_TYPE_FP16, 64, 32, kSM_80, fused_mha_with_relPosBias_fp16_64_32_kernel_sm80_cubin,
+     fused_mha_with_relPosBias_fp16_64_32_kernel_sm80_cubin_len,
+     "fused_mha_with_relPosBias_fp16_64_32_kernel_sm80_noloop", 10240, 128, 32, false},
+    {DATA_TYPE_FP16, 128, 32, kSM_80, fused_mha_with_relPosBias_fp16_128_32_kernel_sm80_cubin,
+     fused_mha_with_relPosBias_fp16_128_32_kernel_sm80_cubin_len,
+     "fused_mha_with_relPosBias_fp16_128_32_kernel_sm80", 16384, 128, 0, false},
+    {DATA_TYPE_FP16, 128, 32, kSM_80, fused_mha_with_relPosBias_fp16_128_32_kernel_sm80_cubin,
+     fused_mha_with_relPosBias_fp16_128_32_kernel_sm80_cubin_len,
+     "fused_mha_with_relPosBias_fp16_128_32_kernel_sm80_noloop", 10240, 128, 32, false},
+    {DATA_TYPE_FP16, 256, 32, kSM_80, fused_mha_with_relPosBias_fp16_256_32_kernel_sm80_cubin,
+     fused_mha_with_relPosBias_fp16_256_32_kernel_sm80_cubin_len,
+     "fused_mha_with_relPosBias_fp16_256_32_kernel_sm80", 18432, 128, 0, false},
+    {DATA_TYPE_FP16, 256, 32, kSM_80, fused_mha_with_relPosBias_fp16_256_32_kernel_sm80_cubin,
+     fused_mha_with_relPosBias_fp16_256_32_kernel_sm80_cubin_len,
+     "fused_mha_with_relPosBias_fp16_256_32_kernel_sm80_noloop", 18432, 128, 32, false},
     {DATA_TYPE_FP16, 64, 64, kSM_80, fused_multihead_attention_v2_fp16_64_64_kernel_sm80_cubin,
         fused_multihead_attention_v2_fp16_64_64_kernel_sm80_cubin_len,
         "fused_multihead_attention_v2_fp16_64_64_kernel_sm80", 32768, 128, 0, false},
@@ -364,6 +438,12 @@ static const struct FusedMultiHeadAttentionKernelMetaInfoV2
     {DATA_TYPE_FP16, 384, 64, kSM_80, fused_multihead_attention_v2_fp16_384_64_kernel_sm80_cubin,
         fused_multihead_attention_v2_fp16_384_64_kernel_sm80_cubin_len,
         "fused_multihead_attention_v2_fp16_384_64_kernel_sm80", 114688, 256, 0, false},
+    {DATA_TYPE_INT8, 64, 32, kSM_80, fused_mha_with_relPosBias_int8_64_32_kernel_sm80_cubin,
+     fused_mha_with_relPosBias_int8_64_32_kernel_sm80_cubin_len,
+     "fused_mha_with_relPosBias_int8_64_32_kernel_sm80", 10240, 128, 0, false},
+    {DATA_TYPE_INT8, 256, 32, kSM_80, fused_mha_with_relPosBias_int8_256_32_kernel_sm80_cubin,
+     fused_mha_with_relPosBias_int8_256_32_kernel_sm80_cubin_len,
+     "fused_mha_with_relPosBias_int8_256_32_kernel_sm80", 10240, 128, 0, false},
     {DATA_TYPE_INT8, 64, 64, kSM_80, fused_multihead_attention_v2_int8_64_64_kernel_sm80_cubin,
         fused_multihead_attention_v2_int8_64_64_kernel_sm80_cubin_len,
         "fused_multihead_attention_v2_int8_64_64_kernel_sm80", 24576, 128, 0, false},
@@ -418,6 +498,24 @@ static const struct FusedMultiHeadAttentionKernelMetaInfoV2
 
     // GA10x
     // Note: For GA10X keep only kernels whose sharedMemBytes < 100KiB
+    {DATA_TYPE_FP16, 64, 32, kSM_86, fused_mha_with_relPosBias_fp16_64_32_kernel_sm86_cubin,
+     fused_mha_with_relPosBias_fp16_64_32_kernel_sm86_cubin_len,
+     "fused_mha_with_relPosBias_fp16_64_32_kernel_sm86", 12288, 128, 0, false},
+    {DATA_TYPE_FP16, 64, 32, kSM_86, fused_mha_with_relPosBias_fp16_64_32_kernel_sm86_cubin,
+     fused_mha_with_relPosBias_fp16_64_32_kernel_sm86_cubin_len,
+     "fused_mha_with_relPosBias_fp16_64_32_kernel_sm86_noloop", 10240, 128, 32, false},
+    {DATA_TYPE_FP16, 128, 32, kSM_86, fused_mha_with_relPosBias_fp16_128_32_kernel_sm86_cubin,
+     fused_mha_with_relPosBias_fp16_128_32_kernel_sm86_cubin_len,
+     "fused_mha_with_relPosBias_fp16_128_32_kernel_sm86", 16384, 128, 0, false},
+    {DATA_TYPE_FP16, 128, 32, kSM_86, fused_mha_with_relPosBias_fp16_128_32_kernel_sm86_cubin,
+     fused_mha_with_relPosBias_fp16_128_32_kernel_sm86_cubin_len,
+     "fused_mha_with_relPosBias_fp16_128_32_kernel_sm86_noloop", 10240, 128, 32, false},
+    {DATA_TYPE_FP16, 256, 32, kSM_86, fused_mha_with_relPosBias_fp16_256_32_kernel_sm86_cubin,
+     fused_mha_with_relPosBias_fp16_256_32_kernel_sm86_cubin_len,
+     "fused_mha_with_relPosBias_fp16_256_32_kernel_sm86", 18432, 128, 0, false},
+    {DATA_TYPE_FP16, 256, 32, kSM_86, fused_mha_with_relPosBias_fp16_256_32_kernel_sm86_cubin,
+     fused_mha_with_relPosBias_fp16_256_32_kernel_sm86_cubin_len,
+     "fused_mha_with_relPosBias_fp16_256_32_kernel_sm86_noloop", 18432, 128, 32, false},
     {DATA_TYPE_FP16, 64, 64, kSM_86, fused_multihead_attention_v2_fp16_64_64_kernel_sm86_cubin,
         fused_multihead_attention_v2_fp16_64_64_kernel_sm86_cubin_len,
         "fused_multihead_attention_v2_fp16_64_64_kernel_sm80", 32768, 128, 0, false},
@@ -506,20 +604,20 @@ public:
     {
     }
 
-    inline uint64_t hashID(unsigned int s, bool interleaved, bool unroll) const
+    inline uint64_t hashID(unsigned int s, unsigned int d, bool interleaved, bool unroll) const
     {
-        return (uint64_t) s << 32 | (interleaved ? 2ull : 0ull) | (unroll ? 1ull : 0ull);
+        return (uint64_t) s << 32 | d |(interleaved ? 2ull : 0ull) | (unroll ? 1ull : 0ull);
     }
 
     virtual uint64_t hashID(const KernelMeta& kernelMeta) const
     {
-        assert(kernelMeta.mD == 64);
-        return hashID(kernelMeta.mS, kernelMeta.mInterleaved, kernelMeta.mUnrollStep);
+        assert(kernelMeta.mD == 64 || kernelMeta.mD == 32);
+        return hashID(kernelMeta.mS, kernelMeta.mD, kernelMeta.mInterleaved, kernelMeta.mUnrollStep);
     }
 
     virtual void run(Fused_multihead_attention_params_v2& params, cudaStream_t ss) const
     {
-        assert(params.d == 64);
+        assert(params.d == 64 || params.d == 32);
         if (params.interleaved)
         {
             assert(mDataType == fastertransformer::DATA_TYPE_INT8);
@@ -533,35 +631,36 @@ public:
                 unsigned int mSM;
                 Data_type mDataType;
                 int mS;
+                int mD;
                 int mMaxBatch;
             } unrollList[]
-                = { {kSM_75, fastertransformer::DATA_TYPE_FP16, 256, 1},
-                      {kSM_75, fastertransformer::DATA_TYPE_FP16, 384, 1},
-                      {kSM_75, fastertransformer::DATA_TYPE_INT8, 128, 1},
-                      {kSM_75, fastertransformer::DATA_TYPE_INT8, 192, 2},
-                      {kSM_75, fastertransformer::DATA_TYPE_INT8, 256, 1},
-                      {kSM_75, fastertransformer::DATA_TYPE_INT8, 384, 1},
+                = { {kSM_75, fastertransformer::DATA_TYPE_FP16, 256, 64, 1},
+                      {kSM_75, fastertransformer::DATA_TYPE_FP16, 384, 64, 1},
+                      {kSM_75, fastertransformer::DATA_TYPE_INT8, 128, 64, 1},
+                      {kSM_75, fastertransformer::DATA_TYPE_INT8, 192, 64, 2},
+                      {kSM_75, fastertransformer::DATA_TYPE_INT8, 256, 64, 1},
+                      {kSM_75, fastertransformer::DATA_TYPE_INT8, 384, 64, 1},
 #if CUDA_VERSION >= 11000
-                      {kSM_80, fastertransformer::DATA_TYPE_FP16, 128, 4},
-                      {kSM_80, fastertransformer::DATA_TYPE_FP16, 256, 4},
-                      {kSM_80, fastertransformer::DATA_TYPE_FP16, 384, 4},
-                      {kSM_80, fastertransformer::DATA_TYPE_INT8, 128, 4},
-                      {kSM_80, fastertransformer::DATA_TYPE_INT8, 192, 16},
-                      {kSM_80, fastertransformer::DATA_TYPE_INT8, 256, 8},
-                      {kSM_80, fastertransformer::DATA_TYPE_INT8, 384, 8},
+                      {kSM_80, fastertransformer::DATA_TYPE_FP16, 128, 64, 4},
+                      {kSM_80, fastertransformer::DATA_TYPE_FP16, 256, 64, 4},
+                      {kSM_80, fastertransformer::DATA_TYPE_FP16, 384, 64, 4},
+                      {kSM_80, fastertransformer::DATA_TYPE_INT8, 128, 64, 4},
+                      {kSM_80, fastertransformer::DATA_TYPE_INT8, 192, 64, 16},
+                      {kSM_80, fastertransformer::DATA_TYPE_INT8, 256, 64, 8},
+                      {kSM_80, fastertransformer::DATA_TYPE_INT8, 384, 64, 8},
 
-                      {kSM_86, fastertransformer::DATA_TYPE_FP16, 128, 4},
-                      {kSM_86, fastertransformer::DATA_TYPE_FP16, 256, 4},
-                      {kSM_86, fastertransformer::DATA_TYPE_INT8, 128, 4},
-                      {kSM_86, fastertransformer::DATA_TYPE_INT8, 192, 16},
-                      {kSM_86, fastertransformer::DATA_TYPE_INT8, 256, 8},
-                      {kSM_86, fastertransformer::DATA_TYPE_INT8, 384, 8},
+                      {kSM_86, fastertransformer::DATA_TYPE_FP16, 128, 64, 4},
+                      {kSM_86, fastertransformer::DATA_TYPE_FP16, 256, 64, 4},
+                      {kSM_86, fastertransformer::DATA_TYPE_INT8, 128, 64, 4},
+                      {kSM_86, fastertransformer::DATA_TYPE_INT8, 192, 64, 16},
+                      {kSM_86, fastertransformer::DATA_TYPE_INT8, 256, 64, 8},
+                      {kSM_86, fastertransformer::DATA_TYPE_INT8, 384, 64, 8}, 
 #endif
                   };
             for (unsigned int i = 0u; i < sizeof(unrollList) / sizeof(unrollList[0]); ++i)
             {
                 if (mSM == unrollList[i].mSM && mDataType == unrollList[i].mDataType && params.s == unrollList[i].mS
-                    && params.b <= unrollList[i].mMaxBatch)
+                    &&params.d == unrollList[i].mD && params.b <= unrollList[i].mMaxBatch)
                 {
                     forceUnroll = true;
                     break;
@@ -569,7 +668,7 @@ public:
             }
         }
 
-        const auto findIter = mFunctions.find(hashID(params.s, params.interleaved, forceUnroll));
+        const auto findIter = mFunctions.find(hashID(params.s, params.d, params.interleaved, forceUnroll));
         // ASSERT(findIter != mFunctions.end());
 
         const auto& kernelMeta = mKernelMeta[findIter->second.mMetaInfoIndex];

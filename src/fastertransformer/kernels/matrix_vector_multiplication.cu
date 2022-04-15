@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,14 +18,22 @@
 #include <cmath>
 #include <cuda_fp16.h>
 
+#include "bfloat16_fallback_kenrels.cuh"
 #include "matrix_vector_multiplication.h"
 #include "reduce_kernel_utils.cuh"
+#include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
 
 namespace fastertransformer {
 
 typedef struct half4 {
     half x, y, z, w;
 } half4;
+
+#ifdef ENABLE_BF16
+typedef struct bf164 {
+    __nv_bfloat16 x, y, z, w;
+} bf164;
+#endif
 
 template<int NUM, typename T>
 struct ARRAY {
@@ -167,6 +175,79 @@ __global__ void int8WeightPerChannelLdkMultiplication(
         }
     }
 }
+
+#ifdef ENABLE_BF16
+template<int m, int nPerThread>
+__global__ void int8WeightPerChannelLdkMultiplication(
+    const char4* weight, const bf164* input, const float* scale_list, void* output, const int k_4)
+{
+
+    const int tidx = threadIdx.x;
+    const int bidx = blockIdx.x;
+    const int row_idx = bidx * nPerThread;
+    const size_t b_offset = row_idx * k_4;
+
+    using array = struct ARRAY<nPerThread, float>;
+    array sum_list[m];
+#pragma unroll
+    for (int m_i = 0; m_i < m; m_i++) {
+#pragma unroll
+        for (int i = 0; i < nPerThread; i++) {
+            sum_list[m_i].data[i] = 0.0f;
+        }
+    }
+
+    for (int k_idx = tidx; k_idx < k_4; k_idx += blockDim.x) {
+        __nv_bfloat162 input_val_0[m];
+        __nv_bfloat162 input_val_1[m];
+#pragma unroll
+        for (int m_i = 0; m_i < m; m_i++) {
+            const bf164 input_val = input[k_idx + m_i * k_4];
+            input_val_0[m_i] = {input_val.x, input_val.y};
+            input_val_1[m_i] = {input_val.z, input_val.w};
+        }
+#pragma unroll
+        for (int i = 0; i < nPerThread; i++) {
+            const char4 weight_val = weight[b_offset + i * k_4 + k_idx];
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800
+            const __nv_bfloat162 weight_val_0 = {static_cast<__nv_bfloat16>(weight_val.x),
+                                                 static_cast<__nv_bfloat16>(weight_val.y)};
+            const __nv_bfloat162 weight_val_1 = {static_cast<__nv_bfloat16>(weight_val.z),
+                                                 static_cast<__nv_bfloat16>(weight_val.w)};
+#else
+            const __nv_bfloat162 weight_val_0 = {__float2bfloat16(static_cast<float>(weight_val.x)),
+                                                 __float2bfloat16(static_cast<float>(weight_val.y))};
+            const __nv_bfloat162 weight_val_1 = {__float2bfloat16(static_cast<float>(weight_val.z)),
+                                                 __float2bfloat16(static_cast<float>(weight_val.w))};
+#endif
+#pragma unroll
+            for (int m_i = 0; m_i < m; m_i++) {
+                const __nv_bfloat162 weight_val_2 =
+                    bf16hadd2(bf16hmul2(input_val_0[m_i], weight_val_0), bf16hmul2(input_val_1[m_i], weight_val_1));
+                sum_list[m_i].data[i] += static_cast<float>(weight_val_2.x + weight_val_2.y);
+            }
+        }
+    }
+#pragma unroll
+    for (int m_i = 0; m_i < m; m_i++) {
+        cgBlockReduceSumElements<nPerThread>(sum_list[m_i].data, cgBlockReduceSumElements_shm);
+        __syncthreads();
+    }
+    if (tidx == 0) {
+        using array_half = struct ARRAY<nPerThread, __nv_bfloat16>;
+        const array scale = *((const array*)scale_list + bidx);
+#pragma unroll
+        for (int m_i = 0; m_i < m; m_i++) {
+            array_half sum_list_half;
+#pragma unroll
+            for (int i = 0; i < nPerThread; i++) {
+                sum_list_half.data[i] = __float2bfloat16_rn(sum_list[m_i].data[i] * scale.data[i]);
+            }
+            *((array_half*)output + bidx + m_i * gridDim.x) = sum_list_half;
+        }
+    }
+}
+#endif
 ///////////////////////////////////////////////////////////////////////
 
 #define RUN(M, TYPE)                                                                                                   \
@@ -195,20 +276,29 @@ void int8WeightPerChannelLdkMultiplicationLauncher(const int8_t* weight,
     dim3 grid(n / nPerThread);
     dim3 block;
     // block size tuned with gpt-3 parameter
-    if (k > 10000)
+    if (k > 10000) {
         block.x = 256;
-    else if (k > 2000)
+    }
+    else if (k > 2000) {
         block.x = 128;
-    else
+    }
+    else {
         block.x = 64;
-    while (block.x * 4 > k)
+    }
+    while (block.x * 4 > k) {
         block.x /= 2;
+    }
     block.x = (block.x + 31) / 32 * 32;
     const size_t shm_size = block.x * nPerThread * sizeof(float);
     if (m == 1) {
         if (std::is_same<T, half>::value) {
             RUN(1, half4)
         }
+#ifdef ENABLE_BF16
+        else if (std::is_same<T, __nv_bfloat16>::value) {
+            RUN(1, bf164);
+        }
+#endif
         else {
             RUN(1, float4)
         }
@@ -217,6 +307,11 @@ void int8WeightPerChannelLdkMultiplicationLauncher(const int8_t* weight,
         if (std::is_same<T, half>::value) {
             RUN(2, half4)
         }
+#ifdef ENABLE_BF16
+        else if (std::is_same<T, __nv_bfloat16>::value) {
+            RUN(2, bf164);
+        }
+#endif
         else {
             RUN(2, float4)
         }
@@ -245,6 +340,16 @@ template void int8WeightPerChannelLdkMultiplicationLauncher(const int8_t* matrix
                                                             const int k,
                                                             cudaStream_t stream);
 
+#ifdef ENABLE_BF16
+template void int8WeightPerChannelLdkMultiplicationLauncher(const int8_t* matrix,
+                                                            const __nv_bfloat16* vector,
+                                                            const float* scale_list,
+                                                            __nv_bfloat16* output,
+                                                            const int m,
+                                                            const int n,
+                                                            const int k,
+                                                            cudaStream_t stream);
+#endif
 /////////////////////////////////////////////////////////////////////
 
 }  // namespace fastertransformer

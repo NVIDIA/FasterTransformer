@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@
 #include "src/fastertransformer/kernels/layernorm_kernels.h"
 #include "src/fastertransformer/layers/FfnWeight.h"
 #include "src/fastertransformer/layers/attention_layers/AttentionWeight.h"
+#include "src/fastertransformer/utils/cuda_utils.h"
 
 namespace fastertransformer {
 
@@ -28,17 +29,15 @@ template<typename T>
 struct GptJDecoderLayerWeight {
 public:
     GptJDecoderLayerWeight() = delete;
-    GptJDecoderLayerWeight(
-        const int hidden_units,
-        const int inter_size,
-        const int tensor_para_size = 1,
-        const int tensor_para_rank = 0
-    );
+    GptJDecoderLayerWeight(const int hidden_units,
+                           const int inter_size,
+                           const int tensor_para_size = 1,
+                           const int tensor_para_rank = 0);
     ~GptJDecoderLayerWeight();
     GptJDecoderLayerWeight(const GptJDecoderLayerWeight& other);
     GptJDecoderLayerWeight& operator=(const GptJDecoderLayerWeight& other);
 
-    void loadModel(std::string dir_path);
+    void loadModel(std::string dir_path, FtCudaDataType model_file_type);
 
     LayerNormWeight<T> pre_layernorm_weights;
     AttentionWeight<T> self_attention_weights;

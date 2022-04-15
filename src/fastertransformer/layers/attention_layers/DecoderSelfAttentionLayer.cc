@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,10 +16,19 @@
 
 #include "src/fastertransformer/layers/attention_layers/DecoderSelfAttentionLayer.h"
 #include "src/fastertransformer/kernels/decoder_masked_multihead_attention.h"
-#include "src/fastertransformer/kernels/decoder_masked_multihead_attention_utils.h"
 #include "src/fastertransformer/utils/logger.h"
 
 namespace fastertransformer {
+
+template<typename T>
+struct TypeConverter {
+    using Type = T;
+};
+
+template<>
+struct TypeConverter<half> {
+    using Type = uint16_t;
+};
 
 template<typename T>
 void fusedQKV_masked_attention_dispatch(const T* qkv_buf,
@@ -27,11 +36,13 @@ void fusedQKV_masked_attention_dispatch(const T* qkv_buf,
                                         const T* relative_attention_bias,
                                         T* key_cache,
                                         T* value_cache,
+                                        const int* cache_indir,
                                         T* context_buf,
                                         const bool* finished,
                                         const int* sequence_lengths,
                                         const int max_batch_size,
                                         const int inference_batch_size,
+                                        const int beam_width,
                                         const int head_num,
                                         const int size_per_head,
                                         const int rotary_embedding_dim,
@@ -43,7 +54,7 @@ void fusedQKV_masked_attention_dispatch(const T* qkv_buf,
                                         const int relative_attention_bias_stride,
                                         cudaStream_t stream)
 {
-    using DataType = typename std::conditional<sizeof(T) == 4, float, uint16_t>::type;
+    using DataType = typename TypeConverter<T>::Type;
     // Prepare the parameters.
     Masked_multihead_attention_params<DataType> params;
     memset(&params, 0, sizeof(params));
@@ -71,13 +82,16 @@ void fusedQKV_masked_attention_dispatch(const T* qkv_buf,
 
     params.k_cache = reinterpret_cast<DataType*>(key_cache);
     params.v_cache = reinterpret_cast<DataType*>(value_cache);
+    params.cache_indir = cache_indir;
     params.batch_size = inference_batch_size;
+    params.beam_width = beam_width;
     params.seq_length = max_seq_len;
     params.length_per_sample = sequence_lengths;
     params.timestep = step - 1;
     params.num_heads = head_num;
-    params.rotary_embedding_dim = rotary_embedding_dim;
     params.hidden_size_per_head = size_per_head;
+    params.rotary_embedding_dim = rotary_embedding_dim;
+    // Note: keep norm factor (sqrt(K_dim)) when adopting megatron T5 structure (may adjust)
     params.inv_sqrt_dh = 1.F / (sqrtf((float)params.hidden_size_per_head) * q_scaling);
 
     params.input_lengths = input_lengths;
@@ -101,11 +115,13 @@ template void fusedQKV_masked_attention_dispatch(const float* qkv_buf,
                                                  const float* relative_attention_bias,
                                                  float* key_cache,
                                                  float* value_cache,
+                                                 const int* cache_indir,
                                                  float* context_buf,
                                                  const bool* finished,
                                                  const int* sequence_lengths,
                                                  const int max_batch_size,
                                                  const int inference_batch_size,
+                                                 const int beam_width,
                                                  const int head_num,
                                                  const int size_per_head,
                                                  const int rotary_embedding_dim,
@@ -122,11 +138,13 @@ template void fusedQKV_masked_attention_dispatch(const half* qkv_buf,
                                                  const half* relative_attention_bias,
                                                  half* key_cache,
                                                  half* value_cache,
+                                                 const int* cache_indir,
                                                  half* context_buf,
                                                  const bool* finished,
                                                  const int* sequence_lengths,
                                                  const int max_batch_size,
                                                  const int inference_batch_size,
+                                                 const int beam_width,
                                                  const int head_num,
                                                  const int size_per_head,
                                                  const int rotary_embedding_dim,
@@ -151,9 +169,20 @@ void DecoderSelfAttentionLayer<T>::allocateBuffer()
 }
 
 template<typename T>
+void DecoderSelfAttentionLayer<T>::allocateBuffer(size_t batch_size)
+{
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    qkv_buf_ =
+        reinterpret_cast<T*>(allocator_->reMalloc(qkv_buf_, sizeof(T) * batch_size * 3 * local_hidden_units_, false));
+    context_buf_ =
+        reinterpret_cast<T*>(allocator_->reMalloc(context_buf_, sizeof(T) * batch_size * local_hidden_units_, false));
+    is_allocate_buffer_ = true;
+}
+
+template<typename T>
 void DecoderSelfAttentionLayer<T>::freeBuffer()
 {
-    if (is_allocate_buffer_ == true) {
+    if (is_allocate_buffer_) {
         allocator_->free(qkv_buf_);
         allocator_->free(context_buf_);
         is_allocate_buffer_ = false;
@@ -377,6 +406,7 @@ void DecoderSelfAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor
     //      input_lengths [batch_size]
     //      max_input_length [1] on cpu
     //      step [1] on cpu
+    //      cache_indirection [batch_size / beam_width, beam_width, max_seq_len]
     //      relative_attention_bias [1, head_num, step, step] or [1, head_num, max_seq_len, max_seq_len] (option)
 
     // output tensors:
@@ -384,29 +414,32 @@ void DecoderSelfAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor
     //      key_cache [batch, local_head_num, size_per_head // x, max_seq_len, x]
     //      value_cache [batch, local_head_num, max_seq_len, size_per_head]
 
-    FT_CHECK(input_tensors->size() == 6 || input_tensors->size() == 7);
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    FT_CHECK(input_tensors->size() == 7 || input_tensors->size() == 8);
     FT_CHECK(output_tensors->size() == 3);
     FT_CHECK(output_tensors->at(1).shape.size() == 5 || output_tensors->at(1).shape.size() == 3);
     FT_CHECK(output_tensors->at(2).shape.size() == 4 || output_tensors->at(2).shape.size() == 3);
-    FT_CHECK(isValidBatchSize(input_tensors->at(0).shape[0]));
-    allocateBuffer();
+    // FT_CHECK(isValidBatchSize(input_tensors->at(0).shape[0]));
+    allocateBuffer(input_tensors->at(0).shape[0]);
 
     const T* attention_input = reinterpret_cast<const T*>(input_tensors->at(0).data);
     const bool* finished = reinterpret_cast<const bool*>(input_tensors->at(1).data);
     const int* sequence_lengths = reinterpret_cast<const int*>(input_tensors->at(2).data);
+    const int* cache_indir = reinterpret_cast<const int*>(input_tensors->at(6).data);
     const T* relative_attention_bias =
-        reinterpret_cast<const T*>(input_tensors->size() == 7 ? input_tensors->at(6).data : nullptr);
-    const int relative_attention_bias_stride = input_tensors->size() == 7 ? input_tensors->at(6).shape[3] : 0;
+        reinterpret_cast<const T*>(input_tensors->size() == 8 ? input_tensors->at(7).data : nullptr);
+    const int relative_attention_bias_stride = input_tensors->size() == 8 ? input_tensors->at(7).shape[3] : 0;
 
     T* attention_out = (T*)(output_tensors->at(0).data);
     T* key_cache = (T*)(output_tensors->at(1).data);
     T* value_cache = (T*)(output_tensors->at(2).data);
 
     const int batch_size = input_tensors->at(0).shape[0];
+    const int beam_width = input_tensors->at(6).shape[1];
     const int max_seq_len = output_tensors->at(1).shape[3];
 
 #ifdef SPARSITY_ENABLED
-    const int m_padded = div_up(batch_size, 8);
+    const int m_padded = 8 * div_up(batch_size, 8);
     if (sparse_ && cublas_wrapper_->isUseSparse(1, 3 * local_hidden_units_, m_padded, d_model_)) {
         cublas_wrapper_->SpGemm(CUBLAS_OP_N,
                                 CUBLAS_OP_N,
@@ -457,11 +490,13 @@ void DecoderSelfAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor
                                           relative_attention_bias,
                                           key_cache,
                                           value_cache,
+                                          cache_indir,
                                           context_buf_,
                                           finished,
                                           sequence_lengths,
                                           batch_size,
                                           batch_size,
+                                          beam_width,
                                           local_head_num_,
                                           size_per_head_,
                                           rotary_embedding_dim_,
@@ -528,5 +563,8 @@ void DecoderSelfAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor
 
 template class DecoderSelfAttentionLayer<float>;
 template class DecoderSelfAttentionLayer<half>;
+#ifdef ENABLE_BF16
+template class DecoderSelfAttentionLayer<__nv_bfloat16>;
+#endif
 
 }  // namespace fastertransformer

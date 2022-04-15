@@ -37,8 +37,13 @@ public:
         allocator_(allocator),
         cuda_device_prop_(cuda_device_prop),
         is_free_buffer_after_forward_(is_free_buffer_after_forward),
-        sparse_(sparse) {};
+        sparse_(sparse){};
     virtual ~BaseLayer() = default;
+
+    virtual void setStream(cudaStream_t stream)
+    {
+        stream_ = stream;
+    }
 
 protected:
     virtual void allocateBuffer() = 0;
@@ -51,7 +56,7 @@ protected:
     cudaDeviceProp* cuda_device_prop_ = nullptr;
 
     bool is_free_buffer_after_forward_;
-    bool is_allocate_buffer_ = false;
+    bool is_allocate_buffer_ = false;  // TODO (bhsueh) to be deprecated
     bool sparse_;
 };
 

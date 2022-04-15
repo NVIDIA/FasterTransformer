@@ -15,13 +15,7 @@
  */
 
 #include "src/fastertransformer/kernels/calibrate_quantize_weight_kernels.h"
-#include "src/fastertransformer/th_op/th_traits.h"
 #include "src/fastertransformer/th_op/th_utils.h"
-#include "src/fastertransformer/utils/cuda_utils.h"
-#include "torch/csrc/cuda/Stream.h"
-#include <cuda_fp16.h>
-#include <torch/custom_class.h>
-#include <torch/script.h>
 
 namespace torch_ext {
 using torch::Tensor;

@@ -51,20 +51,16 @@ BertINT8<T>::BertINT8(size_t max_batch_size,
     attention_type_(attention_type),
     sparse_(sparse)
 {
-    if (int8_mode_ != 1 && int8_mode_ != 2 && int8_mode_ != 3)
-    {
-        throw std::runtime_error(
-            std::string("[FT][ERROR] int8_mode_ not support \n"));
+    if (int8_mode_ != 1 && int8_mode_ != 2 && int8_mode_ != 3) {
+        throw std::runtime_error(std::string("[FT][ERROR] int8_mode_ not support \n"));
     }
     if (sparse_ && int8_mode_ == 1) {
-        throw std::runtime_error(
-            std::string("[FT][ERROR] int8_mode 1 does not support sparsity \n"));
+        throw std::runtime_error(std::string("[FT][ERROR] int8_mode 1 does not support sparsity \n"));
     }
-    if (int8_mode_ == 1 && max_seq_len_ > 384 && (max_seq_len_ % 32 != 0))
-    {
-        throw std::runtime_error(
-            std::string("[FT][ERROR] max_seq_len_ should be a multiple of 32 when int8_mode == 1 && max_seq_len_ > 384\n"));
-    } 
+    if (int8_mode_ == 1 && max_seq_len_ > 384 && (max_seq_len_ % 32 != 0)) {
+        throw std::runtime_error(std::string(
+            "[FT][ERROR] max_seq_len_ should be a multiple of 32 when int8_mode == 1 && max_seq_len_ > 384\n"));
+    }
     bert_layer_ = new BertLayerINT8<T>(max_batch_size_,
                                        max_seq_len_,
                                        head_num_,
@@ -277,14 +273,9 @@ void BertINT8<T>::forward(std::vector<Tensor>* output_tensors,
                    std::vector<size_t>{request_batch_size, 1, request_seq_len, request_seq_len},
                    attention_mask_},
             *padding_offset_tensor_ptr,
-            Tensor{MEMORY_CPU,
-                   TYPE_INT32,
-                   std::vector<size_t>{1},
-                   layer_idx_ptr},
-            Tensor{MEMORY_CPU,
-                   TYPE_INT32,
-                   std::vector<size_t>{1},
-                   num_layer_ptr},};
+            Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{1}, layer_idx_ptr},
+            Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{1}, num_layer_ptr},
+        };
         bert_layer_->forward(&tmp_output_tensors, &tmp_input_tensors, &bert_layer_weights->at(i));
     }
 

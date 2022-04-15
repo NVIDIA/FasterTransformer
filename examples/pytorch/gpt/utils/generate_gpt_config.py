@@ -1,4 +1,5 @@
-# Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,11 +17,6 @@ import argparse
 import configparser
 
 def generate_gpt_config(args):
-
-    is_half = 1
-    if args['data_type'] == "fp32":
-        is_half = 0
-
     config = configparser.ConfigParser()
     config["ft_instance_hyperparameter"] = {
         "max_batch_size": "{}".format(args['max_batch_size']),
@@ -31,7 +27,10 @@ def generate_gpt_config(args):
         "temperature": "{}".format(args['temperature']),
         "tensor_para_size": "{}".format(args['tensor_para_size']),
         "pipeline_para_size": "{}".format(args['pipeline_para_size']),
-        "is_half": "{}".format(is_half),
+        "data_type": "{}".format(args['data_type']),
+        "sparse": "0",
+        "int8_mode": "0",
+        "enable_custom_all_reduce": "0",
         "model_name": "tmp_model",
         "model_dir": "{}".format(args['model_dir']),
         "repetition_penalty": "{}".format(args['repetition_penalty']),
@@ -42,6 +41,8 @@ def generate_gpt_config(args):
     config["request"] = {
         "request_batch_size": "{}".format(args['request_batch_size']),
         "request_output_len": "{}".format(args['request_output_len']),
+        "return_log_probs": "false",
+        "context_log_probs": "false",
     }
 
     config["tmp_model"] = {
@@ -62,8 +63,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('-max_batch_size', '--max_batch_size', type=int, default=8, metavar='NUMBER',
                         help='batch size (default: 8)')
-    parser.add_argument('-max_seq_len', '--max_seq_len', type=int, default=32, metavar='NUMBER',
-                        help='max sequence length (default: 32)')
+    parser.add_argument('-max_seq_len', '--max_seq_len', type=int, default=256, metavar='NUMBER',
+                        help='max sequence length (default: 256)')
     parser.add_argument('-beam_width', '--beam_width', type=int, default=1, metavar='NUMBER',
                         help='beam width for beam search (default: 1)')
     parser.add_argument('-n', '--head_number', type=int, default=32, metavar='NUMBER',
@@ -77,7 +78,7 @@ if __name__ == "__main__":
     parser.add_argument('-v', '--vocab_size', type=int, default=50257, metavar='BOOL',
                         help='vocabulary size. (default: 50257).')
     parser.add_argument('-d', '--data_type', type=str, default="fp32", metavar='STRING',
-                        help='data type (default: fp32)', choices=['fp32', 'fp16'])
+                        help='data type (default: fp32)', choices=['fp32', 'fp16', 'bf16'])
     parser.add_argument('-topk', '--sampling_topk', type=int, default=1, metavar='NUMBER',
                         help='Candidate (k) value of top k sampling in decoding. Default is 1.')
     parser.add_argument('-topp', '--sampling_topp', type=float, default=0.0, metavar='NUMBER',

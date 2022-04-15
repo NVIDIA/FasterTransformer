@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -95,8 +95,8 @@ protected:
 
     // decoder settings
     ParallelGpt<T>* gpt_;
-    std::vector<Tensor>* output_tensors_;
-    const std::vector<Tensor>* input_tensors_;
+    std::unordered_map<std::string, Tensor>* output_tensors_;
+    const std::unordered_map<std::string, Tensor>* input_tensors_;
     const ParallelGptWeight<T>* gpt_weights_;
 
     // streamer status and internal buffers
@@ -123,7 +123,7 @@ protected:
     virtual bool stopCriteria(const int step_from, const int step_to, const int* output_ids)
     {
         assert(step_from <= step_to);
-        int batch_size = input_tensors_->at(1).shape[0];
+        int batch_size = output_tensors_->at("output_ids").shape[0];
         for (int step = step_from; step < step_to; step++) {
             bool stop_generation = true;
             for (int i = 0; i < batch_size; i++) {
@@ -185,7 +185,8 @@ protected:
         // terminating the async thread.
         cudaMemcpyAsync(gpt_->getFinishBuffer(),
                         finished,
-                        sizeof(bool) * output_tensors_->at(2).shape[0],
+                        sizeof(bool) * output_tensors_->at("output_ids").shape[0]
+                            * output_tensors_->at("output_ids").shape[1],
                         cudaMemcpyHostToDevice,
                         stream);
         cudaStreamSynchronize(stream);
@@ -193,9 +194,9 @@ protected:
 
     void streamDecoding()
     {
-        int input_len = input_tensors_->at(0).shape[1];
-        int max_output_len = output_tensors_->at(0).shape[0];
-        int batch_size = output_tensors_->at(2).shape[0];
+        int input_len = input_tensors_->at("input_ids").shape[1];
+        int max_output_len = output_tensors_->at("output_ids").shape[0];
+        int batch_size = output_tensors_->at("output_ids").shape[0];
 
         // initialization
         is_generation_done = false;
@@ -212,7 +213,7 @@ protected:
         onStreamBegin(batch_size, input_len);
         while (!(is_generation_done || curr_step == max_output_len)) {
             cudaMemcpyAsync(seqlen_buf_,
-                            (int*)output_tensors_->at(2).data,
+                            (int*)output_tensors_->at("sequence_length").data,
                             sizeof(int) * batch_size,
                             cudaMemcpyDeviceToHost,
                             stream);
@@ -221,7 +222,7 @@ protected:
             if (prev_step < curr_step) {
                 int idx_from = prev_step * batch_size;
                 cudaMemcpyAsync(output_ids + idx_from,
-                                (int*)(output_tensors_->at(0).data) + idx_from,
+                                (int*)(output_tensors_->at("output_ids").data) + idx_from,
                                 sizeof(int) * (curr_step - prev_step) * batch_size,
                                 cudaMemcpyDeviceToHost,
                                 stream);
@@ -246,7 +247,7 @@ protected:
 
 #ifndef NDEBUG
             if (prev_step < curr_step) {
-                int batch_size = output_tensors_->at(2).shape[0];
+                int batch_size = output_tensors_->at("output_ids").shape[0];
                 std::cout << "\r[DEBUG] Step " << curr_step
                           << " | seqlen: " << strutils::toString(sequence_lengths, batch_size, false)
                           << " | output_ids: "
@@ -301,8 +302,8 @@ public:
     }
 
     void initialize(ParallelGpt<T>* gpt,
-                    std::vector<Tensor>* output_tensors,
-                    const std::vector<Tensor>* input_tensors,
+                    std::unordered_map<std::string, Tensor>* output_tensors,
+                    const std::unordered_map<std::string, Tensor>* input_tensors,
                     const ParallelGptWeight<T>* gpt_weights)
     {
         gpt_ = gpt;
@@ -312,7 +313,7 @@ public:
 
         int total_output_tokens = max_output_length * max_batch_size;
         std::fill(output_ids, output_ids + total_output_tokens, 0);
-        std::fill(sequence_lengths, sequence_lengths + max_batch_size, output_tensors_->at(2).shape[0]);
+        std::fill(sequence_lengths, sequence_lengths + max_batch_size, output_tensors_->at("sequence_length").shape[0]);
         std::fill(finished, finished + max_batch_size, false);
 
         prev_step = 0;
@@ -338,8 +339,8 @@ public:
      * \param gpt_weights A ParallelGptWeight pointer, which continas the weights of gpt model
      */
     void run(ParallelGpt<T>* gpt,
-             std::vector<Tensor>* output_tensors,
-             const std::vector<Tensor>* input_tensors,
+             std::unordered_map<std::string, Tensor>* output_tensors,
+             const std::unordered_map<std::string, Tensor>* input_tensors,
              const ParallelGptWeight<T>* gpt_weights)
     {
         initialize(gpt, output_tensors, input_tensors, gpt_weights);
@@ -370,7 +371,7 @@ protected:
     void streamHook(const int prev_step, const int curr_step, const int* output_ids) override
     {
         if (ofs.is_open()) {
-            int batch_size = this->output_tensors_->at(2).shape[0];
+            int batch_size = this->output_tensors_->at("output_ids").shape[0];
             for (int s = prev_step; s < curr_step; s++) {
                 ofs << strutils::toString(output_ids + s * batch_size, batch_size, false) << std::endl;
             }
@@ -431,16 +432,21 @@ int main(int argc, char* argv[])
         std::cout << "[ERROR] Can't load '" << ini_name << "'\n";
         return -1;
     }
-    const int is_half = reader.GetInteger("ft_instance_hyperparameter", "is_half");
+    const std::string data_type = reader.Get("ft_instance_hyperparameter", "data_type");
 
-    if (is_half == 0) {
+    if (data_type == "fp32") {
         multi_gpu_gpt_example<float>(reader);
     }
-    else if (is_half == 1) {
+    else if (data_type == "fp16") {
         multi_gpu_gpt_example<half>(reader);
     }
+#ifdef ENABLE_BF16
+    else if (data_type == "bf16") {
+        multi_gpu_gpt_example<__nv_bfloat16>(reader);
+    }
+#endif
     else {
-        printf("[ERROR] is_fp16 should be 0 (use float) or 1 (use half). \n");
+        printf("[ERROR] data_type should be fp32, fp16 or bf16 ! \n");
         return -1;
     }
     MPI_Finalize();
@@ -526,6 +532,9 @@ void multi_gpu_gpt_example(const INIReader reader)
     const float temperature = reader.GetFloat("ft_instance_hyperparameter", "temperature");
     const float repetition_penalty = reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty");
     const std::string model_dir = std::string(reader.Get("ft_instance_hyperparameter", "model_dir"));
+    const bool sparse = static_cast<bool>(reader.GetInteger("ft_instance_hyperparameter", "sparse"));
+    const float len_penalty = 1.0f;
+    const float beam_search_diversity_rate = 0.0f;
 
     const int tensor_para_size = reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size");
     const int pipeline_para_size = reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size");
@@ -557,8 +566,9 @@ void multi_gpu_gpt_example(const INIReader reader)
     int rank, world_size, device, device_count;
     MPICHECK(MPI_Comm_rank(MPI_COMM_WORLD, &rank));
     MPICHECK(MPI_Comm_size(MPI_COMM_WORLD, &world_size));
-    if (rank == 0)
+    if (rank == 0) {
         printf("Total ranks: %d.\n", world_size);
+    }
     check_cuda_error(cudaGetDeviceCount(&device_count));
     check_cuda_error(cudaSetDevice(rank % device_count));
     check_cuda_error(cudaGetDevice(&device));
@@ -691,6 +701,11 @@ void multi_gpu_gpt_example(const INIReader reader)
     if (std::is_same<T, half>::value) {
         cublas_wrapper.setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
     }
+#ifdef ENABLE_BF16
+    else if (std::is_same<T, __nv_bfloat16>::value) {
+        cublas_wrapper.setBF16GemmConfig();
+    }
+#endif
     else if (std::is_same<T, float>::value) {
         cublas_wrapper.setFP32GemmConfig();
     }
@@ -706,6 +721,10 @@ void multi_gpu_gpt_example(const INIReader reader)
                                                         pipeline_para_rank,
                                                         int8_mode);
     gpt_weights.loadModel(model_dir);
+    NcclParam tensor_para(tensor_para_rank, tensor_para_size, tensor_para_nccl_comm);
+    NcclParam pipeline_para(pipeline_para_rank, pipeline_para_size, pipeline_para_nccl_comm);
+    unsigned long long int random_seed = 0;
+
     ParallelGpt<T> gpt = ParallelGpt<T>(0,  // max_batch_size, FT will adjust the buffer automatically.
                                         0,  // max_seq_len, FT will adjust the buffer automatically.
                                         0,  // max_input_len, FT will adjust the buffer automatically.
@@ -720,16 +739,12 @@ void multi_gpu_gpt_example(const INIReader reader)
                                         0.0f,
                                         top_k,
                                         top_p,
-                                        0,
+                                        random_seed,
                                         temperature,
                                         1.0f,  // len_penalty,
                                         repetition_penalty,
-                                        tensor_para_size,
-                                        tensor_para_rank,
-                                        tensor_para_nccl_comm,
-                                        pipeline_para_size,
-                                        pipeline_para_rank,
-                                        pipeline_para_nccl_comm,
+                                        tensor_para,
+                                        pipeline_para,
                                         stream,
                                         &cublas_wrapper,
                                         &allocator,
@@ -745,28 +760,52 @@ void multi_gpu_gpt_example(const INIReader reader)
     deviceMalloc(&d_parent_ids, request_batch_size * beam_width * total_output_len, false);
     deviceMalloc(&d_sequence_lengths, request_batch_size * beam_width, false);
 
-    std::vector<Tensor> input_tensors = std::vector<Tensor>{
-        Tensor{MEMORY_GPU,
-               TYPE_INT32,
-               std::vector<size_t>{request_batch_size * beam_width, (size_t)max_input_len},
-               d_input_ids},
-        Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size * beam_width}, d_input_lengths},
-        Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{1}, &total_output_len}};
+    std::unordered_map<std::string, Tensor> input_tensors = std::unordered_map<std::string, Tensor>{
+        {"input_ids",
+         Tensor{MEMORY_GPU,
+                TYPE_INT32,
+                std::vector<size_t>{request_batch_size * beam_width, (size_t)max_input_len},
+                d_input_ids}},
+        {"input_lengths",
+         Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size * beam_width}, d_input_lengths}},
+        {"max_output_seq_len", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{1}, &total_output_len}}};
+    if (top_k == 0 && top_p == 0.0f) {
+        FT_CHECK(beam_width > 1);
+        input_tensors.insert({"beam_search_diversity_rate",
+                              Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &beam_search_diversity_rate}});
+    }
+    else {
+        if (top_p != 0.0f) {
+            input_tensors.insert({"runtime_top_p", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &top_p}});
+        }
+        if (top_k != 0) {
+            input_tensors.insert({"runtime_top_k", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{1}, &top_k}});
+        }
+    }
+    input_tensors.insert({"temperature", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &temperature}});
+    input_tensors.insert({"len_penalty", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &len_penalty}});
+    input_tensors.insert(
+        {"repetition_penalty", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &repetition_penalty}});
+    input_tensors.insert({"random_seed", Tensor{MEMORY_CPU, TYPE_UINT64, std::vector<size_t>{1}, &random_seed}});
 
-    std::vector<Tensor> output_tensors = std::vector<Tensor>{
-        Tensor{MEMORY_GPU,
-               TYPE_INT32,
-               std::vector<size_t>{request_batch_size, beam_width, (size_t)total_output_len},
-               d_output_ids},
-        Tensor{MEMORY_GPU,
-               TYPE_INT32,
-               std::vector<size_t>{(size_t)total_output_len, request_batch_size, beam_width},
-               d_parent_ids},
-        Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size, beam_width}, d_sequence_lengths},
-        Tensor{MEMORY_GPU,
-               TYPE_FP32,
-               std::vector<size_t>{(size_t)request_output_len, request_batch_size, beam_width},
-               nullptr}};
+    std::unordered_map<std::string, Tensor> output_tensors = std::unordered_map<std::string, Tensor>{
+        {"output_ids",
+         Tensor{MEMORY_GPU,
+                TYPE_INT32,
+                std::vector<size_t>{request_batch_size, beam_width, (size_t)total_output_len},
+                d_output_ids}},
+        {"parent_ids",
+         Tensor{MEMORY_GPU,
+                TYPE_INT32,
+                std::vector<size_t>{(size_t)total_output_len, request_batch_size, beam_width},
+                d_parent_ids}},
+        {"sequence_length",
+         Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size, beam_width}, d_sequence_lengths}},
+        {"output_log_probs",
+         Tensor{MEMORY_GPU,
+                TYPE_FP32,
+                std::vector<size_t>{(size_t)request_output_len, request_batch_size, beam_width},
+                nullptr}}};
 
     print_mem_usage();
 
@@ -864,18 +903,23 @@ void multi_gpu_gpt_example(const INIReader reader)
                 std::cout << "Writing " << outCount << " elements\n";
                 int zeroCount = 0;
                 for (size_t i = 0; i < outCount; i++) {
-                    if (hBuf[i] == int(0))
+                    if (hBuf[i] == int(0)) {
                         zeroCount++;
+                    }
                     outFile << hBuf[i];
-                    if ((i + 1) % (total_output_len) == 0)
+                    if ((i + 1) % (total_output_len) == 0) {
                         outFile << std::endl;
-                    else
+                    }
+                    else {
                         outFile << " ";
+                    }
 
-                    if (i < 10)
+                    if (i < 10) {
                         printf("%5d ", hBuf[i]);
-                    if ((i + 1) % (total_output_len) == 0 && i < 10)
+                    }
+                    if ((i + 1) % (total_output_len) == 0 && i < 10) {
                         std::cout << std::endl;
+                    }
                 }
                 std::cout << std::endl << "zeroCount = " << zeroCount << std::endl;
             }

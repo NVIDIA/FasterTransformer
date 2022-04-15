@@ -45,6 +45,7 @@ private:
     void freeBuffer() override;
     bool isValidBatchSize(size_t batch_size);
     bool isValidSeqLen(size_t seq_len);
+    void allocateBuffer(size_t batch_size, size_t seq_len);
 
     int sm_;
     float q_scaling_;
@@ -57,20 +58,20 @@ private:
     using BaseAttentionLayer<T>::allocator_;
 
 protected:
-    T* q_buf_;
-    T* k_buf_;
-    T* v_buf_;
-    T* q_buf_2_;
-    T* k_buf_2_;
-    T* v_buf_2_;
-    T* qk_buf_;
-    T* qkv_buf_;
-    T* qkv_buf_2_;
-    T* attn_workspace_;
+    T* q_buf_ = nullptr;
+    T* k_buf_ = nullptr;
+    T* v_buf_ = nullptr;
+    T* q_buf_2_ = nullptr;
+    T* k_buf_2_ = nullptr;
+    T* v_buf_2_ = nullptr;
+    T* qk_buf_ = nullptr;
+    T* qkv_buf_ = nullptr;
+    T* qkv_buf_2_ = nullptr;
+    T* attn_workspace_ = nullptr;
 
-    T** batch_qkv_kernel_ptr_;
-    T** batch_qkv_input_ptr_;
-    T** batch_qkv_buf_ptr_;
+    T** batch_qkv_kernel_ptr_ = nullptr;
+    T** batch_qkv_input_ptr_ = nullptr;
+    T** batch_qkv_buf_ptr_ = nullptr;
 
 public:
     FusedAttentionLayer(size_t max_batch_size,
@@ -83,7 +84,7 @@ public:
                         cublasMMWrapper* cublas_wrapper,
                         IAllocator* allocator,
                         bool is_free_buffer_after_forward,
-                        bool sparse=false);
+                        bool sparse = false);
 
     FusedAttentionLayer(FusedAttentionLayer<T> const& attention_layer);
 

@@ -15,18 +15,6 @@
  */
 
 #include "src/fastertransformer/models/bert/Bert.h"
-
-#include <cuda_fp16.h>
-#include <iostream>
-#include <nvToolsExt.h>
-#include <vector>
-
-#include "torch/csrc/cuda/Stream.h"
-#include <ATen/cuda/CUDAContext.h>
-#include <torch/custom_class.h>
-#include <torch/script.h>
-
-#include "src/fastertransformer/th_op/th_traits.h"
 #include "src/fastertransformer/th_op/th_utils.h"
 
 namespace ft = fastertransformer;
@@ -64,11 +52,12 @@ public:
         _q_scaling(q_scaling)
     {
 #ifndef SPARSITY_ENABLED
-        if (sparse)
+        if (sparse) {
             std::cout << "[WARNING] Sparsity support is not enabled. Will use dense GEMM instead.\n" << std::flush;
+        }
 #endif
         int hidden_dim = _head_num * _head_size;
-        check_cuda_error(cublasLtCreate(&_cublasltHandle));
+        ft::check_cuda_error(cublasLtCreate(&_cublasltHandle));
         sm_ = ft::getSMVersion();
 #ifdef SPARSITY_ENABLED
         if (sparse) {
@@ -158,8 +147,7 @@ public:
         auto stream = at::cuda::getCurrentCUDAStream().stream();
         cublasHandle_t _cublasHandle = at::cuda::getCurrentCUDABlasHandle();
         cublasSetStream(_cublasHandle, stream);
-        fastertransformer::Allocator<AllocatorType::TH>* allocator =
-            new fastertransformer::Allocator<AllocatorType::TH>();
+        ft::Allocator<ft::AllocatorType::TH>* allocator = new ft::Allocator<ft::AllocatorType::TH>();
         ft::cublasMMWrapper* cublas_wrapper =
 #ifdef SPARSITY_ENABLED
             new ft::cublasMMWrapper(_cublasHandle,

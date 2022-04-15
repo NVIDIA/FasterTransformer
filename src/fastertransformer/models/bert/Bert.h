@@ -59,18 +59,20 @@ private:
     const ActivationType activation_type_;
     const LayerNormType layernorm_type_;
 
+    void allocateBuffer(size_t batch_size, size_t seq_len);
+
 protected:
     // model params
-    size_t* token_num_;
-    int* padding_offset_;
-    int* trt_mha_padding_offset_;
-    T* attention_mask_;
-    T* bert_in_buffer_;
-    T* attn_out_buf_;
-    T* bert_out_buffer_;
+    size_t* token_num_ = nullptr;
+    int* padding_offset_ = nullptr;
+    int* trt_mha_padding_offset_ = nullptr;
+    T* attention_mask_ = nullptr;
+    T* bert_in_buffer_ = nullptr;
+    T* attn_out_buf_ = nullptr;
+    T* bert_out_buffer_ = nullptr;
 
-    T* normed_from_tensor_;
-    T* normed_attn_out_buf_;
+    T* normed_from_tensor_ = nullptr;
+    T* normed_attn_out_buf_ = nullptr;
 
 public:
     Bert(size_t max_batch_size,

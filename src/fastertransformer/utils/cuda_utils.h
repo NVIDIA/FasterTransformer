@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,13 +16,17 @@
 
 #pragma once
 
+#include "3rdparty/INIReader.h"
+#include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
+#include "src/fastertransformer/utils/logger.h"
+
 #include <cublasLt.h>
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
-#include <vector>
 #include <fstream>
 #include <iostream>
 #include <string>
+#include <vector>
 #ifdef SPARSITY_ENABLED
 #include <cusparseLt.h>
 #endif
@@ -34,19 +38,29 @@ namespace fastertransformer {
 // workspace for cublas gemm : 32MB
 #define CUBLAS_WORKSPACE_SIZE 33554432
 
+typedef struct half4 {
+    half x, y, z, w;
+} half4;
+
 /* **************************** type definition ***************************** */
 
-enum CublasDataType
-{
+enum CublasDataType {
     FLOAT_DATATYPE = 0,
     HALF_DATATYPE = 1,
-    INT8_DATATYPE = 2
+    BFLOAT16_DATATYPE = 2,
+    INT8_DATATYPE = 3
 };
 
-enum class OperationType
-{
+enum FtCudaDataType {
+    FP32 = 0,
+    FP16 = 1,
+    BF16 = 2
+};
+
+enum class OperationType {
     FP32,
-    FP16
+    FP16,
+    BF16
 };
 
 /* **************************** debug tools ********************************* */
@@ -117,6 +131,16 @@ inline void syncAndCheck(const char* const file, int const line)
 
 #define sync_check_cuda_error() syncAndCheck(__FILE__, __LINE__)
 
+#define checkCUDNN(expression)                                                                                         \
+    {                                                                                                                  \
+        cudnnStatus_t status = (expression);                                                                           \
+        if (status != CUDNN_STATUS_SUCCESS) {                                                                          \
+            std::cerr << "Error on file " << __FILE__ << " line " << __LINE__ << ": " << cudnnGetErrorString(status)   \
+                      << std::endl;                                                                                    \
+            std::exit(EXIT_FAILURE);                                                                                   \
+        }                                                                                                              \
+    }
+
 template<typename T>
 void print_to_file(const T* result, const int size, const char* file)
 {
@@ -128,10 +152,12 @@ void print_to_file(const T* result, const int size, const char* file)
     check_cuda_error(cudaMemcpy(tmp, result, sizeof(T) * size, cudaMemcpyDeviceToHost));
     for (int i = 0; i < size; ++i) {
         float val;
-        if (sizeof(T) == 2)
+        if (sizeof(T) == 2) {
             val = (T)__half2float(tmp[i]);
-        else
+        }
+        else {
             val = (T)tmp[i];
+        }
         fprintf(fd, "%f\n", val);
     }
     free(tmp);
@@ -156,10 +182,12 @@ void print_to_file(const T* result,
         check_cuda_error(cudaMemcpyAsync(tmp, result, sizeof(T) * size, cudaMemcpyDeviceToHost, stream));
         for (int i = 0; i < size; ++i) {
             float val;
-            if (sizeof(T) == 2)
+            if (sizeof(T) == 2) {
                 val = (T)__half2float(tmp[i]);
-            else
+            }
+            else {
                 val = (T)tmp[i];
+            }
             outFile << val << std::endl;
         }
         delete[] tmp;
@@ -187,16 +215,27 @@ void print_abs_mean(const T* buf, uint size, cudaStream_t stream, std::string na
     double sum = 0.0f;
     uint64_t zero_count = 0;
     float max_val = -1e10;
+    bool find_inf = false;
     for (uint i = 0; i < size; i++) {
+        if (std::isinf(h_tmp[i])) {
+            find_inf = true;
+            continue;
+        }
         sum += abs((double)h_tmp[i]);
         if ((float)h_tmp[i] == 0.0f) {
-            zero_count ++;
+            zero_count++;
         }
         max_val = max_val > abs(float(h_tmp[i])) ? max_val : abs(float(h_tmp[i]));
     }
-    printf("[INFO][FT] %s size: %u, abs mean: %f, abs sum: %f, abs max: %f", name.c_str(), size, sum / size, sum, max_val);
+    printf("[INFO][FT] %20s size: %u, abs mean: %f, abs sum: %f, abs max: %f, find inf: %s",
+           name.c_str(),
+           size,
+           sum / size,
+           sum,
+           max_val,
+           find_inf ? "true" : "false");
     std::cout << std::endl;
-    delete [] h_tmp;
+    delete[] h_tmp;
     cudaDeviceSynchronize();
     check_cuda_error(cudaGetLastError());
 }
@@ -205,7 +244,7 @@ template<typename T>
 void print_to_screen(const T* result, const int size)
 {
     if (result == nullptr) {
-        printf("[WARNING] It is an nullptr, skip!");
+        printf("[WARNING] It is an nullptr, skip! \n");
         return;
     }
     T* tmp = reinterpret_cast<T*>(malloc(sizeof(T) * size));
@@ -217,6 +256,43 @@ void print_to_screen(const T* result, const int size)
 }
 
 template<typename T>
+static inline void printMatrix(T* ptr, int m, int k, int stride, bool is_device_ptr)
+{
+    T* tmp;
+    if (is_device_ptr) {
+        // k < stride ; stride = col-dimension.
+        tmp = reinterpret_cast<T*>(malloc(m * stride * sizeof(T)));
+        check_cuda_error(cudaMemcpy(tmp, ptr, sizeof(T) * m * stride, cudaMemcpyDeviceToHost));
+        cudaDeviceSynchronize();
+    }
+    else {
+        tmp = ptr;
+    }
+
+    for (int ii = -1; ii < m; ++ii) {
+        if (ii >= 0) {
+            printf("%02d ", ii);
+        }
+        else {
+            printf("   ");
+        }
+
+        for (int jj = 0; jj < k; jj += 1) {
+            if (ii >= 0) {
+                printf("%7.3f ", (float)tmp[ii * stride + jj]);
+            }
+            else {
+                printf("%7d ", jj);
+            }
+        }
+        printf("\n");
+    }
+    if (is_device_ptr) {
+        free(tmp);
+    }
+}
+
+template<typename T>
 void check_max_val(const T* result, const int size)
 {
     T* tmp = new T[size];
@@ -224,8 +300,9 @@ void check_max_val(const T* result, const int size)
     float max_val = -100000;
     for (int i = 0; i < size; i++) {
         float val = static_cast<float>(tmp[i]);
-        if (val > max_val)
+        if (val > max_val) {
             max_val = val;
+        }
     }
     delete tmp;
     printf("[INFO][CUDA] addr %p max val: %f \n", result, max_val);
@@ -249,25 +326,27 @@ void check_abs_mean_val(const T* result, const int size)
         std::cout << "[FT][CALL] " << __FUNCTION__ << " " << std::endl;                                                \
     } while (0)
 
-inline void myAssert(bool result, const char* const file, int const line)
+inline void myAssert(bool result, const char* const file, int const line, std::string info = "")
 {
     if (result != true) {
-        throw std::runtime_error(std::string("[FT][ERROR] Assertion fail: ") + +file + ":" + std::to_string(line)
-                                 + " \n");
+        throw std::runtime_error(std::string("[FT][ERROR] ") + info + std::string(" Assertion fail: ") + file + ":"
+                                 + std::to_string(line) + " \n");
     }
 }
 
 #define FT_CHECK(val) myAssert(val, __FILE__, __LINE__)
+#define FT_CHECK_WITH_INFO(val, info) myAssert(val, __FILE__, __LINE__, info)
 
 #ifdef SPARSITY_ENABLED
-#define CHECK_CUSPARSE(func)                                                                                                      \
-{                                                                                                                                 \
-    cusparseStatus_t status = (func);                                                                                             \
-    if (status != CUSPARSE_STATUS_SUCCESS) {                                                                                      \
-      throw std::runtime_error(std::string("[FT][ERROR] CUSPARSE API failed at line ") + std::to_string(__LINE__) +               \
-            " in file " + __FILE__ + ": " + cusparseGetErrorString(status) + " " + std::to_string(status));                       \
-    }                                                                                                                             \
-}
+#define CHECK_CUSPARSE(func)                                                                                           \
+    {                                                                                                                  \
+        cusparseStatus_t status = (func);                                                                              \
+        if (status != CUSPARSE_STATUS_SUCCESS) {                                                                       \
+            throw std::runtime_error(std::string("[FT][ERROR] CUSPARSE API failed at line ")                           \
+                                     + std::to_string(__LINE__) + " in file " + __FILE__ + ": "                        \
+                                     + cusparseGetErrorString(status) + " " + std::to_string(status));                 \
+        }                                                                                                              \
+    }
 #endif
 
 /*************Time Handling**************/
@@ -347,8 +426,9 @@ inline cudaError_t getSetDevice(int i_device, int* o_device = NULL)
 
     if (o_device != NULL) {
         err = cudaGetDevice(&current_dev_id);
-        if (err != cudaSuccess)
+        if (err != cudaSuccess) {
             return err;
+        }
         if (current_dev_id == i_device) {
             *o_device = i_device;
         }
@@ -382,6 +462,90 @@ inline int getDeviceCount()
     int count = 0;
     check_cuda_error(cudaGetDeviceCount(&count));
     return count;
+}
+
+template<typename T>
+CublasDataType getCublasDataType()
+{
+    if (std::is_same<T, half>::value) {
+        return HALF_DATATYPE;
+    }
+#ifdef ENABLE_BF16
+    else if (std::is_same<T, __nv_bfloat16>::value) {
+        return BFLOAT16_DATATYPE;
+    }
+#endif
+    else if (std::is_same<T, float>::value) {
+        return FLOAT_DATATYPE;
+    }
+    else {
+        FT_CHECK(false);
+        return FLOAT_DATATYPE;
+    }
+}
+
+template<typename T>
+cudaDataType_t getCudaDataType()
+{
+    if (std::is_same<T, half>::value) {
+        return CUDA_R_16F;
+    }
+#ifdef ENABLE_BF16
+    else if (std::is_same<T, __nv_bfloat16>::value) {
+        return CUDA_R_16BF;
+    }
+#endif
+    else if (std::is_same<T, float>::value) {
+        return CUDA_R_32F;
+    }
+    else {
+        FT_CHECK(false);
+        return CUDA_R_32F;
+    }
+}
+
+template<CublasDataType T>
+struct getTypeFromCudaDataType {
+    using Type = float;
+};
+
+template<>
+struct getTypeFromCudaDataType<HALF_DATATYPE> {
+    using Type = half;
+};
+
+#ifdef ENABLE_BF16
+template<>
+struct getTypeFromCudaDataType<BFLOAT16_DATATYPE> {
+    using Type = __nv_bfloat16;
+};
+#endif
+
+inline FtCudaDataType getModelFileType(std::string ini_file, std::string section_name)
+{
+    FtCudaDataType model_file_type;
+    INIReader reader = INIReader(ini_file);
+    if (reader.ParseError() < 0) {
+        FT_LOG_WARNING("Can't load %s. Use FP32 as default", ini_file.c_str());
+        model_file_type = FtCudaDataType::FP32;
+    }
+    else {
+        std::string weight_data_type_str = std::string(reader.Get(section_name, "weight_data_type"));
+        if (weight_data_type_str.find("fp32") != std::string::npos) {
+            model_file_type = FtCudaDataType::FP32;
+        }
+        else if (weight_data_type_str.find("fp16") != std::string::npos) {
+            model_file_type = FtCudaDataType::FP16;
+        }
+        else if (weight_data_type_str.find("bf16") != std::string::npos) {
+            model_file_type = FtCudaDataType::BF16;
+        }
+        else {
+            FT_LOG_WARNING("Invalid type %s. Use FP32 as default", weight_data_type_str.c_str());
+            model_file_type = FtCudaDataType::FP32;
+        }
+    }
+    return model_file_type;
 }
 
 /* ************************** end of common utils ************************** */

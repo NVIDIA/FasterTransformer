@@ -15,13 +15,18 @@
  */
 
 #pragma once
+#include "src/fastertransformer/utils/Tensor.h"
+#include "torch/csrc/cuda/Stream.h"
 #include "torch/extension.h"
+#include <ATen/cuda/CUDAContext.h>
 #include <cstdio>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include <iostream>
+#include <nvToolsExt.h>
+#include <torch/custom_class.h>
+#include <torch/script.h>
 #include <vector>
-
-#include "src/fastertransformer/utils/Tensor.h"
 
 #define CHECK_TYPE(x, st) TORCH_CHECK(x.scalar_type() == st, "Inconsistency of Tensor type: " #x)
 #define CHECK_TH_CUDA(x) TORCH_CHECK(x.is_cuda(), #x " must be a CUDA tensor")

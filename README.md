@@ -24,26 +24,35 @@ This repository provides a script and recipe to run the highly optimized transfo
 
 ## Model overview
 
-In NLP, encoder and decoder are two important components, with the transformer layer becoming a popular architecture for both components. FasterTransformer implements a highly optimized transformer layer for both the encoder and decoder for inference. On Volta, Turing and Ampere GPUs, the computing power of Tensor Cores are used automatically when the precision of the data and weights are FP16. 
+In NLP, encoder and decoder are two important components, with the transformer layer becoming a popular architecture for both components. FasterTransformer implements a highly optimized transformer layer for both the encoder and decoder for inference. On Volta, Turing and Ampere GPUs, the computing power of Tensor Cores are used automatically when the precision of the data and weights are FP16.
 
 FasterTransformer is built on top of CUDA, cuBLAS, cuBLASLt and C++. We provide at least one API of the following frameworks: TensorFlow, PyTorch and Triton backend. Users can integrate FasterTransformer into these frameworks directly. For supporting frameworks, we also provide example codes to demonstrate how to use, and show the performance on these frameworks.
 
 ### Support matrix
 
-| Models     | Framework      | FP16 | INT8 (after Turing) | Sparsity (after Ampere) | Tensor parallel | Pipeline parallel |
-| ---------- | -------------- | ---- | ------------------- | ----------------------- | --------------- | ----------------- |
-| BERT       | TensorFlow     | Yes  | Yes                 | -                       | -               | -                 |
-| BERT       | PyTorch        | Yes  | Yes                 | Yes                     | -               | -                 |
-| Encoder    | TensorFlow     | Yes  | Yes                 | -                       | -               | -                 |
-| Encoder    | PyTorch        | Yes  | Yes                 | Yes                     | -               | -                 |
-| Decoder    | TensorFlow     | Yes  | -                   | -                       | -               | -                 |
-| Decoder    | PyTorch        | Yes  | -                   | -                       | -               | -                 |
-| Decoding   | TensorFlow     | Yes  | -                   | -                       | -               | -                 |
-| Decoding   | PyTorch        | Yes  | -                   | -                       | -               | -                 |
-| GPT        | TensorFlow     | Yes  | -                   | -                       | -               | -                 |
-| GPT        | PyTorch        | Yes  | -                   | -                       | Yes             | Yes               |
-| GPT        | Triton backend | Yes  | -                   | -                       | Yes             | Yes               |
-| Longformer | PyTorch        | Yes  | -                   | -                       | -               | -                 |
+| Models           | Framework      | FP16 | INT8 (after Turing) | Sparsity (after Ampere) | Tensor parallel | Pipeline parallel |
+| ---------------- | -------------- | ---- | ------------------- | ----------------------- | --------------- | ----------------- |
+| BERT             | TensorFlow     | Yes  | Yes                 | -                       | -               | -                 |
+| BERT             | PyTorch        | Yes  | Yes                 | Yes                     | -               | -                 |
+| XLNet            | C++            | Yes  | -                   | -                       | -               | -                 |
+| Encoder          | TensorFlow     | Yes  | Yes                 | -                       | -               | -                 |
+| Encoder          | PyTorch        | Yes  | Yes                 | Yes                     | -               | -                 |
+| Decoder          | TensorFlow     | Yes  | -                   | -                       | -               | -                 |
+| Decoder          | PyTorch        | Yes  | -                   | -                       | -               | -                 |
+| Decoding         | TensorFlow     | Yes  | -                   | -                       | -               | -                 |
+| Decoding         | PyTorch        | Yes  | -                   | -                       | -               | -                 |
+| GPT              | TensorFlow     | Yes  | -                   | -                       | -               | -                 |
+| GPT              | PyTorch        | Yes  | -                   | -                       | Yes             | Yes               |
+| GPT              | Triton backend | Yes  | -                   | -                       | Yes             | Yes               |
+| GPT-J            | Triton backend | Yes  | -                   | -                       | Yes             | Yes               |
+| Longformer       | PyTorch        | Yes  | -                   | -                       | -               | -                 |
+| T5               | PyTorch        | Yes  | -                   | -                       | Yes             | Yes               |
+| T5               | Triton backend | Yes  | -                   | -                       | Yes             | Yes               |
+| T5               | TensorRT       | Yes  | -                   | -                       | Yes             | Yes               |
+| Swin Transformer | PyTorch        | Yes  | Yes                 | -                       | -               | -                 |
+| Swin Transformer | TensorRT       | Yes  | Yes                 | -                       | -               | -                 |
+| ViT              | PyTorch        | Yes  | Yes                 | -                       | -               | -                 |
+| ViT              | TensorRT       | Yes  | Yes                 | -                       | -               | -                 |
 
 * Note that the FasterTransformer supports the models above on C++ because all source codes are built on C++.
 
@@ -51,13 +60,14 @@ More details of specific models are put in `xxx_guide.md` of [`docs/`](docs), wh
 
 ## Advanced
 
-The following code lists the directory structure of FasterTransformer: 
+The following code lists the directory structure of FasterTransformer:
 
 ```bash
 /src/fastertransformer: source code of FasterTransformer
     |--/models: Implementation of different models, like BERT, GPT.
     |--/layers: Implementation of layer modeuls, like attention layer, ffn layer.
     |--/kernels: CUDA kernels for different models/layers and operations, like addBiasResiual.
+    |--/tensorrt_plugin: encapluate FasterTransformer into TensorRT plugin.
     |--/tf_op: custom Tensorflow OP implementation
     |--/th_op: custom PyTorch OP implementation
     |--/triton_backend: custom triton backend implementation
@@ -66,6 +76,7 @@ The following code lists the directory structure of FasterTransformer:
     |--/cpp: C++ interface examples
     |--/pytorch: PyTorch OP examples
     |--/tensorflow: TensorFlow OP examples
+    |--tensorrt: TensorRT examples
 /docs: Documents to explain the details of implementation of different models, and show the benchmark
 /benchmark: Contains the scripts to run the benchmarks of different models
 /tests: Unit tests
@@ -74,7 +85,7 @@ The following code lists the directory structure of FasterTransformer:
 
 Note that many folders contains many sub-folders to split different models. Quantization tools are move to `examples`, like `examples/tensorflow/bert/bert-quantization/` and `examples/pytorch/bert/bert-quantization-sparsity/`.
 
-## Performance 
+## Performance
 
 Hardware settings:
 
@@ -111,7 +122,7 @@ For large batch size and sequence length, both EFF-FT and FT-INT8-v2 bring about
 
 The following figure compares the performances of different features of FasterTransformer and TensorFlow XLA under FP16 on T4.
 
-For small batch size and sequence length, using FasterTransformer can bring about 3x speedup. 
+For small batch size and sequence length, using FasterTransformer can bring about 3x speedup.
 
 For large batch size and sequence length, using Effective FasterTransformer with INT8-v2 quantization can bring about 5x speedup.
 
@@ -131,12 +142,12 @@ For large batch size and sequence length, using Effective FasterTransformer with
 
 The results of TensorFlow were obtained by running the `benchmarks/decoding/tf_decoding_beamsearch_benchmark.sh` and `benchmarks/decoding/tf_decoding_sampling_benchmark.sh`
 
-The results of PyTorch were obtained by running the `benchmarks/decoding/pyt_decoding_beamsearch_benchmark.sh`. 
+The results of PyTorch were obtained by running the `benchmarks/decoding/pyt_decoding_beamsearch_benchmark.sh`.
 
 In the experiments of decoding, we updated the following parameters:
 
 * head_num = 8
-* size_per_head = 64 
+* size_per_head = 64
 * num_layers = 6 for both encoder and decoder
 * vocabulary_size = 32001 for TensorFlow sample codes, 31538 for PyTorch sample codes
 * memory_hidden_dim = 512
@@ -178,10 +189,37 @@ In the experiments of decoding, we updated the following parameters:
 
 ### Changelog
 
+April 2022
+- Change the default accumulation type of all gemm to FP32. 
+- Support bfloat16 inference in GPT model.
+- Support Nemo Megatron T5 and Megatron-LM T5 model.
+- Support ViT. 
+
+March 2022
+- Support `stop_ids` and `ban_bad_ids` in GPT-J.
+- Support dynamice `start_id` and `end_id` in GPT-J, GPT, T5 and Decoding.
+
+Febuary 2022
+- Support Swin Transformer.
+- Optimize the k/v cache update of beam search by in-direction buffer.
+- Support runtime input for GPT-J, T5 and GPT.
+- Support soft prompt in GPT and GPT-J.
+- Support custom all reduce kernel.
+  - Limitation: 
+    1. Only support tensor parallel size = 8 on DGX-A100.
+    2. Only support CUDA with cudaMallocAsync.
+
+December 2021
+- Add TensorRT plugin of T5 model.
+- Change some hyper-parameters of GPT model to runtime query.
+- Optimize the memory allocator under C++ code.
+- Fix bug of CUB including when using CUDA 11.5 or newer version.
+
 November 2021
+- **Update the FasterTransformer 5.0 beta**
 - Add GPT-3 INT8 weight only qauntization for batch size <= 2.
 - Support multi-node multi-gpu support on T5.
-- Enhance the multi-node multi-gpu supporting in GPT-3. 
+- Enhance the multi-node multi-gpu supporting in GPT-3.
 
 August 2021
 - **Release the FasterTransformer 5.0 beta**
@@ -228,7 +266,7 @@ Nov 2020
 - Support PyTorch INT8 inference.
 - Provide PyTorch INT8 quantiztion tools.
 - Integrate the fused multi-head attention kernel of TensorRT into FasterTransformer.
-- Add unit test of SQuAD. 
+- Add unit test of SQuAD.
 - Update the missed NGC checkpoints.
 
 Sep 2020
@@ -249,7 +287,7 @@ June 2020
 
 May 2020
 - Fix the bug that seq_len of encoder must be larger than 3.
-- Add the position_encoding of decoding as the input of FasterTransformer decoding. This is convenient to use different types of position encoding. FasterTransformer does not compute the position encoding value, but only lookup the table. 
+- Add the position_encoding of decoding as the input of FasterTransformer decoding. This is convenient to use different types of position encoding. FasterTransformer does not compute the position encoding value, but only lookup the table.
 - Modifying the method of loading model in `translate_sample.py`.
 
 April 2020
@@ -262,9 +300,9 @@ April 2020
   - Merge `bert_transformer_op.h`, `bert_transformer_op.cu.cc` into `bert_transformer_op.cc`
   - Merge `decoder.h`, `decoder.cu.cc` into `decoder.cc`
   - Merge `decoding_beamsearch.h`, `decoding_beamsearch.cu.cc` into `decoding_beamsearch.cc`
-- Fix the bugs of finalize function decoding.py. 
+- Fix the bugs of finalize function decoding.py.
 - Fix the bug of tf DiverseSiblingSearch.
-- Add BLEU scorer `bleu_score.py` into `utils`. Note that the BLEU score requires python3. 
+- Add BLEU scorer `bleu_score.py` into `utils`. Note that the BLEU score requires python3.
 - Fuse QKV Gemm of encoder and masked_multi_head_attention of decoder.
 - Add dynamic batch size and dynamic sequence length features into all ops.
 
@@ -273,25 +311,25 @@ March 2020
   - Add `translate_sample.py` to demonstrate how to translate a sentence by restoring the pretrained model of OpenNMT-tf.
 - Fix bugs of Fastertransformer 2.0
   - Fix the bug of maximum sequence length of decoder cannot be larger than 128.
-  - Fix the bug that decoding does not check finish or not after each step. 
+  - Fix the bug that decoding does not check finish or not after each step.
   - Fix the bug of decoder about max_seq_len.
-  - Modify the decoding model structure to fit the OpenNMT-tf decoding model. 
+  - Modify the decoding model structure to fit the OpenNMT-tf decoding model.
     - Add a layer normalization layer after decoder.
     - Add a normalization for inputs of decoder
 
 Febuary 2020
 - **Release the FasterTransformer 2.0**
-  - Provide a highly optimized OpenNMT-tf based decoder and decoding, including C++ API and TensorFlow op. 
+  - Provide a highly optimized OpenNMT-tf based decoder and decoding, including C++ API and TensorFlow op.
   - Refine the sample codes of encoder.
   - Add dynamic batch size feature into encoder op.
 
 July 2019
 - **Release the FasterTransformer 1.0**
-  - Provide a highly optimized bert equivalent transformer layer, including C++ API, TensorFlow op and TensorRT plugin. 
+  - Provide a highly optimized bert equivalent transformer layer, including C++ API, TensorFlow op and TensorRT plugin.
 
 ### Known issues
 
 - Undefined symbol errors when import the extension
   - Please `import torch` first. If this has been done, it is due to the incompatible C++ ABI. You may need to check the PyTorch used during compilation and execution are the same, or you need to check how your PyTorch is compiled, or the version of your GCC, etc.
-- Results of TensorFlow and OP would be different in decoding. This problem is caused by the accumulated log probability, and we do not avoid this problem. 
-- If encounter some problem in the custom environment, try to use the gcc/g++ 4.8 to build the project of TensorFlow op, especially for TensorFlow 1.14. 
+- Results of TensorFlow and OP would be different in decoding. This problem is caused by the accumulated log probability, and we do not avoid this problem.
+- If encounter some problem in the custom environment, try to use the gcc/g++ 4.8 to build the project of TensorFlow op, especially for TensorFlow 1.14.

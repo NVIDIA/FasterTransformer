@@ -29,10 +29,11 @@ void FfnLayer<T>::forward(std::vector<fastertransformer::Tensor>* output_tensors
     // output tensors:
     //      ffn_output [token_num, hidden_dimension],
 
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     FT_CHECK(input_tensors->size() == 1);
     FT_CHECK(output_tensors->size() == 1);
-    FT_CHECK(isValidTokenNum(input_tensors->at(0).shape[0]));
-    allocateBuffer();
+    // FT_CHECK(isValidTokenNum(input_tensors->at(0).shape[0]));
+    allocateBuffer(input_tensors->at(0).shape[0]);
 
     const int m = input_tensors->at(0).shape[0];
     T* output_tensor = (T*)output_tensors->at(0).data;
@@ -158,6 +159,7 @@ FfnLayer<T>::FfnLayer(size_t max_batch_size,
     inter_size_(inter_size),
     int8_mode_(int8_mode)
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
 }
 
 template<typename T>
@@ -175,11 +177,13 @@ FfnLayer<T>::FfnLayer(FfnLayer<T> const& ffn_layer):
     inter_size_(ffn_layer.inter_size_),
     int8_mode_(ffn_layer.int8_mode_)
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
 }
 
 template<typename T>
 FfnLayer<T>::~FfnLayer()
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     cublas_wrapper_ = nullptr;
     freeBuffer();
 }
@@ -187,6 +191,7 @@ FfnLayer<T>::~FfnLayer()
 template<typename T>
 void FfnLayer<T>::allocateBuffer()
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_ == false) {
         inter_buf_ = (T*)allocator_->malloc(sizeof(T) * max_token_num_ * inter_size_, false);
         is_allocate_buffer_ = true;
@@ -194,9 +199,18 @@ void FfnLayer<T>::allocateBuffer()
 }
 
 template<typename T>
+void FfnLayer<T>::allocateBuffer(size_t token_num)
+{
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    inter_buf_ = (T*)allocator_->reMalloc(inter_buf_, sizeof(T) * token_num * inter_size_, false);
+    is_allocate_buffer_ = true;
+}
+
+template<typename T>
 void FfnLayer<T>::freeBuffer()
 {
-    if (is_allocate_buffer_ == true) {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    if (is_allocate_buffer_) {
         allocator_->free(inter_buf_);
         is_allocate_buffer_ = false;
     }
@@ -205,18 +219,17 @@ void FfnLayer<T>::freeBuffer()
 template<typename T>
 bool FfnLayer<T>::isValidTokenNum(size_t token_num)
 {
-    if (token_num <= max_token_num_) {
-        return true;
+    if (max_token_num_ < token_num) {
+        max_token_num_ = token_num;
     }
-    else {
-        freeBuffer();
-        max_token_num_ = token_num * 1.2;
-        return true;
-    }
+    return true;
 }
 
 template class FfnLayer<float>;
 template class FfnLayer<half>;
+#ifdef ENABLE_BF16
+template class FfnLayer<__nv_bfloat16>;
+#endif
 
 template<typename T>
 GeluFfnLayer<T>::GeluFfnLayer(size_t max_batch_size,
@@ -257,6 +270,9 @@ void GeluFfnLayer<T>::invokeAddBiasActivation(const int m, const T* bias)
 
 template class GeluFfnLayer<float>;
 template class GeluFfnLayer<half>;
+#ifdef ENABLE_BF16
+template class GeluFfnLayer<__nv_bfloat16>;
+#endif
 
 template<typename T>
 ReluFfnLayer<T>::ReluFfnLayer(size_t max_batch_size,
@@ -295,5 +311,8 @@ void ReluFfnLayer<T>::invokeAddBiasActivation(const int m, const T* bias)
 
 template class ReluFfnLayer<float>;
 template class ReluFfnLayer<half>;
+#ifdef ENABLE_BF16
+template class ReluFfnLayer<__nv_bfloat16>;
+#endif
 
 }  // namespace fastertransformer

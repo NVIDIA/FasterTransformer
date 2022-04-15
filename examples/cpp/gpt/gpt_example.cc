@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@
  */
 
 #include "3rdparty/INIReader.h"
-#include "src/fastertransformer/models/gpt/Gpt.h"
+#include "src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.h"
 #include "src/fastertransformer/utils/nvtx_utils.h"
 
 #include <cuda_profiler_api.h>
@@ -42,24 +42,33 @@ int main(int argc, char* argv[])
     printf("Device %s\n", prop.name);
 
     std::string ini_name;
-    if (argc == 2)
+    if (argc == 2) {
         ini_name = std::string(argv[1]);
-    else
+    }
+    else {
         ini_name = "../examples/cpp/gpt/gpt_config.ini";
+    }
 
     INIReader reader = INIReader(ini_name);
     if (reader.ParseError() < 0) {
         std::cout << "[ERROR] Can't load '" << ini_name << "'\n";
         return -1;
     }
-    const int is_half = reader.GetInteger("ft_instance_hyperparameter", "is_half");
+    const std::string data_type = reader.Get("ft_instance_hyperparameter", "data_type");
 
-    if (is_half == 0)
+    if (data_type == "fp32") {
         gpt_example<float>(reader);
-    else if (is_half == 1)
+    }
+    else if (data_type == "fp16") {
         gpt_example<half>(reader);
+    }
+#ifdef ENABLE_BF16
+    else if (data_type == "bf16") {
+        gpt_example<__nv_bfloat16>(reader);
+    }
+#endif
     else {
-        printf("[ERROR] is_fp16 should be 0 (use float) or 1 (use half). \n");
+        printf("[ERROR] data_type should be fp32, fp16 or bf16 ! \n");
         return -1;
     }
     return 0;
@@ -146,6 +155,9 @@ void gpt_example(const INIReader reader)
     const float repetition_penalty = reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty");
     const std::string model_dir = std::string(reader.Get("ft_instance_hyperparameter", "model_dir"));
     const bool sparse = static_cast<bool>(reader.GetInteger("ft_instance_hyperparameter", "sparse"));
+    const float len_penalty = 1.0f;
+    const float beam_search_diversity_rate = 0.0f;
+    const unsigned long long int random_seed = 0;
 
     const size_t head_num = reader.GetInteger(model_name, "head_num");
     const size_t size_per_head = reader.GetInteger(model_name, "size_per_head");
@@ -157,6 +169,13 @@ void gpt_example(const INIReader reader)
     const size_t request_batch_size = reader.GetInteger("request", "request_batch_size");
     // The length of tokens we hope this model to generate
     const int request_output_len = reader.GetInteger("request", "request_output_len");
+    // Whether to return the log probabilities of outputs.
+    const bool is_return_log_probs = reader.GetBoolean("request", "return_log_probs", false);
+    // Whether to include input contexts in computing the cumulative log probabilities.
+    const bool is_return_context_cum_log_probs = reader.GetBoolean("request", "context_log_probs", false);
+    if (is_return_log_probs && !is_return_context_cum_log_probs) {
+        FT_LOG_WARNING("context_log_probs will be ignored since return_log_probs is disabled.");
+    }
 
     const int start_id = 50256;
     const int end_id = 50256;
@@ -167,7 +186,7 @@ void gpt_example(const INIReader reader)
     int max_input_len = -1;
     std::vector<int> v_start_lengths;
     std::vector<int> v_start_ids;
-    read_start_ids(request_batch_size, &v_start_lengths, &v_start_ids, max_input_len, end_id, beam_width);
+    read_start_ids(request_batch_size, &v_start_lengths, &v_start_ids, max_input_len, end_id, 1);
 
     int* d_input_ids;
     int* d_input_lengths;
@@ -178,10 +197,10 @@ void gpt_example(const INIReader reader)
     }
     else {
         // conditional case.
-        deviceMalloc(&d_input_ids, request_batch_size * beam_width * max_input_len, false);
-        deviceMalloc(&d_input_lengths, request_batch_size * beam_width, false);
-        cudaH2Dcpy(d_input_ids, v_start_ids.data(), request_batch_size * beam_width * max_input_len);
-        cudaH2Dcpy(d_input_lengths, v_start_lengths.data(), request_batch_size * beam_width);
+        deviceMalloc(&d_input_ids, request_batch_size * max_input_len, false);
+        deviceMalloc(&d_input_lengths, request_batch_size, false);
+        cudaH2Dcpy(d_input_ids, v_start_ids.data(), request_batch_size * max_input_len);
+        cudaH2Dcpy(d_input_lengths, v_start_lengths.data(), request_batch_size);
     }
 
     const int total_output_len = max_input_len + request_output_len;
@@ -219,13 +238,20 @@ void gpt_example(const INIReader reader)
     if (std::is_same<T, half>::value) {
         cublas_wrapper.setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
     }
+#ifdef ENABLE_BF16
+    else if (std::is_same<T, __nv_bfloat16>::value) {
+        cublas_wrapper.setBF16GemmConfig();
+    }
+#endif
     else if (std::is_same<T, float>::value) {
         cublas_wrapper.setFP32GemmConfig();
     }
     struct cudaDeviceProp prop;
     check_cuda_error(cudaGetDeviceProperties(&prop, 0));
 
-    fastertransformer::GptWeight<T> gpt_weights(hidden_units, inter_size, vocab_size, decoder_layers, max_seq_len);
+    fastertransformer::ParallelGptWeight<T> gpt_weights(
+        hidden_units, inter_size, vocab_size, decoder_layers, max_seq_len, 1, 0, 1, 0, 0);
+
     gpt_weights.loadModel(model_dir);
 
 #ifdef SPARSITY_ENABLED
@@ -234,31 +260,38 @@ void gpt_example(const INIReader reader)
         gpt_weights.compress_weights(cublas_wrapper);
     }
 #endif
+    NcclParam tensor_para;
+    NcclParam pipeline_para;
 
-    Gpt<T> gpt = Gpt<T>(0,  // max_batch_size, FT will adjust the buffer automatically.
-                        0,  // max_seq_len, FT will adjust the buffer automatically.
-                        0,  // max_input_len, FT will adjust the buffer automatically.
-                        beam_width,
-                        head_num,
-                        size_per_head,
-                        inter_size,
-                        decoder_layers,
-                        vocab_size,
-                        start_id,
-                        end_id,
-                        0.0f,
-                        top_k,
-                        top_p,
-                        0,
-                        temperature,
-                        1.0f,  // len_penalty,
-                        repetition_penalty,
-                        stream,
-                        &cublas_wrapper,
-                        &allocator,
-                        false,
-                        &prop,
-                        sparse);
+    // TODO(bhsueh) Some parameters are move to runtime query.
+    // Need to remove them in the future.
+    ParallelGpt<T> gpt = ParallelGpt<T>(0,  // max_batch_size, FT will adjust the buffer automatically.
+                                        0,  // max_seq_len, FT will adjust the buffer automatically.
+                                        0,  // max_input_len, FT will adjust the buffer automatically.
+                                        beam_width,
+                                        head_num,
+                                        size_per_head,
+                                        inter_size,
+                                        decoder_layers,
+                                        vocab_size,
+                                        start_id,
+                                        end_id,
+                                        0.0f,  // beam_search_diversity_rate,
+                                        0,     // top_k,
+                                        0.0,   // top_p,
+                                        0,     // random_seed,
+                                        1.0f,  // temperature,
+                                        1.0f,  // len_penalty,
+                                        1.0f,  // repetition_penalty,
+                                        tensor_para,
+                                        pipeline_para,
+                                        stream,
+                                        &cublas_wrapper,
+                                        &allocator,
+                                        false,
+                                        &prop,
+                                        sparse,
+                                        0);
 
     int* d_output_ids;
     int* d_parent_ids;
@@ -267,28 +300,59 @@ void gpt_example(const INIReader reader)
     deviceMalloc(&d_parent_ids, request_batch_size * beam_width * total_output_len, false);
     deviceMalloc(&d_sequence_lengths, request_batch_size * beam_width, false);
 
-    std::vector<Tensor> input_tensors = std::vector<Tensor>{
-        Tensor{MEMORY_GPU,
-               TYPE_INT32,
-               std::vector<size_t>{request_batch_size * beam_width, (size_t)max_input_len},
-               d_input_ids},
-        Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size * beam_width}, d_input_lengths},
-        Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{1}, &total_output_len}};
+    std::unordered_map<std::string, Tensor> input_tensors = std::unordered_map<std::string, Tensor>{
+        {"input_ids",
+         Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size, (size_t)max_input_len}, d_input_ids}},
+        {"input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size}, d_input_lengths}},
+        {"max_output_seq_len", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{1}, &total_output_len}},
+        {"temperature", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &temperature}},
+        {"len_penalty", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &len_penalty}},
+        {"repetition_penalty", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &repetition_penalty}}};
+    if (top_k == 0 && top_p == 0.0f) {
+        FT_CHECK(beam_width > 1);
+        input_tensors.insert({"beam_search_diversity_rate",
+                              Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &beam_search_diversity_rate}});
+    }
+    else {
+        input_tensors.insert({"random_seed", Tensor{MEMORY_CPU, TYPE_UINT64, std::vector<size_t>{1}, &random_seed}});
+        if (top_p != 0.0f) {
+            input_tensors.insert({"runtime_top_p", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &top_p}});
+        }
+        if (top_k != 0) {
+            input_tensors.insert({"runtime_top_k", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{1}, &top_k}});
+        }
+    }
 
-    std::vector<Tensor> output_tensors = std::vector<Tensor>{
-        Tensor{MEMORY_GPU,
-               TYPE_INT32,
-               std::vector<size_t>{request_batch_size, beam_width, (size_t)total_output_len},
-               d_output_ids},
-        Tensor{MEMORY_GPU,
-               TYPE_INT32,
-               std::vector<size_t>{(size_t)total_output_len, request_batch_size, beam_width},
-               d_parent_ids},
-        Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size, beam_width}, d_sequence_lengths},
-        Tensor{MEMORY_GPU,
-               TYPE_FP32,
-               std::vector<size_t>{(size_t)request_output_len, request_batch_size, beam_width},
-               nullptr}};
+    std::unordered_map<std::string, Tensor> output_tensors = std::unordered_map<std::string, Tensor>{
+        {"output_ids",
+         Tensor{MEMORY_GPU,
+                TYPE_INT32,
+                std::vector<size_t>{request_batch_size, beam_width, (size_t)total_output_len},
+                d_output_ids}},
+        {"parent_ids",
+         Tensor{MEMORY_GPU,
+                TYPE_INT32,
+                std::vector<size_t>{(size_t)total_output_len, request_batch_size, beam_width},
+                d_parent_ids}},
+        {"sequence_length",
+         Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size, beam_width}, d_sequence_lengths}}};
+
+    float* output_log_probs = nullptr;
+    float* d_cum_log_probs = nullptr;
+    if (is_return_log_probs) {
+        deviceMalloc(&output_log_probs, request_batch_size * beam_width * request_output_len);
+        output_tensors.insert({"output_log_probs",
+                               Tensor{MEMORY_GPU,
+                                      TYPE_FP32,
+                                      std::vector<size_t>{request_batch_size, beam_width, (size_t)request_output_len},
+                                      output_log_probs}});
+        deviceMalloc(&d_cum_log_probs, request_batch_size * beam_width);
+        output_tensors.insert(
+            {"cum_log_probs",
+             Tensor{MEMORY_GPU, TYPE_FP32, std::vector<size_t>{request_batch_size, beam_width}, d_cum_log_probs}});
+        input_tensors.insert({"is_return_context_cum_log_probs",
+                              Tensor{MEMORY_CPU, TYPE_BOOL, std::vector<size_t>{1}, &is_return_context_cum_log_probs}});
+    }
 
     print_mem_usage();
     int ite = 1;
@@ -350,20 +414,47 @@ void gpt_example(const INIReader reader)
                 std::cout << "Writing " << outCount << " elements\n";
                 int zeroCount = 0;
                 for (size_t i = 0; i < outCount; i++) {
-                    if (hBuf[i] == int(0))
+                    if (hBuf[i] == int(0)) {
                         zeroCount++;
+                    }
                     outFile << hBuf[i] << " ";
-                    if ((i + 1) % (total_output_len) == 0)
+                    if ((i + 1) % (total_output_len) == 0) {
                         outFile << std::endl;
+                    }
 
-                    if (i < 10)
+                    if (i < 10) {
                         printf("%5d ", hBuf[i]);
-                    if ((i + 1) % (total_output_len) == 0 && i < 10)
+                    }
+                    if ((i + 1) % (total_output_len) == 0 && i < 10) {
                         std::cout << std::endl;
+                    }
                 }
                 std::cout << std::endl << "zeroCount = " << zeroCount << std::endl;
             }
             delete[] hBuf;
+        }
+        outFile.close();
+
+        if (d_cum_log_probs != nullptr) {
+            std::string logprob_fname = "logprob.out";
+            std::ofstream logprob_file = std::ofstream("logprob.out", std::ios::out);
+            if (!logprob_file.is_open()) {
+                printf("[WARNING] Cannot write results into output file %s \n", logprob_fname.c_str());
+            }
+            else {
+                size_t cum_log_probs_size = request_batch_size * beam_width;
+                printf("[INFO] Writing %ld elements (log probs)\n", cum_log_probs_size);
+                float* h_buf = new float[cum_log_probs_size];
+                cudaD2Hcpy(h_buf, d_cum_log_probs, cum_log_probs_size);
+                for (size_t i = 0; i < cum_log_probs_size; i++) {
+                    logprob_file << h_buf[i] << std::endl;
+                    if (i < 10) {
+                        printf(" %10.6f\n", h_buf[i]);
+                    }
+                }
+                delete[] h_buf;
+            }
+            logprob_file.close();
         }
     }
 

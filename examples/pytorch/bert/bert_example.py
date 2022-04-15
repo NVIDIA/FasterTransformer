@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -28,6 +28,7 @@ sys.path.append(dir_path + "/../../..")
 from examples.pytorch.bert.utils.encoder import EncoderWeights
 from examples.pytorch.bert.utils.encoder import CustomEncoder
 from examples.pytorch.bert.utils.encoder import HuggingFaceEncoder
+from examples.pytorch.utils import print_memory_usage
 import threading
 
 def sequence_mask(lengths, max_len=None, is_2d=True):
@@ -251,7 +252,8 @@ def bert_example(args):
             for t in thread_list:
                 t.join()
     
-    sys.stdout.flush()            
+    torch.cuda.empty_cache()
+    sys.stdout.flush()
     return max(torch.mean(FT_diff), torch.mean(EFF_diff))
 
 

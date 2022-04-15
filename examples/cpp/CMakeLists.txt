@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,9 +16,13 @@ add_subdirectory(bert)
 add_subdirectory(bert_int8)
 add_subdirectory(decoding)
 add_subdirectory(gpt)
-add_subdirectory(gptj)
 add_subdirectory(xlnet)
+add_subdirectory(swin)
+add_subdirectory(swin_int8)
+add_subdirectory(vit)
+add_subdirectory(vit_int8)
 
-if(BUILD_GPT)
+if(BUILD_MULTI_GPU)
+    add_subdirectory(gptj)
     add_subdirectory(multi_gpu_gpt)
 endif()

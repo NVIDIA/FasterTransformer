@@ -18,7 +18,13 @@
 #define COMMON_CUH
 
 #include "cublas_v2.h"
+#ifndef CUDART_VERSION
+#error CUDART_VERSION Undefined!
+#elif (CUDART_VERSION >= 11050)
+#include <cub/cub.cuh>
+#else
 #include "3rdparty/cub/cub.cuh"
+#endif 
 
 #define HDI inline __host__ __device__
 

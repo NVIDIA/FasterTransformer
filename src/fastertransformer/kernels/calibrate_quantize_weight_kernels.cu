@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,8 +33,9 @@ __global__ void ldn_calibrate_weight_per_channel(float* scale, const T* src, con
     float amax_val = 0.0f;
     for (int k_i = tidx; k_i < k; k_i += blockDim.x) {
         float val = fabs(static_cast<float>(src[k_i * n + bidx]));
-        if (amax_val < val)
+        if (amax_val < val) {
             amax_val = val;
+        }
     }
     const float block_amax_val = blockReduceMax(amax_val);
     if (tidx == 0) {
@@ -48,8 +49,9 @@ void invokeLdnCalibrateWeightPerChannel(float* scale, const T* src, const int k,
 
     dim3 grid(n);
     dim3 block((k + 31) / 32 * 32);
-    if (block.x > 1024)
+    if (block.x > 1024) {
         block.x = 1024;
+    }
     ldn_calibrate_weight_per_channel<<<grid, block, 0, stream>>>(scale, src, k, n);
 }
 
@@ -58,6 +60,11 @@ invokeLdnCalibrateWeightPerChannel(float* scale, const float* src, const int k, 
 
 template void
 invokeLdnCalibrateWeightPerChannel(float* scale, const half* src, const int k, const int n, cudaStream_t stream);
+
+#ifdef ENABLE_BF16
+template void invokeLdnCalibrateWeightPerChannel(
+    float* scale, const __nv_bfloat16* src, const int k, const int n, cudaStream_t stream);
+#endif
 
 //---------------------------------------------------------------------------------
 
@@ -79,8 +86,9 @@ __global__ void ldk_calibrate_quantize_weight_per_channel(int8_t* dst, float* sc
     for (int k_i = tidx; k_i < k; k_i += blockDim.x) {
         T val = src[k_i];
         val = val > zero ? val : -val;
-        if (amax_val > val)
+        if (amax_val > val) {
             amax_val = val;
+        }
     }
     __shared__ float s_amax;
     const float block_amax_val = blockReduceMax(static_cast<float>(amax_val));
@@ -103,8 +111,9 @@ void invokeLdkCalibrateQuantizeWeightPerChannel(
 
     dim3 grid(n);
     dim3 block((k + 31) / 32 * 32);
-    if (block.x > 1024)
+    if (block.x > 1024) {
         block.x = 1024;
+    }
     ldk_calibrate_quantize_weight_per_channel<<<grid, block, 0, stream>>>(dst, scale, src, k);
 }
 
@@ -155,5 +164,10 @@ template void invokeLdnTransposeQuantizeWeightPerChannel(
 
 template void invokeLdnTransposeQuantizeWeightPerChannel(
     int8_t* dst, const float* scale, const half* src, const int k, const int n, cudaStream_t stream);
+
+#ifdef ENABLE_BF16
+template void invokeLdnTransposeQuantizeWeightPerChannel(
+    int8_t* dst, const float* scale, const __nv_bfloat16* src, const int k, const int n, cudaStream_t stream);
+#endif
 
 }  // namespace fastertransformer

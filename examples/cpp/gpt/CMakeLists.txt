@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,4 +13,4 @@
 # limitations under the License.
 
 add_executable(gpt_example gpt_example.cc)
-target_link_libraries(gpt_example PUBLIC -lcublas -lcublasLt -lcudart Gpt nvtx_utils)
+target_link_libraries(gpt_example PUBLIC -lcublas -lcublasLt -lcudart ParallelGpt nvtx_utils)

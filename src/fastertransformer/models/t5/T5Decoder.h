@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@
 #include "src/fastertransformer/kernels/add_residual_kernels.h"
 #include "src/fastertransformer/kernels/layernorm_kernels.h"
 #include "src/fastertransformer/layers/BaseLayer.h"
+#include "src/fastertransformer/layers/TensorParallelGeluFfnLayer.h"
 #include "src/fastertransformer/layers/TensorParallelReluFfnLayer.h"
 #include "src/fastertransformer/layers/attention_layers/TensorParallelDecoderCrossAttentionLayer.h"
 #include "src/fastertransformer/layers/attention_layers/TensorParallelDecoderSelfAttentionLayer.h"
@@ -28,6 +29,7 @@
 #include "src/fastertransformer/utils/Tensor.h"
 #include "src/fastertransformer/utils/allocator.h"
 #include "src/fastertransformer/utils/cublasMMWrapper.h"
+#include "src/fastertransformer/utils/custom_ar_comm.h"
 
 namespace fastertransformer {
 
@@ -43,6 +45,8 @@ private:
     const size_t d_model_;
     const size_t num_layer_;
     const size_t hidden_units_;
+    const ActivationType activation_type_;
+    float q_scaling_;
 
     BaseAttentionLayer<T>* self_attention_layer_;
     BaseAttentionLayer<T>* cross_attention_layer_;
@@ -51,11 +55,15 @@ private:
     void allocateBuffer() override;
     void freeBuffer() override;
     bool isValidBatchSize(size_t batch_size);
+    void allocateBuffer(size_t batch_size);
 
     void initialize();
 
     NcclParam tensor_para_;
     NcclParam pipeline_para_;
+
+    std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm_;
+    int enable_custom_all_reduce_;
 
     bool isValidLayerParallelId(uint l);
     bool isFirstLayerParallelId(uint l);
@@ -63,12 +71,12 @@ private:
     int getFirstLayerParallelId();
 
 protected:
-    T* decoder_normed_input_;
-    T* self_attn_output_;
-    T* normed_self_attn_output_;
-    T* cross_attn_output_;
-    T* normed_cross_attn_output_;
-    T* decoder_layer_output_;
+    T* decoder_normed_input_ = nullptr;
+    T* self_attn_output_ = nullptr;
+    T* normed_self_attn_output_ = nullptr;
+    T* cross_attn_output_ = nullptr;
+    T* normed_cross_attn_output_ = nullptr;
+    T* decoder_layer_output_ = nullptr;
 
 public:
     T5Decoder(size_t max_batch_size,
@@ -82,7 +90,11 @@ public:
               IAllocator* allocator,
               bool is_free_buffer_after_forward,
               NcclParam tensor_para,
-              NcclParam pipeline_para);
+              NcclParam pipeline_para,
+              ActivationType activation_type,
+              float q_scaling = 1.0f,
+              std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm = nullptr,
+              int enable_custom_all_reduce = 0);
 
     T5Decoder(T5Decoder<T> const& decoder);
 
@@ -91,6 +103,7 @@ public:
     void forward(std::vector<Tensor>* output_tensors,
                  const std::vector<Tensor>* input_tensors,
                  const std::vector<T5DecoderLayerWeight<T>*>* decoder_layer_weights);
+    void setStream(cudaStream_t stream) override;
 };
 
 }  // namespace fastertransformer

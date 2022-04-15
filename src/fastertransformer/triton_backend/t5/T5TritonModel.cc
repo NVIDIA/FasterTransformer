@@ -1,6 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
- * Copyright (c) 2021, NAVER Corp.  Authored by CLOVA.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,8 +21,7 @@
 
 namespace ft = fastertransformer;
 
-std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createT5Model(const int max_batch_size,
-                                                                                  std::string model_dir)
+std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createT5Model(std::string model_dir)
 {
     INIReader reader = INIReader(model_dir + "/config.ini");
     if (reader.ParseError() < 0) {
@@ -34,78 +32,55 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createT5Mode
 
     const int is_half = reader.GetInteger("ft_instance_hyperparameter", "is_half");
     if (is_half) {
-        return std::make_shared<T5TritonModel<half>>(max_batch_size, reader, model_dir);
+        return std::make_shared<T5TritonModel<half>>(reader, model_dir);
     }
     else {
-        return std::make_shared<T5TritonModel<float>>(max_batch_size, reader, model_dir);
+        return std::make_shared<T5TritonModel<float>>(reader, model_dir);
     }
 }
 
 template<typename T>
-T5TritonModel<T>::T5TritonModel(const int max_batch_size, INIReader reader, std::string model_dir):
-    max_batch_size_(max_batch_size), model_dir_(model_dir)
+T5TritonModel<T>::T5TritonModel(INIReader reader, std::string model_dir): model_dir_(model_dir)
 {
     // encoder
-    max_encoder_seq_len_ = 1;
     encoder_head_num_ = reader.GetInteger("encoder", "num_heads");
     encoder_size_per_head_ = reader.GetInteger("encoder", "d_kv");
     encoder_d_model_ = reader.GetInteger("encoder", "d_model");
     encoder_inter_size_ = reader.GetInteger("encoder", "d_ff");
     encoder_num_layer_ = reader.GetInteger("encoder", "num_layers");
     encoder_vocab_size_ = reader.GetInteger("encoder", "vocab_size");
-    encoder_num_bucket_ = reader.GetInteger("encoder", "relative_attention_num_buckets");
+    encoder_num_bucket_or_max_pos_seq_len_ =
+        reader.GetInteger("encoder", "relative_attention_num_buckets_or_max_pos_seq_len");
 
     // decoding
-    max_decoding_seq_len_ = reader.GetInteger("ft_instance_hyperparameter", "max_decoding_seq_len");
-    beam_width_ = reader.GetInteger("ft_instance_hyperparameter", "beam_width");
     decoding_head_num_ = reader.GetInteger("decoder", "num_heads");
     decoding_size_per_head_ = reader.GetInteger("decoder", "d_kv");
     decoding_d_model_ = reader.GetInteger("decoder", "d_model");
     decoding_inter_size_ = reader.GetInteger("decoder", "d_ff");
     decoding_num_layer_ = reader.GetInteger("decoder", "num_layers");
     decoding_vocab_size_ = reader.GetInteger("decoder", "vocab_size");
-    decoding_num_bucket_ = reader.GetInteger("decoder", "relative_attention_num_buckets");
+    decoding_num_bucket_or_max_pos_seq_len_ =
+        reader.GetInteger("decoder", "relative_attention_num_buckets_or_max_pos_seq_len");
     start_id_ = reader.GetInteger("decoder", "decoder_start_token_id");
     end_id_ = reader.GetInteger("decoder", "eos_token_id");
-    beam_search_diversity_rate_ = reader.GetFloat("ft_instance_hyperparameter", "beam_search_diversity_rate");
-    top_k_ = reader.GetFloat("ft_instance_hyperparameter", "top_k");
-    top_p_ = reader.GetFloat("ft_instance_hyperparameter", "top_p");
-    temperature_ = reader.GetFloat("ft_instance_hyperparameter", "temperature");
-    len_penalty_ = reader.GetFloat("ft_instance_hyperparameter", "len_penalty");
-    repetition_penalty_ = reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty");
     tensor_para_size_ = reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size");
     pipeline_para_size_ = reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size");
-
+    enable_custom_all_reduce_ = reader.GetInteger("ft_instance_hyperparameter", "enable_custom_all_reduce", 0);
+    t5_with_bias_ = (bool)reader.GetInteger("structure", "t5_with_bias", 0);
+    position_embedding_type_ = ft::PositionEmbeddingType(reader.GetInteger("structure", "position_embedding_type", 0));
+    q_scaling_ = t5_with_bias_ ? 1.0f : (1.0f / (sqrt(encoder_size_per_head_) * 1.0f));
     max_distance_ = 128;  // use default value of huggingface here
 }
 
 template<typename T>
-T5TritonModel<T>::T5TritonModel(size_t max_batch_size,
-                                size_t max_decoding_seq_len,
-                                size_t max_encoder_seq_len,
-                                size_t beam_width,
-                                float beam_search_diversity_rate,
-                                size_t top_k,
-                                float top_p,
-                                float temperature,
-                                float len_penalty,
-                                float repetition_penalty,
-                                size_t tensor_para_size,
+T5TritonModel<T>::T5TritonModel(size_t tensor_para_size,
                                 size_t pipeline_para_size,
+                                int enable_custom_all_reduce,
                                 std::string model_dir,
                                 int int8_mode):
-    max_batch_size_(max_batch_size),
-    max_decoding_seq_len_(max_decoding_seq_len),
-    max_encoder_seq_len_(max_encoder_seq_len),
-    beam_width_(beam_width),
-    beam_search_diversity_rate_(beam_search_diversity_rate),
-    top_k_(top_k),
-    top_p_(top_p),
-    temperature_(temperature),
-    len_penalty_(len_penalty),
-    repetition_penalty_(repetition_penalty),
     tensor_para_size_(tensor_para_size),
     pipeline_para_size_(pipeline_para_size),
+    enable_custom_all_reduce_(enable_custom_all_reduce),
     model_dir_(model_dir),
     int8_mode_(int8_mode)
 {
@@ -126,7 +101,8 @@ T5TritonModel<T>::T5TritonModel(size_t max_batch_size,
     encoder_inter_size_ = reader.GetInteger("encoder", "d_ff");
     encoder_num_layer_ = reader.GetInteger("encoder", "num_layers");
     encoder_vocab_size_ = reader.GetInteger("encoder", "vocab_size");
-    encoder_num_bucket_ = reader.GetInteger("encoder", "relative_attention_num_buckets");
+    encoder_num_bucket_or_max_pos_seq_len_ =
+        reader.GetInteger("encoder", "relative_attention_num_buckets_or_max_pos_seq_len");
 
     // decoding
     decoding_head_num_ = reader.GetInteger("decoder", "num_heads");
@@ -135,9 +111,14 @@ T5TritonModel<T>::T5TritonModel(size_t max_batch_size,
     decoding_inter_size_ = reader.GetInteger("decoder", "d_ff");
     decoding_num_layer_ = reader.GetInteger("decoder", "num_layers");
     decoding_vocab_size_ = reader.GetInteger("decoder", "vocab_size");
-    decoding_num_bucket_ = reader.GetInteger("decoder", "relative_attention_num_buckets");
+    decoding_num_bucket_or_max_pos_seq_len_ =
+        reader.GetInteger("decoder", "relative_attention_num_buckets_or_max_pos_seq_len");
     start_id_ = reader.GetInteger("decoder", "decoder_start_token_id");
     end_id_ = reader.GetInteger("decoder", "eos_token_id");
+
+    t5_with_bias_ = (bool)reader.GetInteger("structure", "t5_with_bias", 0);
+    position_embedding_type_ = ft::PositionEmbeddingType(reader.GetInteger("structure", "position_embedding_type", 0));
+    q_scaling_ = t5_with_bias_ ? 1.0f : (1.0f / (sqrt(encoder_size_per_head_) * 1.0f));
 
     max_distance_ = 128;  // use default value of huggingface here
 }
@@ -147,7 +128,8 @@ std::unique_ptr<AbstractTransformerModelInstance>
 T5TritonModel<T>::createModelInstance(int device_id,
                                       int rank,
                                       cudaStream_t stream,
-                                      std::pair<std::vector<ncclComm_t>, std::vector<ncclComm_t>> nccl_comms)
+                                      std::pair<std::vector<ncclComm_t>, std::vector<ncclComm_t>> nccl_comms,
+                                      std::shared_ptr<ft::AbstractCustomComm> custom_all_reduce_comm)
 {
     ft::check_cuda_error(cudaSetDevice(device_id));
     const int tensor_para_rank = rank % tensor_para_size_;
@@ -155,6 +137,8 @@ T5TritonModel<T>::createModelInstance(int device_id,
 
     std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator(
         new ft::Allocator<ft::AllocatorType::CUDA>(device_id));
+
+    allocator->setStream(stream);
 
     cublasHandle_t cublas_handle;
     cublasLtHandle_t cublaslt_handle;
@@ -179,9 +163,11 @@ T5TritonModel<T>::createModelInstance(int device_id,
     }
 
     const int sm_ = ft::getSMVersion();
-    const float q_scaling_ = 1.0f;
-    ft::AttentionType attention_type =
-        ft::getAttentionType<T>(encoder_size_per_head_, sm_, true, max_encoder_seq_len_, false);
+
+    // TODO(bhsueh) not support fused mha
+    // ft::AttentionType attention_type =
+    //     ft::getAttentionType<T>(encoder_size_per_head_, sm_, true, max_encoder_seq_len_, false);
+    ft::AttentionType attention_type = ft::AttentionType::UNFUSED_MHA;
 
     ft::NcclParam tensor_para_;
     ft::NcclParam pipeline_para_;
@@ -193,67 +179,78 @@ T5TritonModel<T>::createModelInstance(int device_id,
     pipeline_para_.rank_ = pipeline_para_rank;
     pipeline_para_.nccl_comm_ = nccl_comms.second[device_id];
 
-    auto encoder = std::make_unique<ft::T5Encoder<T>>(ft::T5Encoder<T>(0,
-                                                                       max_encoder_seq_len_,
-                                                                       encoder_head_num_,
-                                                                       encoder_size_per_head_,
-                                                                       encoder_inter_size_,
-                                                                       encoder_d_model_,
-                                                                       encoder_num_layer_,
-                                                                       encoder_num_bucket_,
-                                                                       max_distance_,
-                                                                       sm_,
-                                                                       q_scaling_,
-                                                                       stream,
-                                                                       cublas_wrapper.get(),
-                                                                       allocator.get(),
-                                                                       false,
-                                                                       attention_type,
-                                                                       false,
-                                                                       ft::ActivationType::Relu,
-                                                                       ft::LayerNormType::pre_layernorm,
-                                                                       tensor_para_,
-                                                                       pipeline_para_));
+    auto encoder = std::make_unique<ft::T5Encoder<T>>(
+        ft::T5Encoder<T>(0,
+                         0,
+                         encoder_head_num_,
+                         encoder_size_per_head_,
+                         encoder_inter_size_,
+                         encoder_d_model_,
+                         encoder_num_layer_,
+                         encoder_num_bucket_or_max_pos_seq_len_,
+                         max_distance_,
+                         sm_,
+                         q_scaling_,
+                         stream,
+                         cublas_wrapper.get(),
+                         allocator.get(),
+                         false,
+                         attention_type,
+                         false,
+                         t5_with_bias_ ? ft::ActivationType::Gelu : ft::ActivationType::Relu,
+                         ft::LayerNormType::pre_layernorm,
+                         tensor_para_,
+                         pipeline_para_,
+                         custom_all_reduce_comm,
+                         enable_custom_all_reduce_));
 
-    auto decoding = std::make_unique<ft::T5Decoding<T>>(ft::T5Decoding<T>(0,
-                                                                          max_decoding_seq_len_,
-                                                                          max_encoder_seq_len_,
-                                                                          beam_width_,
-                                                                          decoding_head_num_,
-                                                                          decoding_size_per_head_,
-                                                                          decoding_inter_size_,
-                                                                          decoding_d_model_,
-                                                                          decoding_num_layer_,
-                                                                          decoding_vocab_size_,
-                                                                          decoding_num_bucket_,
-                                                                          max_distance_,
-                                                                          start_id_,
-                                                                          end_id_,
-                                                                          beam_search_diversity_rate_,
-                                                                          top_k_,
-                                                                          top_p_,
-                                                                          temperature_,
-                                                                          len_penalty_,
-                                                                          repetition_penalty_,
-                                                                          stream,
-                                                                          cublas_wrapper.get(),
-                                                                          allocator.get(),
-                                                                          false,
-                                                                          cuda_device_prop_ptr.get(),
-                                                                          tensor_para_,
-                                                                          pipeline_para_));
+    auto decoding = std::make_unique<ft::T5Decoding<T>>(
+        ft::T5Decoding<T>(0,
+                          0,
+                          0,
+                          0,
+                          decoding_head_num_,
+                          decoding_size_per_head_,
+                          decoding_inter_size_,
+                          decoding_d_model_,
+                          decoding_num_layer_,
+                          decoding_vocab_size_,
+                          decoding_num_bucket_or_max_pos_seq_len_,
+                          max_distance_,
+                          q_scaling_,
+                          start_id_,
+                          end_id_,
+                          0.0f,  // beam_search_diversity_rate_,
+                          1,     // top_k_,
+                          0.0f,  // top_p_,
+                          1.0f,  // temperature_,
+                          1.0f,  // len_penalty_,
+                          1.0f,  // repetition_penalty_,
+                          stream,
+                          cublas_wrapper.get(),
+                          allocator.get(),
+                          false,
+                          cuda_device_prop_ptr.get(),
+                          tensor_para_,
+                          pipeline_para_,
+                          t5_with_bias_ ? ft::ActivationType::Gelu : ft::ActivationType::Relu,
+                          custom_all_reduce_comm,
+                          enable_custom_all_reduce_));
 
-    auto encoder_weight = std::unique_ptr<ft::T5EncoderWeight<T>>(new ft::T5EncoderWeight<T>(encoder_head_num_,
-                                                                                             encoder_size_per_head_,
-                                                                                             encoder_d_model_,
-                                                                                             encoder_inter_size_,
-                                                                                             encoder_vocab_size_,
-                                                                                             encoder_num_layer_,
-                                                                                             encoder_num_bucket_,
-                                                                                             tensor_para_.world_size_,
-                                                                                             tensor_para_.rank_,
-                                                                                             pipeline_para_.world_size_,
-                                                                                             pipeline_para_.rank_));
+    auto encoder_weight =
+        std::unique_ptr<ft::T5EncoderWeight<T>>(new ft::T5EncoderWeight<T>(encoder_head_num_,
+                                                                           encoder_size_per_head_,
+                                                                           encoder_d_model_,
+                                                                           encoder_inter_size_,
+                                                                           encoder_vocab_size_,
+                                                                           encoder_num_layer_,
+                                                                           encoder_num_bucket_or_max_pos_seq_len_,
+                                                                           tensor_para_.world_size_,
+                                                                           tensor_para_.rank_,
+                                                                           pipeline_para_.world_size_,
+                                                                           pipeline_para_.rank_,
+                                                                           t5_with_bias_,
+                                                                           position_embedding_type_));
 
     auto decoding_weight =
         std::unique_ptr<ft::T5DecodingWeight<T>>(new ft::T5DecodingWeight<T>(decoding_head_num_,
@@ -263,11 +260,13 @@ T5TritonModel<T>::createModelInstance(int device_id,
                                                                              decoding_vocab_size_,
                                                                              decoding_num_layer_,
                                                                              encoder_d_model_,
-                                                                             decoding_num_bucket_,
+                                                                             decoding_num_bucket_or_max_pos_seq_len_,
                                                                              tensor_para_.world_size_,
                                                                              tensor_para_.rank_,
                                                                              pipeline_para_.world_size_,
-                                                                             pipeline_para_.rank_));
+                                                                             pipeline_para_.rank_,
+                                                                             t5_with_bias_,
+                                                                             position_embedding_type_));
 
     encoder_weight->loadModel(model_dir_);
     decoding_weight->loadModel(model_dir_);
@@ -280,33 +279,30 @@ T5TritonModel<T>::createModelInstance(int device_id,
                                                                                   std::move(cublas_algo_map),
                                                                                   std::move(cublas_wrapper_mutex),
                                                                                   std::move(cublas_wrapper),
-                                                                                  std::move(cuda_device_prop_ptr),
-                                                                                  max_batch_size_,
-                                                                                  max_decoding_seq_len_,
-                                                                                  beam_width_));
+                                                                                  std::move(cuda_device_prop_ptr)));
 }
 
 template<typename T>
 std::string T5TritonModel<T>::toString()
 {
     std::stringstream ss;
+    std::string position_embedding_type_string =
+        position_embedding_type_ == ft::PositionEmbeddingType::relative ? "relative" : "absolute";
 
     ss << "\nModel: "
-       << "\n    max_batch_size_: " << max_batch_size_ << "\n    max_encoder_seq_len_: " << max_encoder_seq_len_
        << "\n    encoder_head_num_: " << encoder_head_num_ << "\n    encoder_size_per_head_: " << encoder_size_per_head_
        << "\n    encoder_d_model_: " << encoder_d_model_ << "\n    encoder_inter_size_: " << encoder_inter_size_
        << "\n    encoder_num_layer_: " << encoder_num_layer_ << "\n    encoder_vocab_size_: " << encoder_vocab_size_
-       << "\n    encoder_num_bucket_: " << encoder_num_bucket_
-       << "\n    max_decoding_seq_len_: " << max_decoding_seq_len_ << "\n    beam_width_: " << beam_width_
+       << "\n    encoder_num_bucket_or_max_pos_seq_len_: " << encoder_num_bucket_or_max_pos_seq_len_
        << "\n    decoding_head_num_: " << decoding_head_num_
        << "\n    decoding_size_per_head_: " << decoding_size_per_head_
        << "\n    decoding_d_model_: " << decoding_d_model_ << "\n    decoding_inter_size_: " << decoding_inter_size_
        << "\n    decoding_num_layer_: " << decoding_num_layer_ << "\n    decoding_vocab_size_: " << decoding_vocab_size_
-       << "\n    decoding_num_bucket_: " << decoding_num_bucket_ << "\n    start_id_: " << start_id_
-       << "\n    end_id_: " << end_id_ << "\n    beam_search_diversity_rate_: " << beam_search_diversity_rate_
-       << "\n    top_k_: " << top_k_ << "\n    top_p_: " << top_p_ << "\n    temperature_: " << temperature_
-       << "\n    len_penalty_: " << len_penalty_ << "\n    repetition_penalty_: " << repetition_penalty_
-       << "\n    model_name_: " << model_name_ << "\n    model_dir_: " << model_dir_ << std::endl;
+       << "\n    decoding_num_bucket_or_max_pos_seq_len_: " << decoding_num_bucket_or_max_pos_seq_len_
+       << "\n    t5_with_bias_: " << t5_with_bias_
+       << "\n   position_embedding_type_: " << position_embedding_type_string << "\n    start_id_: " << start_id_
+       << "\n    end_id_: " << end_id_ << "\n    model_name_: " << model_name_ << "\n    model_dir_: " << model_dir_
+       << std::endl;
 
     return ss.str();
 }
@@ -380,9 +376,11 @@ std::pair<std::vector<ncclComm_t>, std::vector<ncclComm_t>> T5TritonModel<T>::cr
 }
 
 template<typename T>
-std::pair<uint32_t, uint32_t> T5TritonModel<T>::getMaxBatchSeqlen()
+void T5TritonModel<T>::createCustomComms(std::vector<std::shared_ptr<ft::AbstractCustomComm>>* custom_all_reduce_comms,
+                                         int world_size)
 {
-    return std::pair<uint32_t, uint32_t>(max_batch_size_, max_decoding_seq_len_);
+    using commDataType = typename ft::CustomARCommTypeConverter<T>::Type;
+    ft::initCustomAllReduceComm<commDataType>(custom_all_reduce_comms, enable_custom_all_reduce_, world_size);
 }
 
 template<typename T>

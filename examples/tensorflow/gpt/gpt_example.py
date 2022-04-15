@@ -25,7 +25,7 @@
 # TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE
 # OR OTHER DEALINGS IN THE SOFTWARE.
 
-# Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -65,7 +65,7 @@ def sample_model(
     temperature=1,
     top_k=4,
     top_p=0.0,
-    models_dir='../models/openai-gpt-models',
+    models_dir='../models/openai_gpt_model',
     data_type='fp32',
     beam_width=1
 ):
@@ -157,10 +157,10 @@ def sample_model(
             ckpt_dict[var.name] = var
         
         op_output, sequence_length = ft_gpt_op(ckpt_dict,
-                                            decoding_args,
-                                            batch_size,
-                                            start_ids,
-                                            lengths)
+                                               decoding_args,
+                                               batch_size,
+                                               start_ids,
+                                               lengths)
 
         generated = 0
         
@@ -226,17 +226,12 @@ def ft_gpt_op(var_dict,
 
     decoder_args = decoding_args.decoder_args
 
-    extended_input_ids = tf.cast(tf.contrib.seq2seq.tile_batch(
-        input_ids, multiplier=decoder_args.beam_width), tf.int32)
-    extended_input_lengths = tf.cast(tf.contrib.seq2seq.tile_batch(
-        input_lengths, multiplier=decoder_args.beam_width), tf.int32)
-    
     gpt_op_module = tf.load_op_library(os.path.join('./lib/libtf_gpt.so'))
     data_type = decoder_args.dtype
 
     output_ids, parent_ids, sequence_length, cum_log_probs = gpt_op_module.gpt(
-        extended_input_ids, # 0
-        extended_input_lengths, # 1
+        input_ids, # 0
+        input_lengths, # 1
         [tf.cast(var_dict["model/h%d/ln_1/b:0" % l], data_type) for l in range(decoder_args.num_layer)], # 2
         [tf.cast(var_dict["model/h%d/ln_1/g:0" % l], data_type) for l in range(decoder_args.num_layer)], # 3
         [tf.cast(var_dict["model/h%d/attn/c_attn/w:0" % l], data_type) for l in range(decoder_args.num_layer)], # 4
@@ -249,11 +244,11 @@ def ft_gpt_op(var_dict,
         [tf.cast(var_dict["model/h%d/mlp/c_fc/b:0" % l], data_type)for l in range(decoder_args.num_layer)], # 11
         [tf.cast(var_dict["model/h%d/mlp/c_proj/w:0" % l], data_type) for l in range(decoder_args.num_layer)], # 12
         [tf.cast(var_dict["model/h%d/mlp/c_proj/b:0" % l], data_type) for l in range(decoder_args.num_layer)], # 13
-        tf.cast(var_dict['model/ln_f/b:0'], data_type), # 28
-        tf.cast(var_dict['model/ln_f/g:0'], data_type), # 29
-        tf.cast(var_dict['model/wpe:0'], data_type), # 33 
-        tf.cast(var_dict['model/wte:0'], data_type), # 30
-        tf.cast(var_dict['model/wte:0'], data_type), # 30
+        tf.cast(var_dict['model/ln_f/b:0'], data_type), # 14
+        tf.cast(var_dict['model/ln_f/g:0'], data_type), # 15
+        tf.cast(var_dict['model/wpe:0'], data_type), # 16
+        tf.cast(var_dict['model/wte:0'], data_type), # 17
+        tf.cast(var_dict['model/wte:0'], data_type), # 18
         max_batch_size=batch_size,
         max_seq_len=decoding_args.max_seq_len,
         beam_width=decoder_args.beam_width,
@@ -269,13 +264,9 @@ def ft_gpt_op(var_dict,
         temperature=1.0,
         len_penalty=1.0,
         repetition_penalty=1.0,
-        output_cum_log_probs=True,
+        output_log_probs=True,
         request_output_length=decoding_args.max_seq_len - input_lengths.max())
 
-    if decoder_args.beam_width > 1:
-        output_ids = tf.transpose(output_ids, [1, 2, 0])
-    else:
-        output_ids = tf.transpose(output_ids, [1, 0])
     return output_ids, sequence_length
 
 if __name__ == '__main__':

@@ -14,18 +14,7 @@
  * limitations under the License.
  */
 
-#include <cuda_fp16.h>
-#include <iostream>
-#include <nvToolsExt.h>
-#include <vector>
-
-#include "torch/csrc/cuda/Stream.h"
-#include <ATen/cuda/CUDAContext.h>
-#include <torch/custom_class.h>
-#include <torch/script.h>
-
 #include "src/fastertransformer/models/decoding/Decoding.h"
-#include "src/fastertransformer/th_op/th_traits.h"
 #include "src/fastertransformer/th_op/th_utils.h"
 
 namespace ft = fastertransformer;
@@ -79,7 +68,7 @@ public:
         repetition_penalty_(repetition_penalty),
         _weights(w)
     {
-        check_cuda_error(cublasLtCreate(&cublasltHandle_));
+        ft::check_cuda_error(cublasLtCreate(&cublasltHandle_));
         cublas_algo_map_ = new ft::cublasAlgoMap("gemm_config.in");
         cublas_wrapper_mutex_ = new std::mutex();
 
@@ -160,9 +149,9 @@ public:
         auto stream = at::cuda::getCurrentCUDAStream().stream();
         cublasHandle_t cublasHandle = at::cuda::getCurrentCUDABlasHandle();
         cublasSetStream(cublasHandle, stream);
-        ft::Allocator<AllocatorType::TH> allocator = ft::Allocator<AllocatorType::TH>();
-        ft::cublasMMWrapper cublas_wrapper =
-            ft::cublasMMWrapper(cublasHandle, cublasltHandle_, stream, cublas_algo_map_, cublas_wrapper_mutex_, &allocator);
+        ft::Allocator<ft::AllocatorType::TH> allocator = ft::Allocator<ft::AllocatorType::TH>();
+        ft::cublasMMWrapper cublas_wrapper = ft::cublasMMWrapper(
+            cublasHandle, cublasltHandle_, stream, cublas_algo_map_, cublas_wrapper_mutex_, &allocator);
 
         if (std::is_same<T, half>::value) {
             cublas_wrapper.setFP16GemmConfig();
@@ -198,24 +187,28 @@ public:
                                                    &prop_);
         ft::DataType data_type = ft::getTensorType<T>();
         std::vector<ft::Tensor> input_tensors = std::vector<ft::Tensor>{
-            ft::Tensor{MEMORY_GPU,
+            ft::Tensor{ft::MEMORY_GPU,
                        data_type,
                        std::vector<size_t>{(size_t)memory.size(0), (size_t)memory.size(1), (size_t)memory.size(2)},
                        get_ptr<T>(memory)},
-            ft::Tensor{
-                MEMORY_GPU, TYPE_INT32, std::vector<size_t>{(size_t)memory_seq_lens.size(0)}, get_ptr<T>(memory_seq_lens)}};
+            ft::Tensor{ft::MEMORY_GPU,
+                       ft::TYPE_INT32,
+                       std::vector<size_t>{(size_t)memory_seq_lens.size(0)},
+                       get_ptr<T>(memory_seq_lens)}};
 
-        std::vector<ft::Tensor> output_tensors = std::vector<ft::Tensor>{
-            ft::Tensor{MEMORY_GPU,
-                       TYPE_INT32,
-                       std::vector<size_t>{max_seq_len, batch_size, beam_width},
-                       get_ptr<int>(output_ids)},
-            ft::Tensor{MEMORY_GPU,
-                       TYPE_INT32,
-                       std::vector<size_t>{max_seq_len, batch_size, beam_width},
-                       get_ptr<int>(parent_ids)},
-            ft::Tensor{
-                MEMORY_GPU, TYPE_INT32, std::vector<size_t>{batch_size, beam_width}, get_ptr<int>(sequence_lengths)}};
+        std::vector<ft::Tensor> output_tensors =
+            std::vector<ft::Tensor>{ft::Tensor{ft::MEMORY_GPU,
+                                               ft::TYPE_INT32,
+                                               std::vector<size_t>{max_seq_len, batch_size, beam_width},
+                                               get_ptr<int>(output_ids)},
+                                    ft::Tensor{ft::MEMORY_GPU,
+                                               ft::TYPE_INT32,
+                                               std::vector<size_t>{max_seq_len, batch_size, beam_width},
+                                               get_ptr<int>(parent_ids)},
+                                    ft::Tensor{ft::MEMORY_GPU,
+                                               ft::TYPE_INT32,
+                                               std::vector<size_t>{batch_size, beam_width},
+                                               get_ptr<int>(sequence_lengths)}};
         decoding.forward(&output_tensors, &input_tensors, &decoding_weights);
     }
 

@@ -93,9 +93,8 @@ void invokeAddFusedQKVBiasTranspose(T* q_buf,
                                     const int size_per_head,
                                     cudaStream_t stream)
 {
-  invokeAddFusedQKVBiasTranspose(q_buf, k_buf, v_buf, QKV,
-                                 qkv_bias, batch_size, seq_len,
-                                 head_num, size_per_head, 0, stream);
+    invokeAddFusedQKVBiasTranspose(
+        q_buf, k_buf, v_buf, QKV, qkv_bias, batch_size, seq_len, head_num, size_per_head, 0, stream);
 }
 
 template<typename T>
@@ -142,5 +141,29 @@ void invokeAddRelativeAttentionBias(T* qk_buf,
                                     const int head_num,
                                     const int seq_len,
                                     cudaStream_t stream);
+
+template<typename T>
+void invokeAddHead3SizeQKVBias(const T* mm_qkv,
+                               const T* bias_qkv,
+                               T* q_buf_,
+                               T* k_buf_,
+                               T* v_buf_,
+                               const int batch,
+                               const int window_num,
+                               const int window_len,
+                               const int head_num,
+                               const int size_per_head,
+                               cudaStream_t stream);
+
+template<typename T>
+void invokeMaskedSoftMaxWithRelPosBias(T* qk_buf,
+                                       const T* attn_mask,
+                                       const T* relative_pos_bias,
+                                       const int batch_size,
+                                       const int num_head,
+                                       const int window_num,
+                                       const int window_len,
+                                       const float qk_scale,
+                                       cudaStream_t stream);
 
 }  // namespace fastertransformer

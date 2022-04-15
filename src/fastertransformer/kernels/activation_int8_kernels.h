@@ -16,24 +16,51 @@
 
 #pragma once
 
-#include <cuda_fp16.h>
-#include <cuda_runtime.h>
 #include "int8_utils.cuh"
 #include <assert.h>
+#include <cuda_fp16.h>
+#include <cuda_runtime.h>
 
 namespace fastertransformer {
 
-template <typename T>
-void invokeAddBiasGeluCol32(int8_t *out, const int32_t* in, const T* bias, const int m, const int n, 
-                            cudaStream_t stream, const float* weight_amax, const float* input_deQFactor_div127_ptr, 
+template<typename T>
+void invokeAddBiasGeluCol32(int8_t* out,
+                            const int32_t* in,
+                            const T* bias,
+                            const int m,
+                            const int n,
+                            cudaStream_t stream,
+                            const float* weight_amax,
+                            const float* input_deQFactor_div127_ptr,
                             const float* out_scale_ptr);
 
-template <typename T>
-void invokeAddBiasGeluCol32(int8_t *out, const int8_t* in, const T* bias, const int m, const int n, 
-                            cudaStream_t stream, const float* input_deQFactor_ptr, const float* out_scale_ptr);
+template<typename T>
+void invokeAddBiasGeluCol32(int8_t* out,
+                            const int8_t* in,
+                            const T* bias,
+                            const int m,
+                            const int n,
+                            cudaStream_t stream,
+                            const float* input_deQFactor_ptr,
+                            const float* out_scale_ptr);
 
-template <typename T>
-void invokeAddBiasGeluRow(int8_t *out, const int8_t* in, const T* bias, const int m, const int n, 
-                          cudaStream_t stream, const float* input_deQFactor_ptr, const float* out_scale_ptr);
+template<typename T>
+void invokeAddBiasGeluCol32_v2(int8_t* out,
+                               const T* bias,
+                               const int m,
+                               const int n,
+                               cudaStream_t stream,
+                               const float* input_deQFactor_ptr,
+                               const float* out_scale_ptr);
+
+template<typename T>
+void invokeAddBiasGeluRow(int8_t* out,
+                          const int8_t* in,
+                          const T* bias,
+                          const int m,
+                          const int n,
+                          cudaStream_t stream,
+                          const float* input_deQFactor_ptr,
+                          const float* out_scale_ptr);
 
 }  // namespace fastertransformer

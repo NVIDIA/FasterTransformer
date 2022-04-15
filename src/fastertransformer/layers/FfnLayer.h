@@ -25,8 +25,7 @@
 
 namespace fastertransformer {
 
-enum ActivationType
-{
+enum ActivationType {
     Gelu,
     Relu
 };
@@ -50,9 +49,10 @@ private:
     void allocateBuffer() override;
     void freeBuffer() override;
     bool isValidTokenNum(size_t token_num);
+    void allocateBuffer(size_t token_num);
 
 protected:
-    T* inter_buf_;
+    T* inter_buf_ = nullptr;
     size_t inter_size_;
     virtual void invokeAddBiasActivation(const int m, const T* bias) = 0;
 

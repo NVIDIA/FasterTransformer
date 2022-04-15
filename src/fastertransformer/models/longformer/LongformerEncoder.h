@@ -21,8 +21,8 @@
 #include "src/fastertransformer/kernels/layernorm_kernels.h"
 #include "src/fastertransformer/kernels/longformer_kernels.h"
 #include "src/fastertransformer/layers/DenseWeight.h"
-#include "src/fastertransformer/layers/attention_layers/LongformerAttentionLayer.h"
 #include "src/fastertransformer/layers/FfnLayer.h"
+#include "src/fastertransformer/layers/attention_layers/LongformerAttentionLayer.h"
 
 namespace fastertransformer {
 

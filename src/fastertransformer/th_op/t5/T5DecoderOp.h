@@ -14,18 +14,7 @@
  * limitations under the License.
  */
 
-#include <cuda_fp16.h>
-#include <iostream>
-#include <nvToolsExt.h>
-#include <vector>
-
-#include "torch/csrc/cuda/Stream.h"
-#include <ATen/cuda/CUDAContext.h>
-#include <torch/custom_class.h>
-#include <torch/script.h>
-
 #include "src/fastertransformer/models/t5/T5Decoder.h"
-#include "src/fastertransformer/th_op/th_traits.h"
 #include "src/fastertransformer/th_op/th_utils.h"
 #include "src/fastertransformer/utils/mpi_utils.h"
 
@@ -75,7 +64,7 @@ public:
         init_nccl_comm();
 
         int hidden_dim = _head_num * _head_size;
-        check_cuda_error(cublasLtCreate(&_cublasltHandle));
+        ft::check_cuda_error(cublasLtCreate(&_cublasltHandle));
         cublas_algo_map_ = new ft::cublasAlgoMap("gemm_config.in");
 
         cublas_wrapper_mutex_ = new std::mutex();
@@ -84,17 +73,20 @@ public:
 
         for (int i = 0; i < _layer_num; ++i) {
             int local_num_layer = (int)(ceil(_layer_num * 1.0f / pipeline_para_.world_size_));
-            if (!(i < _layer_num && (i >= local_num_layer * pipeline_para_.rank_) && (i < local_num_layer * (pipeline_para_.rank_ + 1)))) {
+            if (!(i < _layer_num && (i >= local_num_layer * pipeline_para_.rank_)
+                  && (i < local_num_layer * (pipeline_para_.rank_ + 1)))) {
                 continue;
             }
             const int first_layer_index = local_num_layer * pipeline_para_.rank_;
 
-            decoder_layer_weights[i]->pre_layernorm_weights.gamma = get_ptr<T>(_weights[0]) + (i - first_layer_index) * _d_model;
+            decoder_layer_weights[i]->pre_layernorm_weights.gamma =
+                get_ptr<T>(_weights[0]) + (i - first_layer_index) * _d_model;
             decoder_layer_weights[i]->self_attention_weights.query_weight.kernel =
                 get_ptr<T>(_weights[1]) + (i - first_layer_index) * _d_model * 3 * hidden_dim;
             decoder_layer_weights[i]->self_attention_weights.attention_output_weight.kernel =
                 get_ptr<T>(_weights[2]) + (i - first_layer_index) * hidden_dim * _d_model;
-            decoder_layer_weights[i]->self_attn_layernorm_weights.gamma = get_ptr<T>(_weights[3]) + (i - first_layer_index) * _d_model;
+            decoder_layer_weights[i]->self_attn_layernorm_weights.gamma =
+                get_ptr<T>(_weights[3]) + (i - first_layer_index) * _d_model;
             decoder_layer_weights[i]->cross_attention_weights.query_weight.kernel =
                 get_ptr<T>(_weights[4]) + (i - first_layer_index) * _d_model * hidden_dim;
             decoder_layer_weights[i]->cross_attention_weights.key_weight.kernel =
@@ -103,7 +95,8 @@ public:
                 get_ptr<T>(_weights[6]) + (i - first_layer_index) * _mem_d_model * hidden_dim;
             decoder_layer_weights[i]->cross_attention_weights.attention_output_weight.kernel =
                 get_ptr<T>(_weights[7]) + (i - first_layer_index) * hidden_dim * _d_model;
-            decoder_layer_weights[i]->cross_attn_layernorm_weights.gamma = get_ptr<T>(_weights[8]) + (i - first_layer_index) * _d_model;
+            decoder_layer_weights[i]->cross_attn_layernorm_weights.gamma =
+                get_ptr<T>(_weights[8]) + (i - first_layer_index) * _d_model;
             decoder_layer_weights[i]->ffn_weights.intermediate_weight.kernel =
                 get_ptr<T>(_weights[9]) + (i - first_layer_index) * _d_model * _inter_size;
             decoder_layer_weights[i]->ffn_weights.output_weight.kernel =
@@ -113,6 +106,21 @@ public:
 
     void init_nccl_comm()
     {
+        int mpi_initialized;
+        MPICHECK(MPI_Initialized(&mpi_initialized));
+        if (!mpi_initialized) {
+            printf("[INFO] MPI is not initialized! Skipped the NCCL communication initialization.\n");
+            if (tensor_para_.world_size_ != 1) {
+                printf("[FATAL] MPI initialization can only be skipped when tensor_para_size=1, but got %d!\n",
+                       tensor_para_.world_size_);
+            }
+            if (pipeline_para_.world_size_ != 1) {
+                printf("[FATAL] MPI initialization can only be skipped when pipeline_para_size=1, but got %d!\n",
+                       pipeline_para_.world_size_);
+            }
+            return;
+        }
+
         int rank, world_size;
         MPICHECK(MPI_Comm_rank(MPI_COMM_WORLD, &rank));
         MPICHECK(MPI_Comm_size(MPI_COMM_WORLD, &world_size));
@@ -131,15 +139,14 @@ public:
             //       n, ..., 2n - 1 are in group 1.
             NCCLCHECK(ncclGetUniqueId(&tensor_para_nccl_uid));
             for (int i = 1; i < (int)tensor_para_.world_size_; i++) {
-                printf("[INFO] rank %d sends tensor_para_nccl_uid to rank %d \n", rank, rank + i);
+                FT_LOG_INFO("rank %d sends tensor_para_nccl_uid to rank %d \n", rank, rank + i);
                 MPICHECK(MPI_Send(
                     &tensor_para_nccl_uid, sizeof(tensor_para_nccl_uid), MPI_BYTE, rank + i, 0, MPI_COMM_WORLD));
             }
         }
         else {
             MPI_Status status;
-            printf(
-                "[INFO] rank %d receives tensor_para_nccl_uid from rank %d \n", rank, rank - (int)tensor_para_.rank_);
+            FT_LOG_INFO("rank %d receives tensor_para_nccl_uid from rank %d \n", rank, rank - (int)tensor_para_.rank_);
             MPICHECK(MPI_Recv(&tensor_para_nccl_uid,
                               sizeof(tensor_para_nccl_uid),
                               MPI_BYTE,
@@ -155,9 +162,9 @@ public:
             // 1, k+1, 2k+1 are in group 1
             NCCLCHECK(ncclGetUniqueId(&pipeline_para_nccl_uid));
             for (int i = 1; i < (int)pipeline_para_.world_size_; i++) {
-                printf("[INFO] rank %d sends pipeline_para_nccl_uid to rank %d \n",
-                       rank,
-                       rank + i * (int)tensor_para_.world_size_);
+                FT_LOG_INFO("rank %d sends pipeline_para_nccl_uid to rank %d \n",
+                            rank,
+                            rank + i * (int)tensor_para_.world_size_);
                 MPICHECK(MPI_Send(&pipeline_para_nccl_uid,
                                   sizeof(pipeline_para_nccl_uid),
                                   MPI_BYTE,
@@ -168,9 +175,8 @@ public:
         }
         else {
             MPI_Status status;
-            printf("[INFO] rank %d receives pipeline_para_nccl_uid from rank %d \n",
-                   rank,
-                   rank % (int)tensor_para_.world_size_);
+            FT_LOG_INFO(
+                "rank %d receives pipeline_para_nccl_uid from rank %d \n", rank, rank % (int)tensor_para_.world_size_);
             MPICHECK(MPI_Recv(&pipeline_para_nccl_uid,
                               sizeof(pipeline_para_nccl_uid),
                               MPI_BYTE,
@@ -208,8 +214,8 @@ public:
         auto stream = at::cuda::getCurrentCUDAStream().stream();
         cublasHandle_t _cublasHandle = at::cuda::getCurrentCUDABlasHandle();
         cublasSetStream(_cublasHandle, stream);
-        fastertransformer::Allocator<AllocatorType::TH>* allocator =
-            new fastertransformer::Allocator<AllocatorType::TH>();
+        fastertransformer::Allocator<ft::AllocatorType::TH>* allocator =
+            new fastertransformer::Allocator<ft::AllocatorType::TH>();
         ft::cublasMMWrapper* cublas_wrapper = new ft::cublasMMWrapper(
             _cublasHandle, _cublasltHandle, stream, cublas_algo_map_, cublas_wrapper_mutex_, allocator);
 
@@ -231,7 +237,8 @@ public:
                                                     allocator,
                                                     true,
                                                     tensor_para_,
-                                                    pipeline_para_);
+                                                    pipeline_para_,
+                                                    ft::ActivationType::Relu);
 
         int tmp_step = step + 1;
         std::vector<ft::Tensor> input_tensors =

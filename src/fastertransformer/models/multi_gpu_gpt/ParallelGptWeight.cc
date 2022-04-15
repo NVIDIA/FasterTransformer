@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -157,17 +157,19 @@ void ParallelGptWeight<T>::mallocWeights()
 template<typename T>
 void ParallelGptWeight<T>::loadModel(std::string dir_path)
 {
+    FtCudaDataType model_file_type = getModelFileType(dir_path + "/config.ini", "gpt");
     FT_CHECK(is_maintain_buffer == true);
-
-    loadWeightFromBin<T>(weights_ptr[0], {max_seq_len_, hidden_units_}, dir_path + "/model.wpe.bin");
-    loadWeightFromBin<T>(weights_ptr[1], {vocab_size_ * hidden_units_}, dir_path + "/model.wte.bin");
-    loadWeightFromBin<T>(weights_ptr[2], {hidden_units_}, dir_path + "/model.final_layernorm.bias.bin");
-    loadWeightFromBin<T>(weights_ptr[3], {hidden_units_}, dir_path + "/model.final_layernorm.weight.bin");
-    loadWeightFromBin<T>(weights_ptr[4], {vocab_size_ * hidden_units_}, dir_path + "/model.wte.bin");
+    loadWeightFromBin<T>(weights_ptr[0], {max_seq_len_, hidden_units_}, dir_path + "/model.wpe.bin", model_file_type);
+    loadWeightFromBin<T>(weights_ptr[1], {vocab_size_ * hidden_units_}, dir_path + "/model.wte.bin", model_file_type);
+    loadWeightFromBin<T>(
+        weights_ptr[2], {hidden_units_}, dir_path + "/model.final_layernorm.bias.bin", model_file_type);
+    loadWeightFromBin<T>(
+        weights_ptr[3], {hidden_units_}, dir_path + "/model.final_layernorm.weight.bin", model_file_type);
+    loadWeightFromBin<T>(weights_ptr[4], {vocab_size_ * hidden_units_}, dir_path + "/model.wte.bin", model_file_type);
 
     for (int l = 0; l < num_layer_; l++) {
         if (isValidLayerParallelId(l)) {
-            decoder_layer_weights[l]->loadModel(dir_path + "/model.layers." + std::to_string(l));
+            decoder_layer_weights[l]->loadModel(dir_path + "/model.layers." + std::to_string(l), model_file_type);
         }
     }
 }
@@ -205,5 +207,8 @@ void ParallelGptWeight<T>::compress_weights(cublasMMWrapper& cublas_wrapper)
 
 template struct ParallelGptWeight<float>;
 template struct ParallelGptWeight<half>;
+#ifdef ENABLE_BF16
+template struct ParallelGptWeight<__nv_bfloat16>;
+#endif
 
 }  // namespace fastertransformer

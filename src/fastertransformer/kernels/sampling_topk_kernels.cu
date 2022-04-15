@@ -15,7 +15,13 @@
  * limitations under the License.
  */
 
+#ifndef CUDART_VERSION
+#error CUDART_VERSION Undefined!
+#elif (CUDART_VERSION >= 11050)
+#include <cub/cub.cuh>
+#else
 #include "3rdparty/cub/cub.cuh"
+#endif
 
 #include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
 #include "src/fastertransformer/kernels/sampling_topk_kernels.h"
@@ -24,10 +30,8 @@ namespace fastertransformer {
 
 __global__ void curandInitialize(curandState_t* state, const int size, const unsigned long long random_seed)
 {
-    // TODO(bhsueh) should we fix the sequence of different batch as same?
     if (threadIdx.x + blockIdx.x * blockDim.x < size) {
-        curand_init(
-            random_seed, 0, 0, &state[blockIdx.x * blockDim.x + threadIdx.x]);
+        curand_init(random_seed, 0, 0, &state[blockIdx.x * blockDim.x + threadIdx.x]);
     }
 }
 
@@ -49,7 +53,7 @@ __global__ void topk_stage_1_opt3(const T* __restrict log_probs,
                                   const bool* finished,
                                   const int k,
                                   const int vocab_size,
-                                  const int end_id)
+                                  const int* end_ids)
 {
     typedef cub::BlockReduce<TopK_2<T>, BLOCK_SIZE_> BlockReduce;
     __shared__ typename BlockReduce::TempStorage temp_storage;
@@ -69,6 +73,7 @@ __global__ void topk_stage_1_opt3(const T* __restrict log_probs,
         if (tid < k) {
             const int index = tmp_topk_buf_index + tid;
             if (block_lane == 0 && tid == 0) {
+                const int end_id = end_ids[row_id];
                 topk_tmp_id_buf[index] = tmp_log_buf_index + end_id;
                 topk_tmp_val_buf[index] = log_probs[tmp_log_buf_index + end_id];
             }
@@ -108,7 +113,7 @@ __global__ void topk_stage_1_opt3(const T* __restrict log_probs,
 }
 
 template<typename T>
-__global__ void addBiasEndMask(T* logits, const T* bias, const int end_id, const bool* finished, const int n)
+__global__ void addBiasEndMask(T* logits, const T* bias, const int* end_ids, const bool* finished, const int n)
 {
     int bid = blockIdx.x;
     bool finish = finished != nullptr ? finished[bid] : false;
@@ -118,28 +123,29 @@ __global__ void addBiasEndMask(T* logits, const T* bias, const int end_id, const
     const T MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
     for (int tid = threadIdx.x; tid < n; tid += blockDim.x) {
         if (finish) {
-            logits[offset + tid] = (tid == end_id) ? MAX_T_VAL : -MAX_T_VAL;
+            logits[offset + tid] = (tid == end_ids[bid]) ? MAX_T_VAL : -MAX_T_VAL;
         }
         else {
-            if (bias != nullptr)
+            if (bias != nullptr) {
                 logits[offset + tid] += bias[tid];
+            }
         }
     }
 }
 
 template<typename T>
 void invokeAddBiasEndMask(
-    T* logits, const T* bias, const int end_id, const bool* finished, const int m, const int n, cudaStream_t stream)
+    T* logits, const T* bias, const int* end_ids, const bool* finished, const int m, const int n, cudaStream_t stream)
 {
     dim3 grid(m);
     dim3 block(min(n, 1024));
     /*n is the vocab_size, e.g., 30000, 7000.... vocab_size is usually very big. */
-    addBiasEndMask<<<grid, block, 0, stream>>>(logits, bias, end_id, finished, n);
+    addBiasEndMask<<<grid, block, 0, stream>>>(logits, bias, end_ids, finished, n);
 }
 
 template void invokeAddBiasEndMask(float* logits,
                                    const float* bias,
-                                   const int end_id,
+                                   const int* end_ids,
                                    const bool* finished,
                                    const int m,
                                    const int n,
@@ -147,24 +153,26 @@ template void invokeAddBiasEndMask(float* logits,
 
 template void invokeAddBiasEndMask(half* logits,
                                    const half* bias,
-                                   const int end_id,
+                                   const int* end_ids,
                                    const bool* finished,
                                    const int m,
                                    const int n,
                                    cudaStream_t stream);
 
 template<typename T, int BLOCK_SIZE_, int BLOCKS_PER_BEAM_>
-__global__ void topk_stage_2_opt3_sampling(const int* __restrict topk_tmp_id_buf,
-                                           T* topk_tmp_val_buf,
-                                           T* topk_tmp2_val_buf,
-                                           int* ids,
-                                           int* sequence_length,
-                                           bool* finished_buf,
-                                           float* cum_log_probs,
-                                           const int k,
-                                           curandState_t* curandstate,
-                                           const int end_id,
-                                           const int vocab_size)
+__global__ void topk_topp_stage_2_opt3_sampling(const int* __restrict topk_tmp_id_buf,
+                                                T* topk_tmp_val_buf,
+                                                T* topk_tmp2_val_buf,
+                                                int* ids,
+                                                int* sequence_length,
+                                                bool* finished_buf,
+                                                float* cum_log_probs,
+                                                float* output_log_probs,
+                                                const int k,
+                                                const T prob_threshold,
+                                                curandState_t* curandstate,
+                                                const int* end_ids,
+                                                const int vocab_size)
 {
     const int size = k * BLOCKS_PER_BEAM_;
     const int tid = threadIdx.x;
@@ -180,12 +188,12 @@ __global__ void topk_stage_2_opt3_sampling(const int* __restrict topk_tmp_id_buf
     __shared__ float s_max;
     T* s_val = topk_tmp_val_buf + batch_id * size;
     int* s_id = (int*)(array);
-    s_max = (float)0.0f;
-    s_sum = (float)0.0f;
+    s_max = 0.0f;
+    s_sum = 0.0f;
     TopK_2<float> partial;
 
     if (finished_buf != nullptr && finished_buf[batch_id] == true) {
-        ids[batch_id] = end_id;
+        ids[batch_id] = end_ids[batch_id];
         return;
     }
 
@@ -214,7 +222,7 @@ __global__ void topk_stage_2_opt3_sampling(const int* __restrict topk_tmp_id_buf
 
             // when cum_log_probs are computed, topk_tmp_val_buf (logits_buf_) are already pre-processed by
             // softmax_kernel
-            if (cum_log_probs == nullptr) {
+            if (cum_log_probs == nullptr && output_log_probs == nullptr) {
                 total.u = __expf(total.u - s_max);
             }
             s_val2[ite] = total.u;
@@ -223,14 +231,26 @@ __global__ void topk_stage_2_opt3_sampling(const int* __restrict topk_tmp_id_buf
         __syncthreads();
     }
     if (tid == 0) {
-        rand_num = (float)curand_uniform(curandstate + blockIdx.x) * s_sum;
+        rand_num = (float)curand_uniform(curandstate + blockIdx.x) * (float)prob_threshold * s_sum;
         for (int i = 0; i < k; i++) {
             float exp_logit = s_val2[i];
             rand_num = rand_num - exp_logit;
-            if (rand_num <= 0.0f) {
+            if (rand_num <= 0.0f || i == k - 1) {
                 ids[batch_id] = topk_tmp_id_buf[batch_id * size + s_id[i]] % vocab_size;
-                if (cum_log_probs != nullptr) {
-                    cum_log_probs[batch_id] = logf(exp_logit / s_sum);
+                if (cum_log_probs != nullptr || output_log_probs != nullptr) {
+                    float log_prob = logf(exp_logit);
+                    if (cum_log_probs != nullptr) {
+                        cum_log_probs[batch_id] += log_prob;
+                    }
+                    if (output_log_probs != nullptr) {
+                        // 'output_log_probs' is the probability induced by the top-k sampling.
+                        // We normalize the probability 'exp_logit' of the selected token by
+                        // the probability 's_sum' of a set of top-k tokens, meaning the log_prob
+                        // is the probability of the selected token, conditioned on the event that
+                        // it is selected, i.e.,
+                        //   log_prob = log P(i | i is in top-k) = log(exp_logit / s_sum).
+                        output_log_probs[batch_id] = log_prob - logf(s_sum);
+                    }
                 }
                 break;
             }
@@ -238,7 +258,7 @@ __global__ void topk_stage_2_opt3_sampling(const int* __restrict topk_tmp_id_buf
         if (sequence_length != nullptr && finished_buf != nullptr) {
             sequence_length[batch_id] =
                 finished_buf[batch_id] ? sequence_length[batch_id] : sequence_length[batch_id] + 1;
-            finished_buf[batch_id] = ids[batch_id] == end_id ? 1 : 0;
+            finished_buf[batch_id] = ids[batch_id] == end_ids[batch_id] ? 1 : 0;
         }
     }
 }
@@ -253,8 +273,8 @@ __global__ void topk_stage_2_opt3_sampling(const int* __restrict topk_tmp_id_buf
                                                                           finished_buf,                                \
                                                                           candidate_num,                               \
                                                                           vocab_size,                                  \
-                                                                          end_id);                                     \
-        topk_stage_2_opt3_sampling<T, BLOCK_SIZE_2_, BLOCKS_PER_BEAM_>                                                 \
+                                                                          end_ids);                                    \
+        topk_topp_stage_2_opt3_sampling<T, BLOCK_SIZE_2_, BLOCKS_PER_BEAM_>                                            \
             <<<batch_size, BLOCK_SIZE_2_, K_MAX * sizeof(int) + K_MAX * sizeof(float), stream>>>(topk_tmp_id_buf,      \
                                                                                                  topk_tmp_val_buf,     \
                                                                                                  topk_tmp2_val_buf,    \
@@ -262,9 +282,11 @@ __global__ void topk_stage_2_opt3_sampling(const int* __restrict topk_tmp_id_buf
                                                                                                  sequence_length,      \
                                                                                                  finished_buf,         \
                                                                                                  cum_log_probs,        \
+                                                                                                 output_log_probs,     \
                                                                                                  candidate_num,        \
+                                                                                                 1.0f,                 \
                                                                                                  curandstate,          \
-                                                                                                 end_id,               \
+                                                                                                 end_ids,              \
                                                                                                  vocab_size);          \
         break;
 
@@ -276,10 +298,11 @@ void invokeTopKSampling(void* workspace,
                         int* sequence_length,
                         bool* finished_buf,
                         float* cum_log_probs,
+                        float* output_log_probs,
                         curandState_t* curandstate,
                         const int top_k,
                         const int vocab_size_padded,
-                        const int end_id,
+                        const int* end_ids,
                         cudaStream_t stream,
                         const int batch_size)
 {
@@ -331,10 +354,11 @@ template void invokeTopKSampling(void* workspace,
                                  int* sequence_length,
                                  bool* finished_buf,
                                  float* cum_log_probs,
+                                 float* output_log_probs,
                                  curandState_t* curandstate,
                                  const int top_k,
                                  const int vocab_size_padded,
-                                 const int end_id,
+                                 const int* end_ids,
                                  cudaStream_t stream,
                                  const int batch_size);
 
@@ -345,92 +369,13 @@ template void invokeTopKSampling(void* workspace,
                                  int* sequence_length,
                                  bool* finished_buf,
                                  float* cum_log_probs,
+                                 float* output_log_probs,
                                  curandState_t* curandstate,
                                  const int top_k,
                                  const int vocab_size_padded,
-                                 const int end_id,
+                                 const int* end_ids,
                                  cudaStream_t stream,
                                  const int batch_size);
-
-template<typename T, int BLOCK_SIZE_, int BLOCKS_PER_BEAM_>
-__global__ void topk_topp_sampling_kernel_v2(const int* __restrict topk_tmp_id_buf,
-                                             T* topk_tmp_val_buf,
-                                             T* topk_tmp2_val_buf,
-                                             int* ids,
-                                             int* sequence_length,
-                                             bool* finished_buf,
-                                             const int k,
-                                             const T prob_threshold,
-                                             curandState_t* curandstate,
-                                             const int end_id,
-                                             const int vocab_size)
-{
-    const int size = k * BLOCKS_PER_BEAM_;
-    const int tid = threadIdx.x;
-    const int batch_id = blockIdx.x;
-    const bool IS_FP16 = std::is_same<T, half>::value;
-    const T MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
-
-    typedef cub::BlockReduce<TopK_2<float>, BLOCK_SIZE_> BlockReduce;
-    __shared__ typename BlockReduce::TempStorage temp_storage;
-    extern __shared__ char array[];
-    __shared__ float rand_num;
-    __shared__ float s_max;
-    __shared__ float s_sum;
-    T* s_val = topk_tmp_val_buf + batch_id * size;
-    int* s_id = (int*)(array);
-    s_max = 0.0f;
-    s_sum = 0.0f;
-    TopK_2<float> partial;
-
-    if (finished_buf != nullptr && finished_buf[batch_id] == true) {
-        ids[batch_id] = end_id;
-        return;
-    }
-
-    for (int index = tid; index < size; index += BLOCK_SIZE_) {
-        topk_tmp2_val_buf[batch_id * size + index] = topk_tmp_val_buf[batch_id * size + index];
-    }
-    __syncthreads();
-    T* s_val2 = topk_tmp2_val_buf + batch_id * size;
-
-    for (int ite = 0; ite < k; ite++) {
-        partial.init();
-#pragma unroll
-        for (int i = tid; i < size; i += BLOCK_SIZE_) {
-            partial.insert((float)s_val[i], i);
-        }
-
-        TopK_2<float> total = BlockReduce(temp_storage).Reduce(partial, reduce_topk_op_2<float>);
-
-        if (ite == 0)
-            s_max = total.u;
-
-        if (tid == 0) {
-            s_id[ite] = total.p;
-            s_val[total.p] = -MAX_T_VAL;
-            total.u = __expf(total.u - s_max);
-            s_val2[total.p] = (T)total.u;
-            s_sum += total.u;
-        }
-        __syncthreads();
-    }
-    if (tid == 0) {
-        rand_num = (float)curand_uniform(curandstate + blockIdx.x) * (float)prob_threshold * s_sum;
-        for (int i = 0; i < k; i++) {
-            rand_num = rand_num - (float)s_val2[s_id[i]];
-            if (rand_num <= 0.0f) {
-                ids[batch_id] = topk_tmp_id_buf[batch_id * size + s_id[i]] % vocab_size;
-                break;
-            }
-        }
-        if (sequence_length != nullptr && finished_buf != nullptr) {
-            sequence_length[batch_id] =
-                finished_buf[batch_id] ? sequence_length[batch_id] : sequence_length[batch_id] + 1;
-            finished_buf[batch_id] = ids[batch_id] == end_id ? 1 : 0;
-        }
-    }
-}
 
 #define CASE_K(K_MIN, K_MAX, BLOCK_SIZE_1_, BLOCK_SIZE_2_, BLOCKS_PER_BEAM_)                                           \
     case K_MIN ... K_MAX:                                                                                              \
@@ -442,19 +387,21 @@ __global__ void topk_topp_sampling_kernel_v2(const int* __restrict topk_tmp_id_b
                                                                           finished_buf,                                \
                                                                           candidate_num,                               \
                                                                           vocab_size,                                  \
-                                                                          end_id);                                     \
-        topk_topp_sampling_kernel_v2<T, BLOCK_SIZE_2_, BLOCKS_PER_BEAM_>                                               \
-            <<<batch_size, BLOCK_SIZE_2_, K_MAX * sizeof(int), stream>>>(topk_tmp_id_buf,                              \
-                                                                         topk_tmp_val_buf,                             \
-                                                                         topk_tmp2_val_buf,                            \
-                                                                         output_ids,                                   \
-                                                                         sequence_length,                              \
-                                                                         finished_buf,                                 \
-                                                                         candidate_num,                                \
-                                                                         prob_threshold,                               \
-                                                                         curandstate,                                  \
-                                                                         end_id,                                       \
-                                                                         vocab_size);                                  \
+                                                                          end_ids);                                    \
+        topk_topp_stage_2_opt3_sampling<T, BLOCK_SIZE_2_, BLOCKS_PER_BEAM_>                                            \
+            <<<batch_size, BLOCK_SIZE_2_, K_MAX * sizeof(int) + K_MAX * sizeof(float), stream>>>(topk_tmp_id_buf,      \
+                                                                                                 topk_tmp_val_buf,     \
+                                                                                                 topk_tmp2_val_buf,    \
+                                                                                                 output_ids,           \
+                                                                                                 sequence_length,      \
+                                                                                                 finished_buf,         \
+                                                                                                 cum_log_probs,        \
+                                                                                                 output_log_probs,     \
+                                                                                                 candidate_num,        \
+                                                                                                 prob_threshold,       \
+                                                                                                 curandstate,          \
+                                                                                                 end_ids,              \
+                                                                                                 vocab_size);          \
         break;
 
 template<typename T>
@@ -464,12 +411,14 @@ void invokeTopKTopPSampling(void* workspace,
                             const T* logits,
                             int* sequence_length,
                             bool* finished_buf,
+                            float* cum_log_probs,
+                            float* output_log_probs,
                             curandState_t* curandstate,
                             const int batch_size,
                             const int top_k,
                             const T top_p,
                             const int vocab_size_padded,
-                            const int end_id,
+                            const int* end_ids,
                             cudaStream_t stream)
 {
     // Here, we put batch size as an argument because the batch size of initialization
@@ -518,12 +467,14 @@ template void invokeTopKTopPSampling(void* workspace,
                                      const float* logits,
                                      int* sequence_length,
                                      bool* finished_buf,
+                                     float* cum_log_probs,
+                                     float* output_log_probs,
                                      curandState_t* curandstate,
                                      const int batch_size,
                                      const int top_k,
                                      const float top_p,
                                      const int vocab_size_padded,
-                                     const int end_id,
+                                     const int* end_ids,
                                      cudaStream_t stream);
 
 template void invokeTopKTopPSampling(void* workspace,
@@ -532,11 +483,13 @@ template void invokeTopKTopPSampling(void* workspace,
                                      const half* logits,
                                      int* sequence_length,
                                      bool* finished_buf,
+                                     float* cum_log_probs,
+                                     float* output_log_probs,
                                      curandState_t* curandstate,
                                      const int batch_size,
                                      const int top_k,
                                      const half top_p,
                                      const int vocab_size_padded,
-                                     const int end_id,
+                                     const int* end_ids,
                                      cudaStream_t stream);
 }  // namespace fastertransformer

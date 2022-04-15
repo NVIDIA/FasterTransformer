@@ -25,15 +25,26 @@ template<typename T>
 void invokeLocalAttnMaskShift(T* local_attn_mask, T* out, int batch_size, int seq_len, cudaStream_t stream);
 
 template<typename T>
-void invokeInitLongformerIdx(T* global_attn_mask, int* seq_idx, int* global_idx,
-                             int* global_token_nums, int seq_len, int batch_size,
-                             void* cub_storage, cudaStream_t stream);
+void invokeInitLongformerIdx(T* global_attn_mask,
+                             int* seq_idx,
+                             int* global_idx,
+                             int* global_token_nums,
+                             int seq_len,
+                             int batch_size,
+                             void* cub_storage,
+                             cudaStream_t stream);
 
 template<typename T>
 void invokeLongformerMHASoftmax(const T* global_attn_mask,
-                                const int* global_idx, const int* global_token_nums,
-                                void* input_ptrs, const T* local_attn_mask, float scaler,
-                                int seq_len, int head_num, int batch_size, int local_attn_window_size,
+                                const int* global_idx,
+                                const int* global_token_nums,
+                                void* input_ptrs,
+                                const T* local_attn_mask,
+                                float scaler,
+                                int seq_len,
+                                int head_num,
+                                int batch_size,
+                                int local_attn_window_size,
                                 cudaStream_t stream);
 
 }  // namespace fastertransformer

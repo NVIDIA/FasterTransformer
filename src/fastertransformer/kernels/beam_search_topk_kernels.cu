@@ -14,7 +14,13 @@
  * limitations under the License.
  */
 
+#ifndef CUDART_VERSION
+#error CUDART_VERSION Undefined!
+#elif (CUDART_VERSION >= 11050)
+#include <cub/cub.cuh>
+#else
 #include "3rdparty/cub/cub.cuh"
+#endif
 
 #include "src/fastertransformer/kernels/beam_search_topk_kernels.h"
 #include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
@@ -116,8 +122,9 @@ __launch_bounds__(THREADBLOCK_SIZE) __global__
 
     if (tid == 0) {
 #pragma unroll
-        for (int i = 0; i < MAX_K; i++)
+        for (int i = 0; i < MAX_K; i++) {
             id_buf[bid * MAX_K + i] = total.p[i];
+        }
     }
 }
 
@@ -129,7 +136,7 @@ __global__ void topk_stage_1_opt3(const T* __restrict log_probs,
                                   const bool* finished,
                                   const int k,
                                   const int vocab_size,
-                                  const int end_id)
+                                  const int* end_ids)
 {
     typedef cub::BlockReduce<TopK_2<T>, BLOCK_SIZE_> BlockReduce;
     __shared__ typename BlockReduce::TempStorage temp_storage;
@@ -149,6 +156,7 @@ __global__ void topk_stage_1_opt3(const T* __restrict log_probs,
         if (tid < k) {
             const int index = tmp_topk_buf_index + tid;
             if (block_lane == 0 && tid == 0) {
+                const int end_id = end_ids[row_id / k];
                 topk_tmp_id_buf[index] = tmp_log_buf_index + end_id;
                 topk_tmp_val_buf[index] = log_probs[tmp_log_buf_index + end_id];
             }
@@ -219,8 +227,9 @@ __global__ void topk_stage_2_opt3(const int* __restrict topk_tmp_id_buf, T* topk
         }
         __syncthreads();
     }
-    if (tid < k)
+    if (tid < k) {
         ids[batch_id * k + tid] = topk_tmp_id_buf[batch_id * size + s_id[tid]];
+    }
 }
 
 template<typename T, int BLOCK_SIZE, int BLOCKS_PER_BEAM>
@@ -303,8 +312,9 @@ topk_stage_2_opt2_general(const int* __restrict topk_tmp_id_buf, T* topk_tmp_val
         }
         __syncthreads();
     }
-    if (tid < k)
+    if (tid < k) {
         ids[batch_id * k + tid] = topk_tmp_id_buf[batch_id * size + s_id[tid]];
+    }
 }
 
 #define CASE_K_DIV(K, BLOCK_SIZE_1, BLOCK_SIZE_2)                                                                      \
@@ -328,7 +338,7 @@ topk_stage_2_opt2_general(const int* __restrict topk_tmp_id_buf, T* topk_tmp_val
                                                                               finished,                                \
                                                                               beam_width,                              \
                                                                               vocab_size,                              \
-                                                                              end_id);                                 \
+                                                                              end_ids);                                \
         topk_stage_2_opt3<float, BLOCK_SIZE_2_, BLOCKS_PER_BEAM_>                                                      \
             <<<batch_size, BLOCK_SIZE_2_, K * sizeof(int), stream>>>(                                                  \
                 topk_tmp_id_buf, topk_tmp_val_buf, ids, beam_width);                                                   \
@@ -344,7 +354,7 @@ void invokeTopkBeamSearch(void* workspace,
                           const int beam_width,
                           const int vocab_size_padded_,
                           const T diversity_rate,
-                          const int end_id,
+                          const int* end_ids,
                           cudaStream_t stream)
 {
     const int vocab_size = vocab_size_padded_;
@@ -415,7 +425,7 @@ template void invokeTopkBeamSearch(void* workspace,
                                    const int beam_width,
                                    const int vocab_size_padded_,
                                    const float diversity_rate,
-                                   const int end_id,
+                                   const int* end_ids,
                                    cudaStream_t stream);
 
 template<typename T>
@@ -463,12 +473,12 @@ void invokeTileEncoderResults(T* tiled_output,
     if (d_model % 2 == 0 && std::is_same<T, half>::value) {
         dim3 block(min(512, (int)(d_model / 2)));
         tileEncoderResults<half2><<<grid, block, 0, stream>>>((half2*)tiled_output,
-                                                       tiled_sequence_length,
-                                                       (const half2*)output,
-                                                       sequence_length,
-                                                       batch_size,
-                                                       beam_width,
-                                                       d_model / 2);
+                                                              tiled_sequence_length,
+                                                              (const half2*)output,
+                                                              sequence_length,
+                                                              batch_size,
+                                                              beam_width,
+                                                              d_model / 2);
     }
     else {
         dim3 block(min(512, (int)d_model));

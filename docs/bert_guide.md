@@ -106,10 +106,10 @@ The following section lists the requirements to use FasterTransformer BERT.
 ### Requirements
 
 - CMake >= 3.8 for Tensorflow, CMake >= 3.13 for PyTorch
-- CUDA 10.1 or newer version
+- CUDA 11.0 or newer version
 - Python 3 is recommended because some features are not supported in python 2
-- Tensorflow 1.13 or 1.14 or 1.15
-- PyTorch >= 1.4.0
+- Tensorflow: Verify on 1.15, 1.13 and 1.14 should work.
+- PyTorch: Verify on 1.8.0, >= 1.5.0 should work.
 
 These components are readily available within the NGC TensorFlow/PyTorch Docker image below.
 
@@ -218,7 +218,7 @@ For those unable to use the NGC container, to set up the required environment or
     - `sequence_length`=32
     - `head_number`=12
     - `size_per_head`=64 
-    - `data_type`=FP32
+    - `data_type`=0 (FP32) or 1 (FP16) or 2 (BF16)
     - `int8_mode`=0
 
     Then the following scripts can generate the best GEMM configuration under such settings and record the configuration into the `gemm_config.in` file.

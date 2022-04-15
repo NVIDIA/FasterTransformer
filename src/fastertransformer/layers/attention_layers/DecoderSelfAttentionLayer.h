@@ -42,6 +42,7 @@ private:
     void allocateBuffer() override;
     void freeBuffer() override;
     bool isValidBatchSize(size_t batch_size);
+    void allocateBuffer(size_t batch_size);
 
     using BaseAttentionLayer<T>::is_free_buffer_after_forward_;
     using BaseAttentionLayer<T>::is_allocate_buffer_;
@@ -49,8 +50,8 @@ private:
     using BaseAttentionLayer<T>::allocator_;
 
 protected:
-    T* qkv_buf_;
-    T* context_buf_;
+    T* qkv_buf_ = nullptr;
+    T* context_buf_ = nullptr;
     using BaseAttentionLayer<T>::stream_;
     using BaseAttentionLayer<T>::sparse_;
 

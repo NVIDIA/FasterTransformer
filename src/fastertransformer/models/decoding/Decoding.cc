@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  * Copyright (c) 2021, NAVER Corp.  Authored by CLOVA.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
+#include <string>
+#include <unordered_map>
+
+#include "src/fastertransformer/kernels/beam_search_topk_kernels.h"
+#include "src/fastertransformer/layers/beam_search_layers/BaseBeamSearchLayer.h"
 #include "src/fastertransformer/models/decoding/Decoding.h"
-#include "src/fastertransformer/layers/beam_search_layers/BeamSearchLayer.h"
-#include "src/fastertransformer/layers/beam_search_layers/OnlineBeamSearchLayer.h"
-#include "src/fastertransformer/layers/sampling_layers/TopKSamplingLayer.h"
-#include "src/fastertransformer/layers/sampling_layers/TopKTopPSamplingLayer.h"
-#include "src/fastertransformer/layers/sampling_layers/TopPSamplingLayer.h"
 
 namespace fastertransformer {
 
@@ -37,105 +37,21 @@ void Decoding<T>::initialize()
                               allocator_,
                               is_free_buffer_after_forward_);
 
-    if (beam_width_ > 1) {
-        if (beam_width_ < 16) {
-            dynamic_decode_ = new OnlineBeamSearchLayer<T>(max_batch_size_,
-                                                           head_num_,
-                                                           size_per_head_,
-                                                           beam_width_,
-                                                           vocab_size_,
-                                                           vocab_size_padded_,
-                                                           end_id_,
-                                                           beam_search_diversity_rate_,
-                                                           temperature_,
-                                                           len_penalty_,
-                                                           repetition_penalty_,
-                                                           stream_,
-                                                           cublas_wrapper_,
-                                                           allocator_,
-                                                           is_free_buffer_after_forward_);
-        }
-        else {
-            dynamic_decode_ = new BeamSearchLayer<T>(max_batch_size_,
-                                                     head_num_,
-                                                     size_per_head_,
-                                                     beam_width_,
-                                                     vocab_size_,
-                                                     vocab_size_padded_,
-                                                     end_id_,
-                                                     beam_search_diversity_rate_,
-                                                     temperature_,
-                                                     len_penalty_,
-                                                     repetition_penalty_,
-                                                     stream_,
-                                                     cublas_wrapper_,
-                                                     allocator_,
-                                                     is_free_buffer_after_forward_);
-        }
-    }
-    else if (top_p_ == 0 && top_k_ != 0) {
-        // we sugguest set the is_free_buffer_after_forward_ of sampling to false
-        // since we need to initialize some buffers if we allocate buffer
-        // every time.
-        dynamic_decode_ = new TopKSamplingLayer<T>(max_batch_size_,
-                                                   vocab_size_,
-                                                   vocab_size_padded_,
-                                                   end_id_,
-                                                   top_k_,
-                                                   0,
-                                                   temperature_,
-                                                   len_penalty_,
-                                                   repetition_penalty_,
-                                                   stream_,
-                                                   cublas_wrapper_,
-                                                   allocator_,
-                                                   false);
-    }
-    else if (top_k_ == 0 && top_p_ != 0.0f) {
-        // we sugguest set the is_free_buffer_after_forward_ of sampling to false
-        // since we need to initialize some buffers if we allocate buffer
-        // every time.
-        dynamic_decode_ = new TopPSamplingLayer<T>(max_batch_size_,
-                                                   vocab_size_,
-                                                   vocab_size_padded_,
-                                                   end_id_,
-                                                   top_p_,
-                                                   0,
-                                                   temperature_,
-                                                   len_penalty_,
-                                                   repetition_penalty_,
-                                                   stream_,
-                                                   cublas_wrapper_,
-                                                   allocator_,
-                                                   false,
-                                                   cuda_device_prop_);
-    }
-    else {
-        // we sugguest set the is_free_buffer_after_forward_ of sampling to false
-        // since we need to initialize some buffers if we allocate buffer
-        // every time.
-        dynamic_decode_ = new TopKTopPSamplingLayer<T>(max_batch_size_,
-                                                       vocab_size_,
-                                                       vocab_size_padded_,
-                                                       end_id_,
-                                                       top_k_,
-                                                       top_p_,
-                                                       0,
-                                                       temperature_,
-                                                       len_penalty_,
-                                                       repetition_penalty_,
-                                                       stream_,
-                                                       cublas_wrapper_,
-                                                       allocator_,
-                                                       false);
-    }
+    dynamic_decode_layer_ = new DynamicDecodeLayer<T>(vocab_size_,
+                                                      vocab_size_padded_,
+                                                      end_id_,
+                                                      stream_,
+                                                      cublas_wrapper_,
+                                                      allocator_,
+                                                      is_free_buffer_after_forward_,
+                                                      cuda_device_prop_);
 }
 
 template<typename T>
 void Decoding<T>::allocateBuffer()
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_ == false) {
-
         const size_t batchxbeam = max_batch_size_ * beam_width_;
         const size_t self_cache_size = num_layer_ * batchxbeam * max_seq_len_ * hidden_units_;
         const size_t mem_cache_size = num_layer_ * batchxbeam * mem_max_seq_len_ * hidden_units_;
@@ -155,14 +71,17 @@ void Decoding<T>::allocateBuffer()
         finished_buf_ = (bool*)(allocator_->malloc(sizeof(bool) * batchxbeam, false));
         h_finished_buf_ = new bool[batchxbeam];
 
-        key_caches_[0] = (T*)(allocator_->malloc(sizeof(T) * self_cache_size, false));
-        value_caches_[0] = (T*)(allocator_->malloc(sizeof(T) * self_cache_size, false));
+        start_ids_buf_ = (int*)(allocator_->malloc(sizeof(int) * max_batch_size_, false));
+        end_ids_buf_ = (int*)(allocator_->malloc(sizeof(int) * max_batch_size_, false));
+
+        key_cache_ = (T*)(allocator_->malloc(sizeof(T) * self_cache_size, false));
+        value_cache_ = (T*)(allocator_->malloc(sizeof(T) * self_cache_size, false));
         if (beam_width_ > 1) {
-            key_caches_[1] = (T*)(allocator_->malloc(sizeof(T) * self_cache_size, false));
-            value_caches_[1] = (T*)(allocator_->malloc(sizeof(T) * self_cache_size, false));
+            cache_indirections_[0] = (int*)(allocator_->malloc(sizeof(int) * batchxbeam * max_seq_len_ * 2, true));
+            cache_indirections_[1] = cache_indirections_[0] + batchxbeam * max_seq_len_;
         }
-        key_mem_caches_ = (T*)(allocator_->malloc(sizeof(T) * mem_cache_size, false));
-        value_mem_caches_ = (T*)(allocator_->malloc(sizeof(T) * mem_cache_size, false));
+        key_mem_cache_ = (T*)(allocator_->malloc(sizeof(T) * mem_cache_size, false));
+        value_mem_cache_ = (T*)(allocator_->malloc(sizeof(T) * mem_cache_size, false));
 
         padded_pos_embedding_bias_ = (T*)(allocator_->malloc(sizeof(T) * vocab_size_padded_, false));
         output_ids_buf_ = (int*)(allocator_->malloc(sizeof(int) * batchxbeam * max_seq_len_, false));
@@ -175,6 +94,7 @@ void Decoding<T>::allocateBuffer()
 template<typename T>
 void Decoding<T>::freeBuffer()
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_ == true) {
         if (vocab_size_ != vocab_size_padded_) {
             padded_embedding_kernel_ptr_ = nullptr;
@@ -182,6 +102,8 @@ void Decoding<T>::freeBuffer()
             allocator_->free(padded_embedding_kernel_);
             allocator_->free(padded_embedding_bias_);
         }
+        allocator_->free(start_ids_buf_);
+        allocator_->free(end_ids_buf_);
 
         allocator_->free(decoder_input_buf_);
         allocator_->free(decoder_output_buf_);
@@ -191,14 +113,13 @@ void Decoding<T>::freeBuffer()
         allocator_->free(finished_buf_);
         delete[] h_finished_buf_;
 
-        allocator_->free(key_caches_[0]);
-        allocator_->free(value_caches_[0]);
-        if (beam_width_ > 1) {
-            allocator_->free(key_caches_[1]);
-            allocator_->free(value_caches_[1]);
+        allocator_->free(key_cache_);
+        allocator_->free(value_cache_);
+        if (cache_indirections_[0] != nullptr) {
+            allocator_->free(cache_indirections_[0]);
         }
-        allocator_->free(key_mem_caches_);
-        allocator_->free(value_mem_caches_);
+        allocator_->free(key_mem_cache_);
+        allocator_->free(value_mem_cache_);
 
         allocator_->free(padded_pos_embedding_bias_);
 
@@ -326,8 +247,9 @@ Decoding<T>::Decoding(Decoding<T> const& decoding):
 template<typename T>
 Decoding<T>::~Decoding()
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     delete decoder_;
-    delete dynamic_decode_;
+    delete dynamic_decode_layer_;
     freeBuffer();
 }
 
@@ -336,6 +258,7 @@ void Decoding<T>::forward(std::vector<Tensor>* output_tensors,
                           const std::vector<Tensor>* input_tensors,
                           const DecodingWeight<T>* decoding_weights)
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     // input_tensors:
     //      encoder_output [batch_size * beam, mem_max_seq_len, memory_hidden_dimension]
     //      encoder_sequence_length [batch_size * beam]
@@ -361,11 +284,18 @@ void Decoding<T>::forward(std::vector<Tensor>* output_tensors,
     const DataType data_type = getTensorType<T>();
     const size_t mem_max_seq_len = input_tensors->at(0).shape[1];
 
+    deviceFill(start_ids_buf_, batch_size, start_id_);
+    deviceFill(end_ids_buf_, batch_size, end_id_);
+
+    if (beam_width_ > 1) {
+        cudaMemsetAsync(cache_indirections_[0], 0, 2 * sizeof(int) * batch_size * beam_width_ * max_seq_len_, stream_);
+    }
+
     invokeDecodingInitialize(finished_buf_,
                              (int*)output_tensors->at(2).data,
                              output_ids_buf_,
                              cum_log_probs_,
-                             start_id_,
+                             start_ids_buf_,
                              batch_size,
                              beam_width_,
                              max_input_length,
@@ -398,6 +328,10 @@ void Decoding<T>::forward(std::vector<Tensor>* output_tensors,
         num_layer_, batch_size * beam_width_, head_num_, (size_t)(max_seq_len_), size_per_head_};
 
     for (int step = 1; step <= (int)max_seq_len_; step++) {
+        const int ite = 0;
+        const int local_batch_size = batch_size;
+        const int id_offset = ite * local_batch_size * beam_width_;
+
         cudaD2Hcpy(h_finished_buf_, finished_buf_, batch_size * beam_width_);
         uint sum = 0;
         for (uint i = 0; i < batch_size * beam_width_; i++) {
@@ -407,8 +341,8 @@ void Decoding<T>::forward(std::vector<Tensor>* output_tensors,
             break;
         }
 
-        const int src_cache_id = beam_width_ > 1 ? (step - 1) & 0x1 : 0;
-        const int tgt_cache_id = 1 - src_cache_id;
+        const int src_indir_idx = (step - 1) % 2;
+        const int tgt_indir_idx = 1 - src_indir_idx;
 
         invokeEmbeddingLookupPosEncoding(decoder_input_buf_,
                                          decoding_weights->pre_decoder_embedding_table,
@@ -431,20 +365,24 @@ void Decoding<T>::forward(std::vector<Tensor>* output_tensors,
             input_tensors->at(1),
             Tensor{MEMORY_GPU, TYPE_BOOL, {batch_size * beam_width_}, finished_buf_},
             Tensor{MEMORY_CPU, TYPE_INT32, {1}, &step},
-            output_tensors->at(2)};
+            output_tensors->at(2),
+            Tensor{MEMORY_GPU,
+                   TYPE_INT32,
+                   {(size_t)local_batch_size, beam_width_, max_seq_len_},
+                   beam_width_ > 1 ? cache_indirections_[src_indir_idx] + id_offset * max_seq_len_ : nullptr}};
 
         std::vector<Tensor> decoder_output_tensors{
             Tensor{MEMORY_GPU, data_type, {batch_size * beam_width_, hidden_units_}, decoder_output_buf_},
-            Tensor{MEMORY_GPU, data_type, self_k_cache_size, key_caches_[src_cache_id]},
-            Tensor{MEMORY_GPU, data_type, self_v_cache_size, value_caches_[src_cache_id]},
+            Tensor{MEMORY_GPU, data_type, self_k_cache_size, key_cache_},
+            Tensor{MEMORY_GPU, data_type, self_v_cache_size, value_cache_},
             Tensor{MEMORY_GPU,
                    data_type,
                    {num_layer_, batch_size * beam_width_, mem_max_seq_len, hidden_units_},
-                   key_mem_caches_},
+                   key_mem_cache_},
             Tensor{MEMORY_GPU,
                    data_type,
                    {num_layer_, batch_size * beam_width_, mem_max_seq_len, hidden_units_},
-                   value_mem_caches_}};
+                   value_mem_cache_}};
         decoder_->forward(&decoder_output_tensors, &decoder_input_tensors, &decoding_weights->decoder_layer_weights);
 
         invokeGeneralLayerNorm(normed_decoder_output_buf_,
@@ -468,50 +406,62 @@ void Decoding<T>::forward(std::vector<Tensor>* output_tensors,
                               logits_buf_,
                               vocab_size_padded_ /* n */);
 
-        std::vector<Tensor>* dynamic_decode_input_tensors;
-        std::vector<Tensor>* dynamic_decode_output_tensors;
         const int tmp_ite = 0;
-        if (beam_width_ > 1) {
-            dynamic_decode_input_tensors = new std::vector<Tensor>{
-                Tensor{MEMORY_GPU, data_type, {batch_size, beam_width_, vocab_size_padded_}, logits_buf_},
-                Tensor{MEMORY_GPU, data_type, {vocab_size_padded_}, padded_embedding_bias_ptr_},
-                Tensor{MEMORY_CPU, TYPE_INT32, {1}, &step},
-                Tensor{MEMORY_GPU, data_type, self_k_cache_size, key_caches_[src_cache_id]},
-                Tensor{MEMORY_GPU, data_type, self_v_cache_size, value_caches_[src_cache_id]},
-                Tensor{MEMORY_CPU, TYPE_INT32, {1}, &max_input_length},
-                Tensor{MEMORY_GPU, TYPE_INT32, {batch_size, beam_width_}, nullptr},
-                Tensor{MEMORY_CPU, TYPE_INT32, {1}, &tmp_ite}};
+        const int tmp_local_batch_size = batch_size;
+        const bool has_diff_runtime_args = false;
+        const int runtime_top_k = (int)top_k_;
+        const float runtime_top_p = (float)top_p_;
+        const unsigned long long int random_seed = 0;
+        const bool is_initialize_random_table = step == 1;
 
-            dynamic_decode_output_tensors = new std::vector<Tensor>{
-                Tensor{MEMORY_GPU, TYPE_INT32, {max_seq_len_, batch_size, beam_width_}, output_ids_buf_},
-                Tensor{MEMORY_GPU, TYPE_BOOL, {batch_size * beam_width_}, finished_buf_},
-                Tensor{MEMORY_GPU, TYPE_FP32, {batch_size * beam_width_}, cum_log_probs_},
-                Tensor{MEMORY_GPU, TYPE_INT32, {max_seq_len_, batch_size, beam_width_}, parent_ids_buf_},
-                output_tensors->at(2),
-                Tensor{MEMORY_GPU, data_type, self_k_cache_size, key_caches_[tgt_cache_id]},
-                Tensor{MEMORY_GPU, data_type, self_v_cache_size, value_caches_[tgt_cache_id]}};
-        }
-        else {
+        std::unordered_map<std::string, Tensor> dynamic_decode_input_tensors{
+            {"logits", Tensor{MEMORY_GPU, data_type, {batch_size, beam_width_, vocab_size_padded_}, logits_buf_}},
+            {"embedding_bias", Tensor{MEMORY_GPU, data_type, {vocab_size_padded_}, padded_embedding_bias_ptr_}},
+            {"end_id", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size}, end_ids_buf_}},
+            {"step", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &step}},
+            {"max_input_length", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &max_input_length}},
+            {"input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size, beam_width_}, nullptr}},
+            {"ite", Tensor{MEMORY_CPU, TYPE_UINT32, {1}, &tmp_ite}},
+            {"has_diff_runtime_args", Tensor{MEMORY_CPU, TYPE_BOOL, {1}, &has_diff_runtime_args}},
+            {"src_key_cache", Tensor{MEMORY_GPU, data_type, self_k_cache_size, key_cache_}},
+            {"src_value_cache", Tensor{MEMORY_GPU, data_type, self_v_cache_size, value_cache_}},
+            {"src_cache_indirection",
+             Tensor{
+                 MEMORY_GPU, TYPE_INT32, {batch_size, beam_width_, max_seq_len_}, cache_indirections_[src_indir_idx]}},
+            {"local_batch_size", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &tmp_local_batch_size}},
+            {"random_seed", Tensor{MEMORY_CPU, TYPE_UINT64, {1}, &random_seed}},
+            {"beam_search_diversity_rate", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &beam_search_diversity_rate_}},
+            {"temperature", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &temperature_}},
+            {"len_penalty", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &len_penalty_}},
+            {"repetition_penalty", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &repetition_penalty_}},
+            {"runtime_top_k", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &runtime_top_k}},
+            {"runtime_top_p", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &runtime_top_p}},
+            {"is_initialize_random_table", Tensor{MEMORY_CPU, TYPE_BOOL, {1}, &is_initialize_random_table}}};
 
-            dynamic_decode_input_tensors = new std::vector<Tensor>{
-                Tensor{MEMORY_GPU, data_type, {batch_size, beam_width_, vocab_size_padded_}, logits_buf_},
-                Tensor{MEMORY_GPU, data_type, {vocab_size_padded_}, padded_embedding_bias_ptr_},
-                Tensor{MEMORY_CPU, TYPE_INT32, {1}, &step},
-                Tensor{MEMORY_CPU, TYPE_INT32, {1}, &max_input_length},
-                Tensor{MEMORY_GPU, TYPE_INT32, {batch_size, beam_width_}, nullptr},
-                Tensor{MEMORY_CPU, TYPE_INT32, {1}, &tmp_ite}};
+        // TODO(bhsueh) Need to modify the forward function to use unordered_map
+        // for (auto t = input_tensors->begin(); t != input_tensors->end(); ++t) {
+        //     dynamic_decode_input_tensors.insert(*t);
+        // }
 
-            dynamic_decode_output_tensors = new std::vector<Tensor>{
-                Tensor{MEMORY_GPU, TYPE_INT32, {max_seq_len_, batch_size, beam_width_}, output_ids_buf_},
-                Tensor{MEMORY_GPU, TYPE_BOOL, {batch_size * beam_width_}, finished_buf_},
-                output_tensors->at(2),
-                Tensor{MEMORY_GPU, TYPE_FP32, {max_seq_len_, batch_size, beam_width_}, nullptr}};
-        }
+        // common outputs
+        std::unordered_map<std::string, Tensor> dynamic_decode_output_tensors{
+            {"output_ids", Tensor{MEMORY_GPU, TYPE_INT32, {max_seq_len_, batch_size, beam_width_}, output_ids_buf_}},
+            {"finished", Tensor{MEMORY_GPU, TYPE_BOOL, {batch_size * beam_width_}, finished_buf_}},
+            {"cum_log_probs", Tensor{MEMORY_GPU, TYPE_FP32, {batch_size * beam_width_}, cum_log_probs_}},
+            {"parent_ids", Tensor{MEMORY_GPU, TYPE_INT32, {max_seq_len_, batch_size, beam_width_}, parent_ids_buf_}},
+            {"sequence_length", output_tensors->at(2)},
+            {"tgt_key_cache", Tensor{MEMORY_GPU, data_type, self_k_cache_size, key_cache_}},
+            {"tgt_value_cache", Tensor{MEMORY_GPU, data_type, self_v_cache_size, value_cache_}},
+            {"tgt_cache_indirection",
+             Tensor{
+                 MEMORY_GPU, TYPE_INT32, {batch_size, beam_width_, max_seq_len_}, cache_indirections_[tgt_indir_idx]}}};
 
-        dynamic_decode_->forward(dynamic_decode_output_tensors, dynamic_decode_input_tensors);
+        // TODO(bhsueh) Need to modify the forward function to use unordered_map
+        // for (auto t = output_tensors->begin(); t != output_tensors->end(); ++t) {
+        //     dynamic_decode_output_tensors.insert(*t);
+        // }
 
-        delete dynamic_decode_input_tensors;
-        delete dynamic_decode_output_tensors;
+        dynamic_decode_layer_->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
     }
 
     // minus the sequence length of unfinished sentence by 1 since we start from 1.
@@ -531,7 +481,7 @@ void Decoding<T>::forward(std::vector<Tensor>* output_tensors,
                          beam_width_,
                          output_ids_buf_ + batch_size * beam_width_,
                          parent_ids_buf_ + batch_size * beam_width_,
-                         end_id_,
+                         end_ids_buf_,
                          stream_);
     }
     else {

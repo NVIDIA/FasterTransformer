@@ -26,9 +26,9 @@ void FfnLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>* output_ten
     // input_tensors: [input (token_num, hidden_dimension)]
     // output_tensors: [output (token_num, hidden_dimension)]
     ScaleList* scale_list = ((const FfnINT8Weight<T>*)ffn_weights)->scale_list_ptr;
-    
-    cublasINT8MMWrapper* cublas_wrapper = (cublasINT8MMWrapper*)cublas_wrapper_; 
-    
+
+    cublasINT8MMWrapper* cublas_wrapper = (cublasINT8MMWrapper*)cublas_wrapper_;
+
     FT_CHECK(isValidTokenNum(input_tensors->at(0).shape[0]));
     allocateBuffer();
 
@@ -45,22 +45,41 @@ void FfnLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>* output_ten
     const int8_t* input_tensor = (const int8_t*)input_tensors->at(0).data;
 
     if (int8_mode_ == 1) {
-        cublas_wrapper->Gemm(inter_int_buf_, 1, m, inter_size_, hidden_units_, 0, 0, 0,
-                              input_tensor, (int8_t*)(ffn_weights->intermediate_weight.kernel));
+        cublas_wrapper->Gemm(inter_int_buf_,
+                             1,
+                             m,
+                             inter_size_,
+                             hidden_units_,
+                             0,
+                             0,
+                             0,
+                             input_tensor,
+                             (int8_t*)(ffn_weights->intermediate_weight.kernel));
     }
     else if (int8_mode_ == 2 || int8_mode_ == 3) {
 #ifdef SPARSITY_ENABLED
         if (sparse_) {
-            cublas_wrapper->SpGemm(inter_size_, m_padded, hidden_units_,
-                                   scale_list->h_scale_list_[scale_list->p3_offset_+6],
+            cublas_wrapper->SpGemm(inter_size_,
+                                   m_padded,
+                                   hidden_units_,
+                                   scale_list->h_scale_list_[scale_list->p3_offset_ + 6],
                                    (int8_t*)(ffn_weights->intermediate_weight.sp_kernel),
                                    input_tensor,
                                    (int8_t*)inter_int_buf_);
-        } else {
+        }
+        else {
 #endif
-        cublas_wrapper->Gemm((int8_t*)inter_int_buf_, 1, m, inter_size_, hidden_units_,
-                              0, 0, 0, scale_list->h_scale_list_[scale_list->p3_offset_+6],
-                              input_tensor, (int8_t*)(ffn_weights->intermediate_weight.kernel));
+            cublas_wrapper->Gemm((int8_t*)inter_int_buf_,
+                                 1,
+                                 m,
+                                 inter_size_,
+                                 hidden_units_,
+                                 0,
+                                 0,
+                                 0,
+                                 scale_list->h_scale_list_[scale_list->p3_offset_ + 6],
+                                 input_tensor,
+                                 (int8_t*)(ffn_weights->intermediate_weight.kernel));
 #ifdef SPARSITY_ENABLED
         }
 #endif
@@ -70,22 +89,41 @@ void FfnLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>* output_ten
     sync_check_cuda_error();
 
     if (int8_mode_ == 1) {
-        cublas_wrapper->Gemm(output_tensor, 1, m, hidden_units_, inter_size_, 0, 0, 0,
-                              inter_buf_, (int8_t*)(ffn_weights->output_weight.kernel));
+        cublas_wrapper->Gemm(output_tensor,
+                             1,
+                             m,
+                             hidden_units_,
+                             inter_size_,
+                             0,
+                             0,
+                             0,
+                             inter_buf_,
+                             (int8_t*)(ffn_weights->output_weight.kernel));
     }
     else if (int8_mode_ == 2 || int8_mode_ == 3) {
 #ifdef SPARSITY_ENABLED
         if (sparse_) {
-            cublas_wrapper->SpGemm(hidden_units_, m_padded, inter_size_,
-                                   scale_list->h_scale_list_[scale_list->p3_offset_+7],
+            cublas_wrapper->SpGemm(hidden_units_,
+                                   m_padded,
+                                   inter_size_,
+                                   scale_list->h_scale_list_[scale_list->p3_offset_ + 7],
                                    (int8_t*)(ffn_weights->output_weight.sp_kernel),
                                    inter_buf_,
                                    (int8_t*)output_tensor);
-        } else {
+        }
+        else {
 #endif
-        cublas_wrapper->Gemm((int8_t*)output_tensor, 1, m, hidden_units_, inter_size_, 
-                              0, 0, 0, scale_list->h_scale_list_[scale_list->p3_offset_+7],
-                              inter_buf_, (int8_t*)(ffn_weights->output_weight.kernel));
+            cublas_wrapper->Gemm((int8_t*)output_tensor,
+                                 1,
+                                 m,
+                                 hidden_units_,
+                                 inter_size_,
+                                 0,
+                                 0,
+                                 0,
+                                 scale_list->h_scale_list_[scale_list->p3_offset_ + 7],
+                                 inter_buf_,
+                                 (int8_t*)(ffn_weights->output_weight.kernel));
 #ifdef SPARSITY_ENABLED
         }
 #endif
@@ -190,16 +228,16 @@ GeluFfnLayerINT8<T>::GeluFfnLayerINT8(size_t max_batch_size,
                                       bool is_free_buffer_after_forward,
                                       bool sparse):
     FfnLayerINT8<T>(max_batch_size,
-                max_seq_len,
-                head_num,
-                size_per_head,
-                inter_size,
-                int8_mode,
-                stream,
-                cublas_wrapper,
-                allocator,
-                is_free_buffer_after_forward,
-                sparse)
+                    max_seq_len,
+                    head_num,
+                    size_per_head,
+                    inter_size,
+                    int8_mode,
+                    stream,
+                    cublas_wrapper,
+                    allocator,
+                    is_free_buffer_after_forward,
+                    sparse)
 {
 }
 
@@ -212,20 +250,38 @@ template<typename T>
 void GeluFfnLayerINT8<T>::invokeAddBiasActivation(const int m, const T* bias, ScaleList* scale_list)
 {
     if (int8_mode_ == 1) {
-        invokeAddBiasGeluCol32<T>(inter_buf_, inter_int_buf_, bias, m, inter_size_, stream_, 
-                                  &(scale_list->d_scale_list_[scale_list->p2_offset_ + 4*hidden_units_]),
+        invokeAddBiasGeluCol32<T>(inter_buf_,
+                                  inter_int_buf_,
+                                  bias,
+                                  m,
+                                  inter_size_,
+                                  stream_,
+                                  &(scale_list->d_scale_list_[scale_list->p2_offset_ + 4 * hidden_units_]),
                                   &(scale_list->d_scale_list_[44 + 2]),
                                   &(scale_list->d_scale_list_[52 + 3]));
     }
     else if (int8_mode_ == 2 || int8_mode_ == 3) {
 #ifdef SPARSITY_ENABLED
         if (sparse_) {
-            invokeAddBiasGeluRow<T>(inter_buf_, (const int8_t*)inter_int_buf_, bias, m, inter_size_, stream_,
-                                    &(scale_list->d_scale_list_[48 + 1]), &(scale_list->d_scale_list_[52 + 3]));
-        } else {
+            invokeAddBiasGeluRow<T>(inter_buf_,
+                                    (const int8_t*)inter_int_buf_,
+                                    bias,
+                                    m,
+                                    inter_size_,
+                                    stream_,
+                                    &(scale_list->d_scale_list_[48 + 1]),
+                                    &(scale_list->d_scale_list_[52 + 3]));
+        }
+        else {
 #endif
-        invokeAddBiasGeluCol32<T>(inter_buf_, (const int8_t*)inter_int_buf_, bias, m, inter_size_, stream_,
-                                  &(scale_list->d_scale_list_[48 + 1]), &(scale_list->d_scale_list_[52 + 3]));
+            invokeAddBiasGeluCol32<T>(inter_buf_,
+                                      (const int8_t*)inter_int_buf_,
+                                      bias,
+                                      m,
+                                      inter_size_,
+                                      stream_,
+                                      &(scale_list->d_scale_list_[48 + 1]),
+                                      &(scale_list->d_scale_list_[52 + 3]));
 #ifdef SPARSITY_ENABLED
         }
 #endif
@@ -267,7 +323,7 @@ ReluFfnLayerINT8<T>::ReluFfnLayerINT8(ReluFfnLayerINT8<T> const& relu_ffn_layer)
 template<typename T>
 void ReluFfnLayerINT8<T>::invokeAddBiasActivation(const int m, const T* bias, ScaleList* scale_list)
 {
-    //TODO
+    // TODO
 }
 
 template class ReluFfnLayerINT8<float>;

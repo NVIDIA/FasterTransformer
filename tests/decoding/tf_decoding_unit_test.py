@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -43,7 +43,8 @@ class TestDecoding(unittest.TestCase):
                         'target_vocabulary': "../examples/tensorflow/decoding/utils/translation/wmtende.vocab",
                         'source': "../examples/tensorflow/decoding/utils/translation/test.en",
                         'target': "../examples/tensorflow/decoding/utils/translation/test.de",
-                        "remove_padding": "True"
+                        "remove_padding": "True",
+                        "max_iteration": 10,
                         }
 
     def check_result(self, beam_width, datatype, test_time, topk=4, topp=0.0, batch_size=-1):
@@ -78,51 +79,51 @@ class TestDecoding(unittest.TestCase):
             result.value = 0
         
     def test_decoding_beamsearch_fp32(self):
-        os.system("./bin/decoding_gemm 32 4 8 64 2048 32001 128 512 0")
+        os.system("./bin/decoding_gemm 32 4 8 64 2048 32001 128 512 0 > .tmp.gemm.log && cat .tmp.gemm.log")
         self.check_result(4, 'fp32', '012', batch_size=32)
         
     def test_decoding_beamsearch_fp16(self):
-        os.system("./bin/decoding_gemm 32 4 8 64 2048 32001 128 512 1")
+        os.system("./bin/decoding_gemm 32 4 8 64 2048 32001 128 512 1 > .tmp.gemm.log && cat .tmp.gemm.log")
         self.check_result(4, 'fp16', '012', batch_size=32)
         
     def test_decoding_beamsearch_fp32_2(self):
-        os.system("./bin/decoding_gemm 16 32 8 64 2048 32001 128 512 0")
+        os.system("./bin/decoding_gemm 16 32 8 64 2048 32001 128 512 0 > .tmp.gemm.log && cat .tmp.gemm.log")
         self.check_result(32, 'fp32', '012', batch_size=16)
         
     def test_decoding_beamsearch_fp16_2(self):
-        os.system("./bin/decoding_gemm 16 32 8 64 2048 32001 128 512 1")
+        os.system("./bin/decoding_gemm 16 32 8 64 2048 32001 128 512 1 > .tmp.gemm.log && cat .tmp.gemm.log")
         self.check_result(32, 'fp16', '012', batch_size=16)
     
     def test_decoding_topk_sampling_fp32(self):
-        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 0")
+        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 0 > .tmp.gemm.log && cat .tmp.gemm.log")
         self.check_result(1, 'fp32', '345', 4, 0.0)
         
     def test_decoding_topk_sampling_fp16(self):
-        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 1")
+        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 1 > .tmp.gemm.log && cat .tmp.gemm.log")
         self.check_result(1, 'fp16', '345', 4, 0.0)
 
     def test_decoding_topk_sampling_fp32_2(self):
-        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 0")
+        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 0 > .tmp.gemm.log && cat .tmp.gemm.log")
         self.check_result(1, 'fp32', '345', 64, 0.0)
 
     def test_decoding_topk_sampling_fp16_2(self):
-        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 1")
+        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 1 > .tmp.gemm.log && cat .tmp.gemm.log")
         self.check_result(1, 'fp16', '345', 64, 0.0)
 
     def test_decoding_topp_sampling_fp32(self):
-        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 0")
+        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 0 > .tmp.gemm.log && cat .tmp.gemm.log")
         self.check_result(1, 'fp32', '345', 0, 0.5)
         
     def test_decoding_topp_sampling_fp16(self):
-        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 1")
+        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 1 > .tmp.gemm.log && cat .tmp.gemm.log")
         self.check_result(1, 'fp16', '345', 0, 0.5)
 
     def test_decoding_topp_sampling_fp32_2(self):
-        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 0")
+        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 0 > .tmp.gemm.log && cat .tmp.gemm.log")
         self.check_result(1, 'fp32', '345', 0, 0.9)
 
     def test_decoding_topp_sampling_fp16_2(self):
-        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 1")
+        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 1 > .tmp.gemm.log && cat .tmp.gemm.log")
         self.check_result(1, 'fp16', '345', 0, 0.9)
 
 if __name__ == "__main__":

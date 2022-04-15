@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  * Copyright (c) 2021, NAVER Corp.  Authored by CLOVA.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+#include "src/fastertransformer/kernels/bfloat16_fallback_kenrels.cuh"
 #include "src/fastertransformer/kernels/decoder_masked_multihead_attention_utils.h"
 #include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
 #include "src/fastertransformer/kernels/unfused_attention_kernels.h"
@@ -208,7 +209,7 @@ __global__ void softmax_kernel_v4(T* qk_buf_,
             int mask_offset = (blockIdx.y * seq_len + seq_id) * seq_len + blockDim.x * i + threadIdx.x;
 
             float qk = static_cast<float>(qk_buf_src[qk_offset]);
-            float mask_val = static_cast<float>(__ldg(&attr_mask[mask_offset]));
+            float mask_val = static_cast<float>(ldg(&attr_mask[mask_offset]));
 
             mask_val = (1.0f - mask_val) * -10000.0f;
 
@@ -242,19 +243,16 @@ __global__ void softmax_kernel_v4(T* qk_buf_,
     }
 }
 
-template<int ITEMS_PER_THREAD>
-__global__ void softmax_kernel_v4_half2(half* qk_buf_,
-                                        const half* attr_mask,
-                                        const int batch_size,
-                                        const int head_num,
-                                        const int seq_len,
-                                        const half scalar)
+template<typename T, int ITEMS_PER_THREAD>
+__global__ void softmax_kernel_v4_half2(
+    T* qk_buf_, const T* attr_mask, const int batch_size, const int head_num, const int seq_len, const T scalar)
 {
-    half2* qk_buf_half2 = (half2*)qk_buf_;
-    const half2* attr_mask_half2 = (const half2*)attr_mask;
+    using T2 = typename TypeConverter<T>::Type;
+    T2* qk_buf_half2 = (T2*)qk_buf_;
+    const T2* attr_mask_half2 = (const T2*)attr_mask;
 
     for (int seq_id = blockIdx.x; seq_id < seq_len; seq_id += gridDim.x) {
-        half2 data[ITEMS_PER_THREAD];
+        T2 data[ITEMS_PER_THREAD];
         int qk_offset;
         __shared__ float s_mean, s_max;
         float local_max = -1e20f;
@@ -263,11 +261,11 @@ __global__ void softmax_kernel_v4_half2(half* qk_buf_,
                         + threadIdx.x;
             int mask_offset = (blockIdx.y * seq_len + seq_id) * (seq_len / 2) + blockDim.x * i + threadIdx.x;
 
-            half2 qk = qk_buf_half2[qk_offset];
-            half2 mask_val = __ldg(&attr_mask_half2[mask_offset]);
-            mask_val = __hmul2(__hsub2(__float2half2_rn(1.0f), mask_val), __float2half2_rn(-10000.0f));
+            T2 qk = qk_buf_half2[qk_offset];
+            T2 mask_val = ldg(&attr_mask_half2[mask_offset]);
+            mask_val = hmul2<T2>(hsub2<T2>(float2type2<T2>(1.0f), mask_val), float2type2<T2>(-10000.0f));
 
-            data[i] = __hadd2(__hmul2(qk, __half2half2(scalar)), mask_val);
+            data[i] = hadd2<T2>(hmul2<T2>(qk, type2type2<T, T2>(scalar)), mask_val);
 
             local_max = fmax(local_max, fmax((float)data[i].x, (float)data[i].y));
         }
@@ -280,7 +278,7 @@ __global__ void softmax_kernel_v4_half2(half* qk_buf_,
 
         float local_sum = 0;
         for (int i = 0; blockDim.x * i + threadIdx.x < (seq_len / 2) && i < ITEMS_PER_THREAD; i++) {
-            data[i] = h2exp(__hsub2(data[i], __float2half2_rn(s_max)));
+            data[i] = hexp2<T2>(hsub2<T2>(data[i], float2type2<T2>(s_max)));
             local_sum += (float)(data[i].x + data[i].y);
         }
 
@@ -295,24 +293,21 @@ __global__ void softmax_kernel_v4_half2(half* qk_buf_,
         for (int i = 0; blockDim.x * i + threadIdx.x < (seq_len / 2) && i < ITEMS_PER_THREAD; i++) {
             qk_offset = ((blockIdx.y * head_num + blockIdx.z) * seq_len + seq_id) * (seq_len / 2) + blockDim.x * i
                         + threadIdx.x;
-            qk_buf_half2[qk_offset] = __hmul2(data[i], __float2half2_rn(s_mean));
+            qk_buf_half2[qk_offset] = hmul2<T2>(data[i], float2type2<T2>(s_mean));
         }
     }
 }
 
-template<int ITEMS_PER_THREAD, int NUM>
-__global__ void softmax_kernel_v5_half2(half* qk_buf_,
-                                        const half* attr_mask,
-                                        const int batch_size,
-                                        const int head_num,
-                                        const int seq_len,
-                                        const half scalar)
+template<typename T, int ITEMS_PER_THREAD, int NUM>
+__global__ void softmax_kernel_v5_half2(
+    T* qk_buf_, const T* attr_mask, const int batch_size, const int head_num, const int seq_len, const T scalar)
 {
-    half2* qk_buf_half2 = (half2*)qk_buf_;
-    const half2* attr_mask_half2 = (const half2*)attr_mask;
+    using T2 = typename TypeConverter<T>::Type;
+    T2* qk_buf_half2 = (T2*)qk_buf_;
+    const T2* attr_mask_half2 = (const T2*)attr_mask;
 
     for (int seq_id = blockIdx.x; seq_id < seq_len; seq_id += gridDim.x * NUM) {
-        half2 data[NUM][ITEMS_PER_THREAD];
+        T2 data[NUM][ITEMS_PER_THREAD];
 
         int qk_offset[NUM];
 
@@ -333,13 +328,13 @@ __global__ void softmax_kernel_v5_half2(half* qk_buf_,
                     (blockIdx.y * seq_len + seq_id + j * gridDim.x) * (seq_len / 2) + blockDim.x * i + threadIdx.x;
             }
 
-            half2 mask_val[NUM];
+            T2 mask_val[NUM];
 #pragma unroll
             for (int j = 0; j < NUM; j++) {
-                mask_val[j] = __ldg(&attr_mask_half2[mask_offset[j]]);
+                mask_val[j] = ldg(&attr_mask_half2[mask_offset[j]]);
             }
 
-            half2 qk[NUM];
+            T2 qk[NUM];
 #pragma unroll
             for (int j = 0; j < NUM; j++) {
                 qk[j] = qk_buf_half2[qk_offset[j]];
@@ -347,12 +342,12 @@ __global__ void softmax_kernel_v5_half2(half* qk_buf_,
 
 #pragma unroll
             for (int j = 0; j < NUM; j++) {
-                mask_val[j] = __hmul2(__hsub2(__float2half2_rn(1.0f), mask_val[j]), __float2half2_rn(-10000.0f));
+                mask_val[j] = hmul2<T2>(hsub2<T2>(float2type2<T2>(1.0f), mask_val[j]), float2type2<T2>(-10000.0f));
             }
 
 #pragma unroll
             for (int j = 0; j < NUM; j++) {
-                data[j][i] = __hadd2(__hmul2(qk[j], __half2half2(scalar)), mask_val[j]);
+                data[j][i] = hadd2<T2>(hmul2<T2>(qk[j], type2type2<T, T2>(scalar)), mask_val[j]);
                 local_max[j] = fmax(local_max[j], fmax((float)data[j][i].x, (float)data[j][i].y));
             }
         }
@@ -381,7 +376,7 @@ __global__ void softmax_kernel_v5_half2(half* qk_buf_,
         for (int i = 0; blockDim.x * i + threadIdx.x < (seq_len / 2) && i < ITEMS_PER_THREAD; i++) {
 #pragma unroll
             for (int j = 0; j < NUM; j++) {
-                data[j][i] = h2exp(__hsub2(data[j][i], __float2half2_rn(s_max[j])));
+                data[j][i] = hexp2<T2>(hsub2<T2>(data[j][i], float2type2<T2>(s_max[j])));
             }
 
 #pragma unroll
@@ -414,7 +409,7 @@ __global__ void softmax_kernel_v5_half2(half* qk_buf_,
 
 #pragma unroll
             for (int j = 0; j < NUM; j++) {
-                qk_buf_half2[qk_offset[j]] = __hmul2(data[j][i], __float2half2_rn(s_sum[j]));
+                qk_buf_half2[qk_offset[j]] = hmul2<T2>(data[j][i], float2type2<T2>(s_sum[j]));
             }
         }
     }
@@ -426,11 +421,11 @@ __global__ void softmax_kernel_v5_half2(half* qk_buf_,
     if (is_half2) {                                                                                                    \
         if (grid.x % 4 == 0) {                                                                                         \
             grid.x /= 4;                                                                                               \
-            softmax_kernel_v5_half2<ITEMS_PER_THREAD, 4><<<grid, block, 0, stream>>>(                                  \
+            softmax_kernel_v5_half2<half, ITEMS_PER_THREAD, 4><<<grid, block, 0, stream>>>(                            \
                 (half*)buffer, (const half*)attr_mask, batch_size, head_num, seq_len, (const half)scalar);             \
         }                                                                                                              \
         else {                                                                                                         \
-            softmax_kernel_v4_half2<ITEMS_PER_THREAD><<<grid, block, 0, stream>>>(                                     \
+            softmax_kernel_v4_half2<half, ITEMS_PER_THREAD><<<grid, block, 0, stream>>>(                               \
                 (half*)buffer, (const half*)attr_mask, batch_size, head_num, seq_len, (const half)scalar);             \
         }                                                                                                              \
     }                                                                                                                  \
@@ -438,6 +433,37 @@ __global__ void softmax_kernel_v5_half2(half* qk_buf_,
         softmax_kernel_v4<ITEMS_PER_THREAD, T, T_IN>                                                                   \
             <<<grid, block, 0, stream>>>(buffer, buffer_src, attr_mask, batch_size, head_num, seq_len, scalar);        \
     }
+
+#ifdef ENABLE_BF16
+#define SOFTMAX_KERNEL_BF16(ITEMS_PER_THREAD)                                                                          \
+    block.x /= ITEMS_PER_THREAD;                                                                                       \
+    assert(block.x <= 1024);                                                                                           \
+    if (is_half2) {                                                                                                    \
+        if (grid.x % 4 == 0) {                                                                                         \
+            grid.x /= 4;                                                                                               \
+            softmax_kernel_v5_half2<__nv_bfloat16, ITEMS_PER_THREAD, 4>                                                \
+                <<<grid, block, 0, stream>>>((__nv_bfloat16*)buffer,                                                   \
+                                             (const __nv_bfloat16*)attr_mask,                                          \
+                                             batch_size,                                                               \
+                                             head_num,                                                                 \
+                                             seq_len,                                                                  \
+                                             (const __nv_bfloat16)scalar);                                             \
+        }                                                                                                              \
+        else {                                                                                                         \
+            softmax_kernel_v4_half2<__nv_bfloat16, ITEMS_PER_THREAD>                                                   \
+                <<<grid, block, 0, stream>>>((__nv_bfloat16*)buffer,                                                   \
+                                             (const __nv_bfloat16*)attr_mask,                                          \
+                                             batch_size,                                                               \
+                                             head_num,                                                                 \
+                                             seq_len,                                                                  \
+                                             (const __nv_bfloat16)scalar);                                             \
+        }                                                                                                              \
+    }                                                                                                                  \
+    else {                                                                                                             \
+        softmax_kernel_v4<ITEMS_PER_THREAD, __nv_bfloat16, T_IN>                                                       \
+            <<<grid, block, 0, stream>>>(buffer, buffer_src, attr_mask, batch_size, head_num, seq_len, scalar);        \
+    }
+#endif  // ENABLE_BF16
 
 template<typename T, typename T_IN>
 void invokeMaskedSoftMax(T* buffer,
@@ -475,6 +501,81 @@ void invokeMaskedSoftMax(T* buffer,
     }
 }
 
+#ifdef ENABLE_BF16
+template<>
+void invokeMaskedSoftMax(__nv_bfloat16* buffer,
+                         const __nv_bfloat16* buffer_src,
+                         const __nv_bfloat16* attr_mask,
+                         const int batch_size,
+                         const int seq_len,
+                         const int head_num,
+                         const __nv_bfloat16 scalar,
+                         cudaStream_t stream)
+{
+
+    using T_IN = __nv_bfloat16;
+    dim3 grid(seq_len, batch_size, head_num);
+    if (batch_size * head_num > 360) {
+        grid.x = ceil(float(seq_len) / 32.0f);
+    }
+
+    bool is_half2 = seq_len % 2 == 0;
+    dim3 block((seq_len / (is_half2 ? 2 : 1) + 31) / 32 * 32);
+
+    if (block.x > 3072 && block.x <= 4096) {
+        SOFTMAX_KERNEL_BF16(4)
+    }
+    if (block.x > 2048) {
+        SOFTMAX_KERNEL_BF16(3)
+    }
+    else if (block.x > 1024) {
+        SOFTMAX_KERNEL_BF16(2)
+    }
+    else if (block.x > 0) {
+        SOFTMAX_KERNEL_BF16(1)
+    }
+    else {
+        FT_CHECK(seq_len <= 4096);
+    }
+}
+
+template<>
+void invokeMaskedSoftMax(__nv_bfloat16* buffer,
+                         const float* buffer_src,
+                         const __nv_bfloat16* attr_mask,
+                         const int batch_size,
+                         const int seq_len,
+                         const int head_num,
+                         const __nv_bfloat16 scalar,
+                         cudaStream_t stream)
+{
+    using T_IN = float;
+    dim3 grid(seq_len, batch_size, head_num);
+    if (batch_size * head_num > 360) {
+        grid.x = ceil(float(seq_len) / 32.0f);
+    }
+
+    bool is_half2 = false;
+    dim3 block((seq_len / (is_half2 ? 2 : 1) + 31) / 32 * 32);
+
+    if (block.x > 3072 && block.x <= 4096) {
+        SOFTMAX_KERNEL_BF16(4)
+    }
+    if (block.x > 2048) {
+        SOFTMAX_KERNEL_BF16(3)
+    }
+    else if (block.x > 1024) {
+        SOFTMAX_KERNEL_BF16(2)
+    }
+    else if (block.x > 0) {
+        SOFTMAX_KERNEL_BF16(1)
+    }
+    else {
+        FT_CHECK(seq_len <= 4096);
+    }
+}
+#endif  // ENABLE_BF16
+
 template void invokeMaskedSoftMax(float* buffer,
                                   const float* buffer_src,
                                   const float* attr_mask,
@@ -502,6 +603,26 @@ template void invokeMaskedSoftMax(half* buffer,
                                   const half scalar,
                                   cudaStream_t stream);
 
+#ifdef ENABLE_BF16
+template void invokeMaskedSoftMax(__nv_bfloat16* buffer,
+                                  const __nv_bfloat16* buffer_src,
+                                  const __nv_bfloat16* attr_mask,
+                                  const int batch_size,
+                                  const int seq_len,
+                                  const int head_num,
+                                  const __nv_bfloat16 scalar,
+                                  cudaStream_t stream);
+
+template void invokeMaskedSoftMax(__nv_bfloat16* buffer,
+                                  const float* buffer_src,
+                                  const __nv_bfloat16* attr_mask,
+                                  const int batch_size,
+                                  const int seq_len,
+                                  const int head_num,
+                                  const __nv_bfloat16 scalar,
+                                  cudaStream_t stream);
+#endif  // ENABLE_BF16
+
 template<typename T>
 __global__ void
 transpose(T* src, T* dst, const int batch_size, const int seq_len, const int head_num, const int size_per_head)
@@ -525,11 +646,67 @@ transpose(half* src, half* dst, const int batch_size, const int seq_len, const i
     int id = tid % size_per_head;
 
     int target_id = target_index(batch_id, head_id, seq_id, id, batch_size, head_num, seq_len, size_per_head);
-    half2* src_ptr = (half2*)src;
-    half2* dst_ptr = (half2*)dst;
 
-    dst_ptr[target_id] = src_ptr[tid];
+    dst[target_id] = src[tid];
 }
+
+template<>
+__global__ void
+transpose(half2* src, half2* dst, const int batch_size, const int seq_len, const int head_num, const int size_per_head)
+{
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    int batch_id = tid / (head_num * seq_len * size_per_head);
+    int head_id = (tid % (head_num * seq_len * size_per_head)) / (seq_len * size_per_head);
+    int seq_id = (tid % (seq_len * size_per_head)) / size_per_head;
+    int id = tid % size_per_head;
+
+    int target_id = target_index(batch_id, head_id, seq_id, id, batch_size, head_num, seq_len, size_per_head);
+
+    dst[target_id] = src[tid];
+}
+
+#ifdef ENABLE_BF16
+template<>
+__global__ void transpose(__nv_bfloat16* src,
+                          __nv_bfloat16* dst,
+                          const int batch_size,
+                          const int seq_len,
+                          const int head_num,
+                          const int size_per_head)
+{
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    int batch_id = tid / (head_num * seq_len * size_per_head);
+    int head_id = (tid % (head_num * seq_len * size_per_head)) / (seq_len * size_per_head);
+    int seq_id = (tid % (seq_len * size_per_head)) / size_per_head;
+    int id = tid % size_per_head;
+
+    int target_id = target_index(batch_id, head_id, seq_id, id, batch_size, head_num, seq_len, size_per_head);
+
+    dst[target_id] = src[tid];
+}
+
+template<>
+__global__ void transpose(__nv_bfloat162* src,
+                          __nv_bfloat162* dst,
+                          const int batch_size,
+                          const int seq_len,
+                          const int head_num,
+                          const int size_per_head)
+{
+    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+
+    int batch_id = tid / (head_num * seq_len * size_per_head);
+    int head_id = (tid % (head_num * seq_len * size_per_head)) / (seq_len * size_per_head);
+    int seq_id = (tid % (seq_len * size_per_head)) / size_per_head;
+    int id = tid % size_per_head;
+
+    int target_id = target_index(batch_id, head_id, seq_id, id, batch_size, head_num, seq_len, size_per_head);
+
+    dst[target_id] = src[tid];
+}
+#endif
 
 template<typename T>
 void invokeTransposeQKV(T* dst,
@@ -542,13 +719,32 @@ void invokeTransposeQKV(T* dst,
 {
     dim3 grid, block;
     if (sizeof(T) == 2) {
-        const int seq_per_block = 4;
+        int seq_per_block = 1;
         grid.x = batch_size * head_num * seq_len / seq_per_block;
-        block.x = seq_per_block * size_per_head / 2;
+        while (seq_per_block < 4 && grid.x % 2 == 0) {
+            grid.x /= 2;
+            seq_per_block *= 2;
+        }
 
-        assert(grid.x * seq_per_block == batch_size * head_num * seq_len);
+        FT_CHECK(grid.x * seq_per_block == batch_size * head_num * seq_len);
 
-        transpose<T><<<grid, block, 0, stream>>>(src, dst, batch_size, seq_len, head_num, size_per_head / 2);
+        if (seq_per_block * size_per_head % 2 == 0) {
+            block.x = seq_per_block * size_per_head / 2;
+            if (std::is_same<T, half>::value) {
+                transpose<half2><<<grid, block, 0, stream>>>(
+                    (half2*)src, (half2*)dst, batch_size, seq_len, head_num, size_per_head / 2);
+            }
+#ifdef ENABLE_BF16
+            else {
+                transpose<__nv_bfloat162><<<grid, block, 0, stream>>>(
+                    (__nv_bfloat162*)src, (__nv_bfloat162*)dst, batch_size, seq_len, head_num, size_per_head / 2);
+            }
+#endif
+        }
+        else {
+            block.x = seq_per_block * size_per_head;
+            transpose<T><<<grid, block, 0, stream>>>(src, dst, batch_size, seq_len, head_num, size_per_head);
+        }
     }
     else {
         const int seq_per_block = 1;
@@ -573,6 +769,16 @@ template void invokeTransposeQKV(half* src,
                                  const int head_num,
                                  const int size_per_head,
                                  cudaStream_t stream);
+
+#ifdef ENABLE_BF16
+template void invokeTransposeQKV(__nv_bfloat16* src,
+                                 __nv_bfloat16* dst,
+                                 const int batch_size,
+                                 const int seq_len,
+                                 const int head_num,
+                                 const int size_per_head,
+                                 cudaStream_t stream);
+#endif
 
 template<typename T>
 __global__ void add_QKV_bias_rebuild_padding(const T* Q,
@@ -770,13 +976,13 @@ template void invokeAddQKVBiasRebuildPadding(half* Q,
                                              cudaStream_t stream);
 
 template<typename T>
-__global__ void transpose_rebuild_padding(const T* src,
-                                          T* dst,
-                                          const int batch_size,
-                                          const int seq_len,
-                                          const int head_num,
-                                          const int size_per_head,
-                                          const int* mask_offset)
+__global__ void transpose_remove_padding(const T* src,
+                                         T* dst,
+                                         const int batch_size,
+                                         const int seq_len,
+                                         const int head_num,
+                                         const int size_per_head,
+                                         const int* mask_offset)
 {
     // TODO: optimize this kernel?
     // do remove_sequence_length_padding
@@ -826,11 +1032,11 @@ void invokeTransposeAttentionOutRemovePadding(T* src,
     }
 
     if (is_half2) {
-        transpose_rebuild_padding<half2><<<valid_word_num, block_size, 0, stream>>>(
+        transpose_remove_padding<half2><<<valid_word_num, block_size, 0, stream>>>(
             (half2*)src, (half2*)dst, batch_size, seq_len, head_num, size_per_head / 2, mask_offset);
     }
     else {
-        transpose_rebuild_padding<<<valid_word_num, block_size, 0, stream>>>(
+        transpose_remove_padding<<<valid_word_num, block_size, 0, stream>>>(
             src, dst, batch_size, seq_len, head_num, size_per_head, mask_offset);
     }
 }
@@ -875,7 +1081,7 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
     for (int index = blockDim.x * blockIdx.x + threadIdx.x; index < batch_size * seq_len * 3 * n;
          index += gridDim.x * blockDim.x) {
         int bias_id = index % (3 * n);
-        T val = __ldg(&QKV[index]) + __ldg(&qkv_bias[bias_id]);
+        T val = ldg(&QKV[index]) + ldg(&qkv_bias[bias_id]);
 
         int tmp_index = index;
         const int target_batch_id = tmp_index / (seq_len * 3 * n);
@@ -893,8 +1099,7 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
 }
 
 template<typename T>
-struct Vec_t {
-};
+struct Vec_t {};
 template<>
 struct Vec_t<float> {
     using Type = float2;
@@ -903,6 +1108,13 @@ template<>
 struct Vec_t<half> {
     using Type = uint32_t;
 };
+
+#ifdef ENABLE_BF16
+template<>
+struct Vec_t<__nv_bfloat16> {
+    using Type = __nv_bfloat162;
+};
+#endif
 
 template<typename T>
 __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
@@ -921,8 +1133,9 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
     const int head_idx = blockIdx.y;
     const int seq_idx = blockIdx.x;
     const int tidx = threadIdx.x;
-    if (tidx * 2 >= size_per_head)
+    if (tidx * 2 >= size_per_head) {
         return;
+    }
 
     const int batch_time_idx = seq_len * batch_idx + seq_idx;
     const int hidden_idx = head_idx * size_per_head + tidx * 2;
@@ -1010,6 +1223,20 @@ template void invokeAddFusedQKVBiasTranspose(half* q_buf,
                                              const int size_per_head,
                                              const int rotary_embedding_dim,
                                              cudaStream_t stream);
+
+#ifdef ENABLE_BF16
+template void invokeAddFusedQKVBiasTranspose(__nv_bfloat16* q_buf,
+                                             __nv_bfloat16* k_buf,
+                                             __nv_bfloat16* v_buf,
+                                             __nv_bfloat16* QKV,
+                                             const __nv_bfloat16* qkv_bias,
+                                             const int batch_size,
+                                             const int seq_len,
+                                             const int head_num,
+                                             const int size_per_head,
+                                             const int rotary_embedding_dim,
+                                             cudaStream_t stream);
+#endif
 
 template<typename T>
 __global__ void transpose_4d(T* dst,
@@ -1154,8 +1381,9 @@ __global__ void transpose_4d_batch_major_v_cache(
     constexpr int X_ELEMS = (sizeof(T) == 4) ? 4 : 8;
     const int size_per_head_div_x = size_per_head / X_ELEMS;
 
-    if (idx >= size_per_head_div_x * seq_len)
+    if (idx >= size_per_head_div_x * seq_len) {
         return;
+    }
 
     val_dst[idx] = val_src[idx];
 }
@@ -1207,6 +1435,19 @@ template void invokeTranspose4dBatchMajor(half* k_dst,
                                           const int local_head_num,
                                           cudaStream_t stream);
 
+#ifdef ENABLE_BF16
+template void invokeTranspose4dBatchMajor(__nv_bfloat16* k_dst,
+                                          __nv_bfloat16* v_dst,
+                                          const __nv_bfloat16* k_src,
+                                          const __nv_bfloat16* v_src,
+                                          const int local_batch_size,
+                                          const int seq_len,
+                                          const int max_seq_len,
+                                          const int size_per_head,
+                                          const int local_head_num,
+                                          cudaStream_t stream);
+#endif
+
 template<typename T>
 __global__ void addRelativeAttentionBias(
     T* qk_buf, const T* relative_attention_bias, const int batch_size, const int head_num, const int seq_len)
@@ -1232,7 +1473,7 @@ __global__ void addRelativeAttentionBias(
 
         const int bias_index = blockIdx.x * half2_seq_len + seq_id;
         const int qk_index = batch_id * gridDim.x * half2_seq_len + bias_index;
-        qk_buf[qk_index] = qk_buf[qk_index] + relative_attention_bias[bias_index];
+        qk_buf[qk_index] += relative_attention_bias[bias_index];
     }
 }
 
@@ -1271,5 +1512,352 @@ template void invokeAddRelativeAttentionBias(half* qk_buf,
                                              const int head_num,
                                              const int seq_len,
                                              cudaStream_t stream);
+
+/*******************  invokeAddHead3SizeQKVBias  ***********************/
+// m = batch*window_num*window_len
+// mm_qkv is [m, head*3*size_per_head] row-major
+// bias_qkv is [head*3*size_per_head]
+// q_buf_, k_buf_, v_buf_ is [batch*window_num, num_head, window_len, size_per_head] row-major
+// grid(window_len, window_num, 3*batch);
+// block(num_head * size_per_head)
+template<typename T>
+__global__ void add_head3Size_QKV_bias(const T* mm_qkv,
+                                       const T* bias_qkv,
+                                       T* q_buf_,
+                                       T* k_buf_,
+                                       T* v_buf_,
+                                       const int batch,
+                                       const int window_num,
+                                       const int window_len,
+                                       const int num_head,
+                                       const int size_per_head)
+{
+
+    T* buf_ptr;
+    int qkv_id = blockIdx.z / batch;
+    if (qkv_id == 0) {
+        buf_ptr = q_buf_;
+    }
+    else if (qkv_id == 1) {
+        buf_ptr = k_buf_;
+    }
+    else {
+        buf_ptr = v_buf_;
+    }
+
+    const int batch_id = blockIdx.z % batch;
+    const int token_id = blockIdx.x;
+    const int window_id = blockIdx.y;
+    const int head_id = threadIdx.x / size_per_head;
+    const int id_in_head = threadIdx.x % size_per_head;
+
+    const int bias_idx = (head_id * 3 + qkv_id) * size_per_head + id_in_head;
+    const T bias = __ldg(bias_qkv + bias_idx);
+
+    const int input_idx =
+        ((batch_id * window_num + window_id) * window_len + token_id) * num_head * 3 * size_per_head + bias_idx;
+    T tmp = mm_qkv[input_idx] + bias;
+
+    int target_id = (((batch_id * window_num + window_id) * num_head + head_id) * window_len + token_id) * size_per_head
+                    + id_in_head;
+    ;
+    buf_ptr[target_id] = tmp;
+}
+
+// for float2, size_per_head /= 2
+// m = batch*window_num*window_len
+// mm_qkv is [m, head*3*size_per_head] row-major
+// bias_qkv is [head*3*size_per_head]
+// q_buf_, k_buf_, v_buf_ is [batch*window_num, num_head, window_len, size_per_head] row-major
+// grid(window_len, window_num, 3*batch);
+// block(num_head * size_per_head)
+template<>
+__global__ void add_head3Size_QKV_bias(const float2* mm_qkv,
+                                       const float2* bias_qkv,
+                                       float2* q_buf_,
+                                       float2* k_buf_,
+                                       float2* v_buf_,
+                                       const int batch,
+                                       const int window_num,
+                                       const int window_len,
+                                       const int num_head,
+                                       const int size_per_head)
+{
+
+    float2* buf_ptr;
+    int qkv_id = blockIdx.z / batch;
+    if (qkv_id == 0) {
+        buf_ptr = q_buf_;
+    }
+    else if (qkv_id == 1) {
+        buf_ptr = k_buf_;
+    }
+    else {
+        buf_ptr = v_buf_;
+    }
+
+    const int batch_id = blockIdx.z % batch;
+    const int token_id = blockIdx.x;
+    const int window_id = blockIdx.y;
+    const int head_id = threadIdx.x / size_per_head;
+    const int id_in_head = threadIdx.x % size_per_head;
+
+    const int bias_idx = (head_id * 3 + qkv_id) * size_per_head + id_in_head;
+    const float2 bias = __ldg(bias_qkv + bias_idx);
+
+    const int input_idx =
+        ((batch_id * window_num + window_id) * window_len + token_id) * num_head * 3 * size_per_head + bias_idx;
+    float2 tmp = mm_qkv[input_idx];
+    tmp.x += bias.x;
+    tmp.y += bias.y;
+
+    int target_id = (((batch_id * window_num + window_id) * num_head + head_id) * window_len + token_id) * size_per_head
+                    + id_in_head;
+    ;
+    buf_ptr[target_id] = tmp;
+}
+
+// for half2, size_per_head /= 2
+// m = batch*window_num*window_len
+// mm_qkv is [m, head*3*size_per_head] row-major
+// bias_qkv is [head*3*size_per_head]
+// q_buf_, k_buf_, v_buf_ is [batch*window_num, num_head, window_len, size_per_head] row-major
+// grid(window_len, window_num, batch);
+// block(num_head * size_per_head)
+template<>
+__global__ void add_head3Size_QKV_bias(const half2* mm_qkv,
+                                       const half2* bias_qkv,
+                                       half2* q_buf_,
+                                       half2* k_buf_,
+                                       half2* v_buf_,
+                                       const int batch,
+                                       const int window_num,
+                                       const int window_len,
+                                       const int num_head,
+                                       const int size_per_head)
+{
+
+    const int batch_id = blockIdx.z;
+    const int token_id = blockIdx.x;
+    const int window_id = blockIdx.y;
+    const int head_id = threadIdx.x / size_per_head;
+    const int id_in_head = threadIdx.x % size_per_head;
+
+    const int input_offset =
+        ((batch_id * window_num + window_id) * window_len + token_id) * num_head * 3 * size_per_head;
+    const int target_id =
+        (((batch_id * window_num + window_id) * num_head + head_id) * window_len + token_id) * size_per_head
+        + id_in_head;
+
+    int qkv_id = 0;
+    int bias_idx = (head_id * 3 + qkv_id) * size_per_head + id_in_head;
+    half2 bias = __ldg(bias_qkv + bias_idx);
+    int input_idx = input_offset + bias_idx;
+    half2 tmp = mm_qkv[input_idx];
+    tmp = __hadd2(tmp, bias);
+    q_buf_[target_id] = tmp;
+
+    qkv_id = 1;
+    bias_idx = (head_id * 3 + qkv_id) * size_per_head + id_in_head;
+    bias = __ldg(bias_qkv + bias_idx);
+    input_idx = input_offset + bias_idx;
+    tmp = mm_qkv[input_idx];
+    tmp = __hadd2(tmp, bias);
+    k_buf_[target_id] = tmp;
+
+    qkv_id = 2;
+    bias_idx = (head_id * 3 + qkv_id) * size_per_head + id_in_head;
+    bias = __ldg(bias_qkv + bias_idx);
+    input_idx = input_offset + bias_idx;
+    tmp = mm_qkv[input_idx];
+    tmp = __hadd2(tmp, bias);
+    v_buf_[target_id] = tmp;
+}
+
+template<typename T>
+void invokeAddHead3SizeQKVBias(const T* mm_qkv,
+                               const T* bias_qkv,
+                               T* q_buf_,
+                               T* k_buf_,
+                               T* v_buf_,
+                               const int batch,
+                               const int window_num,
+                               const int window_len,
+                               const int num_head,
+                               const int size_per_head,
+                               cudaStream_t stream)
+{
+    if (std::is_same<T, float>::value) {
+        dim3 grid(window_len, window_num, 3 * batch);
+        dim3 block(num_head * size_per_head);
+
+        if (block.x < 1024) {
+            add_head3Size_QKV_bias<<<grid, block, 0, stream>>>(
+                mm_qkv, bias_qkv, q_buf_, k_buf_, v_buf_, batch, window_num, window_len, num_head, size_per_head);
+        }
+        else if ((block.x % 2 == 0) && (block.x / 2 < 1024)) {
+            block.x /= 2;
+            add_head3Size_QKV_bias<<<grid, block, 0, stream>>>((const float2*)mm_qkv,
+                                                               (const float2*)bias_qkv,
+                                                               (float2*)q_buf_,
+                                                               (float2*)k_buf_,
+                                                               (float2*)v_buf_,
+                                                               batch,
+                                                               window_num,
+                                                               window_len,
+                                                               num_head,
+                                                               size_per_head / 2);
+        }
+        else {
+            printf("[ERROR][invokeAddHead3SizeQKVBias] unsupport block.x!\n");
+            exit(-1);
+        }
+    }
+    else if (std::is_same<T, half>::value) {
+        dim3 grid(window_len, window_num, batch);
+        dim3 block(num_head * size_per_head / 2);
+
+        if (block.x > 1024) {
+            printf("[ERROR][invokeAddHead3SizeQKVBias] block.x > 1024!\n");
+            exit(-1);
+        }
+
+        add_head3Size_QKV_bias<<<grid, block, 0, stream>>>((const half2*)mm_qkv,
+                                                           (const half2*)bias_qkv,
+                                                           (half2*)q_buf_,
+                                                           (half2*)k_buf_,
+                                                           (half2*)v_buf_,
+                                                           batch,
+                                                           window_num,
+                                                           window_len,
+                                                           num_head,
+                                                           size_per_head / 2);
+    }
+}
+
+template void invokeAddHead3SizeQKVBias<float>(const float* mm_qkv,
+                                               const float* bias_qkv,
+                                               float* q_buf_,
+                                               float* k_buf_,
+                                               float* v_buf_,
+                                               const int batch,
+                                               const int window_num,
+                                               const int window_len,
+                                               const int num_head,
+                                               const int size_per_head,
+                                               cudaStream_t stream);
+
+template void invokeAddHead3SizeQKVBias<half>(const half* mm_qkv,
+                                              const half* bias_qkv,
+                                              half* q_buf_,
+                                              half* k_buf_,
+                                              half* v_buf_,
+                                              const int batch,
+                                              const int window_num,
+                                              const int window_len,
+                                              const int num_head,
+                                              const int size_per_head,
+                                              cudaStream_t stream);
+
+/*******************  invokeMaskedSoftMax  ***********************/
+
+// grid = (window_len/word_per_thread, window_num*num_head, batch_size)
+// block.x = max(32, (window_len + 31)/32*32)
+// qk_buf is [batch, window_num, num_head, window_len, window_len]
+// attn_mask is [window_num, window_len, window_len] + row-major
+// relative_pos_bias is [num_head, window_len, window_len] + row-majot
+template<typename T>
+__global__ void softmax_kernel(T* qk_buf,
+                               const T* attn_mask,
+                               const T* relative_pos_bias,
+                               const int batch_size,
+                               const int num_head,
+                               const int window_num,
+                               const int window_len,
+                               const int window_len_x_window_len,
+                               const float qk_scale)
+{
+
+    bool qual = threadIdx.x < window_len;
+    for (int window_id = blockIdx.x; window_id < window_len; window_id += gridDim.x) {
+        float tmp = -1e20f;
+        __shared__ float s_mean, s_max;
+        int qk_offset;
+        if (qual) {
+            const int offset_in_window = window_id * window_len + threadIdx.x;
+            qk_offset = (blockIdx.z * gridDim.y + blockIdx.y) * window_len_x_window_len + offset_in_window;
+            const int relative_pos_bias_offset = (blockIdx.y % num_head) * window_len_x_window_len + offset_in_window;
+            float mask_val =
+                (attn_mask == nullptr) ?
+                    0.0f :
+                    static_cast<float>(
+                        __ldg(attn_mask + ((blockIdx.y / num_head) * window_len_x_window_len + offset_in_window)));
+            tmp = qk_scale * static_cast<float>(qk_buf[qk_offset]) + mask_val
+                  + static_cast<float>(__ldg(relative_pos_bias + relative_pos_bias_offset));
+        }
+
+        float max_val = blockReduceMax<float>(tmp);
+        if (threadIdx.x == 0) {
+            s_max = max_val;
+        }
+        __syncthreads();
+
+        float qk_tmp = qual ? __expf(tmp - s_max) : 0.0f;
+        float sum_val = blockReduceSum<float>(qk_tmp);
+        if (threadIdx.x == 0) {
+            s_mean = sum_val + 1e-6f;
+            s_mean = __fdividef(1.0f, s_mean);
+        }
+        __syncthreads();
+        if (qual) {
+            qk_buf[qk_offset] = (T)(qk_tmp * s_mean);
+        }
+    }
+}
+
+template<typename T>
+void invokeMaskedSoftMaxWithRelPosBias(T* qk_buf,
+                                       const T* attn_mask,
+                                       const T* relative_pos_bias,
+                                       const int batch_size,
+                                       const int num_head,
+                                       const int window_num,
+                                       const int window_len,
+                                       float qk_scale,
+                                       cudaStream_t stream)
+{
+    const int word_per_thread = 1;
+    dim3 grid(window_len / word_per_thread, window_num * num_head, batch_size);
+    dim3 block((window_len + 31) / 32 * 32);
+    softmax_kernel<<<grid, block, 0, stream>>>(qk_buf,
+                                               attn_mask,
+                                               relative_pos_bias,
+                                               batch_size,
+                                               num_head,
+                                               window_num,
+                                               window_len,
+                                               window_len * window_len,
+                                               qk_scale);
+}
+
+template void invokeMaskedSoftMaxWithRelPosBias(float* qk_buf,
+                                                const float* attn_mask,
+                                                const float* relative_pos_bias,
+                                                const int batch_size,
+                                                const int num_head,
+                                                const int window_num,
+                                                const int window_len,
+                                                const float qk_scale,
+                                                cudaStream_t stream);
+
+template void invokeMaskedSoftMaxWithRelPosBias(half* qk_buf,
+                                                const half* attn_mask,
+                                                const half* relative_pos_bias,
+                                                const int batch_size,
+                                                const int num_head,
+                                                const int window_num,
+                                                const int window_len,
+                                                const float qk_scale,
+                                                cudaStream_t stream);
 
 }  // namespace fastertransformer

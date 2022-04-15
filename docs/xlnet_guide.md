@@ -30,15 +30,18 @@ This FasterTransformer XLNet implementation is aligned with [XLNet Github](https
 In this demo, you can run the XLNet as a C++ program.
 
 ### Requirements
-- CUDA 10.1 or newer version
-For correctness check:
-- Python 3
-- Tensorflow 1.13 or 1.14 or 1.15. 
 
+- CMake >= 3.8
+- CUDA 11.0 or newer version
+- NCCL 2.10 or newer version
+- Python 3 is recommended because some features are not supported in python 2
+- Tensorflow: Verify on 1.15, 1.13 and 1.14 should work.
 
 Recommand to use image `nvcr.io/nvidia/tensorflow:20.12-tf1-py3`.  
 
-> docker run -ti --gpus all --rm nvcr.io/nvidia/tensorflow:20.12-tf1-py3 bash
+```bash
+docker run -ti --gpus all --rm nvcr.io/nvidia/tensorflow:20.12-tf1-py3 bash
+```
 
 ### Setup
 
@@ -74,9 +77,9 @@ cd /workspace/FasterTransformer/build
 
 ```bash
 ./bin/xlnet_gemm <batch_size> <sequence_length> <head_number> <size_per_head> <is_use_fp16>
-./bin/xlnet_example <batch_size> <num_layers> <sequence_length> <head_number> <size_per_head> <is_use_fp16>
+./bin/xlnet_example <batch_size> <num_layers> <sequence_length> <head_number> <size_per_head> <data_type>
 ```
-
+Data Type = 0 (FP32) or 1 (FP16) or 2 (BF16)
 - Run XLNet under FP32 on C++
 ```bash
 ./bin/xlnet_gemm 8 128 12 64 0
@@ -87,6 +90,12 @@ cd /workspace/FasterTransformer/build
 ```bash
 ./bin/xlnet_gemm 8 128 12 64 1
 ./bin/xlnet_example 8 12 128 12 64 1 
+```
+
+- Run XLNet under FP16 on C++
+```bash
+./bin/xlnet_gemm 8 128 12 64 2
+./bin/xlnet_example 8 12 128 12 64 2
 ```
 
 #### Verify the correctness  

@@ -69,17 +69,31 @@ void Decoder<T>::allocateBuffer()
 }
 
 template<typename T>
+void Decoder<T>::allocateBuffer(size_t batch_size)
+{
+    decoder_normed_input_ =
+        reinterpret_cast<T*>(decoder_normed_input_, allocator_->malloc(sizeof(T) * batch_size * hidden_units_, false));
+    self_attn_output_ =
+        reinterpret_cast<T*>(self_attn_output_, allocator_->malloc(sizeof(T) * batch_size * hidden_units_, false));
+    normed_self_attn_output_ = reinterpret_cast<T*>(normed_self_attn_output_,
+                                                    allocator_->malloc(sizeof(T) * batch_size * hidden_units_, false));
+    cross_attn_output_ =
+        reinterpret_cast<T*>(cross_attn_output_, allocator_->malloc(sizeof(T) * batch_size * hidden_units_, false));
+    normed_cross_attn_output_ = reinterpret_cast<T*>(normed_cross_attn_output_,
+                                                     allocator_->malloc(sizeof(T) * batch_size * hidden_units_, false));
+    decoder_layer_output_ =
+        reinterpret_cast<T*>(decoder_layer_output_, allocator_->malloc(sizeof(T) * batch_size * hidden_units_, false));
+}
+
+template<typename T>
 void Decoder<T>::freeBuffer()
 {
-    if (is_allocate_buffer_ == true) {
-        allocator_->free(decoder_normed_input_);
-        allocator_->free(self_attn_output_);
-        allocator_->free(normed_self_attn_output_);
-        allocator_->free(cross_attn_output_);
-        allocator_->free(normed_cross_attn_output_);
-        allocator_->free(decoder_layer_output_);
-        is_allocate_buffer_ = false;
-    }
+    allocator_->free(decoder_normed_input_);
+    allocator_->free(self_attn_output_);
+    allocator_->free(normed_self_attn_output_);
+    allocator_->free(cross_attn_output_);
+    allocator_->free(normed_cross_attn_output_);
+    allocator_->free(decoder_layer_output_);
 }
 
 template<typename T>
@@ -131,6 +145,7 @@ Decoder<T>::Decoder(Decoder<T> const& decoder):
 template<typename T>
 Decoder<T>::~Decoder()
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     delete self_attention_layer_;
     delete cross_attention_layer_;
     delete ffn_layer_;
@@ -149,6 +164,9 @@ void Decoder<T>::forward(std::vector<Tensor>* output_tensors,
     //      finished [batch_size],
     //      step [1] on cpu
     //      sequence_lengths [batch_size]
+    //      cache_indirection [local_batch_size / beam_width, beam_width, max_seq_len]
+    //              Here, local_batch_size contains the beam_width, so local_batch_size / beam_width
+    //              is real local_batch_size.
 
     // output tensors:
     //      decoder_output [batch_size, hidden_dimension],
@@ -157,10 +175,10 @@ void Decoder<T>::forward(std::vector<Tensor>* output_tensors,
     //      key_mem_cache [num_layer, batch_size, mem_max_seq_len, hidden_dimension],
     //      value_mem_cache [num_layer, batch_size, mem_max_seq_len, hidden_dimension]
 
-    FT_CHECK(input_tensors->size() == 6);
+    FT_CHECK(input_tensors->size() == 7);
     FT_CHECK(output_tensors->size() == 5);
     isValidBatchSize(input_tensors->at(0).shape[0]);
-    allocateBuffer();
+    allocateBuffer(input_tensors->at(0).shape[0]);
 
     const size_t batch_size = (size_t)input_tensors->at(0).shape[0];
     const size_t mem_max_seq_len = (size_t)input_tensors->at(1).shape[1];
@@ -196,7 +214,8 @@ void Decoder<T>::forward(std::vector<Tensor>* output_tensors,
             input_tensors->at(5),
             Tensor{MEMORY_GPU, TYPE_INT32, {batch_size}, nullptr},
             Tensor{MEMORY_CPU, TYPE_INT32, {1}, &tmp_0},
-            input_tensors->at(4)};
+            input_tensors->at(4),
+            input_tensors->at(6)};
         std::vector<Tensor> self_attention_output_tensors{
             Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, self_attn_output_},
             Tensor{MEMORY_GPU,

@@ -1,4 +1,4 @@
-# Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,16 +13,26 @@
 # limitations under the License.
 
 import argparse
+import configparser
+import multiprocessing
 import numpy as np
+from pathlib import Path
 import torch 
 
 import os
 import sys
+from transformers import GPT2Model # transformers-4.10.0-py3
 dir_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(dir_path + "/../../../..")
-from multiprocessing import Process
+sys.path.append(dir_path)
 
-sys.path.append(os.path.dirname(os.path.realpath(__file__)))
+def get_weight_data_type(data_type):
+    if data_type == "fp32":
+        return np.float32
+    elif data_type == "fp16":
+        return np.float16
+    else:
+        assert False, f"Invalid weight data type {data_type}"
 
 def split_and_convert_process(i, saved_dir,factor,key,args, val):
 
@@ -87,8 +97,23 @@ def split_and_convert(args):
     factor = (int)(i_gpu_num / t_gpu_num)
 
     # load position_embedding from rank 0 
-    model = torch.load(ckpt_name)
+    # model = torch.load(ckpt_name)
+    model = GPT2Model.from_pretrained(args.in_file)
     
+    try:
+        config = configparser.ConfigParser()
+        config["gpt"] = {}
+        for key in vars(args):
+            config["gpt"][key] = f"{vars(args)[key]}"
+        for k, v in vars(model.config).items():
+            config["gpt"][k] = f"{v}"
+        config["gpt"]["weight_data_type"] = args.weight_data_type
+        with open((Path(saved_dir) / f"config.ini").as_posix(), 'w') as configfile:
+            config.write(configfile)
+    except:
+        print(f"Fail to save the config in config.ini.")
+    np_weight_data_type = get_weight_data_type(args.weight_data_type)
+
     huggingface_model_name_pattern = [
         "ln_1.bias",
         "ln_1.weight",
@@ -119,31 +144,32 @@ def split_and_convert(args):
         "mlp.dense_4h_to_h.weight",
     ]
     
-    proccess_list = []
-    for t in model:
-        print(t)
-        if t.find("weight") == -1 and t.find("bias") == -1:
+    torch.multiprocessing.set_start_method("spawn")
+    pool = multiprocessing.Pool(args.processes)
+    for name, param in model.named_parameters():
+        if name.find("weight") == -1 and name.find("bias") == -1:
             continue
-        print(t)
-        if t == 'transformer.wpe.weight':
-            model[t].cpu().numpy().astype(np.float32).tofile(saved_dir + "model.wpe.bin")
-        elif t == 'transformer.wte.weight':
-            model[t].cpu().numpy().astype(np.float32).tofile(saved_dir + "model.wte.bin")
-        elif t == 'transformer.ln_f.bias':
-            model[t].cpu().numpy().astype(np.float32).tofile(saved_dir + "model.final_layernorm.bias.bin")
-        elif t == 'transformer.ln_f.weight':
-            model[t].cpu().numpy().astype(np.float32).tofile(saved_dir + "model.final_layernorm.weight.bin")
-        elif t == 'lm_head.weight':
-            model[t].cpu().numpy().astype(np.float32).tofile(saved_dir + "model.lm_head.weight.bin")
+        print(name)
+        if name == 'transformer.wpe.weight':
+            param.detach().cpu().numpy().astype(np_weight_data_type).tofile(saved_dir + "model.wpe.bin")
+        elif name == 'transformer.wte.weight':
+            param.detach().cpu().numpy().astype(np_weight_data_type).tofile(saved_dir + "model.wte.bin")
+        elif name == 'transformer.ln_f.bias':
+            param.detach().cpu().numpy().astype(np_weight_data_type).tofile(saved_dir + "model.final_layernorm.bias.bin")
+        elif name == 'transformer.ln_f.weight':
+            param.detach().cpu().numpy().astype(np_weight_data_type).tofile(saved_dir + "model.final_layernorm.weight.bin")
+        elif name == 'lm_head.weight':
+            param.detach().cpu().numpy().astype(np_weight_data_type).tofile(saved_dir + "model.lm_head.weight.bin")
         else:
             for i in range(len(huggingface_model_name_pattern)):
-                if t.find(huggingface_model_name_pattern[i]) != -1:
-                    new_name = t.replace("transformer.h.", "layers.").replace(huggingface_model_name_pattern[i], ft_model_name_pattern[i])
-                    proccess_list.append(Process(target=split_and_convert_process, args=(0,saved_dir,factor, new_name, args, model[t].cpu().numpy().astype(np.float32))))
-                    proccess_list[-1].start()
+                if name.find(huggingface_model_name_pattern[i]) != -1:
+                    new_name = name.replace("transformer.h.", "layers.").replace(huggingface_model_name_pattern[i], ft_model_name_pattern[i])
+                    pool.starmap(split_and_convert_process,
+                                [(0, saved_dir, factor, new_name, args,
+                                    param.detach().cpu().numpy().astype(np_weight_data_type))], )
 
-    for t in proccess_list:
-        t.join()
+    pool.close()
+    pool.join()
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
@@ -151,7 +177,8 @@ if __name__ == "__main__":
     parser.add_argument('-in_file', '-i', type=str, help='file name of input checkpoint file', required=True)
     parser.add_argument('-trained_gpu_num', '-t_g', type=int, help='How many gpus for inference', default=1)
     parser.add_argument('-infer_gpu_num', '-i_g', type=int, help='How many gpus for inference', required=True)
-    # parser.add_argument('-head_num', '-h_n', type=int, help='Number of heads', required=True)
+    parser.add_argument("-processes", "-p", type=int, help="How many processes to spawn for conversion (default: 4)", default=4)
+    parser.add_argument("-weight_data_type", type=str, default="fp32", choices=["fp32", "fp16"])
 
     args = parser.parse_args()
     print("\n=============== Argument ===============")

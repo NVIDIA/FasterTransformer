@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,19 +40,21 @@ void T5Encoder<T>::initialize()
         //                                               sparse_);
     }
     else if (attention_type_ == AttentionType::UNFUSED_MHA || attention_type_ == AttentionType::UNFUSED_PADDED_MHA) {
-        attention_layer_ = new TensorParallelUnfusedAttentionLayer<T>(max_batch_size_,
-                                                                      max_seq_len_,
-                                                                      head_num_,
-                                                                      size_per_head_,
-                                                                      d_model_,
-                                                                      q_scaling_ * (1.0 / sqrtf(size_per_head_ * 1.0f)),
-                                                                      tensor_para_.world_size_,
-                                                                      tensor_para_.nccl_comm_,
-                                                                      stream_,
-                                                                      cublas_wrapper_,
-                                                                      allocator_,
-                                                                      is_free_buffer_after_forward_,
-                                                                      sparse_);
+        attention_layer_ =
+            new TensorParallelUnfusedAttentionLayer<T>(max_batch_size_,
+                                                       max_seq_len_,
+                                                       head_num_,
+                                                       size_per_head_,
+                                                       d_model_,
+                                                       q_scaling_,  // adjust according to checkpoint structure
+                                                       tensor_para_,
+                                                       stream_,
+                                                       cublas_wrapper_,
+                                                       allocator_,
+                                                       is_free_buffer_after_forward_,
+                                                       sparse_,
+                                                       custom_all_reduce_comm_,
+                                                       enable_custom_all_reduce_);
     }
     else {
         throw std::runtime_error(std::string("[FT][ERROR] Invalid attention type \n"));
@@ -64,13 +66,15 @@ void T5Encoder<T>::initialize()
                                                        1,
                                                        d_model_,
                                                        inter_size_,
-                                                       tensor_para_.world_size_,
-                                                       tensor_para_.nccl_comm_,
+                                                       tensor_para_,
                                                        stream_,
                                                        cublas_wrapper_,
                                                        allocator_,
                                                        is_free_buffer_after_forward_,
-                                                       sparse_);
+                                                       sparse_,
+                                                       0,
+                                                       custom_all_reduce_comm_,
+                                                       enable_custom_all_reduce_);
     }
     else if (activation_type_ == ActivationType::Relu) {
         ffn_layer_ = new TensorParallelReluFfnLayer<T>(max_batch_size_,
@@ -78,13 +82,14 @@ void T5Encoder<T>::initialize()
                                                        1,
                                                        d_model_,
                                                        inter_size_,
-                                                       tensor_para_.world_size_,
-                                                       tensor_para_.nccl_comm_,
+                                                       tensor_para_,
                                                        stream_,
                                                        cublas_wrapper_,
                                                        allocator_,
                                                        is_free_buffer_after_forward_,
-                                                       sparse_);
+                                                       sparse_,
+                                                       custom_all_reduce_comm_,
+                                                       enable_custom_all_reduce_);
     }
 }
 
@@ -96,7 +101,7 @@ T5Encoder<T>::T5Encoder(size_t max_batch_size,
                         size_t inter_size,
                         size_t d_model,
                         size_t num_layer,
-                        size_t num_bucket,
+                        size_t num_bucket_or_max_seq_len,
                         size_t max_distance,
                         int sm,
                         float q_scaling,
@@ -109,7 +114,9 @@ T5Encoder<T>::T5Encoder(size_t max_batch_size,
                         ActivationType activation_type,
                         LayerNormType layernorm_type,
                         NcclParam tensor_para,
-                        NcclParam pipeline_para):
+                        NcclParam pipeline_para,
+                        std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
+                        int enable_custom_all_reduce):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     max_batch_size_(max_batch_size),
     max_seq_len_(max_seq_len),
@@ -119,7 +126,7 @@ T5Encoder<T>::T5Encoder(size_t max_batch_size,
     d_model_(d_model),
     hidden_units_(head_num_ * size_per_head_),
     num_layer_(num_layer),
-    num_bucket_(num_bucket),
+    num_bucket_or_max_seq_len_(num_bucket_or_max_seq_len),
     max_distance_(max_distance),
     sm_(sm),
     q_scaling_(q_scaling),
@@ -128,7 +135,9 @@ T5Encoder<T>::T5Encoder(size_t max_batch_size,
     activation_type_(activation_type),
     layernorm_type_(layernorm_type),
     tensor_para_(tensor_para),
-    pipeline_para_(pipeline_para)
+    pipeline_para_(pipeline_para),
+    custom_all_reduce_comm_(custom_all_reduce_comm),
+    enable_custom_all_reduce_(enable_custom_all_reduce)
 {
     initialize();
 }
@@ -144,7 +153,7 @@ T5Encoder<T>::T5Encoder(T5Encoder<T> const& t5_encoder):
     d_model_(t5_encoder.d_model_),
     hidden_units_(t5_encoder.hidden_units_),
     num_layer_(t5_encoder.num_layer_),
-    num_bucket_(t5_encoder.num_bucket_),
+    num_bucket_or_max_seq_len_(t5_encoder.num_bucket_or_max_seq_len_),
     max_distance_(t5_encoder.max_distance_),
     sm_(t5_encoder.sm_),
     q_scaling_(t5_encoder.q_scaling_),
@@ -153,7 +162,9 @@ T5Encoder<T>::T5Encoder(T5Encoder<T> const& t5_encoder):
     activation_type_(t5_encoder.activation_type_),
     layernorm_type_(t5_encoder.layernorm_type_),
     tensor_para_(t5_encoder.tensor_para_),
-    pipeline_para_(t5_encoder.pipeline_para_)
+    pipeline_para_(t5_encoder.pipeline_para_),
+    custom_all_reduce_comm_(t5_encoder.custom_all_reduce_comm_),
+    enable_custom_all_reduce_(t5_encoder.enable_custom_all_reduce_)
 {
     initialize();
 }
@@ -161,9 +172,18 @@ T5Encoder<T>::T5Encoder(T5Encoder<T> const& t5_encoder):
 template<typename T>
 T5Encoder<T>::~T5Encoder()
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     delete attention_layer_;
     delete ffn_layer_;
     freeBuffer();
+}
+
+template<typename T>
+void T5Encoder<T>::setStream(cudaStream_t stream)
+{
+    attention_layer_->setStream(stream);
+    ffn_layer_->setStream(stream);
+    BaseLayer::setStream(stream);
 }
 
 template<typename T>
@@ -195,9 +215,43 @@ void T5Encoder<T>::allocateBuffer()
 }
 
 template<typename T>
+void T5Encoder<T>::allocateBuffer(size_t batch_size, size_t seq_len)
+{
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    token_num_ = (size_t*)allocator_->reMalloc(token_num_, sizeof(size_t) * 1, false);
+    padding_offset_ = (int*)allocator_->reMalloc(padding_offset_, sizeof(int) * batch_size * seq_len, false);
+    trt_mha_padding_offset_ =
+        (int*)allocator_->reMalloc(trt_mha_padding_offset_, sizeof(int) * (2 * batch_size + 1), false);
+
+    attention_mask_ = (T*)allocator_->reMalloc(attention_mask_, sizeof(T) * batch_size * seq_len * seq_len, false);
+    relative_attention_bias_ =
+        (T*)allocator_->reMalloc(relative_attention_bias_, sizeof(T) * head_num_ * seq_len * seq_len, false);
+
+    t5_encoder_emb_buf_ =
+        (T*)allocator_->reMalloc(t5_encoder_emb_buf_, sizeof(T) * batch_size * seq_len * d_model_, false);
+    t5_encoder_in_buffer_ =
+        (T*)allocator_->reMalloc(t5_encoder_in_buffer_, sizeof(T) * batch_size * seq_len * d_model_, false);
+    attn_out_buf_ = (T*)allocator_->reMalloc(attn_out_buf_, sizeof(T) * batch_size * seq_len * d_model_, false);
+    t5_encoder_out_buffer_ =
+        (T*)allocator_->reMalloc(t5_encoder_out_buffer_, sizeof(T) * batch_size * seq_len * d_model_, false);
+
+    if (layernorm_type_ == LayerNormType::post_layernorm) {
+        normed_from_tensor_ = nullptr;
+        normed_attn_out_buf_ = nullptr;
+    }
+    else {
+        normed_from_tensor_ =
+            (T*)allocator_->reMalloc(normed_from_tensor_, sizeof(T) * batch_size * seq_len * d_model_, false);
+        normed_attn_out_buf_ =
+            (T*)allocator_->reMalloc(normed_attn_out_buf_, sizeof(T) * batch_size * seq_len * d_model_, false);
+    }
+    is_allocate_buffer_ = true;
+}
+
+template<typename T>
 void T5Encoder<T>::freeBuffer()
 {
-    if (is_allocate_buffer_ == true) {
+    if (is_allocate_buffer_) {
         allocator_->free(token_num_);
         allocator_->free(padding_offset_);
         allocator_->free(trt_mha_padding_offset_);
@@ -259,30 +313,53 @@ void T5Encoder<T>::forward(std::vector<Tensor>* output_tensors,
     //      input_ids [batch, seqlen]
     //      sequence_length [batch]
     // output tensors:
-    //      output hidden state [batch, seqlen, d_model_]
+    //      output_hidden_state [batch, seqlen, d_model_]
 
-    const size_t request_batch_size = input_tensors->at(0).shape[0];
-    const size_t request_seq_len = input_tensors->at(0).shape[1];
+    std::unordered_map<std::string, Tensor> input_tensors_map{{"input_ids", input_tensors->at(0)},
+                                                              {"sequence_length", input_tensors->at(1)}};
+
+    std::unordered_map<std::string, Tensor> output_tensors_map{{"output_hidden_state", output_tensors->at(0)}};
+    forward(&output_tensors_map, &input_tensors_map, t5_encoder_weights);
+}
+
+template<typename T>
+void T5Encoder<T>::forward(std::unordered_map<std::string, Tensor>* output_tensors,
+                           const std::unordered_map<std::string, Tensor>* input_tensors,
+                           const T5EncoderWeight<T>* t5_encoder_weights)
+{
+    // input_tensors:
+    //      input_ids [batch, seqlen]
+    //      sequence_length [batch]
+    // output tensors:
+    //      output_hidden_state [batch, seqlen, d_model_]
+
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    const size_t request_batch_size = input_tensors->at("input_ids").shape[0];
+    const size_t request_seq_len = input_tensors->at("input_ids").shape[1];
     FT_CHECK(input_tensors->size() == 2);
-    FT_CHECK(isValidBatchSize(request_batch_size));
-    FT_CHECK(isValidSeqLen(request_seq_len));
-    FT_CHECK(request_batch_size == input_tensors->at(1).shape[0]);
-    FT_CHECK(input_tensors->at(0).shape.size() == 2);
-    FT_CHECK(input_tensors->at(1).shape.size() == 1);
-    allocateBuffer();
+    FT_CHECK(request_batch_size == input_tensors->at("sequence_length").shape[0]);
+    FT_CHECK(input_tensors->at("input_ids").shape.size() == 2);
+    FT_CHECK(input_tensors->at("sequence_length").shape.size() == 1);
+    allocateBuffer(request_batch_size, request_seq_len);
+
+    // T5 Structure Difference
+    bool t5_with_bias = t5_encoder_weights->t5_with_bias;
+    PositionEmbeddingType position_embedding_type = t5_encoder_weights->position_embedding_type;
 
     invokeBuildRelativeAttentionBias(relative_attention_bias_,
-                                     t5_encoder_weights->relative_attention_bias,
+                                     t5_encoder_weights->absolute_or_relative_position_embedding,
                                      head_num_,
                                      request_seq_len,
-                                     num_bucket_,
+                                     num_bucket_or_max_seq_len_,
                                      true,
                                      max_distance_,
+                                     position_embedding_type,
                                      stream_);
-
     if (attention_type_ == AttentionType::UNFUSED_MHA || attention_type_ == AttentionType::FUSED_MHA) {
         // prevent undefined behavior of the padding parts
-        cudaMemset((T*)output_tensors->at(0).data, 0, sizeof(T) * request_batch_size * request_seq_len * d_model_);
+        cudaMemset(output_tensors->at("output_hidden_state").getPtr<T>(),
+                   0,
+                   sizeof(T) * request_batch_size * request_seq_len * d_model_);
     }
     const size_t local_batch_size = getLocalBatchSize(request_batch_size, request_seq_len, pipeline_para_.world_size_);
     const size_t iteration_num = request_batch_size / local_batch_size;
@@ -290,21 +367,39 @@ void T5Encoder<T>::forward(std::vector<Tensor>* output_tensors,
         size_t id_offset = ite * local_batch_size;
         size_t d_model_offset = id_offset * request_seq_len * d_model_;
 
-        const int* sequence_lengths = reinterpret_cast<const int*>(input_tensors->at(1).data) + id_offset;
+        const int* sequence_lengths = input_tensors->at("sequence_length").getPtr<int>() + id_offset;
 
-        invokeEmbeddingLookupPosEncoding(t5_encoder_emb_buf_,
-                                         t5_encoder_weights->embedding_table,
-                                         (T*)nullptr,
-                                         (int*)(input_tensors->at(0).data) + id_offset * request_seq_len,
-                                         nullptr,
-                                         local_batch_size * request_seq_len,
-                                         d_model_,
-                                         (T)1.0f,
-                                         0,
-                                         0,
-                                         local_batch_size * request_seq_len,
-                                         0,
-                                         stream_);
+        if (position_embedding_type == PositionEmbeddingType::absolute) {
+            invokeInputIdsEmbeddingLookupPosEncoding(t5_encoder_emb_buf_,
+                                                     nullptr,
+                                                     t5_encoder_weights->embedding_table,
+                                                     t5_encoder_weights->absolute_or_relative_position_embedding,
+                                                     input_tensors->at("input_ids").getPtr<int>()
+                                                         + id_offset * request_seq_len,
+                                                     1,
+                                                     request_seq_len,
+                                                     request_seq_len,
+                                                     local_batch_size,
+                                                     hidden_units_,
+                                                     stream_);
+        }
+        else {
+            invokeEmbeddingLookupPosEncoding(t5_encoder_emb_buf_,
+                                             t5_encoder_weights->embedding_table,
+                                             (const T*)nullptr,
+                                             input_tensors->at("input_ids").getPtr<int>() + id_offset * request_seq_len,
+                                             nullptr,
+                                             local_batch_size * request_seq_len,
+                                             d_model_,
+                                             (T)1.0f,
+                                             0,
+                                             0,
+                                             local_batch_size * request_seq_len,
+                                             0,
+                                             stream_);
+        }
+
+        sync_check_cuda_error();
 
         size_t h_token_num;
         T* t5_encoder_input_ptr;
@@ -344,46 +439,46 @@ void T5Encoder<T>::forward(std::vector<Tensor>* output_tensors,
 
                 sync_check_cuda_error();
                 h_token_num = local_batch_size * request_seq_len;
-                t5_encoder_input_ptr = (T*)input_tensors->at(0).data + d_model_offset;
-                t5_encoder_output_ptr = (T*)output_tensors->at(0).data + d_model_offset;
+                t5_encoder_input_ptr = t5_encoder_emb_buf_;
+                t5_encoder_output_ptr = output_tensors->at("output_hidden_state").getPtr<T>() + d_model_offset;
                 padding_offset_tensor_ptr = new Tensor(MEMORY_GPU, TYPE_INT32, std::vector<size_t>{0}, nullptr);
                 break;
             }
             case AttentionType::FUSED_MHA: {
                 FT_CHECK(false);  // not support FUSED_MHA now
-                invokeGetPaddingOffset(&h_token_num,
-                                       token_num_,
-                                       padding_offset_,
-                                       sequence_lengths,
-                                       local_batch_size,
-                                       request_seq_len,
-                                       stream_);
+                // invokeGetPaddingOffset(&h_token_num,
+                //                        token_num_,
+                //                        padding_offset_,
+                //                        sequence_lengths,
+                //                        local_batch_size,
+                //                        request_seq_len,
+                //                        stream_);
 
-                if (pipeline_para_.rank_ == 0) {
-                    invokeRemovePadding(
-                        t5_encoder_in_buffer_, t5_encoder_emb_buf_, padding_offset_, h_token_num, d_model_, stream_);
-                    sync_check_cuda_error();
-                }
-                sync_check_cuda_error();
-                t5_encoder_input_ptr = t5_encoder_in_buffer_;
-                t5_encoder_output_ptr = t5_encoder_out_buffer_;
+                // if (pipeline_para_.rank_ == 0) {
+                //     invokeRemovePadding(
+                //         t5_encoder_in_buffer_, t5_encoder_emb_buf_, padding_offset_, h_token_num, d_model_, stream_);
+                //     sync_check_cuda_error();
+                // }
+                // sync_check_cuda_error();
+                // t5_encoder_input_ptr = t5_encoder_in_buffer_;
+                // t5_encoder_output_ptr = t5_encoder_out_buffer_;
 
-                invokeGetTrtPaddingOffset(trt_mha_padding_offset_, sequence_lengths, local_batch_size, stream_);
+                // invokeGetTrtPaddingOffset(trt_mha_padding_offset_, sequence_lengths, local_batch_size, stream_);
 
-                padding_offset_tensor_ptr = new Tensor(
-                    MEMORY_GPU, TYPE_INT32, std::vector<size_t>{local_batch_size + 1}, trt_mha_padding_offset_);
-                break;
+                // padding_offset_tensor_ptr = new Tensor(
+                //     MEMORY_GPU, TYPE_INT32, std::vector<size_t>{local_batch_size + 1}, trt_mha_padding_offset_);
+                // break;
             }
             case AttentionType::FUSED_PADDED_MHA: {
                 FT_CHECK(false);  // not support FUSED_MHA now
-                h_token_num = local_batch_size * request_seq_len;
-                invokeGetTrtPaddingOffset(
-                    trt_mha_padding_offset_, sequence_lengths, local_batch_size, request_seq_len, stream_);
-                padding_offset_tensor_ptr = new Tensor(
-                    MEMORY_GPU, TYPE_INT32, std::vector<size_t>{local_batch_size * 2 + 1}, trt_mha_padding_offset_);
-                t5_encoder_input_ptr = (T*)input_tensors->at(0).data + d_model_offset;
-                t5_encoder_output_ptr = (T*)output_tensors->at(0).data + d_model_offset;
-                break;
+                // h_token_num = local_batch_size * request_seq_len;
+                // invokeGetTrtPaddingOffset(
+                //     trt_mha_padding_offset_, sequence_lengths, local_batch_size, request_seq_len, stream_);
+                // padding_offset_tensor_ptr = new Tensor(
+                //     MEMORY_GPU, TYPE_INT32, std::vector<size_t>{local_batch_size * 2 + 1}, trt_mha_padding_offset_);
+                // t5_encoder_input_ptr = t5_encoder_emb_buf_ + d_model_offset;
+                // t5_encoder_output_ptr = output_tensors->at("output_hidden_state").getPtr<T>() + d_model_offset;
+                // break;
             }
             default: {
                 throw std::runtime_error(std::string("[FT][ERROR] Invalid attention type \n"));
@@ -391,6 +486,7 @@ void T5Encoder<T>::forward(std::vector<Tensor>* output_tensors,
         }
 
         DataType data_type = getTensorType<T>();
+
         for (uint i = 0; i < num_layer_; i++) {
             if (!isValidLayerParallelId(i)) {
                 continue;
@@ -403,18 +499,17 @@ void T5Encoder<T>::forward(std::vector<Tensor>* output_tensors,
                 ftNcclRecv(from_tensor + data_size * tensor_para_.rank_,
                            data_size,
                            pipeline_para_.rank_ - 1,
-                           pipeline_para_.nccl_comm_,
+                           pipeline_para_,
                            stream_);
                 if (tensor_para_.world_size_ > 1) {
-                    ftNcclAllGather(
-                        from_tensor, from_tensor, data_size, tensor_para_.rank_, tensor_para_.nccl_comm_, stream_);
+                    ftNcclAllGather(from_tensor, from_tensor, data_size, tensor_para_.rank_, tensor_para_, stream_);
                 }
             }
-
             if (layernorm_type_ == LayerNormType::pre_layernorm) {
                 invokeGeneralT5LayerNorm(normed_from_tensor_,
                                          from_tensor,
                                          t5_encoder_weights->t5_encoder_layer_weights[i]->attn_layernorm_weights.gamma,
+                                         t5_encoder_weights->t5_encoder_layer_weights[i]->attn_layernorm_weights.beta,
                                          h_token_num,
                                          d_model_,
                                          stream_);
@@ -434,7 +529,9 @@ void T5Encoder<T>::forward(std::vector<Tensor>* output_tensors,
                     Tensor{MEMORY_GPU,
                            data_type,
                            std::vector<size_t>{1, head_num_, request_seq_len, request_seq_len},
-                           relative_attention_bias_}};
+                           t5_encoder_weights->position_embedding_type == PositionEmbeddingType::relative ?
+                               relative_attention_bias_ :
+                               nullptr}};
                 std::vector<Tensor> attn_output_tensors{
                     Tensor{MEMORY_GPU, data_type, std::vector<size_t>{h_token_num, d_model_}, attn_out_buf_}};
 
@@ -444,21 +541,25 @@ void T5Encoder<T>::forward(std::vector<Tensor>* output_tensors,
             }
 
             if (layernorm_type_ == LayerNormType::post_layernorm) {
-                invokeGeneralAddResidualT5PreLayerNorm(
+                invokeGeneralAddBiasResidualT5PreLayerNorm(
                     attn_out_buf_,
                     attn_out_buf_,
                     from_tensor,
                     t5_encoder_weights->t5_encoder_layer_weights[i]->attn_layernorm_weights.gamma,
+                    t5_encoder_weights->t5_encoder_layer_weights[i]->attn_layernorm_weights.beta,
+                    t5_encoder_weights->t5_encoder_layer_weights[i]->attention_weights.attention_output_weight.bias,
                     h_token_num,
                     d_model_,
                     stream_);
             }
             else if (layernorm_type_ == LayerNormType::pre_layernorm) {
-                invokeGeneralAddResidualT5PreLayerNorm(
+                invokeGeneralAddBiasResidualT5PreLayerNorm(
                     attn_out_buf_,
                     normed_attn_out_buf_,
                     from_tensor,
                     t5_encoder_weights->t5_encoder_layer_weights[i]->ffn_layernorm_weights.gamma,
+                    t5_encoder_weights->t5_encoder_layer_weights[i]->ffn_layernorm_weights.beta,
+                    t5_encoder_weights->t5_encoder_layer_weights[i]->attention_weights.attention_output_weight.bias,
                     h_token_num,
                     d_model_,
                     stream_);
@@ -479,17 +580,24 @@ void T5Encoder<T>::forward(std::vector<Tensor>* output_tensors,
             }
 
             if (layernorm_type_ == LayerNormType::post_layernorm) {
-                invokeGeneralAddResidualT5PreLayerNorm(
+                invokeGeneralAddBiasResidualT5PreLayerNorm(
                     out_tensor,
                     out_tensor,
                     attn_out_buf_,
                     t5_encoder_weights->t5_encoder_layer_weights[i]->ffn_layernorm_weights.gamma,
+                    t5_encoder_weights->t5_encoder_layer_weights[i]->ffn_layernorm_weights.beta,
+                    t5_encoder_weights->t5_encoder_layer_weights[i]->ffn_weights.output_weight.bias,
                     h_token_num,
                     d_model_,
                     stream_);
             }
             else if (layernorm_type_ == LayerNormType::pre_layernorm) {
-                invokeT5AddResidual(out_tensor, attn_out_buf_, h_token_num, d_model_, stream_);
+                invokeT5AddBiasResidual(out_tensor,
+                                        attn_out_buf_,
+                                        t5_encoder_weights->t5_encoder_layer_weights[i]->ffn_weights.output_weight.bias,
+                                        h_token_num,
+                                        d_model_,
+                                        stream_);
             }
             sync_check_cuda_error();
 
@@ -498,7 +606,7 @@ void T5Encoder<T>::forward(std::vector<Tensor>* output_tensors,
                 ftNcclSend(out_tensor + data_size * tensor_para_.rank_,
                            data_size,
                            pipeline_para_.rank_ + 1,
-                           pipeline_para_.nccl_comm_,
+                           pipeline_para_,
                            stream_);
             }
         }
@@ -508,6 +616,7 @@ void T5Encoder<T>::forward(std::vector<Tensor>* output_tensors,
                 invokeGeneralT5LayerNorm(t5_encoder_output_ptr,
                                          t5_encoder_output_ptr,
                                          t5_encoder_weights->post_transformer_layernorm_weights.gamma,
+                                         t5_encoder_weights->post_transformer_layernorm_weights.beta,
                                          h_token_num,
                                          d_model_,
                                          stream_);
@@ -517,7 +626,7 @@ void T5Encoder<T>::forward(std::vector<Tensor>* output_tensors,
             switch (attention_type_) {
                 case AttentionType::UNFUSED_MHA: {
                     if (pipeline_para_.rank_ == pipeline_para_.world_size_ - 1) {
-                        invokeRebuildPadding((T*)output_tensors->at(0).data + d_model_offset,
+                        invokeRebuildPadding(output_tensors->at("output_hidden_state").getPtr<T>() + d_model_offset,
                                              t5_encoder_out_buffer_,
                                              padding_offset_,
                                              h_token_num,
@@ -531,7 +640,7 @@ void T5Encoder<T>::forward(std::vector<Tensor>* output_tensors,
                 }
                 case AttentionType::FUSED_MHA: {
                     if (pipeline_para_.rank_ == pipeline_para_.world_size_ - 1) {
-                        invokeRebuildPadding((T*)output_tensors->at(0).data + d_model_offset,
+                        invokeRebuildPadding(output_tensors->at("output_hidden_state").getPtr<T>() + d_model_offset,
                                              t5_encoder_out_buffer_,
                                              padding_offset_,
                                              h_token_num,
@@ -549,60 +658,33 @@ void T5Encoder<T>::forward(std::vector<Tensor>* output_tensors,
             }
         }
 
-        if (is_free_buffer_after_forward_ == true) {
-            freeBuffer();
-        }
-        sync_check_cuda_error();
-
         delete padding_offset_tensor_ptr;
     }
+    if (is_free_buffer_after_forward_ == true) {
+        freeBuffer();
+    }
+    sync_check_cuda_error();
 
     if (pipeline_para_.world_size_ > 1) {
         NCCLCHECK(ncclGroupStart());
         const int data_size = request_batch_size * request_seq_len * d_model_ / tensor_para_.world_size_;
-        ftNcclBroadCast((T*)output_tensors->at(0).data + data_size * tensor_para_.rank_,
+        ftNcclBroadCast(output_tensors->at("output_hidden_state").getPtr<T>() + data_size * tensor_para_.rank_,
                         data_size,
                         pipeline_para_.world_size_ - 1,
-                        pipeline_para_.nccl_comm_,
+                        pipeline_para_,
                         stream_);
 
         NCCLCHECK(ncclGroupEnd());
         check_cuda_error(cudaStreamSynchronize(stream_));
         sync_check_cuda_error();
         if (tensor_para_.world_size_ > 1) {
-            ftNcclAllGather((T*)output_tensors->at(0).data,
-                            (T*)output_tensors->at(0).data,
+            ftNcclAllGather(output_tensors->at("output_hidden_state").getPtr<T>(),
+                            output_tensors->at("output_hidden_state").getPtr<T>(),
                             data_size,
                             tensor_para_.rank_,
-                            tensor_para_.nccl_comm_,
+                            tensor_para_,
                             stream_);
         }
-    }
-}
-
-template<typename T>
-bool T5Encoder<T>::isValidBatchSize(size_t batch_size)
-{
-    if (batch_size <= max_batch_size_) {
-        return true;
-    }
-    else {
-        freeBuffer();
-        max_batch_size_ = batch_size * 1.2;
-        return true;
-    }
-}
-
-template<typename T>
-bool T5Encoder<T>::isValidSeqLen(size_t seq_len)
-{
-    if (seq_len <= max_seq_len_) {
-        return true;
-    }
-    else {
-        freeBuffer();
-        max_seq_len_ = seq_len * 1.2;
-        return true;
     }
 }
 

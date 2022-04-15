@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  * Copyright (c) 2021, NAVER Corp.  Authored by CLOVA.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,23 +20,18 @@
 #include <cstddef>
 #include <vector>
 
-#include "src/fastertransformer/layers/DynamicDecodeBaseLayer.h"
+#include "src/fastertransformer/layers/DynamicDecodeLayer.h"
 #include "src/fastertransformer/models/multi_gpu_gpt/ParallelGptContextDecoder.h"
 #include "src/fastertransformer/models/multi_gpu_gpt/ParallelGptDecoder.h"
 #include "src/fastertransformer/models/multi_gpu_gpt/ParallelGptWeight.h"
+#include "src/fastertransformer/utils/custom_ar_comm.h"
 
 namespace fastertransformer {
 
 template<typename T>
 class ParallelGpt: public BaseLayer {
 private:
-    // buffer handling
-    size_t max_batch_size_ = 0;
-    size_t max_seq_len_ = 0;
-    size_t max_input_len_ = 0;
-
     // meta data
-    size_t beam_width_;
     size_t head_num_;
     size_t size_per_head_;
     size_t inter_size_;
@@ -48,6 +43,7 @@ private:
     float beam_search_diversity_rate_;
     size_t hidden_units_;
 
+    // TODO(bhsueh) remove these member because they are runtime parameters
     size_t top_k_;
     float top_p_;
     unsigned long long random_seed_;
@@ -56,29 +52,39 @@ private:
     float len_penalty_;
     float repetition_penalty_;
 
-    size_t tensor_para_size_;
-    size_t tensor_para_rank_;
-    ncclComm_t tensor_para_comm_;
     size_t local_head_num_;
-    size_t pipeline_para_size_;
-    size_t pipeline_para_rank_;
-    ncclComm_t pipeline_para_comm_;
+    NcclParam tensor_para_;
+    NcclParam pipeline_para_;
+
+    std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm_;
+    int enable_custom_all_reduce_;
 
     const bool is_context_qk_buf_float_ = true;
     size_t vocab_size_padded_;
     const int int8_mode_ = 0;
 
     ParallelGptDecoder<T>* gpt_decoder_;
-    DynamicDecodeBaseLayer* dynamic_decode_;
     ParallelGptContextDecoder<T>* gpt_context_decoder_;
+    DynamicDecodeLayer<float>* dynamic_decode_layer_;
 
     void allocateBuffer() override;
+    void allocateBuffer(size_t batch_size,
+                        size_t beam_width,
+                        size_t max_seq_len,
+                        size_t max_input_len,
+                        bool is_return_context_cum_log_probs);
     void freeBuffer() override;
-    bool isValidBatchSize(size_t batch_size);
-    bool isValidSeqLen(size_t seq_len);
-    bool isValidInputSeqLen(size_t seq_len);
 
     void initialize();
+
+    void computeContextCumLogProbs(float* cum_log_probs,
+                                   const T* context_decoder_outputs,
+                                   const int* input_ids,
+                                   const int* input_lengths,
+                                   const size_t batch_size,
+                                   const size_t beam_width,
+                                   const size_t max_input_length,
+                                   const ParallelGptWeight<T>* gpt_weights);
 
 protected:
     T* padded_embedding_kernel_;
@@ -95,17 +101,29 @@ protected:
     bool* finished_buf_;
     bool* h_finished_buf_;
 
-    T* key_caches_[2];    // ping-pong buffer
-    T* value_caches_[2];  // ping-pong buffer
+    T* key_cache_;
+    T* value_cache_;
+    int* cache_indirections_[2] = {nullptr, nullptr};
 
-    T* padded_pos_embedding_bias_;
+    int* start_ids_buf_;
+    int* end_ids_buf_;
 
+    int* tiled_input_ids_buf_;
+    int* tiled_input_lengths_buf_;
+
+    int* transposed_output_ids_buf_;
     int* output_ids_buf_;
     int* parent_ids_buf_;
-    int* input_length_buf_;
 
     T* context_decoder_input_buf_;
     T* context_decoder_output_buf_;
+    float* output_log_probs_buf_;
+
+    // buffers dedicated to log prob computation
+    T* lp_normed_decoder_output_buf_ = nullptr;
+    float* lp_logits_buf_ = nullptr;
+    float* lp_nccl_logits_buf_ = nullptr;
+    float* lp_logprob_buf_ = nullptr;
 
 public:
     ParallelGpt(size_t max_batch_size,
@@ -126,19 +144,17 @@ public:
                 float temperature,
                 float len_penalty,
                 float repetition_penalty,
-                size_t tensor_para_size,
-                size_t tensor_para_rank,
-                ncclComm_t tensor_para_comm,
-                size_t pipeline_para_size,
-                size_t pipeline_para_rank,
-                ncclComm_t pipeline_para_comm,
+                NcclParam tensor_para,
+                NcclParam pipeline_para,
                 cudaStream_t stream,
                 cublasMMWrapper* cublas_wrapper,
                 IAllocator* allocator,
                 bool is_free_buffer_after_forward,
                 cudaDeviceProp* cuda_device_prop = nullptr,
                 bool sparse = false,
-                int int8_mode = 0);
+                int int8_mode = 0,
+                std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm = nullptr,
+                int enable_custom_all_reduce = 0);
 
     ParallelGpt(ParallelGpt<T> const& gpt);
 
@@ -146,6 +162,10 @@ public:
 
     void forward(std::vector<Tensor>* output_tensors,
                  const std::vector<Tensor>* input_tensors,
+                 const ParallelGptWeight<T>* gpt_weights);
+
+    void forward(std::unordered_map<std::string, Tensor>* output_tensors,
+                 const std::unordered_map<std::string, Tensor>* input_tensors,
                  const ParallelGptWeight<T>* gpt_weights);
 
     size_t getPipelineParallelRank();

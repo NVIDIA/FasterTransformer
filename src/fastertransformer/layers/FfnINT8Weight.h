@@ -21,8 +21,8 @@
 namespace fastertransformer {
 
 template<typename T>
-struct FfnINT8Weight : FfnWeight<T> {
-    ScaleList * scale_list_ptr;   
+struct FfnINT8Weight: FfnWeight<T> {
+    ScaleList* scale_list_ptr;
 };
 
 }  // namespace fastertransformer

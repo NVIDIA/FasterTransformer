@@ -17,8 +17,8 @@
 #pragma once
 
 #include "src/fastertransformer/kernels/layernorm_kernels.h"
-#include "src/fastertransformer/layers/attention_layers/AttentionWeight.h"
 #include "src/fastertransformer/layers/FfnWeight.h"
+#include "src/fastertransformer/layers/attention_layers/AttentionWeight.h"
 #include "src/fastertransformer/utils/memory_utils.h"
 
 namespace fastertransformer {
@@ -106,7 +106,7 @@ struct DecoderLayerWeight {
         hidden_units_ = other.hidden_units_;
         inter_size_ = other.inter_size_;
         mem_hidden_units_ = other.mem_hidden_units_;
-        
+
         mallocWeights();
         cudaD2Dcpy(weights_ptr[0], other.weights_ptr[0], hidden_units_);
         cudaD2Dcpy(weights_ptr[1], other.weights_ptr[1], hidden_units_);
@@ -170,7 +170,6 @@ private:
         ffn_weights.intermediate_weight.bias = weights_ptr[19];
         ffn_weights.output_weight.kernel = weights_ptr[20];
         ffn_weights.output_weight.bias = weights_ptr[21];
-
     }
 
     void mallocWeights()

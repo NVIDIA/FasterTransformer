@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,7 +26,7 @@ void invokeDecodingInitialize(bool* finished,
                               int* sequence_length,
                               int* word_ids,
                               T* cum_log_probs,
-                              const int sentence_id,
+                              const int* sentence_ids,
                               const int batch_size,
                               const int beam_width,
                               const int max_input_length,
@@ -74,9 +74,43 @@ void invokeGatherTree(int* beams,
                       const int beam_width,
                       const int* step_ids,
                       const int* parent_ids,
-                      const int end_token,
+                      const int* end_tokens,
                       cudaStream_t stream);
 
+void invokeGatherTree(int* beams,
+                      int* max_sequence_lengths,
+                      const int max_time,
+                      const int batch_size,
+                      const int beam_width,
+                      const int* step_ids,
+                      const int* parent_ids,
+                      const int* end_tokens,
+                      const int max_input_length,
+                      cudaStream_t stream);
+
+struct gatherTreeParam {
+    int* beams;
+    const int* max_sequence_lengths = nullptr;
+    const int* input_lengths = nullptr;
+    int max_time;
+    int batch_size;
+    int beam_width;
+    const int* step_ids = nullptr;
+    const int* parent_ids = nullptr;
+    const int* end_tokens;
+    int max_input_length;
+    const int* prefix_soft_prompt_lengths = nullptr;
+    int max_prefix_soft_prompt_length;
+    int* output_ids = nullptr;
+    cudaStream_t stream;
+};
+
+void invokeGatherTree(gatherTreeParam param);
+
 void invokeMinusUnfinishedSeqlen(int* sequence_lengths, const bool* finished, const int token_num, cudaStream_t stream);
+void invokePlusUnfinishedSeqlen(int* sequence_lengths, const bool* finished, const int token_num, cudaStream_t stream);
+
+template<typename T>
+void invokePlusScalar(T* buf, const T val, const int size, cudaStream_t stream);
 
 }  // namespace fastertransformer

@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -182,7 +182,9 @@ def finalize(beam_size, output_ids, parent_ids, out_seq_lens, end_id, max_seq_le
     parent_ids = torch.reshape(parent_ids, shape)
     if output_ids.is_cuda:
         torch.classes.load_library("./lib/libth_gather_tree.so")
-        ids = torch.ops.fastertransformer.gather_tree(output_ids.to(torch.int32), parent_ids.to(torch.int32), out_seq_lens.to(torch.int32), end_id)
+        batch_size = output_ids.shape[1]
+        end_ids = end_id * torch.ones(batch_size, dtype=torch.int32, device=output_ids.device)
+        ids = torch.ops.fastertransformer.gather_tree(output_ids.to(torch.int32), parent_ids.to(torch.int32), out_seq_lens.to(torch.int32), end_ids)
     else:
         ids = gather_tree(output_ids, parent_ids, max_lens, end_id)
     ids = torch.einsum('ijk->jki', ids)    # batch_size, beam_size, max_seq_len

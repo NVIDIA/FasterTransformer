@@ -32,14 +32,14 @@ struct ParallelGptTritonModelInstance: AbstractTransformerModelInstance {
                                    std::unique_ptr<ft::cublasAlgoMap> cublas_algo_map,
                                    std::unique_ptr<std::mutex> cublas_wrapper_mutex,
                                    std::unique_ptr<ft::cublasMMWrapper> cublas_wrapper,
-                                   std::unique_ptr<cudaDeviceProp> cuda_device_prop_ptr,
-                                   const size_t max_batch_size,
-                                   const size_t max_seq_len,
-                                   const size_t beam_width);
+                                   std::unique_ptr<cudaDeviceProp> cuda_device_prop_ptr);
     ~ParallelGptTritonModelInstance();
 
     std::shared_ptr<std::vector<triton::Tensor>>
     forward(std::shared_ptr<std::vector<triton::Tensor>> input_tensors) override;
+
+    std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>
+    forward(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors) override;
 
 private:
     const std::unique_ptr<ft::ParallelGpt<T>> gpt_;
@@ -50,22 +50,29 @@ private:
     const std::unique_ptr<ft::cublasMMWrapper> cublas_wrapper_;
     const std::unique_ptr<cudaDeviceProp> cuda_device_prop_ptr_;
 
-    std::vector<ft::Tensor> convert_inputs(std::shared_ptr<std::vector<triton::Tensor>> input_tensors);
-    std::shared_ptr<std::vector<triton::Tensor>> convert_outputs(const std::vector<ft::Tensor>& output_tensors);
+    std::unordered_map<std::string, ft::Tensor>
+    convert_inputs(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors);
+    std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>
+    convert_outputs(const std::unordered_map<std::string, ft::Tensor>& output_tensors);
 
-    void allocateBuffer(const size_t request_batch_size, const size_t total_output_len);
+    void allocateBuffer(const size_t request_batch_size,
+                        const size_t beam_width,
+                        const size_t total_output_len,
+                        const size_t request_output_len);
     void freeBuffer();
-
-    const size_t max_batch_size_;
-    const size_t max_seq_len_;
-    const size_t beam_width_;
 
     int* d_input_ids_ = nullptr;
     int* d_input_lengths_ = nullptr;
+    int* d_prefix_soft_prompt_lengths_ = nullptr;
+    int* d_input_bad_words_ = nullptr;
+    int* d_input_stop_words_ = nullptr;
+    float* d_prefix_soft_prompt_embedding_ = nullptr;
 
     int* d_output_ids_ = nullptr;
     int* d_parent_ids_ = nullptr;
     int* d_sequence_lengths_ = nullptr;
+    float* d_output_log_probs_ = nullptr;
+    float* d_cum_log_probs_ = nullptr;
 
     int h_total_output_len_;
 };

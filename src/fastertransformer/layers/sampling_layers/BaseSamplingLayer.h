@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  * Copyright (c) 2021, NAVER Corp.  Authored by CLOVA.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,29 +29,23 @@ private:
     bool isValidBatchSize(size_t batch_size);
 
 protected:
-    // buffer handling
-    size_t max_batch_size_ = 0;
-
-    // meta data
     size_t vocab_size_;
     size_t vocab_size_padded_;
-    int end_id_;
-    size_t top_k_;
-    float top_p_;
-    unsigned long long random_seed_;
-    float temperature_;
-    float len_penalty_;
-    float repetition_penalty_;
 
     size_t sampling_workspace_size_;
-    void* sampling_workspace_;
-    curandState_t* curandstate_buf_;
+    void* sampling_workspace_ = nullptr;
+    curandState_t* curandstate_buf_ = nullptr;
 
     virtual void runSampling(std::vector<fastertransformer::Tensor>* output_tensors,
                              const std::vector<fastertransformer::Tensor>* input_tensors) = 0;
+    virtual void runSampling(std::unordered_map<std::string, Tensor>* output_tensors,
+                             const std::unordered_map<std::string, Tensor>* input_tensors) = 0;
+
     virtual void freeBuffer() = 0;
     virtual void allocateBuffer() = 0;
-    virtual void invokeInitialize() = 0;
+    virtual void allocateBuffer(size_t batch_size, size_t top_k, float top_p) = 0;
+    virtual void
+    invokeInitialize(size_t batch_size, unsigned long long random_seed, curandState_t* curandstate_buf) = 0;
 
 public:
     BaseSamplingLayer(size_t max_batch_size,
@@ -60,7 +54,7 @@ public:
                       int end_id,
                       size_t top_k,
                       float top_p,
-                      unsigned long long random_seed,
+                      unsigned long long random_seed,  // TODO(bhsueh) delete
                       float temperature,
                       float len_penalty,
                       float repetition_penalty,
@@ -76,6 +70,8 @@ public:
 
     void forward(std::vector<fastertransformer::Tensor>* output_tensors,
                  const std::vector<fastertransformer::Tensor>* input_tensors) override;
+    void forward(std::unordered_map<std::string, Tensor>* output_tensors,
+                 const std::unordered_map<std::string, Tensor>* input_tensors) override;
 };
 
 }  // namespace fastertransformer

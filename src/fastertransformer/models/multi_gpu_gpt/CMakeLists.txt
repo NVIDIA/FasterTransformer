@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -42,8 +42,7 @@ add_library(ParallelGpt STATIC ParallelGpt.cc)
 set_property(TARGET ParallelGpt PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET ParallelGpt PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(ParallelGpt PUBLIC -lcudart ParallelGptDecoder ParallelGptContextDecoder decoding_kernels gpt_kernels
-                        OnlineBeamSearchLayer BeamSearchLayer TopKSamplingLayer TopPSamplingLayer 
-                        TopKTopPSamplingLayer bert_preprocess_kernels ParallelGptWeight)
+                      DynamicDecodeLayer BaseBeamSearchLayer bert_preprocess_kernels ParallelGptWeight custom_ar_comm logprob_kernels)
 
 add_executable(gpt_gemm gpt_gemm.cc)
 target_link_libraries(gpt_gemm PUBLIC -lcudart gpt_gemm_func memory_utils)

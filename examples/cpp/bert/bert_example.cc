@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,8 @@
  */
 
 #include "src/fastertransformer/models/bert/Bert.h"
+#include "src/fastertransformer/utils/logger.h"
+
 using namespace fastertransformer;
 
 template<typename T>
@@ -29,13 +31,14 @@ int bertExample(size_t batch_size,
 int main(int argc, char** argv)
 {
     if (argc != 8 && argc != 9) {
-        printf("[ERROR] bert_example batch_size num_layers seq_len head_num size_per_head is_fp16 is_remove_padding\n");
-        printf("e.g., ./bin/bert_example 32 12 32 12 64 0 0\n");
+        FT_LOG_ERROR("bert_example batch_size num_layers seq_len head_num size_per_head is_fp16 is_remove_padding");
+        FT_LOG_ERROR("e.g., ./bin/bert_example 32 12 32 12 64 0 0");
         return 0;
     }
     bool allow_gemm_test = false;
-    if (argc == 9)
+    if (argc == 9) {
         allow_gemm_test = (atoi(argv[8]) == 1) ? true : false;
+    }
 
     int batch_size = atoi(argv[1]);
     int num_layers = atoi(argv[2]);
@@ -165,13 +168,13 @@ int bertExample(size_t batch_size,
     }
     float total_time = cuda_timer.stop();
 
-    printf("[INFO] batch_size %ld seq_len %ld layer %ld "
-           "FT-CPP-time %.2f ms (%d iterations) \n",
-           batch_size,
-           seq_len,
-           num_layers,
-           total_time / ite,
-           ite);
+    FT_LOG_INFO("batch_size %ld seq_len %ld layer %ld "
+                "FT-CPP-time %.2f ms (%d iterations) ",
+                batch_size,
+                seq_len,
+                num_layers,
+                total_time / ite,
+                ite);
 
 #ifdef SPARSITY_ENABLED
     cusparseLtDestroy(&cusparselt_handle);

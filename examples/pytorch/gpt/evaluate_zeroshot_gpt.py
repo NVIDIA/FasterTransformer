@@ -169,7 +169,7 @@ def process_batch(batch):
     return tokens, labels, attention_mask, position_ids, loss_mask
 
 
-def forward_step(batch, model, eval_metric):
+def forward_step(batch, model, eval_metric, args):
     """Forward step."""
 
     # Get the batch.
@@ -196,8 +196,19 @@ def forward_step(batch, model, eval_metric):
         tmp_start_lengths = torch.min(tmp_length, start_lengths).contiguous()
         
         input_ids = tokens[:,:(i + 1)].contiguous().int()
-        output_id = model(input_ids, tmp_start_lengths)
-        output.append(output_id[:,-1].reshape([-1, 1]))
+        output_id = model(input_ids,
+                          tmp_start_lengths,
+                          1,
+                          args.beam_width,
+                          args.top_k,
+                          args.top_p,
+                          0.0,
+                          1.0,
+                          1.0,
+                          1.0,
+                          0)
+
+        output.append(output_id[:,0,-1].reshape([-1, 1]))
     output = torch.cat((output), 1)
     
     padding = torch.ones(output.shape[0], labels.shape[1] - output.shape[1]).cuda().int()
@@ -224,7 +235,7 @@ def forward_step(batch, model, eval_metric):
     return None
 
 
-def evaluate(data_loader, model, eval_metric):
+def evaluate(data_loader, model, eval_metric, args):
     """Evaluation."""
     args = get_args()
 
@@ -238,7 +249,7 @@ def evaluate(data_loader, model, eval_metric):
             if iteration % args.log_interval == 0:
                 print_rank_0('> working on iteration: {}'.format(iteration))
             # Forward evaluation.
-            output = forward_step(batch, model, eval_metric)
+            output = forward_step(batch, model, eval_metric, args)
 
             # Reduce across processes.
             if mpu.is_pipeline_last_stage():
@@ -250,11 +261,11 @@ def evaluate(data_loader, model, eval_metric):
     return total_output
 
 
-def evaluate_and_print_results(task, data_loader, model, eval_metric):
+def evaluate_and_print_results(task, data_loader, model, eval_metric, args):
     """Evaluate and print results on screen."""
 
     # Evaluate and get results.
-    output = evaluate(data_loader, model, eval_metric)
+    output = evaluate(data_loader, model, eval_metric, args)
 
     string = ' validation results on {} | '.format(task)
     if is_last_rank():
@@ -307,21 +318,24 @@ def main():
     # Set up model and load checkpoint.
     model = GPT(args.num_attention_heads, (int)(args.hidden_size / args.num_attention_heads),
                 args.padded_vocab_size, tokenzier.eod, tokenzier.eod,
-                args.num_layers, args.top_k, args.top_p, 1, 1.0, 1, args.seq_length,
-                1, 1, args.micro_batch_size, 1.0, "lib/libth_gpt.so")
+                args.num_layers, args.seq_length, 1, 1, "lib/libth_gpt.so")
+
     if not model.load(ckpt_path=args.ckpt_path):
         print("[ERROR] Checkpoint file not found at {}.".format(args.ckpt_path))
         exit(-1)
     if args.fp16:
+        assert not args.bf16
         model.half()
-        
+    if args.bf16:
+        assert not args.fp16
+        model.bfloat16()
     # Data stuff.
     dataset = build_dataset(args.task)
     dataloader = build_data_loader(dataset, args.micro_batch_size,
                                    args.num_workers, drop_last=False)
 
     # Run evaluation.
-    evaluate_and_print_results(args.task, dataloader, model, eval_metric)
+    evaluate_and_print_results(args.task, dataloader, model, eval_metric, args)
 
     print_rank_0('done :-)')
 

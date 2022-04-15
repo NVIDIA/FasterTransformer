@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,11 +32,11 @@ void generate_xlnet_gemm_config(int batch_size,
     void* buffer;
     int workSpaceSize;
 
-    int is_fp16 = 0;
-    if (sizeof(T) == sizeof(half))
-        is_fp16 = 1;
-
+#ifdef ENABLE_BF16
+    if (std::is_same<T, half>::value || std::is_same<T, __nv_bfloat16>::value) {
+#else
     if (std::is_same<T, half>::value) {
+#endif  // ENABLE_BF16
         // cublas_workspace_ should be the start pointer of cudaMalloc()
         // to ensure 16B alignemnet
         cublas_workspace = buffer_in;
@@ -227,7 +227,9 @@ void generate_xlnet_gemm_config(int batch_size,
     const int ites = 100;
     struct timeval start, end;
 
-    if (sizeof(T) == sizeof(float)) {
+    CublasDataType data_type;
+    if (std::is_same<T, float>::value) {
+        data_type = FLOAT_DATATYPE;
         AType = CUDA_R_32F;
         BType = CUDA_R_32F;
         CType = CUDA_R_32F;
@@ -235,17 +237,31 @@ void generate_xlnet_gemm_config(int batch_size,
         startAlgo = (int)CUBLAS_GEMM_DEFAULT;
         endAlgo = (int)CUBLAS_GEMM_ALGO23;
     }
-    else {
+    else if (std::is_same<T, half>::value) {
+        data_type = HALF_DATATYPE;
         AType = CUDA_R_16F;
         BType = CUDA_R_16F;
         CType = CUDA_R_16F;
-        computeType = CUDA_R_16F;
+        computeType = CUDA_R_32F;
         startAlgo = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
         endAlgo = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
     }
+#ifdef ENABLE_BF16
+    else if (std::is_same<T, __nv_bfloat16>::value) {
+        data_type = BFLOAT16_DATATYPE;
+        AType = CUDA_R_16BF;
+        BType = CUDA_R_16BF;
+        CType = CUDA_R_16BF;
+        computeType = CUDA_R_32F;
+        startAlgo = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+        endAlgo = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
+    }
+#endif
 
-    T alpha = (T)1.0f;
-    T beta = (T)0.0f;
+    using scaleT = typename ScaleTypeConverter<T, false>::Type;
+
+    scaleT alpha = (scaleT)1.0f;
+    scaleT beta = (scaleT)0.0f;
 
     printf("***Xlnet Gemm Testing Begin***\n");
     printf("***Cublas Gemm Testing Begin***\n");
@@ -317,8 +333,9 @@ void generate_xlnet_gemm_config(int batch_size,
                                                         computeType,
                                                         static_cast<cublasGemmAlgo_t>(algo));
                 }
-                if (status != CUBLAS_STATUS_SUCCESS)
+                if (status != CUBLAS_STATUS_SUCCESS) {
                     break;
+                }
             }
             cudaDeviceSynchronize();
             gettimeofday(&end, NULL);
@@ -333,36 +350,33 @@ void generate_xlnet_gemm_config(int batch_size,
 
         printf("fast_algo %d costs %.3f ms\n", fast_algo, exec_time);
 
-        int is_fp16 = 0;
-        if (sizeof(T) == sizeof(half))
-            is_fp16 = 1;
-        if ((i == 1 || i == 7 || i == 8 || i == 9) && is_fp16 == 1) {
+        if ((i == 1 || i == 7 || i == 8 || i == 9) && data_type != FLOAT_DATATYPE) {
             printf("***cublasLt Gemm Testing Beign***\n");
             // Let try a fixed number of combinations
             int ALGO_COMBINATIONS = 5000;
             customMatmulPerf_t perfResults[ALGO_COMBINATIONS];
 
-            LtHgemmCustomFind<T, T>(ltHandle,
-                                    batch_size,
-                                    seq_len,
-                                    head_num,
-                                    size_per_head,
-                                    n,
-                                    m,
-                                    k,
-                                    &alpha,
-                                    d_B,
-                                    d_A,
-                                    &beta,
-                                    d_C,
-                                    cublas_workspace,
-                                    workSpaceSize,
-                                    fd,
-                                    perfResults,
-                                    ALGO_COMBINATIONS);
+            LtHgemmCustomFind<T, scaleT>(ltHandle,
+                                         batch_size,
+                                         seq_len,
+                                         head_num,
+                                         size_per_head,
+                                         n,
+                                         m,
+                                         k,
+                                         &alpha,
+                                         d_B,
+                                         d_A,
+                                         &beta,
+                                         d_C,
+                                         cublas_workspace,
+                                         workSpaceSize,
+                                         fd,
+                                         perfResults,
+                                         ALGO_COMBINATIONS);
             if (perfResults[0].time < exec_time) {
                 printPerfStructure(
-                    batch_size, seq_len, head_num, size_per_head, n, m, k, perfResults[0], fd, is_fp16, 0);
+                    batch_size, seq_len, head_num, size_per_head, n, m, k, perfResults[0], fd, data_type, 0);
                 exec_time = perfResults[0].time;
             }
             else {
@@ -372,7 +386,7 @@ void generate_xlnet_gemm_config(int batch_size,
                         seq_len,
                         head_num,
                         size_per_head,
-                        is_fp16 ? HALF_DATATYPE : FLOAT_DATATYPE,
+                        data_type,
                         batchCount[i],
                         n,
                         m,
@@ -389,7 +403,7 @@ void generate_xlnet_gemm_config(int batch_size,
                     seq_len,
                     head_num,
                     size_per_head,
-                    is_fp16 ? HALF_DATATYPE : FLOAT_DATATYPE,
+                    data_type,
                     batchCount[i],
                     n,
                     m,
@@ -421,4 +435,15 @@ template void generate_xlnet_gemm_config<half>(int batch_size,
                                                int inter_size_,
                                                void* buffer_in,
                                                bool isAppend);
+#ifdef ENABLE_BF16
+template void generate_xlnet_gemm_config<__nv_bfloat16>(int batch_size,
+                                                        int seq_len,
+                                                        int head_num,
+                                                        int size_per_head,
+                                                        int hidden_units_,
+                                                        int inter_size_,
+                                                        void* buffer_in,
+                                                        bool isAppend);
+#endif
+
 }  // namespace fastertransformer

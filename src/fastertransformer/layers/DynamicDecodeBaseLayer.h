@@ -16,6 +16,9 @@
 
 #pragma once
 
+#include <string>
+#include <unordered_map>
+
 #include "src/fastertransformer/layers/BaseLayer.h"
 
 namespace fastertransformer {
@@ -33,10 +36,12 @@ public:
                            cudaDeviceProp* cuda_device_prop):
         BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, cuda_device_prop){};
     ~DynamicDecodeBaseLayer() = default;
-    DynamicDecodeBaseLayer(DynamicDecodeBaseLayer const& dynmaic_decode_layer): BaseLayer(dynmaic_decode_layer){};
+    DynamicDecodeBaseLayer(DynamicDecodeBaseLayer const& dynamic_decode_layer): BaseLayer(dynamic_decode_layer){};
 
     virtual void forward(std::vector<fastertransformer::Tensor>* output_tensors,
                          const std::vector<fastertransformer::Tensor>* input_tensors) = 0;
+    virtual void forward(std::unordered_map<std::string, Tensor>* output_tensors,
+                         const std::unordered_map<std::string, Tensor>* input_tensors) = 0;
 };
 
 }  // namespace fastertransformer

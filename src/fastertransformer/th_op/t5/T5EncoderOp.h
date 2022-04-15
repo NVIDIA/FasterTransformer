@@ -14,18 +14,7 @@
  * limitations under the License.
  */
 
-#include <cuda_fp16.h>
-#include <iostream>
-#include <nvToolsExt.h>
-#include <vector>
-
-#include "torch/csrc/cuda/Stream.h"
-#include <ATen/cuda/CUDAContext.h>
-#include <torch/custom_class.h>
-#include <torch/script.h>
-
 #include "src/fastertransformer/models/t5/T5Encoder.h"
-#include "src/fastertransformer/th_op/th_traits.h"
 #include "src/fastertransformer/th_op/th_utils.h"
 #include "src/fastertransformer/utils/mpi_utils.h"
 
@@ -58,6 +47,8 @@ public:
                 float q_scaling,
                 int tensor_para_size,
                 int pipeline_para_size,
+                bool t5_with_bias,
+                ft::PositionEmbeddingType position_embedding_type,
                 const std::vector<th::Tensor>& w):
         _head_num(head_num),
         _head_size(head_size),
@@ -68,17 +59,20 @@ public:
         _max_distance(max_distance),
         _weights(w),
         _sparse(sparse),
-        _q_scaling(q_scaling)
+        _q_scaling(q_scaling),
+        _t5_with_bias(t5_with_bias),
+        _position_embedding_type(position_embedding_type)
     {
         tensor_para_.world_size_ = tensor_para_size;
         pipeline_para_.world_size_ = pipeline_para_size;
         init_nccl_comm();
 #ifndef SPARSITY_ENABLED
-        if (sparse)
+        if (sparse) {
             std::cout << "[WARNING] Sparsity support is not enabled. Will use dense GEMM instead.\n" << std::flush;
+        }
 #endif
         int hidden_dim = _head_num * _head_size;
-        check_cuda_error(cublasLtCreate(&_cublasltHandle));
+        ft::check_cuda_error(cublasLtCreate(&_cublasltHandle));
         sm_ = ft::getSMVersion();
 #ifdef SPARSITY_ENABLED
         if (sparse) {
@@ -90,6 +84,7 @@ public:
         cublas_wrapper_mutex_ = new std::mutex();
 
         t5_encoder_weights.resizeLayer(_layer_num);
+        t5_encoder_weights.setT5StructureDiff(t5_with_bias, position_embedding_type);
         for (int i = 0; i < _layer_num; i++) {
             int local_num_layer = (int)(ceil(_layer_num * 1.0f / pipeline_para_.world_size_));
             if (!(i < _layer_num && (i >= local_num_layer * pipeline_para_.rank_)
@@ -114,10 +109,31 @@ public:
                 get_ptr<T>(_weights[6]) + _d_model * _inter_size / tensor_para_.world_size_ * (i - first_layer_index);
             t5_encoder_weights.t5_encoder_layer_weights[i]->ffn_weights.output_weight.kernel =
                 get_ptr<T>(_weights[7]) + _inter_size / tensor_para_.world_size_ * _d_model * (i - first_layer_index);
+            if (_t5_with_bias) {
+                t5_encoder_weights.t5_encoder_layer_weights[i]->attn_layernorm_weights.beta =
+                    get_ptr<T>(_weights[11]) + _d_model * (i - first_layer_index);
+                t5_encoder_weights.t5_encoder_layer_weights[i]->attention_weights.query_weight.bias =
+                    get_ptr<T>(_weights[12]) + hidden_dim / tensor_para_.world_size_ * (i - first_layer_index);
+                t5_encoder_weights.t5_encoder_layer_weights[i]->attention_weights.key_weight.bias =
+                    get_ptr<T>(_weights[13]) + hidden_dim / tensor_para_.world_size_ * (i - first_layer_index);
+                t5_encoder_weights.t5_encoder_layer_weights[i]->attention_weights.value_weight.bias =
+                    get_ptr<T>(_weights[14]) + hidden_dim / tensor_para_.world_size_ * (i - first_layer_index);
+                t5_encoder_weights.t5_encoder_layer_weights[i]->attention_weights.attention_output_weight.bias =
+                    get_ptr<T>(_weights[15]) + _d_model * (i - first_layer_index);
+                t5_encoder_weights.t5_encoder_layer_weights[i]->ffn_layernorm_weights.beta =
+                    get_ptr<T>(_weights[16]) + _d_model * (i - first_layer_index);
+                t5_encoder_weights.t5_encoder_layer_weights[i]->ffn_weights.intermediate_weight.bias =
+                    get_ptr<T>(_weights[17]) + _inter_size / tensor_para_.world_size_ * (i - first_layer_index);
+                t5_encoder_weights.t5_encoder_layer_weights[i]->ffn_weights.output_weight.bias =
+                    get_ptr<T>(_weights[18]) + _d_model * (i - first_layer_index);
+            }
         }
         t5_encoder_weights.post_transformer_layernorm_weights.gamma = get_ptr<T>(_weights[8]);
-        t5_encoder_weights.relative_attention_bias = get_ptr<T>(_weights[9]);
+        t5_encoder_weights.absolute_or_relative_position_embedding = get_ptr<T>(_weights[9]);
         t5_encoder_weights.embedding_table = get_ptr<T>(_weights[10]);
+        if (_t5_with_bias) {
+            t5_encoder_weights.post_transformer_layernorm_weights.beta = get_ptr<T>(_weights[19]);
+        }
 
 #ifdef SPARSITY_ENABLED
         if (sparse) {
@@ -152,6 +168,21 @@ public:
 
     void init_nccl_comm()
     {
+        int mpi_initialized;
+        MPICHECK(MPI_Initialized(&mpi_initialized));
+        if (!mpi_initialized) {
+            printf("[INFO] MPI is not initialized! Skipped the NCCL communication initialization.\n");
+            if (tensor_para_.world_size_ != 1) {
+                printf("[FATAL] MPI initialization can only be skipped when tensor_para_size=1, but got %d!\n",
+                       tensor_para_.world_size_);
+            }
+            if (pipeline_para_.world_size_ != 1) {
+                printf("[FATAL] MPI initialization can only be skipped when pipeline_para_size=1, but got %d!\n",
+                       pipeline_para_.world_size_);
+            }
+            return;
+        }
+
         int rank, world_size;
         MPICHECK(MPI_Comm_rank(MPI_COMM_WORLD, &rank));
         MPICHECK(MPI_Comm_size(MPI_COMM_WORLD, &world_size));
@@ -234,8 +265,7 @@ public:
         auto stream = at::cuda::getCurrentCUDAStream().stream();
         cublasHandle_t _cublasHandle = at::cuda::getCurrentCUDABlasHandle();
         cublasSetStream(_cublasHandle, stream);
-        fastertransformer::Allocator<AllocatorType::TH>* allocator =
-            new fastertransformer::Allocator<AllocatorType::TH>();
+        ft::Allocator<ft::AllocatorType::TH>* allocator = new ft::Allocator<ft::AllocatorType::TH>();
         ft::cublasMMWrapper* cublas_wrapper =
 #ifdef SPARSITY_ENABLED
             new ft::cublasMMWrapper(_cublasHandle,
@@ -259,32 +289,34 @@ public:
 
         ft::AttentionType attention_type = ft::getAttentionType<T>(_head_size, sm_, removing_padding, seq_len, false);
 
-        ft::T5Encoder<T>* t5_encoder = new ft::T5Encoder<T>(batch_size,
-                                                            seq_len,
-                                                            _head_num,
-                                                            _head_size,
-                                                            _inter_size,
-                                                            _d_model,
-                                                            _layer_num,
-                                                            _num_bucket,
-                                                            _max_distance,
-                                                            sm_,
-                                                            _q_scaling,
-                                                            stream,
-                                                            cublas_wrapper,
-                                                            allocator,
-                                                            false,
-                                                            attention_type,
-                                                            _sparse,
-                                                            ft::ActivationType::Relu,
-                                                            ft::LayerNormType::pre_layernorm,
-                                                            tensor_para_,
-                                                            pipeline_para_);
+        ft::T5Encoder<T>* t5_encoder =
+            new ft::T5Encoder<T>(batch_size,
+                                 seq_len,
+                                 _head_num,
+                                 _head_size,
+                                 _inter_size,
+                                 _d_model,
+                                 _layer_num,
+                                 _num_bucket,
+                                 _max_distance,
+                                 sm_,
+                                 _q_scaling,
+                                 stream,
+                                 cublas_wrapper,
+                                 allocator,
+                                 false,
+                                 attention_type,
+                                 _sparse,
+                                 _t5_with_bias ? ft::ActivationType::Gelu : ft::ActivationType::Relu,
+                                 ft::LayerNormType::pre_layernorm,
+                                 tensor_para_,
+                                 pipeline_para_);
 
-        std::vector<ft::Tensor> input_tensors =
-            std::vector<ft::Tensor>{convert_tensor<T>(input_ids), convert_tensor<int>(sequence_lengths)};
+        std::unordered_map<std::string, ft::Tensor> input_tensors = std::unordered_map<std::string, ft::Tensor>{
+            {"input_ids", convert_tensor<T>(input_ids)}, {"sequence_length", convert_tensor<int>(sequence_lengths)}};
 
-        std::vector<ft::Tensor> output_tensors = std::vector<ft::Tensor>{convert_tensor<T>(output)};
+        std::unordered_map<std::string, ft::Tensor> output_tensors =
+            std::unordered_map<std::string, ft::Tensor>{{"output_hidden_state", convert_tensor<T>(output)}};
 
         try {
             t5_encoder->forward(&output_tensors, &input_tensors, &t5_encoder_weights);
@@ -311,6 +343,8 @@ private:
     const int _num_bucket;
     const int _max_distance;
     std::vector<th::Tensor> _weights;
+    bool _t5_with_bias;
+    ft::PositionEmbeddingType _position_embedding_type;
     bool _sparse;
     const float _q_scaling;
     int sm_;
@@ -328,17 +362,26 @@ private:
 
 class FasterTransformerT5Encoder: public th::jit::CustomClassHolder {
 public:
-    FasterTransformerT5Encoder(th::Tensor q_kernel,
+    FasterTransformerT5Encoder(th::Tensor attr_output_layernorm_gamma,
+                               th::Tensor q_kernel,
                                th::Tensor k_kernel,
                                th::Tensor v_kernel,
                                th::Tensor attr_output_kernel,
-                               th::Tensor attr_output_layernorm_gamma,
+                               th::Tensor output_layernorm_gamma,
                                th::Tensor inter_kernel,
                                th::Tensor output_kernel,
-                               th::Tensor output_layernorm_gamma,
                                th::Tensor post_transformer_layernorm_gamma,
-                               th::Tensor relative_attention_bias,
+                               th::Tensor absolute_or_relative_position_embedding,
                                th::Tensor embedding_table,
+                               th::Tensor attr_output_layernorm_beta,
+                               th::Tensor q_bias,
+                               th::Tensor k_bias,
+                               th::Tensor v_bias,
+                               th::Tensor attr_output_bias,
+                               th::Tensor output_layernorm_beta,
+                               th::Tensor inter_bias,
+                               th::Tensor output_bias,
+                               th::Tensor post_transformer_layernorm_beta,
                                int64_t head_num,
                                int64_t head_size,
                                int64_t inter_size,
@@ -350,7 +393,9 @@ public:
                                bool sparse,
                                double q_scaling,
                                int64_t tensor_para_size,
-                               int64_t pipeline_para_size);
+                               int64_t pipeline_para_size,
+                               bool t5_with_bias,
+                               int64_t position_embedding_type);
 
     ~FasterTransformerT5Encoder();
 

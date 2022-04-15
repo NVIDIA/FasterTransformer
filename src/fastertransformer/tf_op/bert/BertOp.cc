@@ -214,11 +214,11 @@ public:
         }
         catch (std::runtime_error& error) {
             std::cout << tf::errors::Internal(error.what());
-            exit(-1);
+            ft::FT_CHECK(false);
         }
         catch (...) {
             std::cout << tf::errors::Internal("Runtime error");
-            exit(-1);
+            ft::FT_CHECK(false);
         }
     }
 

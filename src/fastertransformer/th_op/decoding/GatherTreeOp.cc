@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,7 +19,8 @@
 namespace th = torch;
 
 namespace torch_ext {
-th::Tensor gather_tree(th::Tensor step_ids, th::Tensor parent_ids, th::Tensor max_sequence_lengths, int64_t end_token)
+th::Tensor
+gather_tree(th::Tensor step_ids, th::Tensor parent_ids, th::Tensor max_sequence_lengths, th::Tensor end_tokens)
 {
     CHECK_TH_CUDA(step_ids);
     CHECK_CONTIGUOUS(step_ids);
@@ -43,7 +44,7 @@ th::Tensor gather_tree(th::Tensor step_ids, th::Tensor parent_ids, th::Tensor ma
                                         beam_width,
                                         torch_ext::get_ptr<int>(step_ids),
                                         torch_ext::get_ptr<int>(parent_ids),
-                                        end_token,
+                                        torch_ext::get_ptr<int>(end_tokens),
                                         stream);
 
     return beams;

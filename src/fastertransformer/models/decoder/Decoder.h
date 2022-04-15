@@ -21,9 +21,9 @@
 #include "src/fastertransformer/kernels/add_residual_kernels.h"
 #include "src/fastertransformer/kernels/layernorm_kernels.h"
 #include "src/fastertransformer/layers/BaseLayer.h"
+#include "src/fastertransformer/layers/FfnLayer.h"
 #include "src/fastertransformer/layers/attention_layers/DecoderCrossAttentionLayer.h"
 #include "src/fastertransformer/layers/attention_layers/DecoderSelfAttentionLayer.h"
-#include "src/fastertransformer/layers/FfnLayer.h"
 #include "src/fastertransformer/models/decoder/DecoderLayerWeight.h"
 #include "src/fastertransformer/utils/Tensor.h"
 #include "src/fastertransformer/utils/allocator.h"
@@ -48,18 +48,19 @@ private:
     FfnLayer<T>* ffn_layer_;
 
     void allocateBuffer() override;
+    void allocateBuffer(size_t batch_size);
     void freeBuffer() override;
     bool isValidBatchSize(size_t batch_size);
 
     void initialize();
 
 protected:
-    T* decoder_normed_input_;
-    T* self_attn_output_;
-    T* normed_self_attn_output_;
-    T* cross_attn_output_;
-    T* normed_cross_attn_output_;
-    T* decoder_layer_output_;
+    T* decoder_normed_input_ = nullptr;
+    T* self_attn_output_ = nullptr;
+    T* normed_self_attn_output_ = nullptr;
+    T* cross_attn_output_ = nullptr;
+    T* normed_cross_attn_output_ = nullptr;
+    T* decoder_layer_output_ = nullptr;
 
 public:
     Decoder(size_t max_batch_size,

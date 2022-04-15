@@ -16,10 +16,10 @@
 
 #pragma once
 
+#include "src/fastertransformer/kernels/int8_utils.cuh"
 #include "src/fastertransformer/layers/attention_layers/BaseAttentionLayer.h"
 #include "src/fastertransformer/layers/attention_layers_int8/AttentionINT8Weight.h"
 #include "src/fastertransformer/utils/ScaleList.h"
-#include "src/fastertransformer/kernels/int8_utils.cuh"
 #include "src/fastertransformer/utils/cublasINT8MMWrapper.h"
 
 namespace fastertransformer {
@@ -30,7 +30,7 @@ private:
     // buffer handling
     size_t max_batch_size_ = 0;
     size_t max_seq_len_ = 0;
-    
+
     // metadata
     size_t head_num_;
     size_t size_per_head_;
@@ -52,8 +52,8 @@ private:
     using BaseAttentionLayer<T>::allocator_;
 
 protected:
-    int8_t* q_buf_, *k_buf_, *v_buf_, *qk_buf_, *dst_;
-    int32_t* Q_int_buf_, *V_int_buf_, *K_int_buf_, *qk_int_buf_, *transpose_dst_int_buf_, *sequence_id_map_; 
+    int8_t *q_buf_, *k_buf_, *v_buf_, *qk_buf_, *dst_;
+    int32_t *Q_int_buf_, *V_int_buf_, *K_int_buf_, *qk_int_buf_, *transpose_dst_int_buf_, *sequence_id_map_;
 
 public:
     UnfusedAttentionLayerINT8(size_t max_batch_size,
@@ -66,7 +66,7 @@ public:
                               cublasMMWrapper* cublas_wrapper,
                               IAllocator* allocator,
                               bool is_free_buffer_after_forward,
-                              bool sparse=false);
+                              bool sparse = false);
 
     UnfusedAttentionLayerINT8(UnfusedAttentionLayerINT8<T> const& attention_layer);
 

@@ -18,6 +18,10 @@
 #include "src/fastertransformer/tf_op/BaseOp.h"
 #include "src/fastertransformer/utils/convert_data_type.h"
 
+#ifndef CUDART_VERSION
+#error CUDART_VERSION Undefined!
+#endif
+
 namespace ft = fastertransformer;
 namespace tf = tensorflow;
 
@@ -67,10 +71,12 @@ void quantization_CUBLASLT_ORDER_COL4_4R2_8C(T* dst,
     if (per_channel_quantization) {
         for (int i = 0; i < n; i++) {
             amaxs[i] = fabs(quant_min[i]);
-            if (fabs(quant_max[i]) > amaxs[i])
+            if (fabs(quant_max[i]) > amaxs[i]) {
                 amaxs[i] = fabs(quant_max[i]);
-            if (amaxs[i] > amax_in_all)
+            }
+            if (amaxs[i] > amax_in_all) {
                 amax_in_all = amaxs[i];
+            }
         }
     }
     if (!per_channel_quantization) {
@@ -109,10 +115,12 @@ void quantization_CUBLASLT_ORDER_COL32_2R_4R4(T* dst,
     if (per_channel_quantization) {
         for (int i = 0; i < n; i++) {
             amaxs[i] = fabs(quant_min[i]);
-            if (fabs(quant_max[i]) > amaxs[i])
+            if (fabs(quant_max[i]) > amaxs[i]) {
                 amaxs[i] = fabs(quant_max[i]);
-            if (amaxs[i] > amax_in_all)
+            }
+            if (amaxs[i] > amax_in_all) {
                 amax_in_all = amaxs[i];
+            }
         }
     }
     if (!per_channel_quantization) {
@@ -157,7 +165,7 @@ public:
     {
         OP_REQUIRES_OK(context, context->GetAttr("per_channel_quantization", &per_channel_quantization_));
         use_ORDER_COL32_2R_4R4 = false;
-#ifdef CUDA11_MODE
+#if (CUDART_VERSION >= 11000)
         int device{-1};
         cudaGetDevice(&device);
         cudaDeviceProp props;
@@ -194,12 +202,14 @@ public:
 
         try {
             // TODO: accelerate quantizing weight with CUDA kernel & less call of sess.run in python
-            if (use_ORDER_COL32_2R_4R4)
+            if (use_ORDER_COL32_2R_4R4) {
                 quantization_CUBLASLT_ORDER_COL32_2R_4R4(
                     transform_out, transform_out2, weight_, quant_max_, quant_min_, n, k, per_channel_quantization_);
-            else
+            }
+            else {
                 quantization_CUBLASLT_ORDER_COL4_4R2_8C(
                     transform_out, transform_out2, weight_, quant_max_, quant_min_, n, k, per_channel_quantization_);
+            }
         }
         catch (std::runtime_error& error) {
             std::cout << errors::Internal(error.what());

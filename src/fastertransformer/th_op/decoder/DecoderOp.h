@@ -15,18 +15,6 @@
  */
 
 #include "src/fastertransformer/models/decoder/Decoder.h"
-
-#include <cuda_fp16.h>
-#include <iostream>
-#include <nvToolsExt.h>
-#include <vector>
-
-#include "torch/csrc/cuda/Stream.h"
-#include <ATen/cuda/CUDAContext.h>
-#include <torch/custom_class.h>
-#include <torch/script.h>
-
-#include "src/fastertransformer/th_op/th_traits.h"
 #include "src/fastertransformer/th_op/th_utils.h"
 
 namespace ft = fastertransformer;
@@ -66,7 +54,7 @@ public:
         _mem_hidden_dim(mem_hidden_dim)
     {
         int hidden_dim = _head_num * _head_size;
-        check_cuda_error(cublasLtCreate(&_cublasltHandle));
+        ft::check_cuda_error(cublasLtCreate(&_cublasltHandle));
         cublas_algo_map_ = new ft::cublasAlgoMap("gemm_config.in");
 
         cublas_wrapper_mutex_ = new std::mutex();
@@ -135,8 +123,7 @@ public:
         auto stream = at::cuda::getCurrentCUDAStream().stream();
         cublasHandle_t _cublasHandle = at::cuda::getCurrentCUDABlasHandle();
         cublasSetStream(_cublasHandle, stream);
-        fastertransformer::Allocator<AllocatorType::TH>* allocator =
-            new fastertransformer::Allocator<AllocatorType::TH>();
+        ft::Allocator<ft::AllocatorType::TH>* allocator = new ft::Allocator<ft::AllocatorType::TH>();
         ft::cublasMMWrapper* cublas_wrapper = new ft::cublasMMWrapper(
             _cublasHandle, _cublasltHandle, stream, cublas_algo_map_, cublas_wrapper_mutex_, allocator);
 
@@ -147,17 +134,21 @@ public:
             cublas_wrapper->setFP32GemmConfig();
         }
 
-        ft::Decoder<T> decoder = ft::Decoder<T>(
+        ft::Decoder<T>* decoder = new ft::Decoder<T>(
             batch_size, _head_num, _head_size, _inter_size, _layer_num, stream, cublas_wrapper, allocator, true);
 
         int tmp_step = step + 1;
-        std::vector<ft::Tensor> input_tensors =
-            std::vector<ft::Tensor>{convert_tensor<T>(from_tensor),
-                                    convert_tensor<T>(memory_tensor),
-                                    convert_tensor<int>(memory_sequence_length),
-                                    ft::Tensor{ft::MEMORY_GPU, ft::TYPE_BOOL, {batch_size}, nullptr},
-                                    ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, {1}, &tmp_step},
-                                    convert_tensor<int>(sequence_length)};
+        std::vector<ft::Tensor> input_tensors = std::vector<ft::Tensor>{
+            convert_tensor<T>(from_tensor),
+            convert_tensor<T>(memory_tensor),
+            convert_tensor<int>(memory_sequence_length),
+            ft::Tensor{ft::MEMORY_GPU, ft::TYPE_BOOL, {batch_size}, nullptr},
+            ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, {1}, &tmp_step},
+            convert_tensor<int>(sequence_length),
+            ft::Tensor{ft::MEMORY_GPU,
+                       ft::TYPE_INT32,
+                       {batch_size, 1, (size_t)tmp_step},
+                       nullptr}};  // Since we do gather in the Framework, we don't need id of indirection buffer
 
         std::vector<ft::Tensor> output_tensors = std::vector<ft::Tensor>{convert_tensor<T>(output_tensor),
                                                                          convert_tensor<T>(self_cache_keys_tensor),
@@ -166,7 +157,7 @@ public:
                                                                          convert_tensor<T>(memory_cache_values_tensor)};
 
         try {
-            decoder.forward(&output_tensors, &input_tensors, &decoder_layer_weights);
+            decoder->forward(&output_tensors, &input_tensors, &decoder_layer_weights);
         }
         catch (std::runtime_error& error) {
             std::cout << error.what();
@@ -176,6 +167,7 @@ public:
             std::cout << "Runtime error";
             exit(-1);
         }
+        delete decoder;
         delete cublas_wrapper;
         delete allocator;
     }

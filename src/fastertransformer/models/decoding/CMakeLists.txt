@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,8 +18,7 @@ add_library(Decoding STATIC Decoding.cc)
 set_property(TARGET Decoding PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET Decoding PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(Decoding PUBLIC -lcublas -lcudart -lcurand Decoder decoding_kernels
-                        OnlineBeamSearchLayer BeamSearchLayer TopKSamplingLayer TopPSamplingLayer
-                        TopKTopPSamplingLayer)
+                        BeamSearchLayer DynamicDecodeLayer)
 
 add_executable(decoding_gemm decoding_gemm.cc)
 target_link_libraries(decoding_gemm PUBLIC -lcublas -lcublasLt -lcudart decoding_gemm_func memory_utils)

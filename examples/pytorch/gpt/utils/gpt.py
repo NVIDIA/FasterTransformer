@@ -1,4 +1,4 @@
-# Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@ import torch.distributed as dist
 class GPTWeights(object):
     def __init__(self, head_num, size_per_head, layer_num, vocab_size, max_seq_len, tensor_para_size, pipeline_para_size, int8_mode = 0):
         assert(head_num % tensor_para_size == 0)
-        
+
         if int8_mode != 0:
             self.weight_transpose_calibrate_quantize = torch.ops.fastertransformer.weight_transpose_calibrate_quantize
 
@@ -48,7 +48,7 @@ class GPTWeights(object):
         self.local_hidden_units = local_hidden_units
         self.global_hidden_units = global_hidden_units
         self.local_inter_size = local_inter_size
-        
+
         self.int8_mode = int8_mode
 
         self.w = []
@@ -86,8 +86,8 @@ class GPTWeights(object):
             self.scale.extend([torch.zeros(local_inter_size, dtype=torch.float)] * layer_num)   # ffn_scale1
             self.int8_w.extend([torch.zeros(local_inter_size, global_hidden_units, dtype=torch.int8)] * layer_num)   # ffn_int8_kernel2
             self.scale.extend([torch.zeros(global_hidden_units, dtype=torch.float)] * layer_num)   # ffn_scale2
-            
-            
+
+
 
     def __getitem__(self, idx):
         return self.w[idx]
@@ -111,14 +111,14 @@ class GPTWeights(object):
             if isinstance(self.int8_w[i], list):
                 for j in range(len(self.int8_w[i])):
                     self.int8_w[i][j] = func(self.int8_w[i][j])
-                    
+
             else:
                 self.int8_w[i] = func(self.int8_w[i])
         for i in range(len(self.scale)):
             if isinstance(self.scale[i], list):
                 for j in range(len(self.scale[i])):
                     self.scale[i][j] = func(self.scale[i][j])
-                    
+
             else:
                 self.scale[i] = func(self.scale[i])
 
@@ -162,7 +162,6 @@ class GPTWeights(object):
                                ).reshape(-1, self.global_hidden_units)
         assert self.max_seq_len <= wpe.size(
             0), "max_seq_len must not exceed the value of maximum sequence length during traning."
-        wpe = wpe[:self.max_seq_len]  # excludes weights not to really use.
         w.append(wpe)
         w.append(torch.from_numpy(np.fromfile(ckpt_path + "/model.wte.bin", dtype=np.single)))
         w.append(torch.from_numpy(np.fromfile(ckpt_path + "/model.wte.bin", dtype=np.single)))
@@ -185,7 +184,7 @@ class GPTWeights(object):
                 self.int8_w[i + 1*layer_num], self.scale[i + 1*layer_num] = self.weight_transpose_calibrate_quantize(self.w[4*layer_num + i])
                 self.int8_w[i + 2*layer_num], self.scale[i + 2*layer_num] = self.weight_transpose_calibrate_quantize(self.w[8*layer_num + i])
                 self.int8_w[i + 3*layer_num], self.scale[i + 3*layer_num] = self.weight_transpose_calibrate_quantize(self.w[10*layer_num + i])
-                
+
         return True
 
 
@@ -193,32 +192,19 @@ class GPT(nn.Module):
     def __init__(self,
                  head_num, size_per_head,
                  vocab_size, start_id, end_id, layer_num,
-                 top_k, top_p, random_seed, temperature,
-                 output_len, max_seq_len,
+                 max_seq_len,
                  tensor_para_size, pipeline_para_size,
-                 max_batch_size,
-                 repetition_penalty,
                  lib_path,
 				 int8_mode = 0):
         super().__init__()
-        self.beam_width = 1
         self.head_num = head_num
         self.size_per_head = size_per_head
         self.vocab_size = vocab_size
         self.start_id = start_id
         self.end_id = end_id
         self.layer_num = layer_num
-        self.beam_search_diversity_rate = 0.0
-        self.top_k = top_k
-        self.top_p = top_p
-        self.random_seed = random_seed
-        self.temperature = temperature
-        self.output_len = output_len
-        self.max_seq_len = max_seq_len
         self.tensor_para_size = tensor_para_size
         self.pipeline_para_size = pipeline_para_size
-        self.max_batch_size = max_batch_size
-        self.repetition_penalty = repetition_penalty
         self.use_sparse_gemm = False
         self.build_model = False
         self.int8_mode = int8_mode
@@ -233,7 +219,7 @@ class GPT(nn.Module):
 
         # Prepare weights
         self.weights = GPTWeights(head_num, size_per_head, layer_num, vocab_size,
-                                  max_seq_len, tensor_para_size, pipeline_para_size, 
+                                  max_seq_len, tensor_para_size, pipeline_para_size,
                                   int8_mode)
 
         # Prepare for tensor/pipeline parallel
@@ -265,6 +251,10 @@ class GPT(nn.Module):
         self.weights._map(lambda w: w.half())
         self.cuda()
 
+    def bfloat16(self):
+        self.weights._map(lambda w: w.bfloat16())
+        self.cuda()
+
     def sparse(self):
         if not self.use_sparse_gemm:
             self.use_sparse_gemm = True
@@ -274,38 +264,60 @@ class GPT(nn.Module):
         self.weights._map(lambda w: w.cuda(self.device))
         if self.int8_mode != 0:
             self.weights._map_int8(lambda w: w.cuda(self.device))
-            
+
         if self.build_model:
             del self.model
             self.build_model = False
-        self.model = torch.classes.FasterTransformer.GptOp(
-            self.max_batch_size,
-            self.max_seq_len, self.beam_width,
-            self.head_num, self.size_per_head, 4 * self.head_num * self.size_per_head,
-            self.layer_num, self.vocab_size, self.start_id, self.end_id,
-            self.beam_search_diversity_rate, self.top_k, self.top_p, self.random_seed, self.temperature, 1.0,
-            self.repetition_penalty,
-            self.use_sparse_gemm,
-            self.weights.w)
+        self.model = torch.classes.FasterTransformer.GptOp(self.head_num, self.size_per_head, 4 * self.head_num * self.size_per_head,
+                                                           self.layer_num, self.vocab_size, self.start_id, self.end_id,
+                                                           self.use_sparse_gemm, self.weights.w)
         self.build_model = True
 
-    def forward(self, start_ids, start_lengths, batch_first=True):
+    def forward(self,
+                start_ids,
+                start_lengths,
+                output_len,
+                beam_width=1,
+                top_k=1,
+                top_p=0.0,
+                beam_search_diversity_rate=0.0,
+                temperature=1.0,
+                len_penalty=1.0,
+                repetition_penalty=1.0,
+                random_seed=0,
+                return_output_length=False,
+                return_cum_log_probs=0):
         if not self.build_model:
             self.cuda()
-        batch_size = start_ids.size(0)
-        assert batch_size <= self.max_batch_size, "batch_size must not exceed max_batch_size."
-
         input_len = start_ids.size(1)
         assert input_len > 0, "input len must be larger than zero. For an unconditional case, use start_id as the first token."
-        assert input_len + self.output_len <= self.max_seq_len, "input_len + output_len must not exceed max_seq_len."
 
         # Inputs to device
         start_ids = start_ids.cuda(self.device)
         start_lengths = start_lengths.cuda(self.device)
-
-        output_ids, output_lengths = self.model.forward(start_ids, start_lengths, self.output_len)
-        output_ids = output_ids.reshape((batch_size * self.beam_width, -1))
-        if self.rank == 0:
+        # outputs: output_ids, output_lengths, output_cum_log_probs (optional)
+        outputs = self.model.forward(start_ids,
+                                     start_lengths,
+                                     output_len,
+                                     beam_width,
+                                     top_k,
+                                     top_p,
+                                     beam_search_diversity_rate,
+                                     temperature,
+                                     len_penalty,
+                                     repetition_penalty,
+                                     random_seed,
+                                     return_cum_log_probs)
+        if return_cum_log_probs == 0:
+            output_ids, output_lengths = outputs
+        else:
+            output_ids, output_lengths, output_cum_log_probs = outputs
+        if return_output_length:
+            if return_cum_log_probs > 0:
+                return output_ids, output_lengths, output_cum_log_probs
+            else:
+                return output_ids, output_lengths
+        else:
             return output_ids
 
     def set_input_tensor(self, input_tensor):

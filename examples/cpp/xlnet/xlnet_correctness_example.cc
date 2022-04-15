@@ -18,7 +18,6 @@
 #include "src/fastertransformer/models/xlnet/Xlnet.h"
 using namespace fastertransformer;
 using namespace std;
-//#include <sstream>
 #include <iomanip>
 
 template<typename T>

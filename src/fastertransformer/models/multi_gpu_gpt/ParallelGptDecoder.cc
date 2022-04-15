@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -21,32 +21,34 @@ namespace fastertransformer {
 template<typename T>
 void ParallelGptDecoder<T>::initialize()
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     self_attention_layer_ = new TensorParallelDecoderSelfAttentionLayer<T>(max_batch_size_,
                                                                            head_num_,
                                                                            size_per_head_,
-                                                                           tensor_para_size_,
-                                                                           tensor_para_comm_,
+                                                                           tensor_para_,
                                                                            stream_,
                                                                            cublas_wrapper_,
                                                                            allocator_,
                                                                            is_free_buffer_after_forward_,
                                                                            sparse_,
-                                                                           int8_mode_);
+                                                                           int8_mode_,
+                                                                           custom_all_reduce_comm_,
+                                                                           enable_custom_all_reduce_);
 
     ffn_layer_ = new TensorParallelGeluFfnLayer<T>(max_batch_size_,
                                                    1,
                                                    head_num_,
                                                    size_per_head_,
                                                    inter_size_,
-                                                   tensor_para_size_,
-                                                   tensor_para_comm_,
+                                                   tensor_para_,
                                                    stream_,
                                                    cublas_wrapper_,
                                                    allocator_,
                                                    is_free_buffer_after_forward_,
                                                    sparse_,
-                                                   int8_mode_);
-    allocateBuffer();
+                                                   int8_mode_,
+                                                   custom_all_reduce_comm_,
+                                                   enable_custom_all_reduce_);
 }
 
 template<typename T>
@@ -55,18 +57,16 @@ ParallelGptDecoder<T>::ParallelGptDecoder(size_t max_batch_size,
                                           size_t size_per_head,
                                           size_t inter_size,
                                           size_t num_layer,
-                                          size_t tensor_para_size,
-                                          size_t tensor_para_rank,
-                                          ncclComm_t tensor_para_comm,
-                                          size_t layer_para_size,
-                                          size_t layer_para_rank,
-                                          ncclComm_t layer_para_comm,
+                                          NcclParam tensor_para,
+                                          NcclParam pipeline_para,
                                           cudaStream_t stream,
                                           cublasMMWrapper* cublas_wrapper,
                                           IAllocator* allocator,
                                           bool is_free_buffer_after_forward,
                                           bool sparse,
-                                          int int8_mode):
+                                          int int8_mode,
+                                          std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
+                                          int enable_custom_all_reduce):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, nullptr, sparse),
     max_batch_size_(max_batch_size),
     head_num_(head_num),
@@ -74,13 +74,11 @@ ParallelGptDecoder<T>::ParallelGptDecoder(size_t max_batch_size,
     inter_size_(inter_size),
     num_layer_(num_layer),
     hidden_units_(head_num_ * size_per_head_),
-    tensor_para_size_(tensor_para_size),
-    tensor_para_rank_(tensor_para_rank),
-    tensor_para_comm_(tensor_para_comm),
-    layer_para_size_(layer_para_size),
-    layer_para_rank_(layer_para_rank),
-    layer_para_comm_(layer_para_comm),
-    int8_mode_(int8_mode)
+    tensor_para_(tensor_para),
+    pipeline_para_(pipeline_para),
+    int8_mode_(int8_mode),
+    custom_all_reduce_comm_(custom_all_reduce_comm),
+    enable_custom_all_reduce_(enable_custom_all_reduce)
 {
     initialize();
 }
@@ -99,13 +97,11 @@ ParallelGptDecoder<T>::ParallelGptDecoder(ParallelGptDecoder<T> const& decoder):
     inter_size_(decoder.inter_size_),
     num_layer_(decoder.num_layer_),
     hidden_units_(decoder.hidden_units_),
-    tensor_para_size_(decoder.tensor_para_size_),
-    tensor_para_rank_(decoder.tensor_para_rank_),
-    tensor_para_comm_(decoder.tensor_para_comm_),
-    layer_para_size_(decoder.layer_para_size_),
-    layer_para_rank_(decoder.layer_para_rank_),
-    layer_para_comm_(decoder.layer_para_comm_),
-    int8_mode_(decoder.int8_mode_)
+    tensor_para_(decoder.tensor_para_),
+    pipeline_para_(decoder.pipeline_para_),
+    int8_mode_(decoder.int8_mode_),
+    custom_all_reduce_comm_(decoder.custom_all_reduce_comm_),
+    enable_custom_all_reduce_(decoder.enable_custom_all_reduce_)
 {
     initialize();
 }
@@ -113,6 +109,7 @@ ParallelGptDecoder<T>::ParallelGptDecoder(ParallelGptDecoder<T> const& decoder):
 template<typename T>
 void ParallelGptDecoder<T>::allocateBuffer()
 {
+    FT_CHECK(false);
     if (is_allocate_buffer_ == false) {
         decoder_layer_output_ =
             reinterpret_cast<T*>(allocator_->malloc(sizeof(T) * max_batch_size_ * hidden_units_, false));
@@ -127,9 +124,25 @@ void ParallelGptDecoder<T>::allocateBuffer()
 }
 
 template<typename T>
+void ParallelGptDecoder<T>::allocateBuffer(size_t batch_size)
+{
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    decoder_layer_output_ = reinterpret_cast<T*>(
+        allocator_->reMalloc(decoder_layer_output_, sizeof(T) * batch_size * hidden_units_, false));
+    decoder_normed_input_ = reinterpret_cast<T*>(
+        allocator_->reMalloc(decoder_normed_input_, sizeof(T) * batch_size * hidden_units_, false));
+    self_attn_output_ =
+        reinterpret_cast<T*>(allocator_->reMalloc(self_attn_output_, sizeof(T) * batch_size * hidden_units_, false));
+    normed_self_attn_output_ = reinterpret_cast<T*>(
+        allocator_->reMalloc(normed_self_attn_output_, sizeof(T) * batch_size * hidden_units_, false));
+    is_allocate_buffer_ = true;
+}
+
+template<typename T>
 void ParallelGptDecoder<T>::freeBuffer()
 {
-    if (is_allocate_buffer_ == true) {
+    if (is_allocate_buffer_) {
+        FT_LOG_DEBUG(__PRETTY_FUNCTION__);
         allocator_->free(decoder_layer_output_);
         allocator_->free(decoder_normed_input_);
         allocator_->free(self_attn_output_);
@@ -154,30 +167,30 @@ bool ParallelGptDecoder<T>::isValidBatchSize(size_t batch_size)
 template<typename T>
 bool ParallelGptDecoder<T>::isValidLayerParallelId(uint l)
 {
-    int local_num_layer = (int)(ceil(num_layer_ * 1.0f / layer_para_size_));
-    return l < num_layer_ && (l >= local_num_layer * layer_para_rank_)
-           && (l < local_num_layer * (layer_para_rank_ + 1));
+    int local_num_layer = (int)(ceil(num_layer_ * 1.0f / pipeline_para_.world_size_));
+    return l < num_layer_ && (l >= local_num_layer * pipeline_para_.rank_)
+           && (l < local_num_layer * (pipeline_para_.rank_ + 1));
 }
 
 template<typename T>
 bool ParallelGptDecoder<T>::isFirstLayerParallelId(uint l)
 {
-    int local_num_layer = (int)(ceil(num_layer_ * 1.0f / layer_para_size_));
-    return l < num_layer_ && (l == local_num_layer * layer_para_rank_);
+    int local_num_layer = (int)(ceil(num_layer_ * 1.0f / pipeline_para_.world_size_));
+    return l < num_layer_ && (l == local_num_layer * pipeline_para_.rank_);
 }
 
 template<typename T>
 bool ParallelGptDecoder<T>::isLastLayerParallelId(uint l)
 {
-    int local_num_layer = (int)(ceil(num_layer_ * 1.0f / layer_para_size_));
-    return l < num_layer_ && (l == local_num_layer * (layer_para_rank_ + 1) - 1);
+    int local_num_layer = (int)(ceil(num_layer_ * 1.0f / pipeline_para_.world_size_));
+    return l < num_layer_ && (l == local_num_layer * (pipeline_para_.rank_ + 1) - 1);
 }
 
 template<typename T>
 int ParallelGptDecoder<T>::getFirstLayerParallelId()
 {
-    int local_num_layer = (int)(ceil(num_layer_ * 1.0f / layer_para_size_));
-    return local_num_layer * layer_para_rank_;
+    int local_num_layer = (int)(ceil(num_layer_ * 1.0f / pipeline_para_.world_size_));
+    return local_num_layer * pipeline_para_.rank_;
 }
 
 template<typename T>
@@ -201,19 +214,22 @@ void ParallelGptDecoder<T>::forward(std::vector<Tensor>* output_tensors,
     //      max_input_length [1] on cpu
     //      step [1] on cpu
     //      ite [1] on cpu
+    //      cache_indirection [local_batch_size / beam_width, beam_width, max_seq_len]
+    //              Here, local_batch_size contains the beam_width, so local_batch_size / beam_width
+    //              is real local_batch_size.
 
     // output tensors:
     //      decoder_output [local_batch_size, hidden_dimension],
     //      key_cache [num_layer, batch_size, head_num, size_per_head // x, max_seq_len, x]
     //      value_cache [num_layer, batch_size, head_num, max_seq_len, size_per_head]
 
-    FT_CHECK(input_tensors->size() == 7);
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    FT_CHECK(input_tensors->size() == 8);
     FT_CHECK(output_tensors->size() == 3);
-    isValidBatchSize(input_tensors->at(0).shape[0]);
-    allocateBuffer();
+    const size_t local_batch_size = input_tensors->at(0).shape[0];
+    allocateBuffer(local_batch_size);
 
     const DataType data_type = getTensorType<T>();
-    const size_t local_batch_size = input_tensors->at(0).shape[0];
     const int ite = *((int*)(input_tensors->at(6).data));
 
     std::vector<size_t> self_k_cache_size;
@@ -234,21 +250,21 @@ void ParallelGptDecoder<T>::forward(std::vector<Tensor>* output_tensors,
         T* decoder_input = (T*)((l == 0) ? input_tensors->at(0).data : decoder_layer_output_);
         T* decoder_output = (T*)((l == num_layer_ - 1) ? output_tensors->at(0).data : decoder_layer_output_);
 
-        if (isFirstLayerParallelId(l) == true && layer_para_rank_ != 0 && layer_para_size_ > 1) {
-            // ftNcclRecv(decoder_input, local_batch_size * hidden_units_, layer_para_rank_ - 1, layer_para_comm_,
+        if (isFirstLayerParallelId(l) == true && pipeline_para_.rank_ != 0 && pipeline_para_.world_size_ > 1) {
+            // ftNcclRecv(decoder_input, local_batch_size * hidden_units_, pipeline_para_.rank_ - 1, pipeline_para_,
             // stream_);
 
-            ftNcclRecv(decoder_input + local_batch_size * hidden_units_ / tensor_para_size_ * tensor_para_rank_,
-                       local_batch_size * hidden_units_ / tensor_para_size_,
-                       layer_para_rank_ - 1,
-                       layer_para_comm_,
+            ftNcclRecv(decoder_input + local_batch_size * hidden_units_ / tensor_para_.world_size_ * tensor_para_.rank_,
+                       local_batch_size * hidden_units_ / tensor_para_.world_size_,
+                       pipeline_para_.rank_ - 1,
+                       pipeline_para_,
                        stream_);
-            if (tensor_para_size_ > 1) {
+            if (tensor_para_.world_size_ > 1) {
                 ftNcclAllGather(decoder_input,
                                 decoder_input,
-                                local_batch_size * hidden_units_ / tensor_para_size_,
-                                tensor_para_rank_,
-                                tensor_para_comm_,
+                                local_batch_size * hidden_units_ / tensor_para_.world_size_,
+                                tensor_para_.rank_,
+                                tensor_para_,
                                 stream_);
             }
         }
@@ -278,7 +294,8 @@ void ParallelGptDecoder<T>::forward(std::vector<Tensor>* output_tensors,
             input_tensors->at(2),
             input_tensors->at(3),
             input_tensors->at(4),
-            input_tensors->at(5)};
+            input_tensors->at(5),
+            input_tensors->at(7)};
 
         std::vector<Tensor> self_attention_output_tensors{
             Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, self_attn_output_},
@@ -299,6 +316,7 @@ void ParallelGptDecoder<T>::forward(std::vector<Tensor>* output_tensors,
             local_batch_size,
             hidden_units_,
             stream_);
+
         sync_check_cuda_error();
 
         std::vector<Tensor> ffn_input_tensors{
@@ -314,14 +332,14 @@ void ParallelGptDecoder<T>::forward(std::vector<Tensor>* output_tensors,
                               stream_);
         sync_check_cuda_error();
 
-        if (isLastLayerParallelId(l) == true && layer_para_rank_ != layer_para_size_ - 1 && layer_para_size_ > 1) {
-            // ftNcclSend(decoder_output, local_batch_size * hidden_units_, layer_para_rank_ + 1, layer_para_comm_,
-            // stream_);
+        if (isLastLayerParallelId(l) == true && pipeline_para_.rank_ != pipeline_para_.world_size_ - 1
+            && pipeline_para_.world_size_ > 1) {
 
-            ftNcclSend(decoder_output + local_batch_size * hidden_units_ / tensor_para_size_ * tensor_para_rank_,
-                       local_batch_size * hidden_units_ / tensor_para_size_,
-                       layer_para_rank_ + 1,
-                       layer_para_comm_,
+            ftNcclSend(decoder_output
+                           + local_batch_size * hidden_units_ / tensor_para_.world_size_ * tensor_para_.rank_,
+                       local_batch_size * hidden_units_ / tensor_para_.world_size_,
+                       pipeline_para_.rank_ + 1,
+                       pipeline_para_,
                        stream_);
         }
     }
@@ -333,5 +351,8 @@ void ParallelGptDecoder<T>::forward(std::vector<Tensor>* output_tensors,
 
 template class ParallelGptDecoder<float>;
 template class ParallelGptDecoder<half>;
+#ifdef ENABLE_BF16
+template class ParallelGptDecoder<__nv_bfloat16>;
+#endif
 
 }  // namespace fastertransformer

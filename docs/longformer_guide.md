@@ -46,9 +46,9 @@ In this demo, you can run the longformer as a Pytorch OP.
 ### Requirements
 
 - CMake >= 3.13 for PyTorch
-- CUDA 10.1 or newer version
-- Python 3
-- PyTorch >= 1.4.0
+- CUDA 11.0 or newer version
+- Python 3 is recommended because some features are not supported in python 2
+- PyTorch: Verify on 1.8.0, >= 1.5.0 should work.
 
 These components are readily available within the NGC PyTorch Docker image below.
 

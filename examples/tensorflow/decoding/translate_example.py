@@ -12,7 +12,7 @@ prefetching, token-based batching, gradients accumulation, beam search, etc.
 Currently, the beam search part is not easily customizable. This is expected to
 be improved for TensorFlow 2.0 which is eager first.
 
-# Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -92,6 +92,7 @@ def translate(args_dict):
     sampling_topk = args_dict['sampling_topk']
     sampling_topp = args_dict['sampling_topp']
     tf_datatype = tf.float32
+    max_ite = args_dict['max_iteration']
     if args_dict['data_type'] == "fp16":
         tf_datatype = tf.float16
     
@@ -341,6 +342,8 @@ def translate(args_dict):
 
                     if translation_result_list[i].name == "tf-decoding-sampling-for-warmup" and translation_result_list[i].batch_num > 20:
                         break
+                    if translation_result_list[i].batch_num >= max_ite: 
+                        break
                 except tf.errors.OutOfRangeError:
                     break
             t2 = datetime.now()
@@ -403,8 +406,9 @@ def main():
                         help='Probability (p) value of top p sampling in decoding. Default is 0.0. ')
     parser.add_argument('-d', '--data_type', type=str, default="fp32", metavar='STRING',
                         help='data type (default: fp32)', choices=['fp32', 'fp16'])
+    parser.add_argument('-max_ite', '--max_iteration', type=int, default=100000, metavar='NUMBER',
+                        help='Maximum iteraiton for translation, default is 100000 (as large as possible to run all test set).')
     args = parser.parse_args()
-
     translate(vars(args))
 
 # example script

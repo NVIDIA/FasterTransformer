@@ -145,18 +145,18 @@ void invokeApplyRepetitionPenalty(T* logits,
 {
     dim3 block(min(512, step));
     dim3 grid((int)(local_batch_size));
-    applyRepetitionPenalty<T><<<grid, block, step*(sizeof(float) + sizeof(int)), stream>>>(logits,
-                                                                                           penalty,
-                                                                                           start_ids,
-                                                                                           output_ids,
-                                                                                           batch_size,
-                                                                                           local_batch_size,
-                                                                                           vocab_size,
-                                                                                           vocab_size_padd,
-                                                                                           input_lengths,
-                                                                                           max_input_len,
-                                                                                           step,
-                                                                                           ite);
+    applyRepetitionPenalty<T><<<grid, block, step * (sizeof(float) + sizeof(int)), stream>>>(logits,
+                                                                                             penalty,
+                                                                                             start_ids,
+                                                                                             output_ids,
+                                                                                             batch_size,
+                                                                                             local_batch_size,
+                                                                                             vocab_size,
+                                                                                             vocab_size_padd,
+                                                                                             input_lengths,
+                                                                                             max_input_len,
+                                                                                             step,
+                                                                                             ite);
 }
 
 template void invokeApplyRepetitionPenalty(float* logits,

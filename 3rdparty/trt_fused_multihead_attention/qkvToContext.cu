@@ -147,6 +147,56 @@ public:
         params.o_stride_in_bytes = interface->mNumHeads * interface->mHeadSize * sizeof(half);
     }
 
+    void setup(const int S, const int B, const int window_num)
+    {
+        // TODO these implementation details might be better centralized into the XMMA code, since they are needed in
+        // several places (also outside of this plugin)
+        size_t warps_m = 2, warps_n = 2, warps_k = 1;
+        if (S == 64 || S == 128) {
+            warps_m = 2;
+            warps_n = 2;
+        }
+        else if (S == 256) {
+            warps_m = 1;
+            warps_n = 4;
+        }
+        else if (S == 384) {
+            warps_m = 1;
+            warps_n = 8;
+        }
+        else {
+            assert(false && "Unsupporte seqlen");
+        }
+        // The number of threads per CTA.
+        threads_per_cta = warps_m * warps_n * warps_k * 32;
+        // The number of xmmas in the M dimension. We use one uint32_t per XMMA in the M dimension.
+        xmmas_m = (S + 16 * warps_m - 1) / (16 * warps_m);
+        // The number of xmmas in the N dimension.
+        xmmas_n = (S + 16 * warps_n - 1) / (16 * warps_n);
+
+        const float scale_bmm1 = interface->mRsqrtHeadSize;
+        const float scale_softmax = 1.f;  // Seems to be only required for int8
+        const float scale_bmm2 = 1.f;
+
+        Data_type scale_type = DATA_TYPE_FP16;
+        set_alpha(params.scale_bmm1, scale_bmm1, scale_type);
+        set_alpha(params.scale_softmax, scale_softmax, scale_type);
+        set_alpha(params.scale_bmm2, scale_bmm2, scale_type);
+
+        params.b = B;
+        params.h = interface->mNumHeads;
+        params.s = S;
+        params.d = interface->mHeadSize;
+        params.window_num = window_num;
+
+        // mLdQKV = 3 * B * mNumHeads * mHeadSize;
+        // mLdOut = B * mNumHeads * mHeadSize;
+
+        params.qkv_stride_in_bytes = 3 * interface->mNumHeads * interface->mHeadSize * sizeof(half);
+        params.packed_mask_stride_in_bytes = S * sizeof(half);
+        params.o_stride_in_bytes = interface->mNumHeads * interface->mHeadSize * sizeof(half);
+    }
+
     void run(const void* qkvPtr, const void* maskPtr, const void* cuSeqlenPtr, void* output, void* workspace, cudaStream_t stream)
     {
         params.qkv_ptr = const_cast<void*>(qkvPtr);
@@ -156,6 +206,29 @@ public:
         params.o_ptr = output;
 
         params.cu_seqlens = static_cast<int*>(const_cast<void*>(cuSeqlenPtr));
+        xmmaKernel->run(params, stream);
+        check_cuda_error(cudaPeekAtLastError());
+    }
+
+    void run(const void* qkvPtr,
+             const void* maskPtr,
+             const void* relative_position_bias,
+             const int actual_seqlen,
+             void* output,
+             void* workspace,
+             cudaStream_t stream)
+    {
+        params.qkv_ptr = const_cast<void*>(qkvPtr);
+
+        params.packed_mask_ptr = const_cast<void*>(maskPtr);
+
+        params.packed_relative_position_bias_ptr = const_cast<void*>(relative_position_bias);
+
+        params.o_ptr = output;
+
+        params.actual_seqlen = actual_seqlen;
+
+        params.cu_seqlens = nullptr;
         xmmaKernel->run(params, stream);
         check_cuda_error(cudaPeekAtLastError());
     }
@@ -218,6 +291,12 @@ void FusedMHARunnerFP16v2::setup(const int S, const int B)
     pimpl->setup(S, B);
 }
 
+void FusedMHARunnerFP16v2::setup(const int S, const int B, const int window_num)
+{
+    MHARunner::setup(S, B, window_num);
+    pimpl->setup(S, B, window_num);
+}
+
 size_t FusedMHARunnerFP16v2::getWorkspaceSize() const
 {
     return 0;
@@ -231,6 +310,17 @@ void FusedMHARunnerFP16v2::run(const void* input, const void* mask, void* worksp
 void FusedMHARunnerFP16v2::run(const void* input, const void* mask, const void* seqlen, void* workspace, void* output, cudaStream_t stream)
 {
     pimpl->run(input, mask, seqlen, output, workspace, stream);
+}
+
+void FusedMHARunnerFP16v2::run(const void* input,
+                               const void* mask,
+                               const void* relatice_position_bias,
+                               const int actual_seqlen,
+                               void* workspace,
+                               void* output,
+                               cudaStream_t stream)
+{
+    pimpl->run(input, mask, relatice_position_bias, actual_seqlen, output, workspace, stream);
 }
 
 bool FusedMHARunnerFP16v2::isValid(int s) const
@@ -271,6 +361,87 @@ public:
         assert(threads_per_cta > 0);
         assert(interface->mB > 0);
         return interface->mB * xmmas_m * threads_per_cta * sizeof(uint32_t);
+    }
+
+    void setup(const int S, const int B, const int window_num)
+    {
+        size_t warps_m, warps_n, warps_k = 1;
+        if (S == 64) {
+            warps_m = 2;
+            warps_n = 2;
+        }
+        else if (S == 128) {
+            warps_m = 2;
+            warps_n = 2;
+        }
+        else if (S == 256) {
+            warps_m = 1;
+            warps_n = 4;
+        }
+        else if (S == 384) {
+            warps_m = 1;
+            warps_n = 8;
+        }
+        else {
+            assert(false && "Unsupported seqlen.");
+        }
+        // The number of threads per CTA.
+        threads_per_cta = warps_m * warps_n * warps_k * 32;
+        // The number of xmmas in the M dimension. We use one uint32_t per XMMA in the M dimension.
+        xmmas_m = (S + 16 * warps_m - 1) / (16 * warps_m);
+        // The number of xmmas in the N dimension.
+        xmmas_n = (S + 16 * warps_n - 1) / (16 * warps_n);
+
+        params.b = B;
+        params.h = interface->mNumHeads;
+        params.s = S;
+        params.d = interface->mHeadSize;
+        params.window_num = window_num;
+        params.use_int8_scale_max = true;
+        params.packed_mask_stride_in_bytes = S * sizeof(half);
+        params.qkv_stride_in_bytes = 3 * interface->mNumHeads * interface->mHeadSize * sizeof(int8_t);
+        params.o_stride_in_bytes = interface->mNumHeads * interface->mHeadSize * sizeof(int8_t);
+
+        float scaleQkv = interface->mScaleQkv;
+        float scaleCtx = interface->mScaleCtx;
+
+        // float scaleBmm1 = scaleQkv * scaleQkv;// * (1.f / sqrtf(interface->mHeadSize));
+        // float scaleBmm2 = interface->mDqProbs * scaleQkv / scaleCtx;
+        // float scaleSoftmax = 1.f / interface->mDqProbs;
+        //TODO: unify 3 scales
+        float scaleBmm1 = scaleQkv * (1.f / sqrtf(interface->mHeadSize));
+        float scaleBmm2 = scaleCtx;
+        float scaleSoftmax = interface->mDqProbs;
+
+        params.scale_bmm1 = reinterpret_cast<const uint32_t&>(scaleBmm1);
+        params.scale_bmm2 = reinterpret_cast<const uint32_t&>(scaleBmm2);
+        params.scale_softmax = reinterpret_cast<const uint32_t&>(scaleSoftmax);
+
+        params.enable_i2f_trick =
+            -double(1 << 22) * double(scaleBmm2) <= -128.f && double(1 << 22) * double(scaleBmm2) >= 127.f;
+    }
+
+    void run(const void* qkvPtr,
+             const void* maskPtr,
+             const void* relativePositionBiasPtr,
+             int actual_seqlen,
+             void* output,
+             void* workspace,
+             cudaStream_t stream)
+    {
+        params.qkv_ptr = const_cast<void*>(qkvPtr);
+
+        params.packed_mask_ptr = const_cast<void*>(maskPtr);
+
+        params.packed_relative_position_bias_ptr = const_cast<void*>(relativePositionBiasPtr);
+
+        params.actual_seqlen = actual_seqlen;
+
+        params.o_ptr = output;
+
+        params.cu_seqlens = nullptr;
+
+        xmmaKernel->run(params, stream);
     }
 
     void setup(const int S, const int B)
@@ -430,6 +601,11 @@ void FusedMHARunnerInt8v2::setScaleList(const float scaleQkv, const float dqProb
     mScaleCtx = scaleCtx;
 }
 
+void FusedMHARunnerInt8v2::setup(const int S, const int B, const int window_num)
+{
+    pimpl->setup(S, B, window_num);
+}
+
 void FusedMHARunnerInt8v2::setup(const int S, const int B)
 {
     pimpl->setup(S, B);
@@ -444,6 +620,18 @@ void FusedMHARunnerInt8v2::run(const void* input, const void* mask, void* worksp
 {
     assert(false && "Not implemented");
 }
+
+void FusedMHARunnerInt8v2::run(const void* input,
+                               const void* mask,
+                               const void* relatice_position_bias,
+                               int actual_seqlen,
+                               void* workspace,
+                               void* output,
+                               cudaStream_t stream)
+{
+    pimpl->run(input, mask, relatice_position_bias, actual_seqlen, output, workspace, stream);
+}
+
 
 void FusedMHARunnerInt8v2::run(const void* input, const void* mask, const void* seqlen, void* workspace, void* output, cudaStream_t stream)
 {

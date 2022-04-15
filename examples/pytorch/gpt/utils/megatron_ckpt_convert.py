@@ -1,4 +1,4 @@
-# Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,12 +13,20 @@
 # limitations under the License.
 
 import argparse
+import configparser
 import multiprocessing
 from pathlib import Path
 
 import numpy as np
 import torch  # pytype: disable=import-error
 
+def get_weight_data_type(data_type):
+    if data_type == "fp32":
+        return np.float32
+    elif data_type == "fp16":
+        return np.float16
+    else:
+        assert False, f"Invalid weight data type {data_type}"
 
 # more to less. e.g., trained by 8 gpus, infer by 2 gpus
 def merge_and_convert(args):  # noqa: C901 too complex
@@ -30,6 +38,17 @@ def merge_and_convert(args):  # noqa: C901 too complex
     ckpt_ver = args.checkpoint_version
 
     saved_dir.mkdir(parents=True, exist_ok=True)
+    
+    config = configparser.ConfigParser()
+    config["gpt"] = {}
+    for key in vars(args):
+        config["gpt"][key] = f"{vars(args)[key]}"
+    config["gpt"]["weight_data_type"] = args.weight_data_type
+    with open((saved_dir / f"config.ini").as_posix(), 'w') as configfile:
+        config.write(configfile)
+
+    np_weight_data_type = get_weight_data_type(args.weight_data_type)
+        
     prefix = Path(args.in_file)
     ckpt_name = "model_optim_rng.pt"
     t_gpu_num = args.trained_gpu_num
@@ -41,7 +60,7 @@ def merge_and_convert(args):  # noqa: C901 too complex
     # load position_embedding from rank 0
     model_00 = torch.load((prefix / "mp_rank_00" / ckpt_name).as_posix())
     model_00["model"]["language_model"]["embedding"]["position_embeddings"]["weight"].cpu().numpy().astype(
-        np.float32
+        np_weight_data_type
     ).tofile(
         (saved_dir / "model.wpe.bin").as_posix()
     )  # not weight, do not need transpose
@@ -56,7 +75,7 @@ def merge_and_convert(args):  # noqa: C901 too complex
                 model["model"]["language_model"]["embedding"]["word_embeddings"]["weight"]
                 .cpu()
                 .numpy()
-                .astype(np.float32)
+                .astype(np_weight_data_type)
             )
             if ckpt_ver == 3:
                 transformer_models.append(model["model"]["language_model"]["encoder"])
@@ -81,14 +100,14 @@ def merge_and_convert(args):  # noqa: C901 too complex
                 if i == 0:
                     val = transformer_models[0][key].T.cpu().numpy()
                     saved_path = saved_dir / f"model.{key}.bin"
-                    np.squeeze(val).astype(np.float32).tofile(saved_path.as_posix())
+                    np.squeeze(val).astype(np_weight_data_type).tofile(saved_path.as_posix())
 
             elif key.find("attention.dense.weight") != -1 or key.find("mlp.dense_4h_to_h.weight") != -1:
                 vals = []
                 for k in range(factor):
                     vals.append(transformer_models[k][key].T.cpu().numpy())
                 saved_path = saved_dir / f"model.{key}.{i}.bin"
-                np.concatenate(vals, axis=0).astype(np.float32).tofile(saved_path.as_posix())
+                np.concatenate(vals, axis=0).astype(np_weight_data_type).tofile(saved_path.as_posix())
 
             elif key.find("mlp.dense_h_to_4h.weight") != -1 or key.find("mlp.dense_h_to_4h.bias") != -1:
 
@@ -96,7 +115,7 @@ def merge_and_convert(args):  # noqa: C901 too complex
                 for k in range(factor):
                     vals.append(transformer_models[k][key].T.cpu().numpy())
                 saved_path = saved_dir / f"model.{key}.{i}.bin"
-                np.concatenate(vals, axis=-1).astype(np.float32).tofile(saved_path.as_posix())
+                np.concatenate(vals, axis=-1).astype(np_weight_data_type).tofile(saved_path.as_posix())
 
             elif key.find("attention.query_key_value.bias") != -1:
                 vals = []
@@ -113,7 +132,7 @@ def merge_and_convert(args):  # noqa: C901 too complex
                     vals.append(val)
 
                 saved_path = saved_dir / f"model.{key}.{i}.bin"
-                np.concatenate(vals, axis=-1).astype(np.float32).tofile(saved_path.as_posix())
+                np.concatenate(vals, axis=-1).astype(np_weight_data_type).tofile(saved_path.as_posix())
 
             elif key.find("attention.query_key_value.weight") != -1:
                 vals = []
@@ -133,9 +152,9 @@ def merge_and_convert(args):  # noqa: C901 too complex
 
                 saved_path = saved_dir / f"model.{key}.{i}.bin"
                 if args.fused_qkv == 1:
-                    np.concatenate(vals, axis=-1).astype(np.float32).tofile(saved_path.as_posix())
+                    np.concatenate(vals, axis=-1).astype(np_weight_data_type).tofile(saved_path.as_posix())
                 elif args.fused_qkv == 0:
-                    np.concatenate(vals, axis=-1).transpose(1, 0, 2).astype(np.float32).tofile(saved_path.as_posix())
+                    np.concatenate(vals, axis=-1).transpose(1, 0, 2).astype(np_weight_data_type).tofile(saved_path.as_posix())
 
             else:
                 print(f"[ERROR] cannot find key '{key}'")
@@ -228,6 +247,16 @@ def split_and_convert(args):
         saved_dir = saved_dir / f"unfusedQKV-{args.infer_gpu_num}-gpu/"
 
     saved_dir.mkdir(parents=True, exist_ok=True)
+     
+    config = configparser.ConfigParser()
+    config["gpt"] = {}
+    for key in vars(args):
+        config["gpt"][key] = f"{vars(args)[key]}"
+    config["gpt"]["weight_data_type"] = args.weight_data_type
+    with open((saved_dir / f"config.ini").as_posix(), 'w') as configfile:
+        config.write(configfile)
+
+    np_weight_data_type = get_weight_data_type(args.weight_data_type)
     prefix = Path(args.in_file)
     ckpt_name = "model_optim_rng.pt"
     t_gpu_num = args.trained_gpu_num
@@ -239,7 +268,7 @@ def split_and_convert(args):
     # load position_embedding from rank 0
     model_00 = torch.load((prefix / "mp_rank_00" / ckpt_name).as_posix())
     model_00["model"]["language_model"]["embedding"]["position_embeddings"]["weight"].cpu().numpy().astype(
-        np.float32
+        np_weight_data_type
     ).tofile(
         (saved_dir / "model.wpe.bin").as_posix()
     )  # not weight, do not need transpose
@@ -256,7 +285,7 @@ def split_and_convert(args):
             transformer_model = m["model"]["language_model"]["transformer"]
 
         w_e_list.append(
-            m["model"]["language_model"]["embedding"]["word_embeddings"]["weight"].cpu().numpy().astype(np.float32)
+            m["model"]["language_model"]["embedding"]["word_embeddings"]["weight"].cpu().numpy().astype(np_weight_data_type)
         )
 
         pool.starmap(
@@ -268,7 +297,7 @@ def split_and_convert(args):
                     factor,
                     k,
                     args,
-                    transformer_model[k].T.cpu().numpy().astype(np.float32),
+                    transformer_model[k].T.cpu().numpy().astype(np_weight_data_type),
                     args.checkpoint_version,
                 )
                 for (k, v) in transformer_model.items()
@@ -297,6 +326,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("-head_num", "-h_n", type=int, help="Number of heads", required=True)
     parser.add_argument("-checkpoint_version", type=int, default=0, help="Checkpoint version of Megatron-LM")
+    parser.add_argument("-weight_data_type", type=str, default="fp32", choices=["fp32", "fp16"])
+
     args = parser.parse_args()
     print("\n=============== Argument ===============")
     for key in vars(args):

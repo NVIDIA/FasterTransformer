@@ -22,7 +22,7 @@
 namespace fastertransformer {
 
 template<typename T>
-struct AttentionINT8Weight : AttentionWeight<T> {
+struct AttentionINT8Weight: AttentionWeight<T> {
     ScaleList* scale_list_ptr;
 };
 

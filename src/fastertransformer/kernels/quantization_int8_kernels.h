@@ -16,13 +16,13 @@
 
 #pragma once
 
+#include "int8_utils.cuh"
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
-#include "int8_utils.cuh"
 
 namespace fastertransformer {
 
-template <typename T>
-void invokeQuantization(int8_t* dst, const T * src, const int size, const float* scale_ptr, cudaStream_t stream);
+template<typename T>
+void invokeQuantization(int8_t* dst, const T* src, const int size, const float* scale_ptr, cudaStream_t stream);
 
 }  // namespace fastertransformer

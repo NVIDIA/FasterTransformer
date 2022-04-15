@@ -25,8 +25,9 @@ int next_pow2(int a)
 {
     int rval = 32;
     if (a > 32) {
-        while (rval < a)
+        while (rval < a) {
             rval <<= 1;
+        }
     }
     return rval;
 }
@@ -53,16 +54,18 @@ __forceinline__ __device__ unsigned warp_id()
 template<typename T>
 __inline__ __device__ T warpReduceSum(T val)
 {
-    for (int mask = 16; mask > 0; mask >>= 1)
+    for (int mask = 16; mask > 0; mask >>= 1) {
         val += __shfl_xor_sync(FINAL_MASK, val, mask, 32);
+    }
     return val;
 }
 
 template<typename T>
 __inline__ __device__ T warpReduceMax(T val)
 {
-    for (int mask = 16; mask > 0; mask >>= 1)
+    for (int mask = 16; mask > 0; mask >>= 1) {
         val = max(val, __shfl_xor_sync(FINAL_MASK, val, mask, 32));
+    }
     return val;
 }
 
@@ -75,8 +78,9 @@ __inline__ __device__ T blockReduceSum(T val)
 
     val = warpReduceSum<T>(val);
 
-    if (lane == 0)
+    if (lane == 0) {
         shared[wid] = val;
+    }
 
     __syncthreads();
 
@@ -95,8 +99,9 @@ __inline__ __device__ T blockReduceMax(T val)
 
     val = warpReduceMax(val);  // get maxx in each warp
 
-    if (lane == 0)  // record in-warp maxx by warp Idx
+    if (lane == 0) {  // record in-warp maxx by warp Idx
         shared[wid] = val;
+    }
 
     __syncthreads();
 
@@ -437,9 +442,9 @@ __global__ void calAttnScore_valueBuf(T* attn_score,
     int out_index;
     T score;
     T mask;
-    T large_value= -1e4;
-    if(sizeof(T)==4){
-        large_value=-1e30f;
+    T large_value = -1e4;
+    if (sizeof(T) == 4) {
+        large_value = -1e30f;
     }
     if (seq2 < seq_len) {
         score = ac[index] + bd[index] + ef[index];
@@ -453,8 +458,9 @@ __global__ void calAttnScore_valueBuf(T* attn_score,
     __shared__ float s_sum, s_max;
     float tmp = seq2 < seq_len ? score : large_value;
     float max_val = blockReduceMax<float>(tmp);
-    if (seq2 == 0)
+    if (seq2 == 0) {
         s_max = max_val;
+    }
     __syncthreads();
     float qk_tmp = seq2 < seq_len ? __expf((float)(tmp - s_max)) : 0.0f;
     float sum_val = blockReduceSum<float>(qk_tmp);
@@ -758,12 +764,14 @@ addBias_layerNorm(T* out, const T* input, const T* bias, const T* gamma, const T
     local_out += (float)(__ldg(&bias[id]));
 
     mean = blockReduceSum<float>(local_out);
-    if (threadIdx.x == 0)
+    if (threadIdx.x == 0) {
         s_mean = mean / n;
+    }
     __syncthreads();
     variance = blockReduceSum<float>((local_out - s_mean) * (local_out - s_mean));
-    if (threadIdx.x == 0)
+    if (threadIdx.x == 0) {
         s_variance = variance / n + epsilon;
+    }
     __syncthreads();
 
     out[id] =
@@ -802,15 +810,17 @@ __global__ void addBias_layerNorm(__half* out,
     local_out += local_out_fp2.y;
 
     mean = blockReduceSum<float>(local_out);
-    if (threadIdx.x == 0)
+    if (threadIdx.x == 0) {
         s_mean = mean / n;
+    }
     __syncthreads();
 
     variance = (local_out_fp2.x - s_mean) * (local_out_fp2.x - s_mean);
     variance += (local_out_fp2.y - s_mean) * (local_out_fp2.y - s_mean);
     variance = blockReduceSum<float>(variance);
-    if (threadIdx.x == 0)
+    if (threadIdx.x == 0) {
         s_variance = rsqrtf(variance / n + epsilon);
+    }
     __syncthreads();
 
     float2 gamma_val = __half22float2(__ldg(&gamma_ptr[tid]));

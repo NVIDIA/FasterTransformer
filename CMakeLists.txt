@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,19 +14,28 @@
 cmake_minimum_required(VERSION 3.8 FATAL_ERROR) # for PyTorch extensions, version should be greater than 3.13
 project(FasterTransformer LANGUAGES CXX CUDA)
 
-find_package(CUDA 10.1 REQUIRED)
+find_package(CUDA 10.2 REQUIRED)
+
+if(${CUDA_VERSION_MAJOR} VERSION_GREATER_EQUAL "11")
+  add_definitions("-DENABLE_BF16")
+  message("CUDA_VERSION ${CUDA_VERSION_MAJOR} is greater or equal than 11, enable -DENABLE_BF16 flag")
+endif()
 
 option(BUILD_TF "Build in TensorFlow mode" OFF)
 option(BUILD_PYT "Build in PyTorch TorchScript class mode" OFF)
-if(NOT BUILD_GPT)
-  option(BUILD_GPT "Build project with gpt" OFF)
+option(BUILD_TRT "Build projects about TensorRT" OFF)
+if(NOT BUILD_MULTI_GPU)
+  option(BUILD_MULTI_GPU "Build project about multi-GPU" OFF)
+endif()
+if(NOT USE_TRITONSERVER_DATATYPE)
+  option(USE_TRITONSERVER_DATATYPE "Build triton backend for triton server" OFF)
 endif()
 
 option(SPARSITY_SUPPORT "Build project with Ampere sparsity feature support" OFF)
 
-if(BUILD_GPT)
-  message(STATUS "Add DBUILD_GPT, requires MPI and NCCL")
-  add_definitions("-DBUILD_GPT")
+if(BUILD_MULTI_GPU)
+  message(STATUS "Add DBUILD_MULTI_GPU, requires MPI and NCCL")
+  add_definitions("-DBUILD_MULTI_GPU")
   set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake/Modules)
   find_package(MPI REQUIRED)
   find_package(NCCL REQUIRED)
@@ -47,11 +56,12 @@ if(BUILD_PYT)
   endif()
 endif()
 
-if(BUILD_PYT OR BUILD_GPT)
-  set(CXX_STD "14" CACHE STRING "C++ standard")
-else()
-  set(CXX_STD "11" CACHE STRING "C++ standard")
+if(USE_TRITONSERVER_DATATYPE)
+  message("-- USE_TRITONSERVER_DATATYPE")
+  add_definitions("-DUSE_TRITONSERVER_DATATYPE")
 endif()
+
+set(CXX_STD "14" CACHE STRING "C++ standard")
 
 set(CUDA_PATH ${CUDA_TOOLKIT_ROOT_DIR})
 
@@ -63,11 +73,6 @@ if(BUILD_TF AND NOT TF_PATH)
 endif()
 
 list(APPEND CMAKE_MODULE_PATH ${CUDA_PATH}/lib64)
-
-if (${CUDA_VERSION} GREATER_EQUAL 11.0)
-  message(STATUS "Add DCUDA11_MODE")
-  add_definitions("-DCUDA11_MODE")
-endif()
 
 # profiling
 option(USE_NVTX "Whether or not to use nvtx" OFF)
@@ -161,6 +166,7 @@ set(COMMON_HEADER_DIRS
   ${PROJECT_SOURCE_DIR}
   ${CUDA_PATH}/include
 )
+message("-- COMMON_HEADER_DIRS: ${COMMON_HEADER_DIRS}")
 
 set(COMMON_LIB_DIRS
   ${CUDA_PATH}/lib64
@@ -207,6 +213,10 @@ endif()
 
 list(APPEND COMMON_HEADER_DIRS ${MPI_INCLUDE_PATH})
 
+if(USE_TRITONSERVER_DATATYPE)
+  list(APPEND COMMON_HEADER_DIRS ${PROJECT_SOURCE_DIR}/../repo-core-src/include)
+endif()
+
 include_directories(
   ${COMMON_HEADER_DIRS}
 )
@@ -221,10 +231,11 @@ link_directories(
 add_subdirectory(3rdparty)
 add_subdirectory(src)
 add_subdirectory(examples)
+add_subdirectory(tests)
 
 ########################################
 
-if(BUILD_GPT)
+if(BUILD_MULTI_GPU)
 # Following feature requires cmake 3.15
 # TODO Remove this part or modify such that we can run it under cmake 3.10
 cmake_minimum_required(VERSION 3.15 FATAL_ERROR)
@@ -234,6 +245,7 @@ add_library(transformer-static STATIC
   $<TARGET_OBJECTS:BeamSearchLayer>
   $<TARGET_OBJECTS:DecoderCrossAttentionLayer>
   $<TARGET_OBJECTS:DecoderSelfAttentionLayer>
+  $<TARGET_OBJECTS:DynamicDecodeLayer>
   $<TARGET_OBJECTS:FfnLayer>
   $<TARGET_OBJECTS:FusedAttentionLayer>
   $<TARGET_OBJECTS:GptContextAttentionLayer>
@@ -268,6 +280,8 @@ add_library(transformer-static STATIC
   $<TARGET_OBJECTS:activation_kernels>
   $<TARGET_OBJECTS:add_bias_transpose_kernels>
   $<TARGET_OBJECTS:add_residual_kernels>
+  $<TARGET_OBJECTS:ban_bad_words>
+  $<TARGET_OBJECTS:stop_criteria>
   $<TARGET_OBJECTS:beam_search_penalty_kernels>
   $<TARGET_OBJECTS:beam_search_topk_kernels>
   $<TARGET_OBJECTS:bert_preprocess_kernels>
@@ -285,6 +299,7 @@ add_library(transformer-static STATIC
   $<TARGET_OBJECTS:matrix_vector_multiplication>
   $<TARGET_OBJECTS:memory_utils>
   $<TARGET_OBJECTS:nccl_utils>
+  $<TARGET_OBJECTS:word_list>
   $<TARGET_OBJECTS:online_softmax_beamsearch_kernels>
   $<TARGET_OBJECTS:quantization_int8_kernels>
   $<TARGET_OBJECTS:sampling_penalty_kernels>
@@ -293,7 +308,8 @@ add_library(transformer-static STATIC
   $<TARGET_OBJECTS:softmax_int8_kernels>
   $<TARGET_OBJECTS:transpose_int8_kernels>
   $<TARGET_OBJECTS:trt_fused_multi_head_attention>
-  $<TARGET_OBJECTS:unfused_attention_kernels>)
+  $<TARGET_OBJECTS:unfused_attention_kernels>
+  $<TARGET_OBJECTS:logprob_kernels>)
 set_property(TARGET transformer-static PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET transformer-static PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 target_link_libraries(transformer-static PUBLIC -lcudart -lnccl -lmpi -lcublas -lcublasLt -lcurand)
@@ -304,6 +320,7 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:BeamSearchLayer>
   $<TARGET_OBJECTS:DecoderCrossAttentionLayer>
   $<TARGET_OBJECTS:DecoderSelfAttentionLayer>
+  $<TARGET_OBJECTS:DynamicDecodeLayer>
   $<TARGET_OBJECTS:FfnLayer>
   $<TARGET_OBJECTS:FusedAttentionLayer>
   $<TARGET_OBJECTS:GptContextAttentionLayer>
@@ -338,6 +355,8 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:activation_kernels>
   $<TARGET_OBJECTS:add_bias_transpose_kernels>
   $<TARGET_OBJECTS:add_residual_kernels>
+  $<TARGET_OBJECTS:ban_bad_words>
+  $<TARGET_OBJECTS:stop_criteria>
   $<TARGET_OBJECTS:beam_search_penalty_kernels>
   $<TARGET_OBJECTS:beam_search_topk_kernels>
   $<TARGET_OBJECTS:bert_preprocess_kernels>
@@ -355,6 +374,9 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:matrix_vector_multiplication>
   $<TARGET_OBJECTS:memory_utils>
   $<TARGET_OBJECTS:nccl_utils>
+  $<TARGET_OBJECTS:custom_ar_comm>
+  $<TARGET_OBJECTS:custom_ar_kernels>
+  $<TARGET_OBJECTS:word_list>
   $<TARGET_OBJECTS:online_softmax_beamsearch_kernels>
   $<TARGET_OBJECTS:quantization_int8_kernels>
   $<TARGET_OBJECTS:sampling_penalty_kernels>
@@ -363,7 +385,8 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:softmax_int8_kernels>
   $<TARGET_OBJECTS:transpose_int8_kernels>
   $<TARGET_OBJECTS:trt_fused_multi_head_attention>
-  $<TARGET_OBJECTS:unfused_attention_kernels>)
+  $<TARGET_OBJECTS:unfused_attention_kernels>
+  $<TARGET_OBJECTS:logprob_kernels>)
 set_target_properties(transformer-shared PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set_target_properties(transformer-shared PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 set_target_properties(transformer-shared PROPERTIES LINKER_LANGUAGE CXX)
@@ -427,4 +450,4 @@ export(
 
 export(PACKAGE FasterTransformer)
 
-endif() # BUILD_GPT
+endif() # BUILD_MULTI_GPU

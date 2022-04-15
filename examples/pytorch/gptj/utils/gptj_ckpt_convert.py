@@ -234,7 +234,7 @@ def main(ckpt_dir, num_layers=28, total_shards=8):
                 old_shape = (params.shape[1],)
             print(f"< {params.shape} to {old_shape}")
             params = reshard(params, old_shape).squeeze(0).T
-            params = torch.tensor(params.copy()).half()
+            params = torch.tensor(np.array(params.copy())).half()
             if params.isnan().any() or params.isinf().any():
                 raise ValueError(f"fp16 over/underflow at {part} {element}")
             checkpoint[transform[0]] = params

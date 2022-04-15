@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,7 +18,8 @@
 
 namespace fastertransformer {
 
-bool isSparseGemmAvailable(size_t m, size_t n, size_t k) {
+bool isSparseGemmAvailable(size_t m, size_t n, size_t k)
+{
     return m % 8 == 0 && n % 8 == 0 && k % 8 == 0;
 }
 
@@ -38,7 +39,11 @@ void generate_gpt_gemm_config(int batch_size,
     void* cublas_workspace;
     void* buffer;
     int workSpaceSize;
+#ifdef ENABLE_BF16
+    if (std::is_same<T, half>::value || std::is_same<T, __nv_bfloat16>::value) {
+#else
     if (std::is_same<T, half>::value) {
+#endif  // ENABLE_BF16
         // cublas_workspace_ should be the start pointer of cudaMalloc()
         // to ensure 16B alignemnet
         cublas_workspace = buffer_in;
@@ -182,9 +187,10 @@ void generate_gpt_gemm_config(int batch_size,
     int startAlgo, endAlgo;
     const int ites = 100;
     struct timeval start, end;
-    int is_fp16 = (sizeof(T) == sizeof(half)) ? 1 : 0;
 
-    if (sizeof(T) == sizeof(float)) {
+    CublasDataType data_type;
+    if (std::is_same<T, float>::value) {
+        data_type = FLOAT_DATATYPE;
         AType = CUDA_R_32F;
         BType = CUDA_R_32F;
         CType = CUDA_R_32F;
@@ -192,15 +198,26 @@ void generate_gpt_gemm_config(int batch_size,
         startAlgo = (int)CUBLAS_GEMM_DEFAULT;
         endAlgo = (int)CUBLAS_GEMM_ALGO23;
     }
-    else {
+    else if (std::is_same<T, half>::value) {
+        data_type = HALF_DATATYPE;
         AType = CUDA_R_16F;
         BType = CUDA_R_16F;
         CType = CUDA_R_16F;
-        computeType = CUDA_R_32F;  // Use fp32 computeType to prevent overflow in gpt
+        computeType = CUDA_R_32F;
         startAlgo = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
         endAlgo = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
     }
-
+#ifdef ENABLE_BF16
+    else if (std::is_same<T, __nv_bfloat16>::value) {
+        data_type = BFLOAT16_DATATYPE;
+        AType = CUDA_R_16BF;
+        BType = CUDA_R_16BF;
+        CType = CUDA_R_16BF;
+        computeType = CUDA_R_32F;
+        startAlgo = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+        endAlgo = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
+    }
+#endif
     float alpha = (float)1.0f;
     float beta = (float)0.0f;
 
@@ -246,7 +263,7 @@ void generate_gpt_gemm_config(int batch_size,
                                                         max_input_len * size_per_head,
                                                         &beta,
                                                         d_C,
-                                                        CUDA_R_32F, // CType,
+                                                        CUDA_R_32F,  // CType,
                                                         max_input_len,
                                                         max_input_len * max_input_len,
                                                         batchCount[i],
@@ -278,6 +295,27 @@ void generate_gpt_gemm_config(int batch_size,
                                                         computeType,
                                                         static_cast<cublasGemmAlgo_t>(algo));
                 }
+                else if (i == 10) {
+                    status = cublasGemmEx(cublas_handle,
+                                          CUBLAS_OP_T,
+                                          CUBLAS_OP_N,
+                                          n,
+                                          m,
+                                          k,
+                                          &alpha,
+                                          d_B,
+                                          BType,
+                                          k,
+                                          d_A,
+                                          AType,
+                                          k,
+                                          &beta,
+                                          d_C,
+                                          CType,
+                                          n,
+                                          computeType,
+                                          static_cast<cublasGemmAlgo_t>(algo));
+                }
                 else {
                     status = cublasGemmEx(cublas_handle,
                                           CUBLAS_OP_N,
@@ -300,8 +338,9 @@ void generate_gpt_gemm_config(int batch_size,
                                           static_cast<cublasGemmAlgo_t>(algo));
                 }
 
-                if (status != CUBLAS_STATUS_SUCCESS)
+                if (status != CUBLAS_STATUS_SUCCESS) {
                     break;
+                }
             }
             cudaDeviceSynchronize();
             gettimeofday(&end, NULL);
@@ -317,14 +356,14 @@ void generate_gpt_gemm_config(int batch_size,
 
         printf("fast_algo %d costs %.3f ms\n", fast_algo, exec_time);
 
-        // for fp16, we compare cublasLt
-        if (is_fp16 == 1 && i != 1 && i != 2) {
+        // for fp16 and bf16, we compare cublasLt
+        if (data_type != FLOAT_DATATYPE && i != 1 && i != 2 && i != 10) {
             printf("***cublasLt Gemm Testing Beign***\n");
             // Let try a fixed number of combinations
             int ALGO_COMBINATIONS = 5000;
             customMatmulPerf_t perfResults[ALGO_COMBINATIONS];
 
-            //for gpt, computeType & scaleType should be FP32
+            // for gpt, computeType & scaleType should be FP32
             LtHgemmCustomFind<T, float>(ltHandle,
                                         batch_size * beam_width,
                                         i == 1 || i == 2 ? max_input_len : 1,
@@ -344,8 +383,17 @@ void generate_gpt_gemm_config(int batch_size,
                                         perfResults,
                                         ALGO_COMBINATIONS);
             if (perfResults[0].time < exec_time) {
-                printPerfStructure(
-                    batch_size * beam_width, seq_len, head_num, size_per_head, n, m, k, perfResults[0], fd, is_fp16, 0);
+                printPerfStructure(batch_size * beam_width,
+                                   seq_len,
+                                   head_num,
+                                   size_per_head,
+                                   n,
+                                   m,
+                                   k,
+                                   perfResults[0],
+                                   fd,
+                                   data_type,
+                                   0);
             }
             else {
                 fprintf(fd,
@@ -354,7 +402,7 @@ void generate_gpt_gemm_config(int batch_size,
                         seq_len,
                         head_num,
                         size_per_head,
-                        is_fp16 ? HALF_DATATYPE : FLOAT_DATATYPE,
+                        data_type,
                         batchCount[i],
                         n,
                         m,
@@ -363,14 +411,15 @@ void generate_gpt_gemm_config(int batch_size,
                         exec_time);
             }
             printf("***cublasLt Gemm Testing End***\n");
-        } else {
+        }
+        else {
             fprintf(fd,
                     "%d %d %d %d %d ### %d %d %d %d %d -1 -1 -1 -1 -1 -1 -1 %f\n",
                     batch_size * beam_width,
                     seq_len,
                     head_num,
                     size_per_head,
-                    is_fp16 ? HALF_DATATYPE : FLOAT_DATATYPE,
+                    data_type,
                     batchCount[i],
                     n,
                     m,
@@ -386,8 +435,7 @@ void generate_gpt_gemm_config(int batch_size,
 
 #ifdef SPARSITY_ENABLED
     bool do_sparse_test = false;
-    if (prop.major == 8 && (prop.minor == 0 || prop.minor == 6) &&
-        sizeof(T) == sizeof(half)) {
+    if (prop.major == 8 && (prop.minor == 0 || prop.minor == 6) && sizeof(T) == sizeof(half)) {
         do_sparse_test = true;
     }
     if (do_sparse_test) {
@@ -397,7 +445,8 @@ void generate_gpt_gemm_config(int batch_size,
         const int spgemm_num = 8;
         if (!isAppend) {
             fd = fopen(SPGEMM_CONFIG, "w+");
-        } else {
+        }
+        else {
             fd = fopen(SPGEMM_CONFIG, "a+");
             std::vector<std::string> config;
             char line[1024];
@@ -435,7 +484,7 @@ void generate_gpt_gemm_config(int batch_size,
         cudaStream_t stream = 0;
         float alpha2 = 1.0f;
         float beta2 = 0.0f;
-        for(int i = 0; i < gemm_num; ++i) {
+        for (int i = 0; i < gemm_num; ++i) {
             // skip qk or attn or logit gemms.
             if (i == 1 || i == 2 || i == 10) {
                 continue;
@@ -450,6 +499,11 @@ void generate_gpt_gemm_config(int batch_size,
             int m = N[i], n = M[i], k = K[i];
             printf("\n-----------------------------\n");
             printf("GEMM test %d: [M: %d, K: %d, N: %d]\n", i, m, k, n);
+
+            if (n % 8 != 0) {
+                n = div_up(n, 8) * 8;  // pad n to be multiple of 8 as FT does.
+            }
+
             T* d_A = (T*)buffer;
             T* d_B = d_A + m * k * batchCount[i];
             T* d_C = d_B + k * n * batchCount[i];
@@ -457,16 +511,13 @@ void generate_gpt_gemm_config(int batch_size,
             {
                 cusparseLtMatDescriptor_t matA;
                 CHECK_CUSPARSE(cusparseLtStructuredDescriptorInit(
-                    &handle, &matA, m, k, m, alignment,
-                    CUDA_R_16F, order, CUSPARSELT_SPARSITY_50_PERCENT) )
-                CHECK_CUSPARSE(cusparseLtSpMMAPrune2(
-                    &handle, &matA, true, opA, d_A, d_A, CUSPARSELT_PRUNE_SPMMA_STRIP, stream))
+                    &handle, &matA, m, k, m, alignment, CUDA_R_16F, order, CUSPARSELT_SPARSITY_50_PERCENT))
+                CHECK_CUSPARSE(
+                    cusparseLtSpMMAPrune2(&handle, &matA, true, opA, d_A, d_A, CUSPARSELT_PRUNE_SPMMA_STRIP, stream))
                 size_t compressed_size;
-                CHECK_CUSPARSE(cusparseLtSpMMACompressedSize2(
-                    &handle, &matA, &compressed_size))
-                check_cuda_error(cudaMalloc((void**) &dA_compressed, compressed_size));
-                CHECK_CUSPARSE(cusparseLtSpMMACompress2(
-                    &handle, &matA, true, opA, d_A, dA_compressed, stream))
+                CHECK_CUSPARSE(cusparseLtSpMMACompressedSize2(&handle, &matA, &compressed_size))
+                check_cuda_error(cudaMalloc((void**)&dA_compressed, compressed_size));
+                CHECK_CUSPARSE(cusparseLtSpMMACompress2(&handle, &matA, true, opA, d_A, dA_compressed, stream))
             }
 
             float exec_time = 99999.0f;
@@ -479,12 +530,9 @@ void generate_gpt_gemm_config(int batch_size,
                     int num_streams = 1;
                     cudaStream_t streams[1] = {stream};
                     CHECK_CUSPARSE(cusparseLtStructuredDescriptorInit(
-                        &handle, &matA, m, k, m, alignment,
-                        CUDA_R_16F, order, CUSPARSELT_SPARSITY_50_PERCENT) )
-                    CHECK_CUSPARSE(cusparseLtDenseDescriptorInit(
-                        &handle, &matB, k, n, k, alignment, CUDA_R_16F, order) )
-                    CHECK_CUSPARSE(cusparseLtDenseDescriptorInit(
-                        &handle, &matC, m, n, m, alignment, CUDA_R_16F, order) )
+                        &handle, &matA, m, k, m, alignment, CUDA_R_16F, order, CUSPARSELT_SPARSITY_50_PERCENT))
+                    CHECK_CUSPARSE(cusparseLtDenseDescriptorInit(&handle, &matB, k, n, k, alignment, CUDA_R_16F, order))
+                    CHECK_CUSPARSE(cusparseLtDenseDescriptorInit(&handle, &matC, m, n, m, alignment, CUDA_R_16F, order))
                     cudaDeviceSynchronize();
                     gettimeofday(&start, NULL);
                     for (int ite = 0; ite < ites; ++ite) {
@@ -495,21 +543,25 @@ void generate_gpt_gemm_config(int batch_size,
                         cusparseLtMatmulAlgSelection_t alg_sel;
                         cusparseLtMatmulPlan_t plan;
                         CHECK_CUSPARSE(cusparseLtMatmulDescriptorInit(
-                            &handle, &matmul, opA, opB,
-                            &matA, &matB, &matC, &matC, compute_type))
-                        CHECK_CUSPARSE(cusparseLtMatmulAlgSelectionInit(
-                            &handle, &alg_sel, &matmul, CUSPARSELT_MATMUL_ALG_DEFAULT))
+                            &handle, &matmul, opA, opB, &matA, &matB, &matC, &matC, compute_type))
+                        CHECK_CUSPARSE(
+                            cusparseLtMatmulAlgSelectionInit(&handle, &alg_sel, &matmul, CUSPARSELT_MATMUL_ALG_DEFAULT))
                         CHECK_CUSPARSE(cusparseLtMatmulAlgSetAttribute(
-                            &handle, &alg_sel, CUSPARSELT_MATMUL_ALG_CONFIG_ID,
-                            &alg, sizeof(alg)))
+                            &handle, &alg_sel, CUSPARSELT_MATMUL_ALG_CONFIG_ID, &alg, sizeof(alg)))
                         size_t workspace_size;
-                        CHECK_CUSPARSE(cusparseLtMatmulGetWorkspace(
-                            &handle, &alg_sel, &workspace_size))
-                        CHECK_CUSPARSE(cusparseLtMatmulPlanInit(
-                            &handle, &plan, &matmul, &alg_sel, workspace_size))
-                        CHECK_CUSPARSE(cusparseLtMatmul(
-                            &handle, &plan, &alpha2, dA_compressed, d_B, &beta2, d_C, d_C,
-                            d_workspace, streams, num_streams))
+                        CHECK_CUSPARSE(cusparseLtMatmulGetWorkspace(&handle, &alg_sel, &workspace_size))
+                        CHECK_CUSPARSE(cusparseLtMatmulPlanInit(&handle, &plan, &matmul, &alg_sel, workspace_size))
+                        CHECK_CUSPARSE(cusparseLtMatmul(&handle,
+                                                        &plan,
+                                                        &alpha2,
+                                                        dA_compressed,
+                                                        d_B,
+                                                        &beta2,
+                                                        d_C,
+                                                        d_C,
+                                                        d_workspace,
+                                                        streams,
+                                                        num_streams))
                         CHECK_CUSPARSE(cusparseLtMatmulPlanDestroy(&plan))
                     }
                     cudaDeviceSynchronize();
@@ -526,14 +578,22 @@ void generate_gpt_gemm_config(int batch_size,
                 fast_algo = -1;
             }
             printf("fast_algo %d\n", fast_algo);
-            fprintf(fd, "%d %d %d %d %d ### %d %d %d %d %d %f\n",
-                    batch_size * beam_width, seq_len, head_num, size_per_head,
-                    is_fp16 ? HALF_DATATYPE : FLOAT_DATATYPE,
-                    batchCount[i], m, n, k,
-                    fast_algo, exec_time);
+            fprintf(fd,
+                    "%d %d %d %d %d ### %d %d %d %d %d %f\n",
+                    batch_size * beam_width,
+                    seq_len,
+                    head_num,
+                    size_per_head,
+                    data_type,
+                    batchCount[i],
+                    m,
+                    n,
+                    k,
+                    fast_algo,
+                    exec_time);
             cudaFree(dA_compressed);
         }
-        CHECK_CUSPARSE( cusparseLtDestroy(&handle) )
+        CHECK_CUSPARSE(cusparseLtDestroy(&handle))
         fclose(fd);
         printf("***cusparseLt Gemm Testing End***\n");
     }
@@ -565,6 +625,19 @@ template void generate_gpt_gemm_config<half>(int batch_size,
                                              void* buffer_in,
                                              bool isAppend);
 
+#ifdef ENABLE_BF16
+template void generate_gpt_gemm_config<__nv_bfloat16>(int batch_size,
+                                                      int beam_width,
+                                                      int max_input_len,
+                                                      int head_num,
+                                                      int size_per_head,
+                                                      int inter_size,
+                                                      int vocab_size,
+                                                      int tensor_para_size,
+                                                      void* buffer_in,
+                                                      bool isAppend);
+#endif
+
 size_t calGptGemmTestBufSizeInByte(int batch_size,
                                    int beam_width,
                                    int max_input_len,
@@ -573,21 +646,23 @@ size_t calGptGemmTestBufSizeInByte(int batch_size,
                                    int inter_size,
                                    int vocab_size,
                                    int tensor_para_size,
-                                   int is_fp16)
+                                   CublasDataType data_type)
 {
     size_t buf_size_in_byte = 0;
     const size_t hidden_units = head_num * size_per_head;
     const size_t local_head_num = head_num / tensor_para_size;
     const size_t local_hidden_units = local_head_num * size_per_head;
 
-    int wordSize = (is_fp16 == 1 ? sizeof(half) : sizeof(float));
+    // TODO add bfloat16
+    int wordSize = (data_type == FLOAT_DATATYPE ? sizeof(float) : sizeof(half));
 
     size_t m = batch_size * beam_width * max_input_len;
     std::vector<size_t> buff_size;
     // for context qkv gemm
     buff_size.push_back(m * hidden_units + hidden_units * 3 * local_hidden_units + m * 3 * local_hidden_units);
     // for context batch gemm
-    buff_size.push_back(m * local_hidden_units + m * local_hidden_units + batch_size * beam_width * head_num * max_input_len * max_input_len);
+    buff_size.push_back(m * local_hidden_units + m * local_hidden_units
+                        + batch_size * beam_width * head_num * max_input_len * max_input_len);
     // for context ffn gemm
     buff_size.push_back(m * inter_size / tensor_para_size + hidden_units * inter_size / tensor_para_size
                         + m * hidden_units);
@@ -599,7 +674,7 @@ size_t calGptGemmTestBufSizeInByte(int batch_size,
         buf_size_in_byte = buf_size_in_byte > t ? buf_size_in_byte : t;
     }
     buf_size_in_byte *= wordSize;
-    buf_size_in_byte += ((is_fp16 == 1) ? CUBLAS_WORKSPACE_SIZE : 0);
+    buf_size_in_byte += ((data_type == HALF_DATATYPE || data_type == BFLOAT16_DATATYPE) ? CUBLAS_WORKSPACE_SIZE : 0);
 
     return buf_size_in_byte;
 }

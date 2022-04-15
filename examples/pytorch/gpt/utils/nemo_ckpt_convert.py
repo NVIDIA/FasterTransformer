@@ -1,4 +1,4 @@
-# Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 
 import os
 import argparse
+import configparser
 import multiprocessing
 from pathlib import Path
 import tarfile
@@ -22,6 +23,13 @@ import numpy as np
 import torch  # pytype: disable=import-error
 import yaml
 
+def get_weight_data_type(data_type):
+    if data_type == "fp32":
+        return np.float32
+    elif data_type == "fp16":
+        return np.float16
+    else:
+        assert False, f"Invalid weight data type {data_type}"
 
 def unpack_nemo_ckpt(nemo_ckpt_path, out_folder):
     """
@@ -63,6 +71,23 @@ def merge_and_convert(
         saved_dir = saved_dir / f"unfusedQKV-{args.infer_gpu_num:d}-gpu"
 
     saved_dir.mkdir(parents=True, exist_ok=True)
+
+    config = configparser.ConfigParser()
+    config["gpt"] = {}
+
+    try:
+        for key in vars(args):
+            config["gpt"][key] = f"{vars(args)[key]}"
+        for k, v in model_config.items():
+            config["gpt"][k] = f"{v}"
+        config["gpt"]["weight_data_type"] = args.weight_data_type
+        with open((saved_dir / f"config.ini").as_posix(), 'w') as configfile:
+            config.write(configfile)
+    except:
+        print(f"Fail to save the config in config.ini.")
+
+    np_weight_data_type = get_weight_data_type(args.weight_data_type)
+
     prefix = Path(args.in_file)
     i_gpu_num = args.infer_gpu_num
 
@@ -84,8 +109,8 @@ def merge_and_convert(
 
     # load position_embedding from rank 0
     model_00 = torch.load(weight_files[0], map_location=map_location_fn)
-    model_00["model.language_model.embedding.position_embeddings.weight"].cpu().numpy().astype(
-        np.float32
+    model_00["model.language_model.embedding.position_embeddings.weight"].float().cpu().numpy().astype(
+        np_weight_data_type
     ).tofile(
         (saved_dir / "model.wpe.bin").as_posix()
     )  # not weight, do not need transpose
@@ -99,9 +124,10 @@ def merge_and_convert(
 
             w_e_list.append(
                 model["model.language_model.embedding.word_embeddings.weight"]
+                    .float()
                     .cpu()
                     .numpy()
-                    .astype(np.float32)
+                    .astype(np_weight_data_type)
             )
 
             prefix = "model.language_model.encoder"
@@ -141,31 +167,31 @@ def merge_and_convert(
             ):
                 # shared weights, only need to convert the weights of rank 0
                 if i == 0:
-                    val = transformer_models[0][key].T.cpu().numpy()
+                    val = transformer_models[0][key].T.float().cpu().numpy()
                     key = key.replace("self_attention", "attention")
                     saved_path = saved_dir / f"model.{key}.bin"
-                    np.squeeze(val).astype(np.float32).tofile(saved_path.as_posix())
+                    np.squeeze(val).astype(np_weight_data_type).tofile(saved_path.as_posix())
 
             elif key.find("attention.dense.weight") != -1 or key.find("mlp.dense_4h_to_h.weight") != -1:
                 vals = []
                 for k in range(factor):
-                    vals.append(transformer_models[k][key].T.cpu().numpy())
+                    vals.append(transformer_models[k][key].T.float().cpu().numpy())
                 key = key.replace("self_attention", "attention")
                 saved_path = saved_dir / f"model.{key}.{i}.bin"
-                np.concatenate(vals, axis=0).astype(np.float32).tofile(saved_path.as_posix())
+                np.concatenate(vals, axis=0).astype(np_weight_data_type).tofile(saved_path.as_posix())
 
             elif key.find("mlp.dense_h_to_4h.weight") != -1 or key.find("mlp.dense_h_to_4h.bias") != -1:
 
                 vals = []
                 for k in range(factor):
-                    vals.append(transformer_models[k][key].T.cpu().numpy())
+                    vals.append(transformer_models[k][key].T.float().cpu().numpy())
                 saved_path = saved_dir / f"model.{key}.{i}.bin"
-                np.concatenate(vals, axis=-1).astype(np.float32).tofile(saved_path.as_posix())
+                np.concatenate(vals, axis=-1).astype(np_weight_data_type).tofile(saved_path.as_posix())
 
             elif key.find("attention.query_key_value.bias") != -1:
                 vals = []
                 for k in range(factor):
-                    val = transformer_models[k][key].T.cpu().numpy()
+                    val = transformer_models[k][key].T.float().cpu().numpy()
                     local_dim = (int)(val.shape[-1] / 3)
                     num_splits = 3
                     head_num = num_attention_heads // t_gpu_num
@@ -177,12 +203,12 @@ def merge_and_convert(
 
                 key = key.replace("self_attention", "attention")
                 saved_path = saved_dir / f"model.{key}.{i}.bin"
-                np.concatenate(vals, axis=-1).astype(np.float32).tofile(saved_path.as_posix())
+                np.concatenate(vals, axis=-1).astype(np_weight_data_type).tofile(saved_path.as_posix())
 
             elif key.find("attention.query_key_value.weight") != -1:
                 vals = []
                 for k in range(factor):
-                    val = transformer_models[k][key].T.cpu().numpy()
+                    val = transformer_models[k][key].T.float().cpu().numpy()
                     hidden_dim = val.shape[0]
                     local_dim = (int)(val.shape[-1] / 3)
                     num_splits = 3
@@ -196,9 +222,9 @@ def merge_and_convert(
                 key = key.replace("self_attention", "attention")
                 saved_path = saved_dir / f"model.{key}.{i}.bin"
                 if args.fused_qkv == 1:
-                    np.concatenate(vals, axis=-1).astype(np.float32).tofile(saved_path.as_posix())
+                    np.concatenate(vals, axis=-1).astype(np_weight_data_type).tofile(saved_path.as_posix())
                 elif args.fused_qkv == 0:
-                    np.concatenate(vals, axis=-1).transpose(1, 0, 2).astype(np.float32).tofile(saved_path.as_posix())
+                    np.concatenate(vals, axis=-1).transpose(1, 0, 2).astype(np_weight_data_type).tofile(saved_path.as_posix())
 
             else:
                 print(f"[ERROR] cannot find key '{key}'")
@@ -214,6 +240,21 @@ def split_and_convert(args, model_config, weight_files, *, load_checkpoints_to_c
         saved_dir = saved_dir / f"unfusedQKV-{args.infer_gpu_num:d}-gpu"
 
     saved_dir.mkdir(parents=True, exist_ok=True)
+    
+    config = configparser.ConfigParser()
+    config["gpt"] = {} 
+    try:
+        for key in vars(args):
+            config["gpt"][key] = f"{vars(args)[key]}"
+        for k, v in model_config.items():
+            config["gpt"][k] = f"{v}"
+        config["gpt"]["weight_data_type"] = args.weight_data_type
+        with open((saved_dir / f"config.ini").as_posix(), 'w') as configfile:
+            config.write(configfile)
+    except:
+        print(f"Fail to save the config in config.ini.")
+
+    np_weight_data_type = get_weight_data_type(args.weight_data_type)
     prefix = Path(args.in_file)
 
     i_gpu_num = args.infer_gpu_num
@@ -235,8 +276,8 @@ def split_and_convert(args, model_config, weight_files, *, load_checkpoints_to_c
 
     # load position_embedding from rank 0
     model_00 = torch.load(weight_files[0], map_location=map_location_fn)
-    model_00["model.language_model.embedding.position_embeddings.weight"].cpu().numpy().astype(
-        np.float32
+    model_00["model.language_model.embedding.position_embeddings.weight"].float().cpu().numpy().astype(
+        np_weight_data_type
     ).tofile(
         (saved_dir / "model.wpe.bin").as_posix()
     )  # not weight, do not need transpose
@@ -250,9 +291,10 @@ def split_and_convert(args, model_config, weight_files, *, load_checkpoints_to_c
 
         w_e_list.append(
             model["model.language_model.embedding.word_embeddings.weight"]
+                .float()
                 .cpu()
                 .numpy()
-                .astype(np.float32)
+                .astype(np_weight_data_type)
         )
 
         prefix = "model.language_model.encoder"
@@ -277,7 +319,7 @@ def split_and_convert(args, model_config, weight_files, *, load_checkpoints_to_c
         transformer_model = model["model"]["language_model"]["encoder"]
 
         for key in transformer_model:
-            val = transformer_model[key].T.float().cpu().numpy().astype(np.float32)
+            val = transformer_model[key].T.float().cpu().numpy().astype(np_weight_data_type)
             if key.find("layers.") != -1:
                 layer_index = (int)(key[7: key.find(".", 7)])
                 saved_key = key
@@ -374,6 +416,7 @@ if __name__ == "__main__":
         help="Fuse the qkv weights or not. Default is true (1)",
         choices=[0, 1],
     )
+    parser.add_argument("-weight_data_type", type=str, default="fp32", choices=["fp32", "fp16"])
     args = parser.parse_args()
     print("\n=============== Argument ===============")
     for key in vars(args):

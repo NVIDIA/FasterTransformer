@@ -31,6 +31,18 @@
 
 namespace fastertransformer {
 
+// Scale Type Converter
+// is_fp16_compute_type is only valid when T = half
+template<typename T, bool is_fp16_compute_type = false>
+struct ScaleTypeConverter {
+    using Type = float;
+};
+
+template<>
+struct ScaleTypeConverter<half, true> {
+    using Type = half;
+};
+
 template<typename T, typename scaleT>
 int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
                       int batch_size,
@@ -58,7 +70,7 @@ size_t calGemmTestBufSizeInByte(int batch_size,
                                 int inter_size,
                                 int vocab_size,
                                 int int8_mode,
-                                int is_fp16);
+                                CublasDataType data_type);
 
 size_t calGemmTestBufSizeInByteXlnet(
     int batch_size, int seq_len, int head_num, int size_per_head, int inter_size, int hidden_units, int is_fp16);
@@ -72,7 +84,7 @@ int printPerfStructure(int batch_size,
                        int k,
                        const customMatmulPerf_t& perf,
                        FILE* fout,
-                       int is_fp16,
+                       CublasDataType data_type,
                        int hasPrint);
 
 }  // namespace fastertransformer

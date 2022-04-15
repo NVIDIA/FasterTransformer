@@ -79,15 +79,16 @@ void FusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* out
 
     FT_CHECK(isValidBatchSize(input_tensors->at(1).shape[0]));
     FT_CHECK(isValidSeqLen(input_tensors->at(1).shape[2]));
-    allocateBuffer();
+
+    const int request_batch_size = input_tensors->at(1).shape[0];
+    const int request_seq_len = input_tensors->at(1).shape[2];
+    allocateBuffer(request_batch_size, request_seq_len);
 
     T* attention_out = (T*)output_tensors->at(0).data;
     const T* from_tensor = (const T*)input_tensors->at(0).data;
     const T* attention_mask = (const T*)input_tensors->at(1).data;
     const int* padding_offset = (const int*)input_tensors->at(2).data;
 
-    const int request_batch_size = input_tensors->at(1).shape[0];
-    const int request_seq_len = input_tensors->at(1).shape[2];
     size_t m_tmp = input_tensors->at(0).shape[0];
     if (m_tmp % 8 != 0) {
         m_tmp = (m_tmp / 8 + 1) * 8;
@@ -234,8 +235,9 @@ FusedAttentionLayer<T>::FusedAttentionLayer(size_t max_batch_size,
     q_scaling_(q_scaling),
     sparse_(sparse)
 {
-    if ((sm_ == kSM_70 || sm_ == kSM_86 || sm_ == kSM_80 || sm_ == kSM_75 || sm_ == kSM_72) && size_per_head_ == 64)
+    if ((sm_ == kSM_70 || sm_ == kSM_86 || sm_ == kSM_80 || sm_ == kSM_75 || sm_ == kSM_72) && size_per_head_ == 64) {
         dispatcher_fp16.reset(new FusedMHARunnerFP16v2(head_num_, size_per_head_, sm_, q_scaling_));
+    }
     else {
         throw std::runtime_error(std::string("[FT][ERROR] FusedAttentionLayer not support \n"));
     }
@@ -257,8 +259,9 @@ FusedAttentionLayer<T>::FusedAttentionLayer(FusedAttentionLayer<T> const& attent
     q_scaling_(attention_layer.q_scaling_),
     sparse_(attention_layer.sparse_)
 {
-    if ((sm_ == kSM_70 || sm_ == kSM_86 || sm_ == kSM_80 || sm_ == kSM_75 || sm_ == kSM_72) && size_per_head_ == 64)
+    if ((sm_ == kSM_70 || sm_ == kSM_86 || sm_ == kSM_80 || sm_ == kSM_75 || sm_ == kSM_72) && size_per_head_ == 64) {
         dispatcher_fp16.reset(new FusedMHARunnerFP16v2(head_num_, size_per_head_, sm_, q_scaling_));
+    }
     else {
         throw std::runtime_error(std::string("[FT][ERROR] FusedAttentionLayer not support \n"));
     }
@@ -290,41 +293,53 @@ void FusedAttentionLayer<T>::allocateBuffer()
 }
 
 template<typename T>
+void FusedAttentionLayer<T>::allocateBuffer(size_t batch_size, size_t seq_len)
+{
+    q_buf_ = (T*)allocator_->reMalloc(q_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
+    k_buf_ = (T*)allocator_->reMalloc(k_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
+    v_buf_ = (T*)allocator_->reMalloc(v_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
+    qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * 3 * batch_size * seq_len * hidden_units_, false);
+    qkv_buf_2_ = (T*)allocator_->reMalloc(qkv_buf_2_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
+    attn_workspace_ = (T*)allocator_->reMalloc(attn_workspace_, dispatcher_fp16->getWorkspaceSize(), false);
+
+    batch_qkv_kernel_ptr_ = (T**)allocator_->reMalloc(batch_qkv_kernel_ptr_, sizeof(T*) * 12, false);
+    batch_qkv_input_ptr_ = batch_qkv_kernel_ptr_ + 4;
+    batch_qkv_buf_ptr_ = batch_qkv_input_ptr_ + 4;
+    is_allocate_buffer_ = true;
+}
+
+template<typename T>
 void FusedAttentionLayer<T>::freeBuffer()
 {
-    if (is_allocate_buffer_ == true) {
+    if (is_allocate_buffer_) {
         allocator_->free(q_buf_);
         allocator_->free(k_buf_);
         allocator_->free(v_buf_);
         allocator_->free(qkv_buf_);
         allocator_->free(qkv_buf_2_);
         allocator_->free(attn_workspace_);
-
         allocator_->free(batch_qkv_kernel_ptr_);
-        is_allocate_buffer_ = false;
         sync_check_cuda_error();
+        is_allocate_buffer_ = false;
     }
 }
 
 template<typename T>
 bool FusedAttentionLayer<T>::isValidBatchSize(size_t batch_size)
 {
-    if (max_batch_size_ == 0) {
+    if (max_batch_size_ < batch_size) {
         max_batch_size_ = batch_size;
-        return true;
     }
-    else {
-        return batch_size <= max_batch_size_;
-    }
+    return true;
 }
 
 template<typename T>
 bool FusedAttentionLayer<T>::isValidSeqLen(size_t seq_len)
 {
-    if (max_seq_len_ == 0) {
+    if (max_seq_len_ < seq_len) {
         max_seq_len_ = seq_len;
     }
-    return seq_len <= max_seq_len_ && seq_len <= 384;
+    return seq_len <= 384;
 }
 
 template class FusedAttentionLayer<float>;

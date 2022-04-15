@@ -63,7 +63,7 @@ __global__ void buildEncoderAttentionMaskKernel(T* attention_mask, const int* se
     attention_mask += blockIdx.x * max_seq_len * max_seq_len;
     const int length = sequence_lengths[blockIdx.x];
     for (int i = threadIdx.x; i < max_seq_len * max_seq_len; i += blockDim.x) {
-        int row_id = i / max_seq_len;
+        // int row_id = i / max_seq_len;
         int col_id = i % max_seq_len;
         // if (row_id < length && col_id < length) {
         // TODO (bhsueh) check this modification is ok or not on other rmodel
@@ -262,8 +262,10 @@ __global__ void buildRelativeAttentionBias(T* relative_attention_bias,
         int max_exact = tmp_num_bucket / 2;
         bool is_small = relative_position < max_exact;
 
-        int relative_position_if_large = max_exact + (int)(logf(relative_position * 1.0f / max_exact)
-                                               / logf((float)max_distance / max_exact) * (tmp_num_bucket - max_exact));
+        int relative_position_if_large =
+            max_exact
+            + (int)(logf(relative_position * 1.0f / max_exact) / logf((float)max_distance / max_exact)
+                    * (tmp_num_bucket - max_exact));
 
         relative_position_if_large = min(relative_position_if_large, tmp_num_bucket - 1);
 
@@ -282,8 +284,12 @@ void invokeBuildRelativeAttentionBias(T* relative_attention_bias,
                                       const int num_bucket,
                                       const bool is_bidirectional,
                                       const int max_distance,
+                                      const PositionEmbeddingType position_embedding_type,
                                       cudaStream_t stream)
 {
+    if (position_embedding_type == PositionEmbeddingType::absolute) {
+        return;
+    }
     dim3 grid(head_num);
     dim3 block(256);
     buildRelativeAttentionBias<<<grid, block, 0, stream>>>(relative_attention_bias,
@@ -302,6 +308,7 @@ template void invokeBuildRelativeAttentionBias(float* relative_attention_bias,
                                                const int num_bucket,
                                                const bool is_bidirectional,
                                                const int max_distance,
+                                               const PositionEmbeddingType position_embedding_type,
                                                cudaStream_t stream);
 
 template void invokeBuildRelativeAttentionBias(half* relative_attention_bias,
@@ -311,6 +318,7 @@ template void invokeBuildRelativeAttentionBias(half* relative_attention_bias,
                                                const int num_bucket,
                                                const bool is_bidirectional,
                                                const int max_distance,
+                                               const PositionEmbeddingType position_embedding_type,
                                                cudaStream_t stream);
 
 }  // namespace fastertransformer

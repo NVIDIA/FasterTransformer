@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,8 +16,6 @@
 
 #pragma once
 
-#include "src/fastertransformer/kernels/decoder_masked_multihead_attention.h"
-#include "src/fastertransformer/kernels/decoder_masked_multihead_attention_utils.h"
 #include "src/fastertransformer/layers/attention_layers/BaseAttentionLayer.h"
 
 namespace fastertransformer {
@@ -40,6 +38,7 @@ private:
     size_t max_mem_seq_len_ = 0;
 
     void allocateBuffer() override;
+    void allocateBuffer(size_t batch_size, size_t max_mem_seq_len);
     void freeBuffer() override;
     bool isValidBatchSize(size_t batch_size);
     bool isValidSeqLen(size_t seq_len);
@@ -51,9 +50,9 @@ protected:
     using BaseAttentionLayer<T>::cublas_wrapper_;
     using BaseAttentionLayer<T>::allocator_;
 
-    T* q_buf_;
-    T* context_buf_;
-    T* mem_cache_buf_;
+    T* q_buf_ = nullptr;
+    T* context_buf_ = nullptr;
+    T* mem_cache_buf_ = nullptr;
 
 public:
     DecoderCrossAttentionLayer(size_t max_batch_size,

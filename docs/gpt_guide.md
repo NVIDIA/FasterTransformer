@@ -5,6 +5,7 @@
 - [GPT](#gpt)
   - [Table Of Contents](#table-of-contents)
   - [Introduction](#introduction)
+    - [Supported features](#supported-features)
   - [Model architecture](#model-architecture)
     - [Workflow](#workflow)
     - [Optimization](#optimization)
@@ -19,10 +20,12 @@
     - [gpt with triton backend](#gpt-with-triton-backend)
   - [Performance](#performance)
     - [Large model inference with model parallel](#large-model-inference-with-model-parallel)
+      - [Performance of Megatron-530B](#performance-of-megatron-530b)
       - [Performance of GPT-175B](#performance-of-gpt-175b)
       - [Perofrmance of GPT-89B](#perofrmance-of-gpt-89b)
-      - [Performance of GPT-1.3B](#performance-of-gpt-13b)
+      - [Performance of GPT-20B](#performance-of-gpt-20b)
       - [Performance of GPT-6.7B](#performance-of-gpt-67b)
+      - [Performance of GPT-1.3B](#performance-of-gpt-13b)
       - [Performance of GPT-350M](#performance-of-gpt-350m)
   - [TODO](#todo)
 
@@ -31,7 +34,30 @@
 This document describes what FasterTransformer provides for the GPT model, explaining the workflow and optimization. We also provide a guide to help users to run the GPT model on FasterTransformer. Finally, we provide benchmark to demonstrate the speed of FasterTransformer on GPT. 
 
 GPT is a variant of Decoding model, which does not have the encoder module, cross multi-head attention, and uses GeLU as the activation. In 2020, OpenAI shows that using very giant model and lots of training data can significantly improve the capacity of GPT model in [their paper](https://arxiv.org/abs/2005.14165). However, it is impossible to put such model into a single GPU. For example, the largest model, GPT-3, has 175 billion parameters, which takes about 350 GBs under half data type. Therefore, multi-gpus, even multi-nodes, is necessary. To solve the bottleneck of latency and memory due to the model size, FasterTransformer provides kernels with high efficiency, optimized memory usage, and model parallelism on multiple frameworks. 
- 
+
+### Supported features
+
+* Checkpoint converter
+  * Huggingface
+  * Megatron
+  * Nemo Megatron
+  * TensorFlow 
+* Data type
+  * FP32
+  * FP16
+  * INT8 weight only PTQ for bs 1 and 2
+* Feature
+  * Multi-GPU multi-node inference
+  * Dynamic random seed
+  * Stop tokens
+  * Beam search and sampling are both supported
+  * Loading FP32 or FP16 weights
+* Frameworks
+  * TensorFlow
+  * PyTorch
+  * C++
+  * Triton backend
+
 ## Model architecture
 
 ### Workflow
@@ -69,10 +95,10 @@ In c++ example codes, we skip the step 4 and step 6, loading the request by `exa
 The source codes are put in `src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.cc`. The arguments, input tensors and output tensors of GPT:
 
 * Arguments:
-  1. Maximum batch size
-  2. Maximum sequence length
-  3. Maximum input sequence length
-  4. beam width for beam search. If setting b to be 1, then we don’t use beam search but use sampling.
+  1. Maximum batch size (Deprecated, move to input)
+  2. Maximum sequence length (Deprecated, move to input)
+  3. Maximum input sequence length (Deprecated, move to input)
+  4. beam width for beam search. If setting b to be 1, then we don’t use beam search but use sampling. (Deprecated, move to input)
   5. Head number
   6. Size per head
   7. Intermediate size. The inter size of feed forward network. It is often set to 4 * head_num * size_per_head.
@@ -80,37 +106,50 @@ The source codes are put in `src/fastertransformer/models/multi_gpu_gpt/Parallel
   9. Vocab size
   10. Start id of the vocabulary
   11. End id of the vocabulary
-  12. Diversity rate of beam search. A hyper hyper-parameter for [simple diverse decoding](https://arxiv.org/pdf/1611.08562.pdf).
-  13. top_k value for top k sampling.
-  14. top_p value for top p sampling
-  15. Random seed for sampling
-  16. Temperature for logit. Setting to be 1.0 if you don’t want to apply the temperature.
-  17. Length penalty for logit. Setting to be 1.0 if you don’t want to apply the length penalty.
-  18. Repetition penalty for logit. Setting to be 1.0 if you don’t want to apply the repetition penalty.
-  19. Size of tensor parallelism. Must be able to divide the head number.
-  20. Rank of tensor parallelism.
-  21. Comm of tensor parallelism.
-  22. Size of pipeline parallelism. Must be able to devide the number of decoder layers.
-  23. Rank of pipeline parallelism.
-  24. Comm of pipeline parallelism.
-  25. CUDA stream.
-  26. Pointer of cuBLAS wrapper, which is declared in `src/fastertransformer/utils/cublasMMWrapper.h`.
-  27. Pointer of memory allocator, which is declared in `src/fastertransformer/utils/allocator.h`
-  28. “is_free_buffer_after_forward” flag. If setting to be true, FasterTransformer will allocate buffer before forward, and free buffer after forward. If the memory is controlled by memory pool and the cost of allocating/releasing memory is small, setting the flag to be true can save some memory.
-  29. Pointer of CUDA device properties, which is used to get the properties of hardware like size of shared memory.
+  12. Diversity rate of beam search. A hyper hyper-parameter for [simple diverse decoding](https://arxiv.org/pdf/1611.08562.pdf). (Deprecated, move to input)
+  13. top_k value for top k sampling. (Deprecated, move to input)
+  14. top_p value for top p sampling. (Deprecated, move to input)
+  15. Random seed for sampling. (Deprecated, move to input)
+  16. Temperature for logit. Setting to be 1.0 if you don’t want to apply the temperature. (Deprecated, move to input)
+  17. Length penalty for logit. Setting to be 1.0 if you don’t want to apply the length penalty. (Deprecated, move to input)
+  18. Repetition penalty for logit. Setting to be 1.0 if you don’t want to apply the repetition penalty. (Deprecated, move to input)
+  19. Tensor Parallel information, which is declared in `src/fastertransformer/utils/nccl_utils.h`.
+  20. Pipeline Parallel information, which is declared in `src/fastertransformer/utils/nccl_utils.h`.
+  21. CUDA stream.
+  22. Pointer of cuBLAS wrapper, which is declared in `src/fastertransformer/utils/cublasMMWrapper.h`.
+  23. Pointer of memory allocator, which is declared in `src/fastertransformer/utils/allocator.h`
+  24. “is_free_buffer_after_forward” flag. If setting to be true, FasterTransformer will allocate buffer before forward, and free buffer after forward. If the memory is controlled by memory pool and the cost of allocating/releasing memory is small, setting the flag to be true can save some memory.
+  25. Pointer of CUDA device properties, which is used to get the properties of hardware like size of shared memory.
+  26. Is using sparsity.
+  27. Int8 mode. 
+  28. Custom all reduction communication for custom all reduction in model parallelism. It is only supported in 8-way tensor parallelism.
+	29. Flag of enable custom all reduction or not. 
 * Input tensors:
   1. Input ids (context). The shape is \[ request batch size * beam width, request maximum input length \].
   2. Input lengths. The shape is \[ request batch size * beam width \].
   3. Maximum output sequence length. An integer to describe the largest number of tokens you hope for results. Note that it includes the input ids.
+  4. Stop word list. When FT generates words in this list, it will stop the generation. An extension of stop id, optional.  
+  5. Start id in runtime. The shape is \[batch_size\] on cpu, optional. If FT receives this input, FT will replace default start id by it, optional. 
+  6. End id in runtime. The shape is \[batch_size\] on cpu, optional. If FT receives this input, FT will replace default end id by it, optional. 
+  7. top_k value for top k sampling. The shape is \[1\] or \[batch_size, 1\] on cpu, optional.
+  8. top_p value for top p sampling. The shape is \[1\] or \[batch_size, 1\] on cpu, optional.
+  9. Diversity rate of beam search (beam_search_diversity_rate). A hyper hyper-parameter for [simple diverse decoding](https://arxiv.org/pdf/1611.08562.pdf). [1] or \[batch_size, 1\] on cpu, optional.
+  10. Temperature for logit (temperature). The sahpe \[1\] or \[batch_size, 1\] on cpu, optional.
+  11. Length penalty for logit (len_penalty). The shape is \[1\] or \[batch_size, 1\] on cpu, optional
+  12. Repetition penalty for logit (repetition_penalty). The shape is \[1\] or \[batch_size, 1\] on cpu, optional
+  13. Random_seed \[1\] or \[batch_size, 1\] on cpu, optional
+  14. Length of prefix soft prompt embedding. This describes how many tokens of soft prompt embedding in each sentence. The shape is \[batch_size\], optional.
+  15. Prefix soft prompt embedding. FT will concat them with results of embedding lookup kernel. The shape is \[batch_size, max_prefix_soft_prompt_length, hidden_units\], optional.
 * Output tensors:
-  1. Output ids. The shape is \[maximum output sequence length, batch size, beam width \].
+  1. Output ids. The shape is \[batch size, beam width, maximum output sequence length \].
   2. Parent ids. It is used to find the best path in beam search. It is deprecated now. 
   3. Sequence lengths. The shape is \[batch size * beam width\]. It records the final sequence lengths of all sentences.
-  4. Log probability for sampling. The shape is \[requested token number, batch size, beam \]. It records the log probability of logits at each step.  
+  4. Log probability for sampling. The shape is \[requested token number, batch size, beam \]. It records the log probability of logits at each step. Optional outputs in FP32.
+  5. Cumulative log probability of generated senteces. The shape is \[batch size, beam\]. Optional outputs in FP32.
 
-Although there are many arguments, most of them are fixed. For example, arguments 5 ~ 11 are model hyper-parameters and fixed after we determine the model hyper-parameters. Arguments 19 ~ 27 and 29 are some settings about CUDA and NCCL, and progress are fixed.
+The `beam_width` value is set by the output shape directly. When the `beam_width` is larger than 1, FT will use beam search to generate tokens; otherwise, FT will use topk or topp sampling. 
 
-We also provide the module `Gpt` in `src/fastertransformer/models/gpt/Gpt.cc`, which is a GPT model without model parallelism. It does not need the arguments 20 ~ 24, and other are same.
+We also provide the module `Gpt` in `src/fastertransformer/models/gpt/Gpt.cc`, which is a GPT model without model parallelism. It does not need the arguments 19 and 20, while others are same.
 
 ### Optimization
 
@@ -126,12 +165,29 @@ The following guide demonstrates how to run the examples of c++, PyTorch and Tri
 ### Requirements
 
 - CMake >= 3.8 for Tensorflow, CMake >= 3.13 for PyTorch
-- CUDA 10.1 or newer version
+- CUDA 11.0 or newer version
+- NCCL 2.10 or newer version
 - Python 3 is recommended because some features are not supported in python 2
-- Tensorflow 1.13 or 1.14 or 1.15
-- PyTorch >= 1.5.0
+- Tensorflow: Verify on 1.15, 1.13 and 1.14 should work.
+- PyTorch: Verify on 1.8.0, >= 1.5.0 should work.
 
-Recommend use nvcr image like `nvcr.io/nvidia/tensorflow:21.02-tf1-py3` or `nvcr.io/nvidia/pytorch:21.02-py3`.
+Recommend use nvcr image like `nvcr.io/nvidia/tensorflow:21.11-tf1-py3` or `nvcr.io/nvidia/pytorch:21.11-py3`.
+
+These components are readily available within the NGC TensorFlow Docker image below.
+
+Ensure you have the following components:
+- [NVIDIA Docker](https://github.com/NVIDIA/nvidia-docker) and NGC container are recommended
+- [NVIDIA Pascal](https://www.nvidia.com/en-us/data-center/pascal-gpu-architecture/) or [Volta](https://www.nvidia.com/en-us/data-center/volta-gpu-architecture/) or [Turing](https://www.nvidia.com/en-us/geforce/turing/) or [Ampere](https://www.nvidia.com/en-us/data-center/nvidia-ampere-gpu-architecture/) based GPU 
+
+For more information about how to get started with NGC containers, see the following sections from the NVIDIA GPU Cloud Documentation and the Deep Learning Documentation:
+
+- [Getting Started Using NVIDIA GPU Cloud](https://docs.nvidia.com/ngc/ngc-getting-started-guide/index.html)
+- [Accessing And Pulling From The NGC Container Registry](https://docs.nvidia.com/deeplearning/frameworks/user-guide/index.html#accessing_registry)
+- [Running TensorFlow](https://docs.nvidia.com/deeplearning/frameworks/tensorflow-release-notes/running.html#running)
+- [Running PyTorch](https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/index.html)
+
+For those unable to use the NGC container, to set up the required environment or create your own container, see the versioned [NVIDIA Container Support Matrix](https://docs.nvidia.com/deeplearning/frameworks/support-matrix/index.html).
+
 
 ### Build the FasterTransformer
 
@@ -139,16 +195,10 @@ Recommend use nvcr image like `nvcr.io/nvidia/tensorflow:21.02-tf1-py3` or `nvcr
 
     You can choose the tensorflow version and python version you want. Here, we list some possible images:
 
-    - `nvcr.io/nvidia/tensorflow:19.07-py2` contains the TensorFlow 1.14 and python 2.7. 
-    - `nvcr.io/nvidia/tensorflow:20.12-tf1-py3` contains the TensorFlow 1.15 and python 3.8. 
-    - `nvcr.io/nvidia/pytorch:20.03-py3` contains the PyTorch 1.5.0 and python 3.6
-    - `nvcr.io/nvidia/pytorch:20.07-py3` contains the PyTorch 1.6.0 and python 3.6
-    - `nvcr.io/nvidia/pytorch:20.12-py3` contains the PyTorch 1.8.0 and python 3.8
-
-    To achieve best performance, we recommand to use the latest image. For example, running image `nvcr.io/nvidia/tensorflow:20.12-tf1-py3` by 
+    To achieve best performance, we recommand to use the latest image. For example, running image `nvcr.io/nvidia/tensorflow:21.11-tf1-py3` by 
 
     ```bash
-    nvidia-docker run -ti --rm nvcr.io/nvidia/tensorflow:20.12-tf1-py3 bash
+    nvidia-docker run -ti --rm nvcr.io/nvidia/tensorflow:21.11-tf1-py3 bash
     git clone https://github.com/NVIDIA/FasterTransformer.git
     mkdir -p FasterTransformer/build
     cd FasterTransformer/build
@@ -162,23 +212,23 @@ Recommend use nvcr image like `nvcr.io/nvidia/tensorflow:21.02-tf1-py3` or `nvcr
 1. build with C++
 
     ```bash
-    cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_GPT=ON ..
+    cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_MULTI_GPU=ON ..
     make
     ```
 
 2. build with TensorFlow 
 
-    Uses need to set the path of TensorFlow. For example, if we use `nvcr.io/nvidia/tensorflow:20.12-tf1-py3`, then
+    Uses need to set the path of TensorFlow. For example, if we use `nvcr.io/nvidia/tensorflow:21.11-tf1-py3`, then
 
     ```bash
-    cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_TF=ON -DTF_PATH=/usr/local/lib/python3.8/dist-packages/tensorflow_core/ -DBUILD_GPT=ON ..
+    cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_TF=ON -DTF_PATH=/usr/local/lib/python3.8/dist-packages/tensorflow_core/ -DBUILD_MULTI_GPU=ON ..
     make 
     ```
 
 3. build with PyTorch
 
     ```bash
-    cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON -DBUILD_GPT=ON ..
+    cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON -DBUILD_MULTI_GPU=ON ..
     make
     ```
 
@@ -251,7 +301,7 @@ python ../examples/pytorch/gpt/utils/megatron_ckpt_convert_2.py -i ../models/meg
 * How to use `checkpoint_saver_fastertransformer.py` to convert the megatron model. Note that this tool is only available for newer checkpoint. Need to get more details from ADLR team.
 
 ```bash
-git clone -b checkpoint_util https://gitlab-master.nvidia.com/ADLR/megatron-lm.git
+git clone -b checkpoint_util https://gitlab-master.nvidia.com/ADLR/megatron-lm.git # This is still an internal tool.
 cp ../examples/pytorch/gpt/utils/checkpoint_saver_fastertransformer.py megatron-lm/tools
 cd megatron-lm
 python tools/checkpoint_util.py --model-type GPT --loader megatron --saver fastertransformer --input ../megatron_new_ckpt/357m-pipeline-2-tensor-2/ --output ../tmp  --target-tensor-parallel-size 1
@@ -267,14 +317,23 @@ python ../examples/onnx/multi_gpu_gpt/onnx_ckpt_convert.py -i gpt2-10.onnx -o ..
 python ../examples/onnx/multi_gpu_gpt/onnx_ckpt_convert.py -i gpt2-10.onnx -o ../models/onnx-models/c-model/124m/ -i_g 4
 ```
 
+* Downlaod huggingface gpt model and convert
+
+```bash
+git clone https://huggingface.co/gpt2-xl
+python ../examples/pytorch/gpt/utils/huggingface_gpt_convert.py -i gpt2-xl/ -o ../models/huggingface-models/c-model/gpt2-xl -i_g 1
+```
+
+
 ### Run GPT
 
 1. Run GPT under on C++ with multiple gpu
 
-    1.1 Generate the `gemm_config.in` file.
+    1.1 Generate the `gemm_config.in` file.\
+    Data Type = 0 (FP32) or 1 (FP16) or 2 (BF16)
 
     ```bash
-    ./bin/gpt_gemm <batch_size> <beam_width> <max_input_len> <head_number> <size_per_head> <inter_size> <vocab_size> <is_fp16> <tensor_para_size>
+    ./bin/gpt_gemm <batch_size> <beam_width> <max_input_len> <head_number> <size_per_head> <inter_size> <vocab_size> <data_type> <tensor_para_size>
     E.g., ./bin/gpt_gemm 8 1 32 12 128 6144 51200 1 1
     ```
 
@@ -313,7 +372,7 @@ python ../examples/onnx/multi_gpu_gpt/onnx_ckpt_convert.py -i gpt2-10.onnx -o ..
     srun -N2 -n2 -t 600 --pty bash # Assume we get 2 nodes: prm-dgx-09 and prm-dgx-10
     srun -N2 -n2 docker pull nvcr.io/nvidia/tensorflow:20.07-tf1-py3 
 
-    srun -N2 -n2  nvidia-docker run -itd --rm --privileged --network=host --pid=host --cap-add=IPC_LOCK --device=/dev/infiniband -v $PWD:$PWD -w $PWD --name ft-test nvcr.io/nvidia/tensorflow:20.12-tf1-py3 /bin/bash
+    srun -N2 -n2  nvidia-docker run -itd --rm --privileged --network=host --pid=host --cap-add=IPC_LOCK --device=/dev/infiniband -v $PWD:$PWD -w $PWD --name ft-test nvcr.io/nvidia/tensorflow:21.11-tf1-py3 /bin/bash
 
     srun -N2 -n2  nvidia-docker exec -i --env SLURM_NTASKS --env SLURM_NODEID --env SLURM_PROCID --env SLURM_STEP_NODELIST --env SLURMD_NODENAME --privileged ft-test bash -c "mkdir /root/.ssh && cp $PWD/ssh/* /root/.ssh && chmod 700 /root/.ssh && chmod 640 /root/.ssh/authorized_keys2 && chmod 400 /root/.ssh/id_rsa && apt-get update && apt-get install ssh -y && mkdir /run/sshd/ && /usr/sbin/sshd -p 11068 && nvidia-smi -lgc 1530"
 
@@ -401,12 +460,69 @@ Details are in [transformer_backend](https://github.com/triton-inference-server/
 
 ## Performance
 
-Hardware settings: 
-* 8xA100-80GBs (with mclk 1593MHz, pclk 1410MHz) with AMD EPYC 7742 64-Core Processor
+Hardware settings (A100 SuperPod architecture):
+
+* Intra node: 8xA100-80GBs (with mclk 1593MHz, pclk 1410MHz) with AMD EPYC 7742 64-Core Processor, linked by NVSwitch
+* Inter node: Linked by Infiniband, 8x200Gb/s NICs
 
 ### Large model inference with model parallel
 
 We demonstrate the inference time of Megatron and FasterTransformer on Triton, and show the speedup of FasterTransformer compare to Megatron for GPT-175B and GPT-89B. In the experiments of GPT, we updated the following parameters:
+
+#### Performance of Megatron-530B
+
+* head_num = 128
+* size_per_head = 160
+* num_layers = 105
+* data_type = FP16
+* vocab_size = 51200
+* top_p = 0.9
+
+TP means tensor parallelism, PP means pipeline parallelism.
+
+<div align=center><img width=800 src ="images/gpt/Megatron_530B_benchmark_1.png "/></div>
+<div align=center> Fig 4. Latency on input length 60, output length 20. TP means tensor parallelism and PP means pipeline parallelism. </div>
+
+<div align=center><img width=800 src ="images/gpt/Megatron_530B_benchmark_2.png "/></div>
+<div align=center> Fig 5. Throughput per GPU on input length 60, output length 20. TP means tensor parallelism and PP means pipeline parallelism. </div>
+
+<div align=center><img width=800 src ="images/gpt/Megatron_530B_benchmark_3.png "/></div>
+<div align=center> Fig 6. Latency on fixing output length 20, 16 ways tensor parallelism, different input length and batch size. </div>
+
+<div align=center><img width=800 src ="images/gpt/Megatron_530B_benchmark_4.png "/></div>
+<div align=center> Fig 7. Latency on fixing input length 128, 16 ways tensor parallelism, different output length and batch size. </div>
+
+| Batch Size | Input Length | Output Length | Latency of TP-16, PP-1 (ms) | Latency of TP-32, PP-1 (ms) | Latency of TP-8, PP-3 (ms) |
+| :--------: | :----------: | :-----------: | :-------------------------: | :-------------------------: | :------------------------: |
+|     1      |      20      |       8       |             565             |             431             |            842             |
+|     2      |      20      |       8       |             598             |             455             |            860             |
+|     4      |      20      |       8       |             616             |             493             |            867             |
+|     8      |      20      |       8       |             660             |             523             |            929             |
+|     16     |      20      |       8       |             730             |             575             |            1049            |
+|     32     |      20      |       8       |             865             |             672             |            1283            |
+|     64     |      20      |       8       |            1191             |             942             |            1722            |
+|    128     |      20      |       8       |            1862             |            1431             |            2124            |
+|    256     |      20      |       8       |            3341             |            2483             |            3140            |
+|            |              |               |                             |                             |                            |
+|     1      |      60      |      20       |            1379             |            1037             |            2085            |
+|     2      |      60      |      20       |            1515             |            1110             |            2122            |
+|     4      |      60      |      20       |            1512             |            1198             |            2184            |
+|     8      |      60      |      20       |            1631             |            1295             |            2367            |
+|     16     |      60      |      20       |            1868             |            1454             |            2753            |
+|     32     |      60      |      20       |            2361             |            1804             |            3543            |
+|     64     |      60      |      20       |            3383             |            2646             |            4117            |
+|    128     |      60      |      20       |            5406             |            4099             |            5319            |
+|    256     |      60      |      20       |             OOM             |            7203             |            8318            |
+|            |              |               |                             |                             |                            |
+|     1      |     128      |       8       |             585             |             866             |            451             |
+|     2      |     128      |       8       |             667             |             932             |            508             |
+|     4      |     128      |       8       |             765             |            1097             |            606             |
+|     8      |     128      |       8       |             990             |            1434             |            766             |
+|     16     |     128      |       8       |            1377             |            2104             |            1074            |
+|     32     |     128      |       8       |            2251             |            2623             |            1741            |
+|     64     |     128      |       8       |            4002             |            3578             |            3114            |
+|    128     |     128      |       8       |             OOM             |            5512             |            5784            |
+|    256     |     128      |       8       |             OOM             |            9614             |           11232            |
 
 #### Performance of GPT-175B
 
@@ -462,33 +578,68 @@ We demonstrate the inference time of Megatron and FasterTransformer on Triton, a
 |     8      |     512      |      32       |           3341.66           |        1415.02        |       2.36       |
 |     16     |     512      |      32       |           6090.07           |        1952.2         |       3.12       |
 
-#### Performance of GPT-1.3B
+#### Performance of GPT-20B
 
-* head_num = 32
-* size_per_head = 64
-* num_layers = 24
+* head_num = 48
+* size_per_head = 128
+* num_layers = 44
 * data_type = FP16
 * vocab_size = 51200
 * top_p = 0.9
-* tensor_para_size = 1
 
-| Batch_size | Input Seqlen | Output Seqlen | FT <br/> Latency (ms) | Memory Usage (GB) |
-| :--------: | :----------: | :-----------: | :-------------------: | :---------------: |
-|     1      |     128      |       8       |         36.76         |       8.67        |
-|     2      |     128      |       8       |         39.16         |       5.39        |
-|     4      |     128      |       8       |         43.32         |       5.49        |
-|     8      |     128      |       8       |         52.92         |       5.66        |
-|     16     |     128      |       8       |         74.44         |       6.00        |
-|     32     |     128      |       8       |        116.74         |       6.66        |
-|     64     |     128      |       8       |        201.71         |       7.97        |
-|            |              |               |                       |                   |
-|     1      |     512      |      32       |        135.85         |       5.58        |
-|     2      |     512      |      32       |        150.57         |       5.71        |
-|     4      |     512      |      32       |        178.25         |       5.97        |
-|     8      |     512      |      32       |        232.11         |       6.64        |
-|     16     |     512      |      32       |        345.96         |       7.98        |
-|     32     |     512      |      32       |        578.52         |       10.52       |
-|     64     |     512      |      32       |        1036.21        |       15.61       |
+TP means tensor parallelism
+
+| Batch_size | Input Length | Output Length | Latency of <br/> single GPU (ms) | Latency of <br/> 2-way TP (ms) | Latency of <br/> 4-way TP (ms) | Latency of <br/> 8-way TP (ms) |
+| :--------: | :----------: | :-----------: | :------------------------------: | :----------------------------: | :----------------------------: | :----------------------------: |
+|     1      |      20      |       8       |               225                |              147               |              102               |               89               |
+|     2      |      20      |       8       |               225                |              152               |              108               |               94               |
+|     4      |      20      |       8       |               228                |              158               |              113               |              100               |
+|     8      |      20      |       8       |               239                |              169               |              121               |              107               |
+|     16     |      20      |       8       |               268                |              191               |              133               |              113               |
+|     32     |      20      |       8       |               331                |              230               |              155               |              127               |
+|     64     |      20      |       8       |               452                |              314               |              200               |              169               |
+|    128     |      20      |       8       |               726                |              484               |              318               |              256               |
+|    256     |      20      |       8       |               1352               |              844               |              533               |              416               |
+|            |              |               |                                  |                                |                                |                                |
+|     1      |      60      |      20       |               560                |              358               |              248               |              212               |
+|     2      |      60      |      20       |               562                |              378               |              262               |              222               |
+|     4      |      60      |      20       |               582                |              393               |              274               |              236               |
+|     8      |      60      |      20       |               635                |              429               |              299               |              247               |
+|     16     |      60      |      20       |               748                |              510               |              345               |              272               |
+|     32     |      60      |      20       |               933                |              620               |              418               |              325               |
+|     64     |      60      |      20       |               1352               |              887               |              574               |              454               |
+|    128     |      60      |      20       |               2218               |              1384              |              928               |              699               |
+|    256     |      60      |      20       |               4141               |              2424              |              1574              |              1152              |
+|            |              |               |                                  |                                |                                |                                |
+|     1      |     128      |      20       |               566                |              362               |              254               |              217               |
+|     2      |     128      |      20       |               580                |              385               |              267               |              227               |
+|     4      |     128      |      20       |               629                |              421               |              290               |              244               |
+|     8      |     128      |      20       |               740                |              487               |              333               |              267               |
+|     16     |     128      |      20       |               931                |              618               |              405               |              312               |
+|     32     |     128      |      20       |               1335               |              862               |              547               |              418               |
+|     64     |     128      |      20       |               2157               |              1379              |              832               |              634               |
+|    128     |     128      |      20       |               3830               |              2365              |              1439              |              1072              |
+|    256     |     128      |      20       |               OOM                |              4414              |              2639              |              1943              |
+|            |              |               |                                  |                                |                                |                                |
+|     1      |      80      |      200      |               5609               |              3532              |              2438              |              2053              |
+|     2      |      80      |      200      |               5588               |              3682              |              2544              |              2095              |
+|     4      |      80      |      200      |               5661               |              3797              |              2646              |              2206              |
+|     8      |      80      |      200      |               5838               |              3984              |              2741              |              2268              |
+|     16     |      80      |      200      |               6167               |              4356              |              2964              |              2307              |
+|     32     |      80      |      200      |               6864               |              4817              |              3233              |              2566              |
+|     64     |      80      |      200      |               8290               |              6003              |              3815              |              3173              |
+|    128     |      80      |      200      |               OOM                |              7884              |              5239              |              4303              |
+|    256     |      80      |      200      |               OOM                |             12007              |              7603              |              6087              |
+|            |              |               |                                  |                                |                                |                                |
+|     1      |     200      |      200      |               5648               |              3544              |              2481              |              2080              |
+|     2      |     200      |      200      |               5686               |              3739              |              2597              |              2131              |
+|     4      |     200      |      200      |               5830               |              3876              |              2719              |              2249              |
+|     8      |     200      |      200      |               6146               |              4123              |              2851              |              2338              |
+|     16     |     200      |      200      |               6815               |              4672              |              3152              |              2475              |
+|     32     |     200      |      200      |               8111               |              5488              |              3634              |              2811              |
+|     64     |     200      |      200      |              10766               |              7256              |              4536              |              3621              |
+|    128     |     200      |      200      |               OOM                |             10538              |              6618              |              5229              |
+|    256     |     200      |      200      |               OOM                |              OOM               |             10447              |              7895              |
 
 #### Performance of GPT-6.7B
 
@@ -517,6 +668,34 @@ We demonstrate the inference time of Megatron and FasterTransformer on Triton, a
 |     16     |     512      |      32       |        1068.88        |       22.17       |
 |     32     |     512      |      32       |        1814.03        |       28.73       |
 |     64     |     512      |      32       |        3306.41        |       41.84       |
+
+#### Performance of GPT-1.3B
+
+* head_num = 32
+* size_per_head = 64
+* num_layers = 24
+* data_type = FP16
+* vocab_size = 51200
+* top_p = 0.9
+* tensor_para_size = 1
+
+| Batch_size | Input Seqlen | Output Seqlen | FT <br/> Latency (ms) | Memory Usage (GB) |
+| :--------: | :----------: | :-----------: | :-------------------: | :---------------: |
+|     1      |     128      |       8       |         36.76         |       8.67        |
+|     2      |     128      |       8       |         39.16         |       5.39        |
+|     4      |     128      |       8       |         43.32         |       5.49        |
+|     8      |     128      |       8       |         52.92         |       5.66        |
+|     16     |     128      |       8       |         74.44         |       6.00        |
+|     32     |     128      |       8       |        116.74         |       6.66        |
+|     64     |     128      |       8       |        201.71         |       7.97        |
+|            |              |               |                       |                   |
+|     1      |     512      |      32       |        135.85         |       5.58        |
+|     2      |     512      |      32       |        150.57         |       5.71        |
+|     4      |     512      |      32       |        178.25         |       5.97        |
+|     8      |     512      |      32       |        232.11         |       6.64        |
+|     16     |     512      |      32       |        345.96         |       7.98        |
+|     32     |     512      |      32       |        578.52         |       10.52       |
+|     64     |     512      |      32       |        1036.21        |       15.61       |
 
 #### Performance of GPT-350M
 
@@ -547,7 +726,3 @@ We demonstrate the inference time of Megatron and FasterTransformer on Triton, a
 |     64     |     512      |      32       |        529.18         |       8.67        |
 
 ## TODO
-
-* [ ] Add benchmark for more model size, batch size with different model parallel size.
-* [ ] Add benchmark for Pipeline parallel. (how local batch size influences: some benchmarks to show the trade off between micro batches computing and the total batch computing)
-* [ ] Add benchmark for With and without recompute
