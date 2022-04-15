@@ -1,0 +1,13 @@
+[submodule "3rdparty/Megatron-LM"]
+	path = 3rdparty/Megatron-LM
+	url = https://github.com/NVIDIA/Megatron-LM.git
+	branch = v2.6
+[submodule "examples/tensorflow/bert/tensorflow_bert/bert"]
+	path = examples/tensorflow/bert/tensorflow_bert/bert
+	url = https://github.com/google-research/bert.git
+[submodule "examples/pytorch/swin/Swin-Transformer-Quantization/SwinTransformer"]
+	path = examples/pytorch/swin/Swin-Transformer-Quantization/SwinTransformer
+	url = https://github.com/microsoft/Swin-Transformer
+[submodule "examples/pytorch/vit/ViT-quantization/ViT-pytorch"]
+	path = examples/pytorch/vit/ViT-quantization/ViT-pytorch
+	url = https://github.com/jeonsworld/ViT-pytorch

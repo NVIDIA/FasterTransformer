@@ -1,0 +1,15 @@
+[flake8]
+ignore = W292
+exclude =
+    *migrations*,
+    # python related
+    *.pyc,
+    .git,
+    __pycache__,
+
+max-line-length=120
+max-complexity=12
+format=pylint
+show_source = True
+statistics = True
+count = True

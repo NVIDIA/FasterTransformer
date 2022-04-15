@@ -1,0 +1,256 @@
+stages:
+  - build
+  - test
+
+build_pyt_release:
+  image: nvcr.io/nvidia/pytorch:21.02-py3
+  tags:
+    - fastertransformer
+  stage: build
+  only:
+    - main
+    - merge_requests
+  artifacts:
+    paths:
+      - ${CI_PROJECT_DIR}/build/
+    expire_in: 1 week
+  script:
+    - cd ${CI_PROJECT_DIR} && mkdir build && cd build
+    - git submodule init && git submodule update
+    - cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON -DBUILD_GPT=ON ..
+    - make -j12
+
+build_pyt_release_sparse:
+  image: nvcr.io/nvidia/pytorch:21.02-py3
+  tags:
+    - fastertransformer
+  stage: build
+  only:
+    - main
+    - merge_requests
+  artifacts:
+    paths:
+      - ${CI_PROJECT_DIR}/build/
+    expire_in: 1 week
+  script:
+    - cd ${CI_PROJECT_DIR} && mkdir build && cd build
+    - git submodule init && git submodule update
+    - wget https://developer.download.nvidia.com/compute/libcusparse-lt/0.1.0/local_installers/libcusparse_lt-linux-x86_64-0.1.0.2.tar.gz
+    - tar -xzvf libcusparse_lt-linux-x86_64-0.1.0.2.tar.gz
+    - cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON -DSPARSITY_SUPPORT=ON -DCUSPARSELT_PATH=${CI_PROJECT_DIR}/build/libcusparse_lt/ ..
+    - make -j12
+
+build_tf_release:
+  image: nvcr.io/nvidia/tensorflow:21.02-tf1-py3
+  tags:
+    - fastertransformer
+  stage: build
+  only:
+    - main
+    - merge_requests
+  artifacts:
+    paths:
+      - ${CI_PROJECT_DIR}/build/
+    expire_in: 1 week
+  script:
+    - cd ${CI_PROJECT_DIR} && mkdir build && cd build
+    - git submodule init && git submodule update
+    - cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_TF=ON -DTF_PATH=/usr/local/lib/python3.8/dist-packages/tensorflow_core/ -DBUILD_GPT=ON ..
+    - make -j12
+    - apt-get update && apt-get install bc
+
+# 1. Get accuracy on LAMBADA dataset
+# 2. Run pytorch gpt op as basline
+# 3. Run pytorch piepline parallel and compare difference with baseline
+# 4. Run pytorch tensor parallel and compare difference with baseline
+pyt_gpt_test:
+  image: nvcr.io/nvidia/pytorch:21.02-py3
+  tags:
+    - fastertransformer
+  stage: test
+  only:
+    - main
+    - merge_requests
+  needs:
+    - job: build_pyt_release
+      artifacts: true
+  script:
+    - cd ${CI_PROJECT_DIR}/build/
+    - git submodule init && git submodule update
+    - export PYTHONPATH="${CI_PROJECT_DIR}/:$PYTHONPATH"
+    - export NVIDIA_TF32_OVERRIDE=0 # Disable the TF32
+    - export CUDA_VISIBLE_DEVICES=0
+    - wget https://s3.amazonaws.com/models.huggingface.co/bert/gpt2-vocab.json -P ../models
+    - wget https://s3.amazonaws.com/models.huggingface.co/bert/gpt2-merges.txt -P ../models
+    - wget --content-disposition https://api.ngc.nvidia.com/v2/models/nvidia/megatron_lm_345m/versions/v0.0/zip -O megatron_lm_345m_v0.0.zip
+    - wget https://github.com/cybertronai/bflm/raw/master/lambada_test.jsonl -P ../models/megatron-models
+    - unzip megatron_lm_345m_v0.0.zip -d ../models/megatron-models/345m
+    - python ../examples/pytorch/gpt/utils/megatron_ckpt_convert.py -head_num 16 -i ../models/megatron-models/345m/release/ -o ../models/megatron-models/c-model/345m/ -t_g 1 -i_g 1
+    - bash ../examples/pytorch/gpt/scripts/evaluate_zeroshot_gpt.sh
+    - python ../examples/pytorch/gpt/gpt_example.py --ckpt_path=../models/megatron-models/c-model/345m/1-gpu/ --top_p 0.5 --sample_output_file single-gpu-out.txt
+    - export CUDA_VISIBLE_DEVICES=0,1
+    - mpirun -n 2 --allow-run-as-root python ../examples/pytorch/gpt/multi_gpu_gpt_example.py --tensor_para_size=1 --pipeline_para_size=2 --ckpt_path=../models/megatron-models/c-model/345m/1-gpu/ --top_p 0.5 --sample_output_file pipeline-parallel-2-gpu-out.txt
+    - diff single-gpu-out.txt pipeline-parallel-2-gpu-out.txt
+    - python ../examples/pytorch/gpt/utils/megatron_ckpt_convert.py -head_num 16 -i ../models/megatron-models/345m/release/ -o ../models/megatron-models/c-model/345m/ -t_g 1 -i_g 2
+    - mpirun -n 2 --allow-run-as-root python ../examples/pytorch/gpt/multi_gpu_gpt_example.py --tensor_para_size=2 --pipeline_para_size=1 --ckpt_path=../models/megatron-models/c-model/345m/2-gpu/ --top_p 0.5 --sample_output_file tensor-parallel-2-gpu-out.txt
+    - diff single-gpu-out.txt tensor-parallel-2-gpu-out.txt
+  timeout: 4h 30m
+
+tf_test:
+  image: nvcr.io/nvidia/tensorflow:21.02-tf1-py3
+  tags:
+    - fastertransformer
+  stage: test
+  only:
+    - main
+    - merge_requests
+  needs:
+    - job: build_tf_release
+      artifacts: true
+  script:
+    - cd ${CI_PROJECT_DIR}/build/
+    - apt-get update && apt-get install bc
+    - export PYTHONPATH="${CI_PROJECT_DIR}/:$PYTHONPATH"
+    - export NVIDIA_TF32_OVERRIDE=0 # Disable the TF32
+    - export CUDA_VISIBLE_DEVICES=0
+    - bash ${CI_PROJECT_DIR}/examples/tensorflow/decoding/utils/translation/download_model_data.sh
+    - mkdir -p ${CI_PROJECT_DIR}/translation/ckpt_fp16
+    - python ${CI_PROJECT_DIR}/tests/bert/tf_bert_unit_test.py
+    - python ${CI_PROJECT_DIR}/tests/bert/tf_encoder_unit_test.py
+    - python ${CI_PROJECT_DIR}/examples/tensorflow/ckpt_type_convert.py --init_checkpoint=${CI_PROJECT_DIR}/translation/ckpt/model.ckpt-500000 --fp16_checkpoint=${CI_PROJECT_DIR}/translation/ckpt_fp16/model.ckpt-500000
+    - python ${CI_PROJECT_DIR}/tests/decoding/tf_decoding_unit_test.py
+  timeout: 4h 30m
+
+tf_xlnet_test:
+  image: nvcr.io/nvidia/tensorflow:21.02-tf1-py3
+  tags:
+    - fastertransformer
+  stage: test
+  only:
+    - master
+    - v4.1
+    - main
+    - merge_requests
+  needs:
+    - job: build_tf_release
+      artifacts: true
+  script:
+    - cd ${CI_PROJECT_DIR}/examples/tensorflow/xlnet
+    - bash downloadModel.sh
+    - bash verifyCorrectness.sh # For FP32 model
+
+pyt_sp_test:
+  image: nvcr.io/nvidia/pytorch:21.02-py3
+  tags:
+    - fastertransformer
+  stage: test
+  only:
+    - main
+    - merge_requests
+  needs:
+    - job: build_pyt_release_sparse
+      artifacts: true
+  script:
+    - cd ${CI_PROJECT_DIR}/build/
+    - export PYTHONPATH="${CI_PROJECT_DIR}/:$PYTHONPATH"
+    - export NVIDIA_TF32_OVERRIDE=0 # Disable the TF32
+    - export CUDA_VISIBLE_DEVICES=0
+    - pip install transformers==2.5.1
+    # GOS has no Ampere GPU, so no sparse tests can be done. only test some dense cases
+    - ${CI_PROJECT_DIR}/build/bin/bert_gemm 32 64 12 64 1 0
+    - python ${CI_PROJECT_DIR}/examples/pytorch/bert/bert_example.py 32 12 64 12 64 --fp16
+    - ${CI_PROJECT_DIR}/build/bin/bert_gemm 32 64 12 64 1 1
+    - python ${CI_PROJECT_DIR}/examples/pytorch/bert/bert_example.py 32 12 64 12 64 --fp16 --int8_mode 1
+    - python ${CI_PROJECT_DIR}/examples/pytorch/bert/bert_example.py 32 12 64 12 64 --fp16 --int8_mode 2
+    - python ${CI_PROJECT_DIR}/examples/pytorch/bert/bert_example.py 32 12 64 12 64 --fp16 --int8_mode 3
+
+pyt_longformer_test:
+  image: nvcr.io/nvidia/pytorch:21.02-py3
+  tags:
+    - fastertransformer
+  stage: test
+  only:
+    - main
+    - merge_requests
+  needs:
+    - job: build_pyt_release
+      artifacts: true
+  script:
+    - cd ${CI_PROJECT_DIR}/examples/pytorch/longformer
+    - apt-get update && apt-get install git-lfs
+    - git lfs install
+    - git config lfs.fetchinclude "pytorch_model.bin,config.json"
+    - git clone https://huggingface.co/allenai/longformer-large-4096-finetuned-triviaqa
+    - cd ${CI_PROJECT_DIR}
+    - export PYTHONPATH="${CI_PROJECT_DIR}/:$PYTHONPATH"
+    - export NVIDIA_TF32_OVERRIDE=0 # Disable the TF32
+    - export CUDA_VISIBLE_DEVICES=0
+    - pip install transformers==4.8.2
+    - python3 tests/longformer/py_longformer_unit_test.py
+
+pyt_decoding_test:
+  image: nvcr.io/nvidia/pytorch:21.02-py3
+  tags:
+    - fastertransformer
+  stage: test
+  only:
+    - main
+    - merge_requests
+  needs:
+    - job: build_pyt_release
+      artifacts: true
+  script:
+    - cd ${CI_PROJECT_DIR}/build/
+    - export PYTHONPATH="${CI_PROJECT_DIR}/:$PYTHONPATH"
+    - export NVIDIA_TF32_OVERRIDE=0 # Disable the TF32
+    - export CUDA_VISIBLE_DEVICES=0
+    - apt-get update && apt-get install bc
+    - pip install sacrebleu
+    - pip install opennmt-py==1.1.1
+    - bash ../examples/pytorch/decoding/utils/download_model.sh
+    - mkdir pytorch/translation/data -p
+    - cp ../examples/tensorflow/decoding/utils/translation/test* pytorch/translation/data
+    - python ../examples/pytorch/decoding/utils/recover_bpe.py pytorch/translation/data/test.de debpe_ref.txt
+    - echo "Run decoding fp32" # decoding fp32 testing
+    - python ../examples/pytorch/decoding/translate_example.py --batch_size 128 --beam_size 4 --model_type decoding_ext --decoding_ths_path ./lib/libth_decoding.so --data_type fp32 --output_file output.txt
+    - python ../examples/pytorch/decoding/utils/recover_bpe.py output.txt debpe_output.txt
+    - cat debpe_output.txt | sacrebleu debpe_ref.txt
+    - echo "Run decoder fp32" # decoder fp32 testing
+    - python ../examples/pytorch/decoding/translate_example.py --batch_size 128 --beam_size 4 --model_type torch_decoding_with_decoder_ext --decoder_ths_path ./lib/libth_decoder.so --data_type fp32 --output_file output.txt
+    - python ../examples/pytorch/decoding/utils/recover_bpe.py output.txt debpe_output.txt
+    - cat debpe_output.txt | sacrebleu debpe_ref.txt
+    - echo "Run decoding fp16" # decoding fp16 testing
+    - python ../examples/pytorch/decoding/translate_example.py --batch_size 128 --beam_size 4 --model_type decoding_ext --decoding_ths_path ./lib/libth_decoding.so --data_type fp16 --output_file output.txt
+    - python ../examples/pytorch/decoding/utils/recover_bpe.py output.txt debpe_output.txt
+    - cat debpe_output.txt | sacrebleu debpe_ref.txt
+    - echo "Run decoder fp16" # decoder fp16 testing
+    - python ../examples/pytorch/decoding/translate_example.py --batch_size 128 --beam_size 4 --model_type torch_decoding_with_decoder_ext --decoder_ths_path ./lib/libth_decoder.so --data_type fp16 --output_file output.txt
+    - python ../examples/pytorch/decoding/utils/recover_bpe.py output.txt debpe_output.txt
+    - cat debpe_output.txt | sacrebleu debpe_ref.txt
+  timeout: 4h
+
+t5_test:
+  image: nvcr.io/nvidia/pytorch:21.02-py3
+  tags:
+    - fastertransformer
+  stage: test
+  only:
+    - main
+    - merge_requests
+  needs:
+    - job: build_pyt_release
+      artifacts: true
+  script:
+    - cd ${CI_PROJECT_DIR}/build/
+    - export PYTHONPATH="${CI_PROJECT_DIR}/:$PYTHONPATH"
+    - export NVIDIA_TF32_OVERRIDE=0 # Disable the TF32
+    - export CUDA_VISIBLE_DEVICES=0
+    - apt-get update && apt-get install bc
+    - pip install transformers huggingface_hub tokenizers sacrebleu SentencePiece
+    - python ../examples/pytorch/t5/translate_example.py -batch 32 -time 0123
+    - python ../examples/pytorch/t5/translate_example.py -batch 32 -time 0123 -d fp16
+    - python ../examples/pytorch/t5/translate_example.py -batch 4 -time 0123 -d fp16 --model t5-3b
+    - export CUDA_VISIBLE_DEVICES=0,2
+    - mpirun -n 2 --allow-run-as-root python ../examples/pytorch/t5/translate_example.py -batch 4 -time 13 -d fp16 --model t5-3b --tensor_para_size 2
+    - mpirun -n 2 --allow-run-as-root python ../examples/pytorch/t5/translate_example.py -batch 4 -time 13 -d fp16 --model t5-3b --pipeline_para_size 2
+  timeout: 4h

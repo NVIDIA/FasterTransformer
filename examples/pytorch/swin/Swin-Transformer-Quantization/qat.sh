@@ -1,0 +1,14 @@
+python -m torch.distributed.launch \
+    --nproc_per_node 1 --master_port 12346 main.py \
+    --train \
+    --cfg SwinTransformer/configs/swin_tiny_patch4_window7_224.yaml \
+    --resume ./calib-checkpoint/swin_tiny_patch4_window7_224_calib.pth \
+    --data-path /data/datasets/ILSVRC2012 \
+    --quant-mode ft2 \
+    --teacher swin_tiny_patch4_window7_224.pth \
+    --output qat-output \
+    --distill \
+    --int8-mode 1\
+    --batch-size 32\
+    --num-epochs 3 \
+    --qat-lr 1e-5
