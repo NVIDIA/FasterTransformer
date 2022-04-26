@@ -847,15 +847,16 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
 
         // Computes the Q/K values with bias.
         q = add(q, q_bias);
+        const int padd_len = (params.input_lengths == nullptr) ? 0 : params.max_input_len - params.input_lengths[bi];
         if (!DO_CROSS_ATTENTION || (DO_CROSS_ATTENTION && params.timestep == 0)) {
             k = add(k, k_bias);
             if (params.rotary_embedding_dim > 0) {
-                apply_rotary_embedding(q, k, tidx, params.rotary_embedding_dim, params.timestep);
+                apply_rotary_embedding(q, k, tidx, params.rotary_embedding_dim, params.timestep - padd_len);
             }
         }
         else {
             if (params.rotary_embedding_dim > 0) {
-                apply_rotary_embedding(q, tidx, params.rotary_embedding_dim, params.timestep);
+                apply_rotary_embedding(q, tidx, params.rotary_embedding_dim, params.timestep - padd_len);
             }
         }
 

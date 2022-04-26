@@ -160,12 +160,12 @@ broadcastRequest(const std::vector<int>& v_start_ids,
         request_list[device_id]->insert(
             {"is_return_log_probs",
              triton::Tensor{triton::MEMORY_CPU, triton::TYPE_BOOL, std::vector<size_t>{1}, is_return_log_probs_ptr}});
-        bool* is_return_context_cum_log_probs = new bool(is_return_context_cum_log_probs);
-        pointer_record->push_back(is_return_context_cum_log_probs);
+        bool* is_return_context_cum_log_probs_ptr = new bool(is_return_context_cum_log_probs);
+        pointer_record->push_back(is_return_context_cum_log_probs_ptr);
         request_list[device_id]->insert(
             {"is_return_context_cum_log_probs",
              triton::Tensor{
-                 triton::MEMORY_CPU, triton::TYPE_BOOL, std::vector<size_t>{1}, is_return_context_cum_log_probs}});
+                 triton::MEMORY_CPU, triton::TYPE_BOOL, std::vector<size_t>{1}, is_return_context_cum_log_probs_ptr}});
         pointer_record->push_back(d_input_ids);
         pointer_record->push_back(d_input_lengths);
         pointer_record->push_back(request_output_len_ptr);
