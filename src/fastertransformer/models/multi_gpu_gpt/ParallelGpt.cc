@@ -1057,7 +1057,7 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>* output_ten
             if (output_tensors->count("output_log_probs") > 0
                 && output_tensors->at("output_log_probs").data != nullptr) {
                 ftNcclSend(output_tensors->at("output_log_probs").getPtr<float>(),
-                           batch_size * beam_width * input_tensors->at("max_output_seq_len").getVal<int>(),
+                           output_tensors->at("output_log_probs").size(),
                            0,
                            pipeline_para_,
                            stream_);
@@ -1087,7 +1087,7 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>* output_ten
             if (output_tensors->count("output_log_probs") > 0
                 && output_tensors->at("output_log_probs").data != nullptr) {
                 ftNcclRecv(output_tensors->at("output_log_probs").getPtr<float>(),
-                           batch_size * beam_width * input_tensors->at("max_output_seq_len").getVal<int>(),
+                           output_tensors->at("output_log_probs").size(),
                            pipeline_para_.world_size_ - 1,
                            pipeline_para_,
                            stream_);
