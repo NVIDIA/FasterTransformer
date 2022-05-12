@@ -3,9 +3,9 @@ description: Submit a bug report
 labels: [ "bug" ]
 body:
   - type: textarea
-    id: Description
+    id: description
     attributes:
-      label: System Info
+      label: Description
       description: Please share your system info with us.
       render: shell
       placeholder: branch, docker version, GPU type
@@ -13,7 +13,7 @@ body:
       required: true
       
   - type: textarea
-    id: Reproduced Steps
+    id: reproduced-steps
     attributes:
       label: Reproduced Steps
       description: Please provide the step to reproduce the bugs
