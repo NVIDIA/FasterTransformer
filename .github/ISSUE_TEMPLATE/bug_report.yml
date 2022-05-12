@@ -1,0 +1,32 @@
+name: "Bug Report"
+description: Submit a bug report
+labels: [ "bug" ]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Please share your system info with us.
+      render: shell
+      placeholder: branch, docker version, GPU type
+    validations:
+      required: true
+      
+  - type: textarea
+    id: reproduced-steps
+    attributes:
+      label: Reproduced Steps
+      description: Please provide the step to reproduce the bugs
+      render: shell
+      placeholder: |
+        Steps to reproduce your bugs:
+        
+        1. docker run -ti --gpus all nvcr.io/nvidia/pytorch:22.03-py3 bash
+        2. git clone https://github.com/NVIDIA/FasterTransformer.git
+        3. cd FasterTransformer mkdir build && cd build
+        4. cmake -DSM=80 -DCMAKE_BUILD_TYPE=Release .. && make -j12
+        5. ./bin/bert_example 32 12 32 12 64 0 0
+        6. What error you see.
+  
+    validations:
+      required: true
