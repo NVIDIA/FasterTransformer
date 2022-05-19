@@ -42,6 +42,7 @@ private:
     size_t inter_size_;
     size_t num_layer_;
     size_t hidden_units_;
+    bool skip_encoder_attn
 
     BaseAttentionLayer<T>* self_attention_layer_;
     BaseAttentionLayer<T>* cross_attention_layer_;
@@ -71,7 +72,8 @@ public:
             cudaStream_t stream,
             cublasMMWrapper* cublas_wrapper,
             IAllocator* allocator,
-            bool is_free_buffer_after_forward);
+            bool is_free_buffer_after_forward,
+            bool skip_encoder_attn);
 
     Decoder(Decoder<T> const& decoder);
 
