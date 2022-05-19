@@ -45,7 +45,7 @@ public:
               int inter_size,
               int layer_num,
               int mem_hidden_dim,
-              bool skip_encode_attn,
+              bool skip_encoder_attn,
               const std::vector<th::Tensor>& w):
         _head_num(head_num),
         _head_size(head_size),
@@ -53,7 +53,7 @@ public:
         _weights(w),
         _layer_num(layer_num),
         _mem_hidden_dim(mem_hidden_dim),
-        _skip_encode_attn(skip_encode_attn)
+        _skip_encoder_attn(skip_encoder_attn)
     {
         int hidden_dim = _head_num * _head_size;
         ft::check_cuda_error(cublasLtCreate(&_cublasltHandle));
@@ -181,7 +181,7 @@ private:
     std::vector<th::Tensor> _weights;
     const int _layer_num;
     const int _mem_hidden_dim;
-    const int _skip_encode_attn;
+    const int _skip_encoder_attn;
     cublasLtHandle_t _cublasltHandle;
     std::mutex* cublas_wrapper_mutex_;
     ft::cublasAlgoMap* cublas_algo_map_;
@@ -217,7 +217,7 @@ public:
                              int64_t inter_size,
                              int64_t layer_num,
                              int64_t mem_hidden_dim,
-                             bool skip_encode_attn);
+                             bool skip_encoder_attn);
 
     ~FasterTransformerDecoder();
 
