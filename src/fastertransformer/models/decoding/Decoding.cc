@@ -35,7 +35,8 @@ void Decoding<T>::initialize()
                               stream_,
                               cublas_wrapper_,
                               allocator_,
-                              is_free_buffer_after_forward_);
+                              is_free_buffer_after_forward_,
+                              skip_encoder_attn_);
 
     dynamic_decode_layer_ = new DynamicDecodeLayer<T>(vocab_size_,
                                                       vocab_size_padded_,
