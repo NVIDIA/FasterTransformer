@@ -137,7 +137,7 @@ public:
         }
 
         ft::Decoder<T>* decoder = new ft::Decoder<T>(
-            batch_size, _head_num, _head_size, _inter_size, _layer_num, stream, cublas_wrapper, allocator, true);
+            batch_size, _head_num, _head_size, _inter_size, _layer_num, stream, cublas_wrapper, allocator, true, true);
 
         int tmp_step = step + 1;
         std::vector<ft::Tensor> input_tensors = std::vector<ft::Tensor>{
@@ -181,7 +181,7 @@ private:
     std::vector<th::Tensor> _weights;
     const int _layer_num;
     const int _mem_hidden_dim;
-    const int _skip_encoder_attn;
+    const bool _skip_encoder_attn;
     cublasLtHandle_t _cublasltHandle;
     std::mutex* cublas_wrapper_mutex_;
     ft::cublasAlgoMap* cublas_algo_map_;
