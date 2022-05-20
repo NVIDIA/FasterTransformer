@@ -45,7 +45,8 @@ FasterTransformerDecoder::FasterTransformerDecoder(th::Tensor self_layernorm_gam
                                                    int64_t head_size,
                                                    int64_t inter_size,
                                                    int64_t layer_num,
-                                                   int64_t mem_hidden_dim):
+                                                   int64_t mem_hidden_dim,
+                                                   bool skip_encoder_attn):
     _st(self_kernel_q.scalar_type()),
     weights{self_layernorm_gamma, self_layernorm_beta, self_kernel_q,         self_bias_q,
             self_output_kernel,   self_output_bias,    cross_layernorm_gamma, cross_layernorm_beta,
@@ -60,20 +61,21 @@ FasterTransformerDecoder::FasterTransformerDecoder(th::Tensor self_layernorm_gam
 
     switch (_st) {
         case at::ScalarType::Float:
-            ftdecoder = new FTDecoder<float>(head_num, head_size, inter_size, layer_num, mem_hidden_dim, weights);
+            ftdecoder = new FTDecoder<float>(head_num, head_size, inter_size, layer_num, mem_hidden_dim, skip_encoder_attn,weights);
             break;
         case at::ScalarType::Half:
-            ftdecoder = new FTDecoder<half>(head_num, head_size, inter_size, layer_num, mem_hidden_dim, weights);
+            ftdecoder = new FTDecoder<half>(head_num, head_size, inter_size, layer_num, mem_hidden_dim, skip_encoder_attn, weights);
             break;
         default:
             throw std::runtime_error("Wrong Tensor type.");
     }
-    head_info = torch::empty({4}, torch::dtype(torch::kInt64));
+    head_info = torch::empty({5}, torch::dtype(torch::kInt64));
     head_info[0] = head_num;
     head_info[1] = head_size;
     head_info[2] = layer_num;
     head_info[3] = inter_size;
     head_info[3] = mem_hidden_dim;
+    head_info[4] = (int64_t)skip_encoder_attn;
 }
 
 FasterTransformerDecoder::~FasterTransformerDecoder()
@@ -169,6 +171,7 @@ static auto fasterTransformerDecoderTHS =
                               int64_t,
                               int64_t,
                               int64_t,
+                              int64_t,
                               int64_t>())
         .def("forward", &torch_ext::FasterTransformerDecoder::forward)
         .def_pickle(
@@ -181,6 +184,7 @@ static auto fasterTransformerDecoderTHS =
                 int64_t layer_num = state[22][2].item().to<int>();
                 int64_t inter_size = state[22][3].item().to<int>();
                 int64_t mem_hidden_dim = state[22][4].item().to<int>();
+                int64_t skip_encoder_attn = state[22][5].item().to<int>();
                 return c10::make_intrusive<torch_ext::FasterTransformerDecoder>(state[0],
                                                                                 state[1],
                                                                                 state[2],
@@ -207,5 +211,6 @@ static auto fasterTransformerDecoderTHS =
                                                                                 head_size,
                                                                                 inter_size,
                                                                                 layer_num,
-                                                                                mem_hidden_dim);
+                                                                                mem_hidden_dim,
+                                                                                skip_encoder_attn);
             });
