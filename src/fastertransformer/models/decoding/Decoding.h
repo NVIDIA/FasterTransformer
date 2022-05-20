@@ -50,6 +50,7 @@ private:
     float temperature_;
     float len_penalty_;
     float repetition_penalty_;
+    bool skip_encoder_attn_;
 
     // calculated data
     size_t vocab_size_padded_;
