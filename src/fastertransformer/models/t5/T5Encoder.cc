@@ -380,7 +380,7 @@ void T5Encoder<T>::forward(std::unordered_map<std::string, Tensor>* output_tenso
                                                      request_seq_len,
                                                      request_seq_len,
                                                      local_batch_size,
-                                                     hidden_units_,
+                                                     d_model_,
                                                      stream_);
         }
         else {
