@@ -209,6 +209,18 @@ print(sysconfig.get_python_inc());"
       message(FATAL_ERROR "Python config Error.")
   endif()
   list(APPEND COMMON_HEADER_DIRS ${PY_INCLUDE_DIR})
+  execute_process(COMMAND ${PYTHON_PATH} "-c" "from __future__ import print_function; import torch;
+print(torch._C._GLIBCXX_USE_CXX11_ABI,end='');"
+                  RESULT_VARIABLE _PYTHON_SUCCESS
+                  OUTPUT_VARIABLE USE_CXX11_ABI)
+  message("-- USE_CXX11_ABI=${USE_CXX11_ABI}")
+  if (USE_CXX11_ABI)
+    set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} -D_GLIBCXX_USE_CXX11_ABI=1")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -D_GLIBCXX_USE_CXX11_ABI=1")
+  else()
+    set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} -D_GLIBCXX_USE_CXX11_ABI=0")
+    set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -D_GLIBCXX_USE_CXX11_ABI=0")
+  endif()
 endif()
 
 list(APPEND COMMON_HEADER_DIRS ${MPI_INCLUDE_PATH})
