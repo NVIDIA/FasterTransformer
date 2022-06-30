@@ -41,6 +41,7 @@ ParallelGptWeight<T>::ParallelGptWeight(const int hidden_units,
     int8_mode_(int8_mode)
 {
     decoder_layer_weights.clear();
+    decoder_layer_weights.reserve(num_layer_);
     for (int l = 0; l < num_layer_; l++) {
         if (isValidLayerParallelId(l)) {
             decoder_layer_weights.push_back(new ParallelGptDecoderLayerWeight<T>(
@@ -99,6 +100,7 @@ ParallelGptWeight<T>::ParallelGptWeight(const ParallelGptWeight& other):
     setWeightPtr();
 
     decoder_layer_weights.clear();
+    decoder_layer_weights.reserve(num_layer_);
     for (int l = 0; l < num_layer_; l++) {
         decoder_layer_weights.push_back(other.decoder_layer_weights[l]);
     }

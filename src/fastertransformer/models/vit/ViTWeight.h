@@ -68,6 +68,7 @@ struct ViTWeight {
             setWeightPtr();
         }
 
+        vit_layer_weights.reserve(num_layer_);
         for (int i = 0; i < num_layer_; i++) {
             vit_layer_weights.push_back(ViTLayerWeight<T>(embed_dim_, inter_size_, i, hold_buffer));
         }
@@ -115,6 +116,7 @@ struct ViTWeight {
         }
 
         vit_layer_weights.clear();
+        vit_layer_weights.reserve(num_layer_);
         for (int i = 0; i < num_layer_; i++) {
             vit_layer_weights.push_back(other.vit_layer_weights[i]);
         }
@@ -143,6 +145,7 @@ struct ViTWeight {
         }
 
         vit_layer_weights.clear();
+        vit_layer_weights.reserve(num_layer_);
         for (int i = 0; i < num_layer_; i++) {
             vit_layer_weights.push_back(other.vit_layer_weights[i]);
         }

@@ -53,6 +53,7 @@ T5EncoderWeight<T>::T5EncoderWeight(const size_t head_num,
     mallocWeights();
     setWeightPtr();
     t5_encoder_layer_weights.clear();
+    t5_encoder_layer_weights.reserve(num_layer_);
     for (int l = 0; l < num_layer_; l++) {
         if (isValidLayerParallelId(l)) {
             t5_encoder_layer_weights.push_back(new T5EncoderLayerWeight<T>(
@@ -130,6 +131,7 @@ T5EncoderWeight<T>::T5EncoderWeight(const T5EncoderWeight& other):
     setWeightPtr();
 
     t5_encoder_layer_weights.clear();
+    t5_encoder_layer_weights.reserve(num_layer_);
     for (int i = 0; i < num_layer_; i++) {
         t5_encoder_layer_weights.push_back(new T5EncoderLayerWeight<T>(*other.t5_encoder_layer_weights[i]));
     }
@@ -163,6 +165,7 @@ T5EncoderWeight<T>& T5EncoderWeight<T>::operator=(const T5EncoderWeight& other)
     setWeightPtr();
 
     t5_encoder_layer_weights.clear();
+    t5_encoder_layer_weights.reserve(num_layer_);
     for (int i = 0; i < num_layer_; i++) {
         t5_encoder_layer_weights.push_back(new T5EncoderLayerWeight<T>(*other.t5_encoder_layer_weights[i]));
     }
