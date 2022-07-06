@@ -41,14 +41,23 @@ static inline __device__ uint32_t fadd(const uint32_t& a, const uint32_t& b)
 
 static inline __device__ void st_flag_release(uint32_t& flag, uint32_t* flag_addr)
 {
+#if __CUDA_ARCH__ >= 700
     asm volatile("st.global.release.sys.b32 [%1], %0;" ::"r"(flag), "l"(flag_addr));
+#else
+    __threadfence();
+    asm volatile("st.global.volatile.b32 [%1], %0;" ::"r"(flag), "l"(flag_addr));
+#endif
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 static inline __device__ void ld_flag_acquire(uint32_t& flag, uint32_t* flag_addr)
 {
+#if __CUDA_ARCH__ >= 700
     asm volatile("ld.global.acquire.sys.b32 %0, [%1];" : "=r"(flag) : "l"(flag_addr));
+#else
+    asm volatile("ld.global.volatile.b32 %0, [%1];" : "=r"(flag) : "l"(flag_addr));
+#endif
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
