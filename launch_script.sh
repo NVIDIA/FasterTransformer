@@ -1,3 +1,5 @@
+# Temporary simple script for launching
+
 python3 examples/pytorch/gpt/gpt_example.py \
 	--layer_num 32 \
 	--head_num 12 \

@@ -24,9 +24,9 @@ import timeit
 import torch
 import numpy as np
 dir_path = os.path.dirname(os.path.realpath(__file__))
-sys.path.append(dir_path + "/../../..")
-from examples.pytorch.gpt.utils.gpt import GPT, GPTWeights
-import examples.pytorch.gpt.utils.gpt_token_encoder as encoder
+sys.path.append(dir_path + "/..")
+from gpt.utils.gpt import GPT, GPTWeights
+import gpt.utils.gpt_token_encoder as encoder
 
 
 def main():
