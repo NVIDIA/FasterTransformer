@@ -31,6 +31,7 @@ struct BertWeight {
         deviceMalloc(&weights_ptr[1], hidden_units_);
 
         setWeightPtr();
+        bert_layer_weights.reserve(num_layer_);
         for (int i = 0; i < num_layer_; i++) {
             bert_layer_weights.push_back(BertLayerWeight<T>(hidden_units_, inter_size_));
         }
@@ -54,6 +55,7 @@ struct BertWeight {
         hidden_units_(other.hidden_units_), inter_size_(other.inter_size_), num_layer_(other.num_layer_)
     {
         bert_layer_weights.clear();
+        bert_layer_weights.reserve(num_layer_);
         for (int i = 0; i < num_layer_; i++) {
             bert_layer_weights.push_back(other.bert_layer_weights[i]);
         }
@@ -71,6 +73,7 @@ struct BertWeight {
         inter_size_ = other.inter_size_;
         num_layer_ = other.num_layer_;
         bert_layer_weights.clear();
+        bert_layer_weights.reserve(num_layer_);
         for (int i = 0; i < num_layer_; i++) {
             bert_layer_weights.push_back(other.bert_layer_weights[i]);
         }

@@ -60,6 +60,7 @@ struct ViTINT8Weight {
         deviceMalloc(&weights_ptr[5], embed_dim_);                        // pre_encoder_conv_weights.bias
 
         setWeightPtr();
+        vit_layer_weights.reserve(num_layer_);
         for (int i = 0; i < num_layer_; i++) {
             vit_layer_weights.push_back(ViTLayerINT8Weight<T>(embed_dim_, inter_size_));
         }
@@ -94,6 +95,7 @@ struct ViTINT8Weight {
         cls_num_(other.cls_num_)
     {
         vit_layer_weights.clear();
+        vit_layer_weights.reserve(num_layer_);
         for (int i = 0; i < num_layer_; i++) {
             vit_layer_weights.push_back(other.vit_layer_weights[i]);
         }
@@ -132,6 +134,7 @@ struct ViTINT8Weight {
         chn_num_ = other.chn_num_;
         cls_num_ = other.cls_num_;
         vit_layer_weights.clear();
+        vit_layer_weights.reserve(num_layer_);
         for (int i = 0; i < num_layer_; i++) {
             vit_layer_weights.push_back(other.vit_layer_weights[i]);
         }

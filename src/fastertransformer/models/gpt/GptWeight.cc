@@ -27,6 +27,7 @@ GptWeight<T>::GptWeight(
     num_layer_(num_layer),
     max_seq_len_(max_seq_len)
 {
+    decoder_layer_weights.reserve(num_layer_);
     for (int l = 0; l < num_layer_; l++) {
         decoder_layer_weights.push_back(GptDecoderLayerWeight<T>(hidden_units_, inter_size_));
     }
@@ -70,6 +71,7 @@ GptWeight<T>::GptWeight(const GptWeight& other):
     setWeightPtr();
 
     decoder_layer_weights.clear();
+    decoder_layer_weights.reserve(num_layer_);
     for (int l = 0; l < num_layer_; l++) {
         decoder_layer_weights.push_back(other.decoder_layer_weights[l]);
     }
