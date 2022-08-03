@@ -228,8 +228,9 @@ DecoderSelfAttentionLayer<T>::DecoderSelfAttentionLayer(size_t max_batch_size,
     q_scaling_(q_scaling),
     int8_mode_(int8_mode)
 {
-    FT_CHECK(size_per_head_ == 32 || size_per_head_ == 64 || size_per_head_ == 96 || size_per_head_ == 128
-             || size_per_head_ == 160 || size_per_head_ == 192 || size_per_head_ == 224 || size_per_head_ == 256);
+    FT_CHECK(size_per_head_ == 32 || size_per_head_ == 64 || size_per_head_ == 80 || size_per_head_ == 96 
+             || size_per_head_ == 128 || size_per_head_ == 160 || size_per_head_ == 192 || size_per_head_ == 224
+             || size_per_head_ == 256);
 }
 
 template<typename T>
