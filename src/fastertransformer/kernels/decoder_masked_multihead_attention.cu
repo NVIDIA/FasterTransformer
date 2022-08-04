@@ -1297,6 +1297,9 @@ void multihead_attention_(const KERNEL_PARAMS_TYPE& params, const cudaStream_t& 
         case 64:
             mmha_launch_kernel<T, 64, 64, KERNEL_PARAMS_TYPE>(params, stream);
             break;
+        case 80:
+            mmha_launch_kernel<T, 80, 128, KERNEL_PARAMS_TYPE>(params, stream);
+            break;
         case 96:
             mmha_launch_kernel<T, 96, 128, KERNEL_PARAMS_TYPE>(params, stream);
             break;
