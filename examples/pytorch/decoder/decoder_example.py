@@ -50,7 +50,7 @@ def main():
     parser.add_argument('--ths_path', type=str, default='./lib/libpyt_fastertransformer.so',
                         help='path of the pyt_fastertransformer dynamic lib file')
     parser.add_argument('-d', '--data_type', type=str, default="fp32", metavar='STRING',
-                        help='data type (default: fp32)', choices=['fp32', 'fp16'])
+                        help='data type (default: fp32)', choices=['fp32', 'fp16', 'bf16'])
 
     args = parser.parse_args()
 
@@ -101,6 +101,9 @@ def main():
     if args.data_type == 'fp16':
         weights.to_half()
         ft_weights.to_half()
+    elif args.data_type == 'bf16':
+        weights.to_bfloat16()
+        ft_weights.to_bfloat16()
     custom_decoder = FTDecoder(args.head_num, args.head_size, hidden_dim, args.layer_num, ft_weights, args)
 
     with torch.no_grad():

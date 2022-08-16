@@ -27,11 +27,11 @@ class XlnetAttentionLayer: public BaseLayer {
 private:
     // buffer handling
     size_t max_batch_size_ = 0;
-    size_t max_seq_len_ = 0;
+    size_t max_seq_len_    = 0;
 
     // metadata
-    int head_num_;
-    int size_per_head_;
+    int   head_num_;
+    int   size_per_head_;
     float q_scaling_;
 
     // calculated params
@@ -73,39 +73,39 @@ protected:
     T* attn_out_;
 
 public:
-    XlnetAttentionLayer(size_t max_batch_size,
-                        size_t max_seq_len,
-                        size_t head_num,
-                        size_t size_per_head,
-                        float q_scaling,
-                        cudaStream_t stream,
+    XlnetAttentionLayer(size_t           max_batch_size,
+                        size_t           max_seq_len,
+                        size_t           head_num,
+                        size_t           size_per_head,
+                        float            q_scaling,
+                        cudaStream_t     stream,
                         cublasMMWrapper* cublas_wrapper,
-                        IAllocator* allocator,
-                        bool is_free_buffer_after_forward);
+                        IAllocator*      allocator,
+                        bool             is_free_buffer_after_forward);
 
     XlnetAttentionLayer(XlnetAttentionLayer<T> const& attention_layer);
 
     ~XlnetAttentionLayer();
 
-    void oneToManyCublasGemm(T* d_A,
-                             T* d_B,
-                             T* d_C,
+    void oneToManyCublasGemm(T*                d_A,
+                             T*                d_B,
+                             T*                d_C,
                              cublasOperation_t transa,
                              cublasOperation_t transb,
-                             int v_m,
-                             int v_n,
-                             int v_k,
-                             int lda,
-                             int strideA,
-                             int ldb,
-                             int strideB,
-                             int ldc,
-                             int strideC,
-                             int batch);
+                             int               v_m,
+                             int               v_n,
+                             int               v_k,
+                             int               lda,
+                             int               strideA,
+                             int               ldb,
+                             int               strideB,
+                             int               ldc,
+                             int               strideC,
+                             int               batch);
 
-    void forward(std::vector<fastertransformer::Tensor>* output_tensors,
+    void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                  const std::vector<fastertransformer::Tensor>* input_tensors,
-                 const XlnetAttentionWeight<T>* xlnet_attention_weights);
+                 const XlnetAttentionWeight<T>*                xlnet_attention_weights);
 };
 
 }  // namespace fastertransformer

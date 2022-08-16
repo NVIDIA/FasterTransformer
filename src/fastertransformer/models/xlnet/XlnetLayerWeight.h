@@ -27,9 +27,9 @@ namespace fastertransformer {
 template<typename T>
 struct XlnetLayerWeight {
     XlnetAttentionWeight<T> attention_weights;
-    LayerNormWeight<T> attn_layernorm_weights;
-    FfnWeight<T> ffn_weights;
-    LayerNormWeight<T> ffn_layernorm_weights;
+    LayerNormWeight<T>      attn_layernorm_weights;
+    FfnWeight<T>            ffn_weights;
+    LayerNormWeight<T>      ffn_layernorm_weights;
 
     XlnetLayerWeight() = default;
     XlnetLayerWeight(const int hidden_units, const int inter_size): hidden_units_(hidden_units), inter_size_(inter_size)
@@ -49,25 +49,25 @@ struct XlnetLayerWeight {
                 deviceFree(weights_ptr[i]);
             }
 
-            attention_weights.attr_kernel_Q = nullptr;
-            attention_weights.attr_kernel_K = nullptr;
-            attention_weights.attr_kernel_V = nullptr;
-            attention_weights.attr_pos_emb = nullptr;
-            attention_weights.attr_bias_Q_w = nullptr;
-            attention_weights.attr_bias_Q_r = nullptr;
-            attention_weights.attr_bias_Q_s = nullptr;
+            attention_weights.attr_kernel_Q  = nullptr;
+            attention_weights.attr_kernel_K  = nullptr;
+            attention_weights.attr_kernel_V  = nullptr;
+            attention_weights.attr_pos_emb   = nullptr;
+            attention_weights.attr_bias_Q_w  = nullptr;
+            attention_weights.attr_bias_Q_r  = nullptr;
+            attention_weights.attr_bias_Q_s  = nullptr;
             attention_weights.attr_seg_embed = nullptr;
-            attention_weights.attr_proj_o = nullptr;
+            attention_weights.attr_proj_o    = nullptr;
 
-            attn_layernorm_weights.gamma = nullptr;
-            attn_layernorm_weights.beta = nullptr;
+            attn_layernorm_weights.gamma           = nullptr;
+            attn_layernorm_weights.beta            = nullptr;
             ffn_weights.intermediate_weight.kernel = nullptr;
-            ffn_weights.intermediate_weight.bias = nullptr;
-            ffn_weights.output_weight.kernel = nullptr;
-            ffn_weights.output_weight.bias = nullptr;
-            ffn_layernorm_weights.gamma = nullptr;
-            ffn_layernorm_weights.beta = nullptr;
-            is_maintain_buffer = false;
+            ffn_weights.intermediate_weight.bias   = nullptr;
+            ffn_weights.output_weight.kernel       = nullptr;
+            ffn_weights.output_weight.bias         = nullptr;
+            ffn_layernorm_weights.gamma            = nullptr;
+            ffn_layernorm_weights.beta             = nullptr;
+            is_maintain_buffer                     = false;
         }
     }
 
@@ -84,7 +84,7 @@ struct XlnetLayerWeight {
     XlnetLayerWeight& operator=(const XlnetLayerWeight& other)
     {
         hidden_units_ = other.hidden_units_;
-        inter_size_ = other.inter_size_;
+        inter_size_   = other.inter_size_;
         setWeightSize();
         for (int i = 0; i < NUM_WEIGHTS; i++) {
             deviceMalloc(&weights_ptr[i], weights_size[i]);
@@ -106,40 +106,40 @@ struct XlnetLayerWeight {
 private:
     void setWeightPtr()
     {
-        attention_weights.attr_kernel_Q = weights_ptr[0];
-        attention_weights.attr_kernel_K = weights_ptr[0] + hidden_units_ * hidden_units_;
-        attention_weights.attr_kernel_V = weights_ptr[0] + hidden_units_ * hidden_units_ * 2;
-        attention_weights.attr_pos_emb = weights_ptr[1];
-        attention_weights.attr_bias_Q_w = weights_ptr[2];
-        attention_weights.attr_bias_Q_r = weights_ptr[3];
-        attention_weights.attr_bias_Q_s = weights_ptr[4];
+        attention_weights.attr_kernel_Q  = weights_ptr[0];
+        attention_weights.attr_kernel_K  = weights_ptr[0] + hidden_units_ * hidden_units_;
+        attention_weights.attr_kernel_V  = weights_ptr[0] + hidden_units_ * hidden_units_ * 2;
+        attention_weights.attr_pos_emb   = weights_ptr[1];
+        attention_weights.attr_bias_Q_w  = weights_ptr[2];
+        attention_weights.attr_bias_Q_r  = weights_ptr[3];
+        attention_weights.attr_bias_Q_s  = weights_ptr[4];
         attention_weights.attr_seg_embed = weights_ptr[5];
-        attention_weights.attr_proj_o = weights_ptr[6];
+        attention_weights.attr_proj_o    = weights_ptr[6];
 
-        attn_layernorm_weights.gamma = weights_ptr[7];
-        attn_layernorm_weights.beta = weights_ptr[8];
+        attn_layernorm_weights.gamma           = weights_ptr[7];
+        attn_layernorm_weights.beta            = weights_ptr[8];
         ffn_weights.intermediate_weight.kernel = weights_ptr[9];
-        ffn_weights.intermediate_weight.bias = weights_ptr[10];
-        ffn_weights.output_weight.kernel = weights_ptr[11];
-        ffn_weights.output_weight.bias = weights_ptr[12];
-        ffn_layernorm_weights.gamma = weights_ptr[13];
-        ffn_layernorm_weights.beta = weights_ptr[14];
+        ffn_weights.intermediate_weight.bias   = weights_ptr[10];
+        ffn_weights.output_weight.kernel       = weights_ptr[11];
+        ffn_weights.output_weight.bias         = weights_ptr[12];
+        ffn_layernorm_weights.gamma            = weights_ptr[13];
+        ffn_layernorm_weights.beta             = weights_ptr[14];
 
         is_maintain_buffer = true;
     }
 
     void setWeightSize()
     {
-        weights_size[0] = hidden_units_ * hidden_units_ * 3;
-        weights_size[1] = hidden_units_ * hidden_units_;
-        weights_size[2] = hidden_units_;
-        weights_size[3] = hidden_units_;
-        weights_size[4] = hidden_units_;
-        weights_size[5] = hidden_units_ * 2;
-        weights_size[6] = hidden_units_ * hidden_units_;
-        weights_size[7] = hidden_units_;
-        weights_size[8] = hidden_units_;
-        weights_size[9] = hidden_units_ * inter_size_;
+        weights_size[0]  = hidden_units_ * hidden_units_ * 3;
+        weights_size[1]  = hidden_units_ * hidden_units_;
+        weights_size[2]  = hidden_units_;
+        weights_size[3]  = hidden_units_;
+        weights_size[4]  = hidden_units_;
+        weights_size[5]  = hidden_units_ * 2;
+        weights_size[6]  = hidden_units_ * hidden_units_;
+        weights_size[7]  = hidden_units_;
+        weights_size[8]  = hidden_units_;
+        weights_size[9]  = hidden_units_ * inter_size_;
         weights_size[10] = inter_size_;
         weights_size[11] = hidden_units_ * inter_size_;
         weights_size[12] = hidden_units_;
@@ -147,11 +147,11 @@ private:
         weights_size[14] = hidden_units_;
     }
 
-    int hidden_units_;
-    int inter_size_;
+    int  hidden_units_;
+    int  inter_size_;
     bool is_maintain_buffer = false;
-    T* weights_ptr[NUM_WEIGHTS];
-    int weights_size[NUM_WEIGHTS];
+    T*   weights_ptr[NUM_WEIGHTS];
+    int  weights_size[NUM_WEIGHTS];
 };
 
 }  // namespace fastertransformer

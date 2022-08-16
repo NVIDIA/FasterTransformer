@@ -34,25 +34,25 @@
 namespace fastertransformer {
 
 template<typename T>
-void generate_gpt_gemm_config(int batch_size,
-                              int beam_width,
-                              int seq_len,
-                              int head_num,
-                              int size_per_head,
-                              int inter_size,
-                              int vocab_size,
-                              int tensor_para_size,
+void generate_gpt_gemm_config(int   batch_size,
+                              int   beam_width,
+                              int   seq_len,
+                              int   head_num,
+                              int   size_per_head,
+                              int   inter_size,
+                              int   vocab_size,
+                              int   tensor_para_size,
                               void* buffer_in,
-                              bool isAppend);
+                              bool  isAppend);
 
-size_t calGptGemmTestBufSizeInByte(int batch_size,
-                                   int beam_width,
-                                   int max_input_len,
-                                   int head_num,
-                                   int size_per_head,
-                                   int inter_size,
-                                   int vocab_size,
-                                   int tensor_para_size,
+size_t calGptGemmTestBufSizeInByte(int            batch_size,
+                                   int            beam_width,
+                                   int            max_input_len,
+                                   int            head_num,
+                                   int            size_per_head,
+                                   int            inter_size,
+                                   int            vocab_size,
+                                   int            tensor_para_size,
                                    CublasDataType data_type);
 
 }  // namespace fastertransformer

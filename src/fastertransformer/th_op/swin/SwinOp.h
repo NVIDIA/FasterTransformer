@@ -32,36 +32,36 @@ public:
 template<typename T>
 class SwinTransformerFunc: public ISwinTransformerFunc {
 public:
-    int sm_;
-    int max_batch_;
-    int img_size_;
-    int patch_size_;
-    int in_chans_;
-    int embed_dim_;
-    int window_size_;
-    int* depths_;
-    int* num_heads_;
-    bool ape_;
-    bool patch_norm_;
-    int layer_num_;
+    int   sm_;
+    int   max_batch_;
+    int   img_size_;
+    int   patch_size_;
+    int   in_chans_;
+    int   embed_dim_;
+    int   window_size_;
+    int*  depths_;
+    int*  num_heads_;
+    bool  ape_;
+    bool  patch_norm_;
+    int   layer_num_;
     float mlp_ratio_;
-    bool qkv_bias_;
+    bool  qkv_bias_;
     float qk_scale_;
 
-    SwinTransformerFunc(const int max_batch,
-                        const int img_size,
-                        const int patch_size,
-                        const int in_chans,
-                        const int embed_dim,
-                        const int window_size,
-                        int* depths,
-                        int* num_heads,
-                        const bool ape,
-                        const bool patch_norm,
-                        const int layer_num,
-                        const float mlp_ratio,
-                        const bool qkv_bias,
-                        const float qk_scale,
+    SwinTransformerFunc(const int                      max_batch,
+                        const int                      img_size,
+                        const int                      patch_size,
+                        const int                      in_chans,
+                        const int                      embed_dim,
+                        const int                      window_size,
+                        int*                           depths,
+                        int*                           num_heads,
+                        const bool                     ape,
+                        const bool                     patch_norm,
+                        const int                      layer_num,
+                        const float                    mlp_ratio,
+                        const bool                     qkv_bias,
+                        const float                    qk_scale,
                         const std::vector<th::Tensor>& w):
         weights_(w),
         max_batch_(max_batch),
@@ -85,7 +85,7 @@ public:
 
         sm_ = ft::getSMVersion();
 
-        cublas_algo_map_ = new ft::cublasAlgoMap(GEMM_CONFIG, "");
+        cublas_algo_map_      = new ft::cublasAlgoMap(GEMM_CONFIG, "");
         cublas_wrapper_mutex_ = new std::mutex();
 
         // We arrange weights layer by layer and block by block inside each layer;
@@ -112,33 +112,33 @@ public:
             ft::SwinTransformerBasicLayerWeight<T> bl;
             for (int di = 0; di < depths[l]; di++) {
                 ft::SwinTransformerBlockWeight<T> p;
-                p.attention_weights.query_weight.kernel = get_ptr<T>(weights_[weight_idx++]);
-                p.attention_weights.query_weight.bias = get_ptr<T>(weights_[weight_idx++]);
+                p.attention_weights.query_weight.kernel            = get_ptr<T>(weights_[weight_idx++]);
+                p.attention_weights.query_weight.bias              = get_ptr<T>(weights_[weight_idx++]);
                 p.attention_weights.attention_output_weight.kernel = get_ptr<T>(weights_[weight_idx++]);
-                p.attention_weights.attention_output_weight.bias = get_ptr<T>(weights_[weight_idx++]);
-                p.ffn_weights.intermediate_weight.kernel = get_ptr<T>(weights_[weight_idx++]);
-                p.ffn_weights.intermediate_weight.bias = get_ptr<T>(weights_[weight_idx++]);
-                p.ffn_weights.output_weight.kernel = get_ptr<T>(weights_[weight_idx++]);
-                p.ffn_weights.output_weight.bias = get_ptr<T>(weights_[weight_idx++]);
-                p.attn_layernorm_weights.gamma = get_ptr<T>(weights_[weight_idx++]);
-                p.attn_layernorm_weights.beta = get_ptr<T>(weights_[weight_idx++]);
-                p.ffn_layernorm_weights.gamma = get_ptr<T>(weights_[weight_idx++]);
-                p.ffn_layernorm_weights.beta = get_ptr<T>(weights_[weight_idx++]);
-                p.attention_relative_pos_bias = get_ptr<T>(weights_[weight_idx++]);
+                p.attention_weights.attention_output_weight.bias   = get_ptr<T>(weights_[weight_idx++]);
+                p.ffn_weights.intermediate_weight.kernel           = get_ptr<T>(weights_[weight_idx++]);
+                p.ffn_weights.intermediate_weight.bias             = get_ptr<T>(weights_[weight_idx++]);
+                p.ffn_weights.output_weight.kernel                 = get_ptr<T>(weights_[weight_idx++]);
+                p.ffn_weights.output_weight.bias                   = get_ptr<T>(weights_[weight_idx++]);
+                p.attn_layernorm_weights.gamma                     = get_ptr<T>(weights_[weight_idx++]);
+                p.attn_layernorm_weights.beta                      = get_ptr<T>(weights_[weight_idx++]);
+                p.ffn_layernorm_weights.gamma                      = get_ptr<T>(weights_[weight_idx++]);
+                p.ffn_layernorm_weights.beta                       = get_ptr<T>(weights_[weight_idx++]);
+                p.attention_relative_pos_bias                      = get_ptr<T>(weights_[weight_idx++]);
                 bl.block_weight_list.push_back(p);
             }
             bl.merge_layernorm_weights.gamma = get_ptr<T>(weights_[weight_idx++]);
-            bl.merge_layernorm_weights.beta = get_ptr<T>(weights_[weight_idx++]);
-            bl.merge_linear_weights.kernel = get_ptr<T>(weights_[weight_idx++]);
-            bl.attn_mask = get_ptr<T>(weights_[weight_idx++]);
+            bl.merge_layernorm_weights.beta  = get_ptr<T>(weights_[weight_idx++]);
+            bl.merge_linear_weights.kernel   = get_ptr<T>(weights_[weight_idx++]);
+            bl.attn_mask                     = get_ptr<T>(weights_[weight_idx++]);
             params_.basic_layer_weight_list.push_back(bl);
         }
         params_.patchEmbed_linear_weights.kernel = get_ptr<T>(weights_[weight_idx++]);
-        params_.patchEmbed_linear_weights.bias = get_ptr<T>(weights_[weight_idx++]);
-        params_.patchEmbed_norm_weights.gamma = get_ptr<T>(weights_[weight_idx++]);
-        params_.patchEmbed_norm_weights.beta = get_ptr<T>(weights_[weight_idx++]);
-        params_.norm_weights.gamma = get_ptr<T>(weights_[weight_idx++]);
-        params_.norm_weights.beta = get_ptr<T>(weights_[weight_idx++]);
+        params_.patchEmbed_linear_weights.bias   = get_ptr<T>(weights_[weight_idx++]);
+        params_.patchEmbed_norm_weights.gamma    = get_ptr<T>(weights_[weight_idx++]);
+        params_.patchEmbed_norm_weights.beta     = get_ptr<T>(weights_[weight_idx++]);
+        params_.norm_weights.gamma               = get_ptr<T>(weights_[weight_idx++]);
+        params_.norm_weights.beta                = get_ptr<T>(weights_[weight_idx++]);
     }
 
     ~SwinTransformerFunc() override
@@ -162,6 +162,11 @@ public:
         if (std::is_same<T, half>::value) {
             cublas_wrapper->setFP16GemmConfig();
         }
+#ifdef ENABLE_BF16
+        else if (std::is_same<T, __nv_bfloat16>::value) {
+            cublas_wrapper->setBF16GemmConfig();
+        }
+#endif
         else if (std::is_same<T, float>::value) {
             cublas_wrapper->setFP32GemmConfig();
         }
@@ -186,20 +191,20 @@ public:
                                                                               qkv_bias_,
                                                                               qk_scale_);
 
-        ft::DataType data_type = ft::getTensorType<T>();
-        int sm_ptr[1] = {sm_};
+        ft::DataType            data_type     = ft::getTensorType<T>();
+        int                     sm_ptr[1]     = {sm_};
         std::vector<ft::Tensor> input_tensors = std::vector<ft::Tensor>{
             ft::Tensor{ft::MEMORY_GPU,
                        data_type,
-                       std::vector<size_t>{(size_t)batch_size, (size_t)img_size_ * img_size_, (size_t)in_chans_},
+                       std::vector<size_t>{(size_t)batch_size, (size_t)in_chans_, (size_t)img_size_, (size_t)img_size_},
                        get_ptr<T>(input)},
             ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT8, std::vector<size_t>{1}, sm_ptr}};
 
-        std::vector<ft::Tensor> output_tensors = std::vector<ft::Tensor>{
-            ft::Tensor{ft::MEMORY_GPU,
-                       data_type,
-                       std::vector<size_t>{(size_t)batch_size, (size_t)img_size_ * img_size_, (size_t)in_chans_},
-                       get_ptr<T>(output)}};
+        std::vector<ft::Tensor> output_tensors =
+            std::vector<ft::Tensor>{ft::Tensor{ft::MEMORY_GPU,
+                                               data_type,
+                                               std::vector<size_t>{(size_t)batch_size, (size_t)output.size(1)},
+                                               get_ptr<T>(output)}};
         swin_transformer->forward(&output_tensors, &input_tensors, params_);
         delete swin_transformer;
         delete cublas_wrapper;
@@ -207,32 +212,32 @@ public:
     }
 
 private:
-    std::vector<th::Tensor> weights_;
-    cublasHandle_t cublas_handle_ = nullptr;
-    cublasLtHandle_t cublaslt_handle_ = nullptr;
-    cudnnHandle_t cudnn_handle_ = nullptr;
+    std::vector<th::Tensor>      weights_;
+    cublasHandle_t               cublas_handle_   = nullptr;
+    cublasLtHandle_t             cublaslt_handle_ = nullptr;
+    cudnnHandle_t                cudnn_handle_    = nullptr;
     ft::SwinTransformerWeight<T> params_;
-    std::mutex* cublas_wrapper_mutex_;
-    ft::cublasAlgoMap* cublas_algo_map_;
+    std::mutex*                  cublas_wrapper_mutex_;
+    ft::cublasAlgoMap*           cublas_algo_map_;
 };
 
 class SwinTransformerClass: public torch::jit::CustomClassHolder {
 public:
     SwinTransformerClass(std::vector<th::Tensor> w,
-                         th::Tensor depths,
-                         th::Tensor num_heads,
-                         int64_t max_batch,
-                         int64_t img_size,
-                         int64_t patch_size,
-                         int64_t in_chans,
-                         int64_t embed_dim,
-                         int64_t window_size,
-                         bool ape,
-                         bool patch_norm,
-                         int64_t layer_num,
-                         double mlp_ratio,
-                         bool qkv_bias = true,
-                         double qk_scale = 1.0);
+                         th::Tensor              depths,
+                         th::Tensor              num_heads,
+                         int64_t                 max_batch,
+                         int64_t                 img_size,
+                         int64_t                 patch_size,
+                         int64_t                 in_chans,
+                         int64_t                 embed_dim,
+                         int64_t                 window_size,
+                         bool                    ape,
+                         bool                    patch_norm,
+                         int64_t                 layer_num,
+                         double                  mlp_ratio,
+                         bool                    qkv_bias = true,
+                         double                  qk_scale = 1.0);
 
     ~SwinTransformerClass();
 
@@ -241,28 +246,28 @@ public:
     std::vector<th::Tensor> get_pickle_info() const;
 
 private:
-    const at::ScalarType st_;
-    ISwinTransformerFunc* swin_transformer_func_;
+    const at::ScalarType    st_;
+    ISwinTransformerFunc*   swin_transformer_func_;
     std::vector<th::Tensor> weights_;
-    th::Tensor depths_;
-    th::Tensor num_heads_;
-    th::Tensor info_int_;
-    th::Tensor info_float_;
-    int output_dim_;
+    th::Tensor              depths_;
+    th::Tensor              num_heads_;
+    th::Tensor              info_int_;
+    th::Tensor              info_float_;
+    int                     output_dim_;
 };
 
 template<typename T>
 th::Tensor gen_relative_pos_bias_impl(th::Tensor relative_position_bias_table,
                                       th::Tensor relative_position_bias_index,
-                                      const int window_size,
-                                      const int head_num)
+                                      const int  window_size,
+                                      const int  head_num)
 {
-    auto stream = at::cuda::getCurrentCUDAStream().stream();
-    int window_len = window_size * window_size;
+    auto     stream                           = at::cuda::getCurrentCUDAStream().stream();
+    int      window_len                       = window_size * window_size;
     const T* relative_position_bias_table_ptr = get_ptr<T>(relative_position_bias_table);
     CHECK_INPUT(relative_position_bias_index, at::ScalarType::Long);
     const int64_t* relative_position_bias_index_ptr = get_ptr<int64_t>(relative_position_bias_index);
-    auto output =
+    auto           output =
         torch::empty({head_num, window_len, window_len},
                      torch::dtype(relative_position_bias_table.dtype()).device(torch::kCUDA).requires_grad(false));
     T* output_ptr = get_ptr<T>(output);
@@ -273,8 +278,8 @@ th::Tensor gen_relative_pos_bias_impl(th::Tensor relative_position_bias_table,
     return output;
 }
 
-th::Tensor gen_relative_pos_bias(th::Tensor relative_position_bias_table,
-                                 th::Tensor relative_position_bias_index,
+th::Tensor gen_relative_pos_bias(th::Tensor    relative_position_bias_table,
+                                 th::Tensor    relative_position_bias_index,
                                  const int64_t window_size,
                                  const int64_t head_num);
 

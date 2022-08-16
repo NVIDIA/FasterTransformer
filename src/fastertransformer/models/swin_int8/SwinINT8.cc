@@ -45,7 +45,7 @@ template<typename T>
 void SwinTransformerINT8<T>::allocateBuffer()
 {
     if (is_allocate_buffer_ == false) {
-        buf_ = (T*)(allocator_->malloc(max_buf_size_, false));
+        buf_ = (T*)(allocator_->reMalloc(buf_, max_buf_size_, false));
 
         x_patch_embed_ = buf_;
 
@@ -71,7 +71,7 @@ template<typename T>
 void SwinTransformerINT8<T>::freeBuffer()
 {
     if (is_allocate_buffer_ == true) {
-        allocator_->free(buf_);
+        allocator_->free((void**)(&buf_));
         is_allocate_buffer_ = false;
     }
 }
@@ -79,26 +79,32 @@ void SwinTransformerINT8<T>::freeBuffer()
 // input is [B, C_in, H, W]
 // output is [B, H, W, C_out]
 template<typename T>
-void SwinTransformerINT8<T>::patchEmbed(T* output,
-                                        const T* input,
-                                        const T* kernel,
-                                        const T* bias,
-                                        const T* gamma,
-                                        const T* beta,
-                                        const int batch,
-                                        const int img_size,
-                                        const int patch_size,
-                                        const int patches_resolution,
-                                        const int in_chans,
-                                        const int embed_dim,
+void SwinTransformerINT8<T>::patchEmbed(T*         output,
+                                        const T*   input,
+                                        const T*   kernel,
+                                        const T*   bias,
+                                        const T*   gamma,
+                                        const T*   beta,
+                                        const int  batch,
+                                        const int  img_size,
+                                        const int  patch_size,
+                                        const int  patches_resolution,
+                                        const int  in_chans,
+                                        const int  embed_dim,
                                         const bool patch_norm)
 {
     conv2d(
         output, input, kernel, batch, img_size, img_size, in_chans, embed_dim, patch_size, patch_size, cudnn_handle_);
 
     if (patch_norm) {
-        invokeAddBiasLayernorm<T>(
-            output, bias, gamma, beta, batch * patches_resolution * patches_resolution, embed_dim, stream_);
+        invokeAddBiasLayernorm<T>(output,
+                                  bias,
+                                  gamma,
+                                  beta,
+                                  layernorm_eps_,
+                                  batch * patches_resolution * patches_resolution,
+                                  embed_dim,
+                                  stream_);
     }
     else {
         invokeAddBias<T>(output, bias, batch * patches_resolution * patches_resolution, embed_dim, stream_);
@@ -106,26 +112,26 @@ void SwinTransformerINT8<T>::patchEmbed(T* output,
 }
 
 template<typename T>
-SwinTransformerINT8<T>::SwinTransformerINT8(int int8_mode,
-                                            int max_batch,
-                                            int img_size,
-                                            int patch_size,
-                                            int in_chans,
-                                            int embed_dim,
-                                            int window_size,
-                                            int* depths,
-                                            int* num_heads,
-                                            bool ape,
-                                            bool patch_norm,
-                                            int layer_num,
-                                            float mlp_ratio,
-                                            cudnnHandle_t cudnn_handle,
-                                            cudaStream_t stream,
+SwinTransformerINT8<T>::SwinTransformerINT8(int              int8_mode,
+                                            int              max_batch,
+                                            int              img_size,
+                                            int              patch_size,
+                                            int              in_chans,
+                                            int              embed_dim,
+                                            int              window_size,
+                                            int*             depths,
+                                            int*             num_heads,
+                                            bool             ape,
+                                            bool             patch_norm,
+                                            int              layer_num,
+                                            float            mlp_ratio,
+                                            cudnnHandle_t    cudnn_handle,
+                                            cudaStream_t     stream,
                                             cublasMMWrapper* cublas_wrapper,
-                                            IAllocator* allocator,
-                                            bool is_free_buffer_after_forward,
-                                            bool qkv_bias,
-                                            float qk_scale):
+                                            IAllocator*      allocator,
+                                            bool             is_free_buffer_after_forward,
+                                            bool             qkv_bias,
+                                            float            qk_scale):
     int8_mode(int8_mode),
     max_batch_(max_batch),
     img_size_(img_size),
@@ -149,7 +155,7 @@ SwinTransformerINT8<T>::SwinTransformerINT8(int int8_mode,
 {
 
     patches_resolution_ = img_size / patch_size;
-    max_buf_size_ = getBufSize(max_batch_, patches_resolution_, layer_num_, embed_dim_);
+    max_buf_size_       = getBufSize(max_batch_, patches_resolution_, layer_num_, embed_dim_);
 
     basic_layer_ = new SwinTransformerINT8BasicLayer<T>(int8_mode,
                                                         max_batch_,
@@ -157,6 +163,7 @@ SwinTransformerINT8<T>::SwinTransformerINT8(int int8_mode,
                                                         patches_resolution_,
                                                         embed_dim_,
                                                         mlp_ratio_,
+                                                        layernorm_eps_,
                                                         qkv_bias_,
                                                         qk_scale_,
                                                         stream_,
@@ -175,8 +182,8 @@ SwinTransformerINT8<T>::~SwinTransformerINT8()
 }
 
 template<typename T>
-void SwinTransformerINT8<T>::forward(std::vector<Tensor>* output_tensors,
-                                     const std::vector<Tensor>* input_tensors,
+void SwinTransformerINT8<T>::forward(std::vector<Tensor>*          output_tensors,
+                                     const std::vector<Tensor>*    input_tensors,
                                      SwinTransformerINT8Weight<T>& swin_weights)
 {
     // input_tensors:
@@ -185,10 +192,10 @@ void SwinTransformerINT8<T>::forward(std::vector<Tensor>* output_tensors,
     // output_tensors:
     //      output_embedding [batch, final_len]
 
-    T* from_tensor = (T*)input_tensors->at(0).data;
-    T* output = (T*)(output_tensors->at(0).data);
-    const size_t batch = input_tensors->at(0).shape[0];
-    const int sm = *(const int*)input_tensors->at(1).data;
+    T*           from_tensor = (T*)input_tensors->at(0).data;
+    T*           output      = (T*)(output_tensors->at(0).data);
+    const size_t batch       = input_tensors->at(0).shape[0];
+    const int    sm          = *(const int*)input_tensors->at(1).data;
     allocateBuffer();
     patchEmbed(x_patch_embed_,
                from_tensor,
@@ -204,12 +211,12 @@ void SwinTransformerINT8<T>::forward(std::vector<Tensor>* output_tensors,
                embed_dim_,
                patch_norm_);
 
-    size_t basic_layer_dim = embed_dim_;
-    size_t basic_layer_input_resolution = patches_resolution_;
-    int basic_layer_output_size = batch * patches_resolution_ * patches_resolution_ * embed_dim_ / 2;
-    size_t m = batch * patches_resolution_ * patches_resolution_;
-    size_t n = embed_dim_;
-    DataType data_type = getTensorType<T>();
+    size_t   basic_layer_dim              = embed_dim_;
+    size_t   basic_layer_input_resolution = patches_resolution_;
+    int      basic_layer_output_size      = batch * patches_resolution_ * patches_resolution_ * embed_dim_ / 2;
+    size_t   m                            = batch * patches_resolution_ * patches_resolution_;
+    size_t   n                            = embed_dim_;
+    DataType data_type                    = getTensorType<T>();
 
     bool do_patch_merge = true;
     if (layer_num_ == 1) {
@@ -229,7 +236,7 @@ void SwinTransformerINT8<T>::forward(std::vector<Tensor>* output_tensors,
             data_type,
             std::vector<size_t>{batch, basic_layer_input_resolution, basic_layer_input_resolution, basic_layer_dim},
             basic_layer_output_ + (i % 2) * basic_layer_output_size}};
-        int additional_parameters[4] = {depths_[i], num_heads_[i], do_patch_merge ? 1 : 0, sm};
+        int                 additional_parameters[4] = {depths_[i], num_heads_[i], do_patch_merge ? 1 : 0, sm};
         std::vector<Tensor> tmp_input_tensors{
             Tensor{
                 MEMORY_GPU,
@@ -254,6 +261,7 @@ void SwinTransformerINT8<T>::forward(std::vector<Tensor>* output_tensors,
                            buffer_COL32,
                            swin_weights.norm_weights.gamma,
                            swin_weights.norm_weights.beta,
+                           layernorm_eps_,
                            batch * basic_layer_input_resolution * basic_layer_input_resolution,
                            basic_layer_dim,
                            stream_);

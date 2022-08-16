@@ -31,18 +31,18 @@ namespace fastertransformer {
 // grid(window_size*window_size, head_num)
 // block(window_size*window_size)
 template<typename T, typename Tindex>
-__global__ void gen_relative_pos_bias(T* relative_position_bias,
-                                      const T* relative_position_bias_table,
+__global__ void gen_relative_pos_bias(T*            relative_position_bias,
+                                      const T*      relative_position_bias_table,
                                       const Tindex* relative_position_bias_index,
-                                      const int window_size,
-                                      const int head_num)
+                                      const int     window_size,
+                                      const int     head_num)
 {
-    const int h_in_window = blockIdx.x / window_size;
-    const int w_in_window = blockIdx.x % window_size;
-    const int h_in_token = threadIdx.x / window_size;
-    const int w_in_token = threadIdx.x % window_size;
-    const int head_idx = blockIdx.y;
-    const int elements_per_window = window_size * window_size;
+    const int    h_in_window           = blockIdx.x / window_size;
+    const int    w_in_window           = blockIdx.x % window_size;
+    const int    h_in_token            = threadIdx.x / window_size;
+    const int    w_in_token            = threadIdx.x % window_size;
+    const int    head_idx              = blockIdx.y;
+    const int    elements_per_window   = window_size * window_size;
     const size_t elements_per_window_2 = elements_per_window * elements_per_window;
     const size_t output_idx = head_idx * elements_per_window_2 + blockIdx.x * elements_per_window + threadIdx.x;
     if (output_idx < head_num * elements_per_window_2) {
@@ -54,12 +54,12 @@ __global__ void gen_relative_pos_bias(T* relative_position_bias,
 }
 
 template<typename T, typename Tindex>
-void invokeGenRelativePosBias(T* relative_position_bias,
-                              const T* relative_position_bias_table,
+void invokeGenRelativePosBias(T*            relative_position_bias,
+                              const T*      relative_position_bias_table,
                               const Tindex* relative_position_bias_index,
-                              const int window_size,
-                              const int head_num,
-                              cudaStream_t stream)
+                              const int     window_size,
+                              const int     head_num,
+                              cudaStream_t  stream)
 {
     dim3 grid(window_size * window_size, head_num);
     dim3 block(window_size * window_size);
@@ -75,32 +75,32 @@ void invokeGenRelativePosBias(T* relative_position_bias,
 
 /*******************  instantiation  ***********************/
 
-template void invokeGenRelativePosBias(float* relative_position_bias,
+template void invokeGenRelativePosBias(float*       relative_position_bias,
                                        const float* relative_position_bias_table,
-                                       const int* relative_position_bias_index,
-                                       const int window_size,
-                                       const int head_num,
+                                       const int*   relative_position_bias_index,
+                                       const int    window_size,
+                                       const int    head_num,
                                        cudaStream_t stream);
 
-template void invokeGenRelativePosBias(half* relative_position_bias,
-                                       const half* relative_position_bias_table,
-                                       const int* relative_position_bias_index,
-                                       const int window_size,
-                                       const int head_num,
+template void invokeGenRelativePosBias(half*        relative_position_bias,
+                                       const half*  relative_position_bias_table,
+                                       const int*   relative_position_bias_index,
+                                       const int    window_size,
+                                       const int    head_num,
                                        cudaStream_t stream);
 
-template void invokeGenRelativePosBias(float* relative_position_bias,
-                                       const float* relative_position_bias_table,
+template void invokeGenRelativePosBias(float*         relative_position_bias,
+                                       const float*   relative_position_bias_table,
                                        const int64_t* relative_position_bias_index,
-                                       const int window_size,
-                                       const int head_num,
-                                       cudaStream_t stream);
+                                       const int      window_size,
+                                       const int      head_num,
+                                       cudaStream_t   stream);
 
-template void invokeGenRelativePosBias(half* relative_position_bias,
-                                       const half* relative_position_bias_table,
+template void invokeGenRelativePosBias(half*          relative_position_bias,
+                                       const half*    relative_position_bias_table,
                                        const int64_t* relative_position_bias_index,
-                                       const int window_size,
-                                       const int head_num,
-                                       cudaStream_t stream);
+                                       const int      window_size,
+                                       const int      head_num,
+                                       cudaStream_t   stream);
 
 }  // namespace fastertransformer

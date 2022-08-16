@@ -20,5 +20,5 @@ set(t5_triton_backend_files
 )
 
 add_library(T5TritonBackend SHARED ${t5_triton_backend_files})
-target_link_libraries(T5TritonBackend PRIVATE T5Encoder T5Decoding)
+target_link_libraries(T5TritonBackend PRIVATE TransformerTritonBackend T5Encoder T5Decoding)
 target_compile_features(T5TritonBackend PRIVATE cxx_std_14)

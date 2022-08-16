@@ -97,6 +97,8 @@ def load_test_model(opt, args):
         model.float()
     elif args.data_type == 'fp16':
         model.half()
+    elif args.data_type == 'bf16':
+        model.bfloat16()
     else:
         raise ValueError('wrong data_type argument {}'.format(args.data_type))
     model.eval()
@@ -204,6 +206,8 @@ def build_base_model(model_opt, fields, gpu, args, checkpoint=None, gpu_id=None)
             encoder_weights = EncoderWeights(model_opt.enc_layers, model_opt.enc_rnn_size, checkpoint['model'])
             if args.data_type == 'fp16':
                 encoder_weights.to_half()
+            elif args.data_type == 'bf16':
+                encoder_weights.to_bfloat16()
             encoder_weights.to_cuda()
             encoder = CustomEncoder(model_opt.enc_layers, model_opt.heads, model_opt.enc_rnn_size // model_opt.heads, encoder_weights,
                                     path=args.encoder_ths_path, embedding=model.encoder.embeddings)
@@ -217,6 +221,8 @@ def build_base_model(model_opt, fields, gpu, args, checkpoint=None, gpu_id=None)
             ft_decoding_weights = FtDecodingWeights(model_opt.dec_layers, model_opt.dec_rnn_size, decoding_weights.w)
             if args.data_type == 'fp16':
                 ft_decoding_weights.to_half()
+            elif args.data_type == 'bf16':
+                ft_decoding_weights.to_bfloat16()
             ft_decoding_weights.to_cuda()
             model.decoder = CustomDecoding(model_opt.heads, model_opt.dec_rnn_size // model_opt.heads,
                                            model_opt.dec_rnn_size * 4, model_opt.dec_rnn_size, model_opt.dec_layers, 
@@ -230,6 +236,8 @@ def build_base_model(model_opt, fields, gpu, args, checkpoint=None, gpu_id=None)
             decoding_weights.to_cuda()
             if args.data_type == 'fp16':
                 decoding_weights.to_half()
+            elif args.data_type == 'bf16':
+                decoding_weights.to_bfloat16()
             model.decoder = TorchDecoding(model_opt.dec_layers, model_opt.heads, model_opt.dec_rnn_size // model_opt.heads,
                                             vocab_size, bos_idx, eos_idx, decoding_weights, args=args)
         else:
@@ -259,4 +267,6 @@ def build_base_model(model_opt, fields, gpu, args, checkpoint=None, gpu_id=None)
     model.to(device)
     if model_opt.model_dtype == 'fp16' and model_opt.optim == 'fusedadam':
         model.half()
+    elif model_opt.model_dtype == 'bf16' and model_opt.optim == 'fusedadam':
+        model.bfloat16()
     return model

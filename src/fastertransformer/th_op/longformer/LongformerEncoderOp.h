@@ -32,12 +32,12 @@ private:
     size_t max_global_token_num_;
     size_t max_batch_size_;
     size_t max_seq_len_;
-    float attn_scaler_;
+    float  attn_scaler_;
     size_t hidden_units_;
 
-    cublasLtHandle_t _cublasltHandle;
+    cublasLtHandle_t   _cublasltHandle;
     ft::cublasAlgoMap* cublas_algo_map_;
-    std::mutex* cublas_wrapper_mutex_;
+    std::mutex*        cublas_wrapper_mutex_;
 
 public:
     FasterTransformerLongformerEncoder(int64_t layer_num,
@@ -49,7 +49,7 @@ public:
                                        int64_t max_global_token_num,
                                        int64_t max_batch_size,
                                        int64_t max_seq_len,
-                                       double attn_scaler);
+                                       double  attn_scaler);
 
     ~FasterTransformerLongformerEncoder();
 
@@ -57,22 +57,22 @@ public:
                        th::Tensor local_attn_mask,
                        th::Tensor global_attn_mask,
                        th::Tensor th_weights,
-                       int64_t device_id = 0);
+                       int64_t    device_id = 0);
 
     template<typename T>
-    void setWeight(int layer_num,
-                   int in_dim,
-                   int hidden_units,
-                   int intermediate_size,
-                   th::Tensor th_weights,
+    void setWeight(int                                        layer_num,
+                   int                                        in_dim,
+                   int                                        hidden_units,
+                   int                                        intermediate_size,
+                   th::Tensor                                 th_weights,
                    std::vector<ft::LongformerLayerWeight<T>>* weights)
     {
         weights->clear();
         weights->resize(layer_num);
         auto weights_ptr = get_ptr<T>(th_weights);
-        int offside = 0;
+        int  offside     = 0;
         for (int i = 0; i < layer_num; i++) {
-            // q k v kg vg weights and bias should be continous, required by the ft longformer encoder.
+            // q k v kg vg weights and bias should be continuous, required by the ft longformer encoder.
             weights->at(i).query_weights.kernel = weights_ptr + offside;  // q
             offside += (i == 0 ? in_dim : hidden_units) * hidden_units;
             weights->at(i).key_weights.kernel = weights_ptr + offside;  // k

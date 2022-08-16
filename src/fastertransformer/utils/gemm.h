@@ -165,51 +165,51 @@ public:
     // We temperally add an interface here for two cases float/half,
     // but to finialze this function, we need an interface of a weight class
     // which is not a template class.
-    virtual void gemm(const GemmOp transa,
-                      const GemmOp transb,
-                      const size_t m,
-                      const size_t n,
-                      const size_t k,
-                      const void* input,
+    virtual void gemm(const GemmOp              transa,
+                      const GemmOp              transb,
+                      const size_t              m,
+                      const size_t              n,
+                      const size_t              k,
+                      const void*               input,
                       const DenseWeight<float>& weight,
-                      void* output,
-                      const float alpha = 1.0f,
-                      const float beta = 0.0f);
-    virtual void gemm(const GemmOp transa,
-                      const GemmOp transb,
-                      const size_t m,
-                      const size_t n,
-                      const size_t k,
-                      const void* input,
+                      void*                     output,
+                      const float               alpha = 1.0f,
+                      const float               beta  = 0.0f);
+    virtual void gemm(const GemmOp             transa,
+                      const GemmOp             transb,
+                      const size_t             m,
+                      const size_t             n,
+                      const size_t             k,
+                      const void*              input,
                       const DenseWeight<half>& weight,
-                      void* output,
-                      const float alpha = 1.0f,
-                      const float beta = 0.0f);
+                      void*                    output,
+                      const float              alpha = 1.0f,
+                      const float              beta  = 0.0f);
 
     virtual void gemm(const GemmOp transa,
                       const GemmOp transb,
                       const size_t m,
                       const size_t n,
                       const size_t k,
-                      const void* A,
-                      const void* B,
-                      void* C,
-                      const float alpha = 1.0f,
-                      const float beta = 0.0f);
+                      const void*  A,
+                      const void*  B,
+                      void*        C,
+                      const float  alpha = 1.0f,
+                      const float  beta  = 0.0f);
 
     virtual void gemm(const GemmOp transa,
                       const GemmOp transb,
                       const size_t m,
                       const size_t n,
                       const size_t k,
-                      const void* A,
+                      const void*  A,
                       const size_t lda,
-                      const void* B,
+                      const void*  B,
                       const size_t ldb,
-                      void* C,
+                      void*        C,
                       const size_t ldc,
-                      const float alpha = 1.0f,
-                      const float beta = 0.0f);
+                      const float  alpha = 1.0f,
+                      const float  beta  = 0.0f);
     /**
      * @brief Compute the matrix multiplication `C = \alpha * op(A) * op(B) + \beta * C`.
      *
@@ -233,49 +233,49 @@ public:
      * @throw GemmNotSupportedException if a type is not TYPE_FP16 or TYPE_FP32.
      * @throw std::runtime_error  if any exception inside CUDA.
      */
-    virtual void gemm(const GemmOp transa,
-                      const GemmOp transb,
-                      const size_t m,
-                      const size_t n,
-                      const size_t k,
-                      const void* A,
+    virtual void gemm(const GemmOp   transa,
+                      const GemmOp   transb,
+                      const size_t   m,
+                      const size_t   n,
+                      const size_t   k,
+                      const void*    A,
                       const DataType Atype,
-                      const size_t lda,
-                      const void* B,
+                      const size_t   lda,
+                      const void*    B,
                       const DataType Btype,
-                      const size_t ldb,
-                      void* C,
+                      const size_t   ldb,
+                      void*          C,
                       const DataType Ctype,
-                      const size_t ldc,
-                      const float alpha = 1.0f,
-                      const float beta = 0.0f);
+                      const size_t   ldc,
+                      const float    alpha = 1.0f,
+                      const float    beta  = 0.0f);
 
-    virtual void batchedGemm(const GemmOp transa,
-                             const GemmOp transb,
-                             const size_t m,
-                             const size_t n,
-                             const size_t k,
+    virtual void batchedGemm(const GemmOp       transa,
+                             const GemmOp       transb,
+                             const size_t       m,
+                             const size_t       n,
+                             const size_t       k,
                              const void* const* A,
                              const void* const* B,
-                             void* const* C,
-                             const size_t batch_size,
-                             const float alpha = 1.0f,
-                             const float beta = 0.0f);
+                             void* const*       C,
+                             const size_t       batch_size,
+                             const float        alpha = 1.0f,
+                             const float        beta  = 0.0f);
 
-    virtual void batchedGemm(const GemmOp transa,
-                             const GemmOp transb,
-                             const size_t m,
-                             const size_t n,
-                             const size_t k,
+    virtual void batchedGemm(const GemmOp       transa,
+                             const GemmOp       transb,
+                             const size_t       m,
+                             const size_t       n,
+                             const size_t       k,
                              const void* const* A,
-                             const size_t lda,
+                             const size_t       lda,
                              const void* const* B,
-                             const size_t ldb,
-                             void* const* C,
-                             const size_t ldc,
-                             const size_t batch_size,
-                             const float alpha = 1.0f,
-                             const float beta = 0.0f);
+                             const size_t       ldb,
+                             void* const*       C,
+                             const size_t       ldc,
+                             const size_t       batch_size,
+                             const float        alpha = 1.0f,
+                             const float        beta  = 0.0f);
 
     /**
      * @brief Compute the matrix multiplication of batch of matrices As and Bs
@@ -303,68 +303,68 @@ public:
      * @throw GemmNotSupportedException if a type is not TYPE_FP16 or TYPE_FP32.
      * @throw std::runtime_error  if any exception inside CUDA.
      */
-    virtual void batchedGemm(const GemmOp transa,
-                             const GemmOp transb,
-                             const size_t m,
-                             const size_t n,
-                             const size_t k,
+    virtual void batchedGemm(const GemmOp       transa,
+                             const GemmOp       transb,
+                             const size_t       m,
+                             const size_t       n,
+                             const size_t       k,
                              const void* const* A,
-                             const DataType Atype,
-                             const size_t lda,
+                             const DataType     Atype,
+                             const size_t       lda,
                              const void* const* B,
-                             const DataType Btype,
-                             const size_t ldb,
-                             void* const* C,
-                             const DataType Ctype,
-                             const size_t ldc,
-                             const size_t batch_size,
-                             const float alpha = 1.0f,
-                             const float beta = 0.0f);
+                             const DataType     Btype,
+                             const size_t       ldb,
+                             void* const*       C,
+                             const DataType     Ctype,
+                             const size_t       ldc,
+                             const size_t       batch_size,
+                             const float        alpha = 1.0f,
+                             const float        beta  = 0.0f);
 
-    virtual void stridedBatchedGemm(GemmOp transa,
-                                    GemmOp transb,
+    virtual void stridedBatchedGemm(GemmOp       transa,
+                                    GemmOp       transb,
                                     const size_t m,
                                     const size_t n,
                                     const size_t k,
-                                    const void* A,
-                                    const void* B,
-                                    void* C,
+                                    const void*  A,
+                                    const void*  B,
+                                    void*        C,
                                     const size_t batch_size,
-                                    const float alpha = 1.0f,
-                                    const float beta = 0.0f);
+                                    const float  alpha = 1.0f,
+                                    const float  beta  = 0.0f);
 
-    virtual void stridedBatchedGemm(GemmOp transa,
-                                    GemmOp transb,
-                                    const size_t m,
-                                    const size_t n,
-                                    const size_t k,
-                                    const void* A,
+    virtual void stridedBatchedGemm(GemmOp        transa,
+                                    GemmOp        transb,
+                                    const size_t  m,
+                                    const size_t  n,
+                                    const size_t  k,
+                                    const void*   A,
                                     const int64_t strideA,
-                                    const void* B,
+                                    const void*   B,
                                     const int64_t strideB,
-                                    void* C,
+                                    void*         C,
                                     const int64_t strideC,
-                                    const size_t batch_size,
-                                    const float alpha = 1.0f,
-                                    const float beta = 0.0f);
+                                    const size_t  batch_size,
+                                    const float   alpha = 1.0f,
+                                    const float   beta  = 0.0f);
 
-    virtual void stridedBatchedGemm(GemmOp transa,
-                                    GemmOp transb,
-                                    const size_t m,
-                                    const size_t n,
-                                    const size_t k,
-                                    const void* A,
-                                    const size_t lda,
+    virtual void stridedBatchedGemm(GemmOp        transa,
+                                    GemmOp        transb,
+                                    const size_t  m,
+                                    const size_t  n,
+                                    const size_t  k,
+                                    const void*   A,
+                                    const size_t  lda,
                                     const int64_t strideA,
-                                    const void* B,
-                                    const size_t ldb,
+                                    const void*   B,
+                                    const size_t  ldb,
                                     const int64_t strideB,
-                                    void* C,
-                                    const size_t ldc,
+                                    void*         C,
+                                    const size_t  ldc,
                                     const int64_t strideC,
-                                    const size_t batch_size,
-                                    const float alpha = 1.0f,
-                                    const float beta = 0.0f);
+                                    const size_t  batch_size,
+                                    const float   alpha = 1.0f,
+                                    const float   beta  = 0.0f);
     /**
      * @brief Compute the strided matrix multiplication of batch of matrices As and Bs
      *
@@ -395,42 +395,42 @@ public:
      * @throw GemmNotSupportedException if a type is not TYPE_FP16 or TYPE_FP32.
      * @throw std::runtime_error  if any exception inside CUDA.
      */
-    virtual void stridedBatchedGemm(GemmOp transa,
-                                    GemmOp transb,
-                                    const size_t m,
-                                    const size_t n,
-                                    const size_t k,
-                                    const void* A,
-                                    DataType Atype,
-                                    const size_t lda,
+    virtual void stridedBatchedGemm(GemmOp        transa,
+                                    GemmOp        transb,
+                                    const size_t  m,
+                                    const size_t  n,
+                                    const size_t  k,
+                                    const void*   A,
+                                    DataType      Atype,
+                                    const size_t  lda,
                                     const int64_t strideA,
-                                    const void* B,
-                                    DataType Btype,
-                                    const size_t ldb,
+                                    const void*   B,
+                                    DataType      Btype,
+                                    const size_t  ldb,
                                     const int64_t strideB,
-                                    void* C,
-                                    DataType Ctype,
-                                    const size_t ldc,
+                                    void*         C,
+                                    DataType      Ctype,
+                                    const size_t  ldc,
                                     const int64_t strideC,
-                                    const size_t batch_size,
-                                    DataType compute_type,
-                                    const float alpha = 1.0f,
-                                    const float beta = 0.0f);
+                                    const size_t  batch_size,
+                                    DataType      compute_type,
+                                    const float   alpha = 1.0f,
+                                    const float   beta  = 0.0f);
 
 protected:
-    IAllocator* allocator_ = nullptr;
-    cudaStream_t stream_;
-    std::mutex* mutex_ = nullptr;
+    IAllocator*    allocator_ = nullptr;
+    cudaStream_t   stream_;
+    std::mutex*    mutex_           = nullptr;
     cublasAlgoMap* cublas_algo_map_ = nullptr;
 
-    cublasHandle_t cublas_handle_;
+    cublasHandle_t   cublas_handle_;
     cublasLtHandle_t cublaslt_handle_;
-    void* workspace_ = nullptr;
+    void*            workspace_ = nullptr;
 
     // use FP32 as default
-    DataType a_type_ = TYPE_FP32;
-    DataType b_type_ = TYPE_FP32;
-    DataType c_type_ = TYPE_FP32;
+    DataType a_type_       = TYPE_FP32;
+    DataType b_type_       = TYPE_FP32;
+    DataType c_type_       = TYPE_FP32;
     DataType compute_type_ = TYPE_FP32;
 
     // Check if data and inputs are valid in the Gemm class.
@@ -457,11 +457,11 @@ protected:
 class SpGemm: public Gemm {
 
 protected:
-    cusparseLtHandle_t cusparselt_handle_;
+    cusparseLtHandle_t                               cusparselt_handle_;
     std::map<std::string, cusparseLtMatDescriptor_t> a_desc_map_;
     std::map<std::string, cusparseLtMatDescriptor_t> b_desc_map_;
     std::map<std::string, cusparseLtMatDescriptor_t> c_desc_map_;
-    bool useBaseGemm(size_t batch_size, size_t m, size_t n, size_t k);
+    bool                                             useBaseGemm(size_t batch_size, size_t m, size_t n, size_t k);
 
 public:
     using Gemm::setComputeType;
@@ -479,68 +479,68 @@ public:
      * @param config_file A file path of a GEMM configuration.
      */
     // TODO: Let's unify algo map loading part.
-    SpGemm(IAllocator* allocator,
+    SpGemm(IAllocator*  allocator,
            cudaStream_t stream,
-           std::string config_file = GEMM_CONFIG,
-           std::string spconfig_file = SPGEMM_CONFIG);
+           std::string  config_file   = GEMM_CONFIG,
+           std::string  spconfig_file = SPGEMM_CONFIG);
     ~SpGemm();
     std::string toString() override;
-    void loadGemmConfig(std::string config_file, std::string spconfig_file);
+    void        loadGemmConfig(std::string config_file, std::string spconfig_file);
 
     // Template method cannot be overrided.
-    void gemm(const GemmOp transa,
-              const GemmOp transb,
-              const size_t m,
-              const size_t n,
-              const size_t k,
-              const void* input,
+    void gemm(const GemmOp              transa,
+              const GemmOp              transb,
+              const size_t              m,
+              const size_t              n,
+              const size_t              k,
+              const void*               input,
               const DenseWeight<float>& weight,
-              void* output,
-              const float alpha = 1.0f,
-              const float beta = 0.0f) override;
-    void gemm(const GemmOp transa,
-              const GemmOp transb,
-              const size_t m,
-              const size_t n,
-              const size_t k,
-              const void* input,
+              void*                     output,
+              const float               alpha = 1.0f,
+              const float               beta  = 0.0f) override;
+    void gemm(const GemmOp             transa,
+              const GemmOp             transb,
+              const size_t             m,
+              const size_t             n,
+              const size_t             k,
+              const void*              input,
               const DenseWeight<half>& weight,
-              void* output,
-              const float alpha = 1.0f,
-              const float beta = 0.0f) override;
+              void*                    output,
+              const float              alpha = 1.0f,
+              const float              beta  = 0.0f) override;
 
-    void gemm(const GemmOp transa,
-              const GemmOp transb,
-              const size_t m,
-              const size_t n,
-              const size_t k,
-              const void* A,
+    void gemm(const GemmOp   transa,
+              const GemmOp   transb,
+              const size_t   m,
+              const size_t   n,
+              const size_t   k,
+              const void*    A,
               const DataType Atype,
-              const size_t lda,
-              const void* B,
+              const size_t   lda,
+              const void*    B,
               const DataType Btype,
-              const size_t ldb,
-              void* C,
+              const size_t   ldb,
+              void*          C,
               const DataType Ctype,
-              const size_t ldc,
-              const float alpha = 1.0f,
-              const float beta = 0.0f) override;
+              const size_t   ldc,
+              const float    alpha = 1.0f,
+              const float    beta  = 0.0f) override;
 
 private:
     void checkDataTypeValidity(const DataType& type) override;
 
     // Temporal gemm helper mtehod to use template T.
     template<typename T>
-    void weightGemmHelper(const GemmOp transa,
-                          const GemmOp transb,
-                          const size_t m,
-                          const size_t n,
-                          const size_t k,
-                          const void* input,
+    void weightGemmHelper(const GemmOp          transa,
+                          const GemmOp          transb,
+                          const size_t          m,
+                          const size_t          n,
+                          const size_t          k,
+                          const void*           input,
                           const DenseWeight<T>& weight,
-                          void* output,
-                          const float alpha,
-                          const float beta);
+                          void*                 output,
+                          const float           alpha,
+                          const float           beta);
 };
 
 // class Int8SpGemm : public Int8Gemm, public SpGemm {
@@ -627,7 +627,7 @@ cublasComputeType_t getCublasComputeType(DataType dtype);
 cudaDataType_t getCublasComputeType(DataType dtype);
 #endif
 cublasOperation_t getCublasOperation(GemmOp op);
-std::string getGemmOpString(const GemmOp& op);
+std::string       getGemmOpString(const GemmOp& op);
 
 #ifdef SPARSITY_ENABLED
 cusparseOperation_t getCusparseOperation(GemmOp op);
@@ -665,13 +665,13 @@ void pruneMatrixB(
  *              or if fail to compute a correct buffer size to store the compressed matrix.
  * @throw std::runtime_error  if any exception inside CUDA.
  */
-size_t compressMatrixB(void** output,
-                       IAllocator& allocator,
+size_t compressMatrixB(void**              output,
+                       IAllocator&         allocator,
                        const cudaStream_t& stream,
-                       const void* input,
-                       const size_t k,
-                       const size_t n,
-                       const GemmOp trans = GEMM_OP_N);
+                       const void*         input,
+                       const size_t        k,
+                       const size_t        n,
+                       const GemmOp        trans = GEMM_OP_N);
 
 #endif
 

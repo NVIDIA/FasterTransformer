@@ -81,25 +81,25 @@ __global__ void ldk_calibrate_quantize_weight_per_channel(int8_t* dst, float* sc
     scale += bidx;
     src += bidx * k;
     dst += bidx * k;
-    T amax_val = 0.0f;
-    const T zero = static_cast<T>(0.0f);
+    T       amax_val = 0.0f;
+    const T zero     = static_cast<T>(0.0f);
     for (int k_i = tidx; k_i < k; k_i += blockDim.x) {
         T val = src[k_i];
-        val = val > zero ? val : -val;
+        val   = val > zero ? val : -val;
         if (amax_val > val) {
             amax_val = val;
         }
     }
     __shared__ float s_amax;
-    const float block_amax_val = blockReduceMax(static_cast<float>(amax_val));
+    const float      block_amax_val = blockReduceMax(static_cast<float>(amax_val));
     if (tidx == 0) {
-        s_amax = block_amax_val;
+        s_amax   = block_amax_val;
         scale[0] = block_amax_val / 127.0f;
     }
     __syncthreads();
 
     for (int k_i = tidx; k_i < k; k_i += blockDim.x) {
-        T val = src[k_i];
+        T val    = src[k_i];
         dst[k_i] = float_to_int8_rn(127.0f * static_cast<float>(val) / s_amax);
     }
 }
@@ -132,10 +132,10 @@ __global__ void
 ldn_transpose_quantize_weight_per_channel(int8_t* dst, const float* scale, const T* src, const int k, const int n)
 {
     __shared__ T shm[32][33];
-    const int tidx = threadIdx.x;
-    const int tidy = threadIdx.y;
-    int n_idx = blockIdx.x * 32 + tidx;
-    int k_idx = blockIdx.y * 32 + tidy;
+    const int    tidx  = threadIdx.x;
+    const int    tidy  = threadIdx.y;
+    int          n_idx = blockIdx.x * 32 + tidx;
+    int          k_idx = blockIdx.y * 32 + tidy;
     if (n_idx < n && k_idx < k) {
         shm[tidx][tidy] = src[k_idx * n + n_idx];
     }

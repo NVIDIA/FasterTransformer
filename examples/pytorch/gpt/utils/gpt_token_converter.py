@@ -24,11 +24,13 @@ def convert_token(
     vocab_file="../models/gpt2-vocab.json",
     bpe_file="../models/gpt2-merges.txt",
     out_file="out",
-    max_input_length=-1
+    max_input_length=-1,
+    text_out_file=None,
 ):
     enc = encoder.get_encoder(vocab_file, bpe_file)
     tokens_batch = np.loadtxt(out_file, dtype=np.int32)
     end_id = 50256
+    outputs = []
     if(tokens_batch.ndim == 1): 
         tokens_batch = tokens_batch.reshape([1, -1])
     for batch_num, tokens in enumerate(tokens_batch):
@@ -40,6 +42,11 @@ def convert_token(
         if len(end_index) > 0:
             end_pos = end_index[0]
         print(f"[INFO] batch {batch_num}: {enc.decode(tokens[:end_pos])}")
+        outputs.append(enc.decode(tokens[:end_pos]))
+        
+        if text_out_file != None:
+            with open(text_out_file, "w+") as f:
+                f.writelines("\n".join(outputs))
     return tokens_batch
 
 if __name__ == "__main__":

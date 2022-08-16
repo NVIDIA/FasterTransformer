@@ -73,7 +73,7 @@ def sample_model(
 
     :model_name=124M : String, which model to use
     :nsamples=0 : Number of samples to return, if 0, continues to
-     generate samples indefinately.
+     generate samples indefinitely.
     :batch_size=1 : Number of batches (only affects speed/memory).
     :length=None : Number of tokens in generated text, if None (default), is
      determined by model hyperparameters
@@ -169,13 +169,9 @@ def sample_model(
             for i in range(batch_size):
                 generated += 1
 
-                if beam_width > 1:
-                    for j in range(beam_width):
-                        print("=" * 40 + " SAMPLE " + str(generated) + " " + "=" * 40)
-                        print(enc.decode(op_out[i][j][:seq_len[i][j]]))
-                else:
-                        print("=" * 40 + " SAMPLE " + str(generated) + " " + "=" * 40)
-                        print(enc.decode(op_out[i][:seq_len[i]]))
+                for j in range(beam_width):
+                    print("=" * 40 + " SAMPLE " + str(generated) + " " + "=" * 40)
+                    print(enc.decode(op_out[i][j][:seq_len[i][j]]))
 
 def finalize(input_ids, beam_width, parent_ids, sequence_lengths, outputs, end_id, max_seq_len=None):
     maximum_lengths = tf.reduce_max(tf.reshape(
@@ -229,7 +225,7 @@ def ft_gpt_op(var_dict,
     gpt_op_module = tf.load_op_library(os.path.join('./lib/libtf_gpt.so'))
     data_type = decoder_args.dtype
 
-    output_ids, parent_ids, sequence_length, cum_log_probs = gpt_op_module.gpt(
+    output_ids, sequence_length, cum_log_probs = gpt_op_module.gpt(
         input_ids, # 0
         input_lengths, # 1
         [tf.cast(var_dict["model/h%d/ln_1/b:0" % l], data_type) for l in range(decoder_args.num_layer)], # 2
@@ -262,7 +258,7 @@ def ft_gpt_op(var_dict,
         top_k=decoding_args.top_k,
         top_p=decoding_args.top_p,
         temperature=1.0,
-        len_penalty=1.0,
+        len_penalty=0.0,
         repetition_penalty=1.0,
         output_log_probs=True,
         request_output_length=decoding_args.max_seq_len - input_lengths.max())

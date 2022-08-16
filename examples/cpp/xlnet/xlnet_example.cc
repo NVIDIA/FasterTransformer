@@ -25,27 +25,31 @@ int main(int argc, char** argv)
 {
     if (argc != 7) {
         printf("[ERROR] xlnet_example <batch_size> <num_layers> <seq_len> <head_num> "
-               "<size_per_head> <is_fp16>\n");
+               "<size_per_head> <data_type, 0: fp32, 1: fp16, 2: bf16>\n");
         printf("e.g., ./bin/xlnet_example 8 12 128 12 64 0\n");
         return 0;
     }
 
-    int batch_size = atoi(argv[1]);
-    int num_layers = atoi(argv[2]);
-    int seq_len = atoi(argv[3]);
-    int head_num = atoi(argv[4]);
-    int size_per_head = atoi(argv[5]);
-    bool is_fp16 = atoi(argv[6]);
+    int            batch_size    = atoi(argv[1]);
+    int            num_layers    = atoi(argv[2]);
+    int            seq_len       = atoi(argv[3]);
+    int            head_num      = atoi(argv[4]);
+    int            size_per_head = atoi(argv[5]);
+    FtCudaDataType data_type     = static_cast<FtCudaDataType>(atoi(argv[6]));  // 0: fp32, 1: fp16, 2: bf16
 
-    if (is_fp16 == 0) {
+    if (data_type == FP32) {
         return xlnetExample<float>(batch_size, num_layers, seq_len, head_num, size_per_head);
     }
-    else if (is_fp16 == 1) {
+#ifdef ENABLE_BF16
+    else if (data_type == BF16) {
+        return xlnetExample<__nv_bfloat16>(batch_size, num_layers, seq_len, head_num, size_per_head);
+    }
+#endif
+    else if (data_type == FP16) {
         return xlnetExample<half>(batch_size, num_layers, seq_len, head_num, size_per_head);
     }
     else {
-        throw std::runtime_error(std::string("[FT][ERROR] is_fp16 should be 0 (use float)"
-                                             "or 1 (use half). \n "));
+        throw std::runtime_error(std::string("[FT][ERROR] data_type should be fp32, fp16, or bf16 \n "));
     }
 }
 
@@ -55,10 +59,10 @@ int xlnetExample(size_t batch_size, size_t num_layers, size_t seq_len, size_t he
     printf("[INFO] Device: %s \n", getDeviceName().c_str());
 
     const size_t hidden_units = head_num * size_per_head;
-    const size_t inter_size = 4 * hidden_units;
+    const size_t inter_size   = 4 * hidden_units;
 
-    cudaStream_t stream;
-    cublasHandle_t cublas_handle;
+    cudaStream_t     stream;
+    cublasHandle_t   cublas_handle;
     cublasLtHandle_t cublaslt_handle;
     cudaStreamCreate(&stream);
     cublasCreate(&cublas_handle);
@@ -77,6 +81,11 @@ int xlnetExample(size_t batch_size, size_t num_layers, size_t seq_len, size_t he
     if (std::is_same<T, half>::value) {
         cublas_wrapper.setFP16GemmConfig();
     }
+#ifdef ENABLE_BF16
+    else if (std::is_same<T, __nv_bfloat16>::value) {
+        cublas_wrapper.setBF16GemmConfig();
+    }
+#endif
     else if (std::is_same<T, float>::value) {
         cublas_wrapper.setFP32GemmConfig();
     }

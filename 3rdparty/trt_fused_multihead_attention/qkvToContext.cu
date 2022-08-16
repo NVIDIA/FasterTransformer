@@ -24,16 +24,28 @@
 
 namespace fastertransformer {
 
+union __half2_uint32_t_union {
+    half2 fp162;
+    uint32_t u32;
+};
+union __float_uint32_t_union {
+    float fp32;
+    uint32_t u32;
+};
+
 static inline void set_alpha(uint32_t& alpha, float norm, Data_type dtype)
 {
     if (dtype == DATA_TYPE_FP16)
     {
-        half2 h2 = __float2half2_rn(norm);
-        alpha = reinterpret_cast<const uint32_t&>(h2);
+        __half2_uint32_t_union temp;
+        temp.fp162 = __float2half2_rn(norm);
+        alpha = temp.u32;
     }
     else if (dtype == DATA_TYPE_FP32)
     {
-        alpha = reinterpret_cast<const uint32_t&>(norm);
+        __float_uint32_t_union temp;
+        temp.fp32 = norm;
+        alpha = temp.u32;
     }
     else if (dtype == DATA_TYPE_INT32)
     {
@@ -365,7 +377,7 @@ public:
 
     void setup(const int S, const int B, const int window_num)
     {
-        size_t warps_m, warps_n, warps_k = 1;
+        size_t warps_m = 1, warps_n = 1, warps_k = 1;
         if (S == 64) {
             warps_m = 2;
             warps_n = 2;
@@ -413,9 +425,14 @@ public:
         float scaleBmm2 = scaleCtx;
         float scaleSoftmax = interface->mDqProbs;
 
-        params.scale_bmm1 = reinterpret_cast<const uint32_t&>(scaleBmm1);
-        params.scale_bmm2 = reinterpret_cast<const uint32_t&>(scaleBmm2);
-        params.scale_softmax = reinterpret_cast<const uint32_t&>(scaleSoftmax);
+        __float_uint32_t_union temp;
+
+        temp.fp32 = scaleBmm1;
+        params.scale_bmm1 = temp.u32;
+        temp.fp32 = scaleBmm2;
+        params.scale_bmm2 = temp.u32;
+        temp.fp32 = scaleSoftmax;
+        params.scale_softmax = temp.u32;
 
         params.enable_i2f_trick =
             -double(1 << 22) * double(scaleBmm2) <= -128.f && double(1 << 22) * double(scaleBmm2) >= 127.f;
@@ -446,7 +463,7 @@ public:
 
     void setup(const int S, const int B)
     {
-        size_t warps_m, warps_n, warps_k = 1;
+        size_t warps_m = 1, warps_n = 1, warps_k = 1;
         if ((sm == 75 || sm == 80) && S == 64)
         {
             warps_m = 2;
@@ -495,9 +512,14 @@ public:
         float scaleBmm2 = interface->mDqProbs * scaleQkv / scaleCtx;
         float scaleSoftmax = 1.f / interface->mDqProbs;
 
-        params.scale_bmm1 = reinterpret_cast<const uint32_t&>(scaleBmm1);
-        params.scale_bmm2 = reinterpret_cast<const uint32_t&>(scaleBmm2);
-        params.scale_softmax = reinterpret_cast<const uint32_t&>(scaleSoftmax);
+        __float_uint32_t_union temp;
+
+        temp.fp32 = scaleBmm1;
+        params.scale_bmm1 = temp.u32;
+        temp.fp32 = scaleBmm2;
+        params.scale_bmm2 = temp.u32;
+        temp.fp32 = scaleSoftmax;
+        params.scale_softmax = temp.u32;
 
         params.enable_i2f_trick
             = -double(1 << 22) * double(scaleBmm2) <= -128.f && double(1 << 22) * double(scaleBmm2) >= 127.f;

@@ -22,18 +22,21 @@ template<typename T>
 void SwinTransformerINT8Block<T>::allocateBuffer()
 {
     if (is_allocate_buffer_ == false) {
-        attention_output_ = (int8_t*)allocator_->malloc(
-            max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_ * sizeof(int8_t), false);
-        skip_buf_ = (int8_t*)allocator_->malloc(
-            max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_ * sizeof(int8_t), false);
-        mlp_buf_ = (int8_t*)allocator_->malloc(max_batch_ * patches_resolution_ * patches_resolution_
-                                                   * int(embed_dim_ * mlp_ratio_) * sizeof(int8_t),
-                                               false);
-        mlp_output_ = (int8_t*)allocator_->malloc(
-            max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_ * sizeof(int32_t), false);
+        attention_output_ = (int8_t*)allocator_->reMalloc(attention_output_,
+                                                          max_batch_ * patches_resolution_ * patches_resolution_
+                                                              * embed_dim_ * sizeof(int8_t),
+                                                          false);
+        skip_buf_         = (int8_t*)allocator_->reMalloc(
+            skip_buf_, max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_ * sizeof(int8_t), false);
+        mlp_buf_    = (int8_t*)allocator_->reMalloc(mlp_buf_,
+                                                 max_batch_ * patches_resolution_ * patches_resolution_
+                                                     * int(embed_dim_ * mlp_ratio_) * sizeof(int8_t),
+                                                 false);
+        mlp_output_ = (int8_t*)allocator_->reMalloc(
+            mlp_output_, max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_ * sizeof(int32_t), false);
 
         normed_shifted_input_ = mlp_buf_;
-        is_allocate_buffer_ = true;
+        is_allocate_buffer_   = true;
     }
 }
 
@@ -41,27 +44,28 @@ template<typename T>
 void SwinTransformerINT8Block<T>::freeBuffer()
 {
     if (is_allocate_buffer_ == true) {
-        allocator_->free(attention_output_);
-        allocator_->free(skip_buf_);
-        allocator_->free(mlp_buf_);
-        allocator_->free(mlp_output_);
+        allocator_->free((void**)(&attention_output_));
+        allocator_->free((void**)(&skip_buf_));
+        allocator_->free((void**)(&mlp_buf_));
+        allocator_->free((void**)(&mlp_output_));
         is_allocate_buffer_ = false;
     }
 }
 
 template<typename T>
-SwinTransformerINT8Block<T>::SwinTransformerINT8Block(int int8_mode,
-                                                      int max_batch,
-                                                      int window_size,
-                                                      int patches_resolution,
-                                                      int embed_dim,
-                                                      float mlp_ratio,
-                                                      bool qkv_bias,
-                                                      cudaStream_t stream,
+SwinTransformerINT8Block<T>::SwinTransformerINT8Block(int              int8_mode,
+                                                      int              max_batch,
+                                                      int              window_size,
+                                                      int              patches_resolution,
+                                                      int              embed_dim,
+                                                      float            mlp_ratio,
+                                                      float            layernorm_eps,
+                                                      bool             qkv_bias,
+                                                      cudaStream_t     stream,
                                                       cublasMMWrapper* cublas_wrapper,
-                                                      IAllocator* allocator,
-                                                      bool is_free_buffer_after_forward,
-                                                      float qk_scale):
+                                                      IAllocator*      allocator,
+                                                      bool             is_free_buffer_after_forward,
+                                                      float            qk_scale):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     int8_mode(int8_mode),
     max_batch_(max_batch),
@@ -69,11 +73,12 @@ SwinTransformerINT8Block<T>::SwinTransformerINT8Block(int int8_mode,
     patches_resolution_(patches_resolution),
     embed_dim_(embed_dim),
     mlp_ratio_(mlp_ratio),
+    layernorm_eps_(layernorm_eps),
     qkv_bias_(qkv_bias),
     qk_scale_(qk_scale)
 {
     window_len_ = window_size_ * window_size_;
-    atten_ = new WindowAttentionINT8<T>(max_batch_,
+    atten_      = new WindowAttentionINT8<T>(max_batch_,
                                         window_size_,
                                         patches_resolution,
                                         embed_dim,
@@ -95,8 +100,8 @@ SwinTransformerINT8Block<T>::~SwinTransformerINT8Block()
 }
 
 template<typename T>
-void SwinTransformerINT8Block<T>::forward(std::vector<Tensor>* output_tensors,
-                                          const std::vector<Tensor>* input_tensors,
+void SwinTransformerINT8Block<T>::forward(std::vector<Tensor>*               output_tensors,
+                                          const std::vector<Tensor>*         input_tensors,
                                           SwinTransformerINT8BlockWeight<T>& swin_block_weights)
 {
     // input_tensors:
@@ -106,20 +111,20 @@ void SwinTransformerINT8Block<T>::forward(std::vector<Tensor>* output_tensors,
     // output_tensors:
     //      output [batch, input_resolution, input_resolution, dim]
 
-    cublasINT8MMWrapper* cublas_wrapper = (cublasINT8MMWrapper*)cublas_wrapper_;
-    T* from_tensor = (T*)input_tensors->at(0).data;
-    T* out_tensor = (T*)(output_tensors->at(0).data);
-    const int batch = input_tensors->at(0).shape[0];
-    const int input_resolution = input_tensors->at(0).shape[1];
-    const int dim = input_tensors->at(0).shape[3];
-    const int* input_parameters = (const int*)input_tensors->at(2).data;
-    const int num_head = input_parameters[0];
-    int shift_size = input_parameters[1];
-    const int sm = input_parameters[2];
+    cublasINT8MMWrapper* cublas_wrapper   = (cublasINT8MMWrapper*)cublas_wrapper_;
+    T*                   from_tensor      = (T*)input_tensors->at(0).data;
+    T*                   out_tensor       = (T*)(output_tensors->at(0).data);
+    const int            batch            = input_tensors->at(0).shape[0];
+    const int            input_resolution = input_tensors->at(0).shape[1];
+    const int            dim              = input_tensors->at(0).shape[3];
+    const int*           input_parameters = (const int*)input_tensors->at(2).data;
+    const int            num_head         = input_parameters[0];
+    int                  shift_size       = input_parameters[1];
+    const int            sm               = input_parameters[2];
 
-    shift_size = (input_resolution <= window_size_) ? 0 : shift_size;
+    shift_size        = (input_resolution <= window_size_) ? 0 : shift_size;
     size_t window_num = (input_resolution / window_size_) * (input_resolution / window_size_);
-    int mlp_dim = int(mlp_ratio_ * dim);
+    int    mlp_dim    = int(mlp_ratio_ * dim);
     allocateBuffer();
 
     const size_t m = batch * input_resolution * input_resolution;
@@ -142,7 +147,7 @@ void SwinTransformerINT8Block<T>::forward(std::vector<Tensor>* output_tensors,
                                        stream_);
     sync_check_cuda_error();
 
-    int additional_parameters[6] = {batch, dim, input_resolution, num_head, shift_size, sm};
+    int                 additional_parameters[6] = {batch, dim, input_resolution, num_head, shift_size, sm};
     std::vector<Tensor> attn_output_tensors{
         Tensor{MEMORY_GPU, TYPE_INT8, std: vector<size_t>{m, n}, attention_output_}};
     std::vector<Tensor> int8_input_tensors{

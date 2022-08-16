@@ -22,7 +22,9 @@
 namespace ft = fastertransformer;
 
 template<typename T>
-void move_tensor_H2D(const triton::Tensor &tensor, T* &d_ptr)
+void move_tensor_H2D(const triton::Tensor&                                          tensor,
+                     T*&                                                            d_ptr,
+                     const std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>>* allocator)
 {
     if (tensor.where == triton::MEMORY_GPU) {
         return;
@@ -32,15 +34,18 @@ void move_tensor_H2D(const triton::Tensor &tensor, T* &d_ptr)
     for (auto t : tensor.shape) {
         tensor_size *= t;
     }
-    ft::deviceMalloc(&d_ptr, tensor_size, false);
-    ft::cudaH2Dcpy(d_ptr, (T*) tensor.data, tensor_size);
+
+    cudaStream_t stream = (*allocator)->returnStream();
+
+    d_ptr = (T*)((*allocator)->reMalloc(d_ptr, sizeof(T) * tensor_size, false));
+    ft::check_cuda_error(cudaMemcpyAsync(d_ptr, (T*)tensor.data, sizeof(T) * tensor_size, cudaMemcpyDefault, stream));
 }
 
 template<typename T>
-ft::Tensor as_GPU_tensor(const triton::Tensor &tensor, T* d_ptr)
+ft::Tensor as_GPU_tensor(const triton::Tensor& tensor, T* d_ptr)
 {
-    return ft::Tensor {ft::MEMORY_GPU,
-                       triton::Tensor::convertTritonTypeToFt(tensor.type),
-                       tensor.shape,
-                       tensor.where == triton::MEMORY_CPU ? d_ptr : tensor.data};
+    return ft::Tensor{ft::MEMORY_GPU,
+                      triton::Tensor::convertTritonTypeToFt(tensor.type),
+                      tensor.shape,
+                      tensor.where == triton::MEMORY_CPU ? d_ptr : tensor.data};
 }

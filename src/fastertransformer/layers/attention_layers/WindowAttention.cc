@@ -85,27 +85,30 @@ void WindowAttention<T>::allocateBuffer()
     }
     if (is_allocate_buffer_ == false) {
         if (use_trt_) {
-            int S = trt_getS(window_len_);
-            trt_attention_mask_ = (half*)allocator_->malloc(roundByteSize(window_num_ * S * S * sizeof(T), 4), false);
-            trt_relative_position_bias_ =
-                (half*)allocator_->malloc(roundByteSize(num_head * S * S * sizeof(T), 4), false);
-            qkv_buf_ =
-                (T*)allocator_->malloc(3 * max_batch_ * window_num_ * window_len_ * embed_dim_ * sizeof(T), false);
-            q_buf_ = (T*)allocator_->malloc(3 * max_batch_ * window_num_ * window_len_ * embed_dim_ * sizeof(T), false);
-            k_buf_ = q_buf_ + max_batch_ * window_num_ * window_len_ * embed_dim_;
-            v_buf_ = k_buf_ + max_batch_ * window_num_ * window_len_ * embed_dim_;
+            int S               = trt_getS(window_len_);
+            trt_attention_mask_ = (half*)allocator_->reMalloc(
+                trt_attention_mask_, roundByteSize(window_num_ * S * S * sizeof(T), 4), false);
+            trt_relative_position_bias_ = (half*)allocator_->reMalloc(
+                trt_relative_position_bias_, roundByteSize(num_head * S * S * sizeof(T), 4), false);
+            qkv_buf_ = (T*)allocator_->reMalloc(
+                qkv_buf_, 3 * max_batch_ * window_num_ * window_len_ * embed_dim_ * sizeof(T), false);
+            q_buf_ = (T*)allocator_->reMalloc(
+                q_buf_, 3 * max_batch_ * window_num_ * window_len_ * embed_dim_ * sizeof(T), false);
+            k_buf_  = q_buf_ + max_batch_ * window_num_ * window_len_ * embed_dim_;
+            v_buf_  = k_buf_ + max_batch_ * window_num_ * window_len_ * embed_dim_;
             qk_buf_ = nullptr;
         }
         else {
-            trt_attention_mask_ = nullptr;
+            trt_attention_mask_         = nullptr;
             trt_relative_position_bias_ = nullptr;
-            qkv_buf_ =
-                (T*)allocator_->malloc(3 * max_batch_ * window_num_ * window_len_ * embed_dim_ * sizeof(T), false);
-            q_buf_ = (T*)allocator_->malloc(3 * max_batch_ * window_num_ * window_len_ * embed_dim_ * sizeof(T), false);
-            k_buf_ = q_buf_ + max_batch_ * window_num_ * window_len_ * embed_dim_;
-            v_buf_ = k_buf_ + max_batch_ * window_num_ * window_len_ * embed_dim_;
-            qk_buf_ = (T*)allocator_->malloc(
-                3 * max_batch_ * window_num_ * num_head * window_len_ * window_len_ * sizeof(T), false);
+            qkv_buf_                    = (T*)allocator_->reMalloc(
+                qkv_buf_, 3 * max_batch_ * window_num_ * window_len_ * embed_dim_ * sizeof(T), false);
+            q_buf_ = (T*)allocator_->reMalloc(
+                q_buf_, 3 * max_batch_ * window_num_ * window_len_ * embed_dim_ * sizeof(T), false);
+            k_buf_  = q_buf_ + max_batch_ * window_num_ * window_len_ * embed_dim_;
+            v_buf_  = k_buf_ + max_batch_ * window_num_ * window_len_ * embed_dim_;
+            qk_buf_ = (T*)allocator_->reMalloc(
+                qk_buf_, 3 * max_batch_ * window_num_ * num_head * window_len_ * window_len_ * sizeof(T), false);
         }
         is_allocate_buffer_ = true;
     }
@@ -116,29 +119,29 @@ void WindowAttention<T>::freeBuffer()
 {
     if (is_allocate_buffer_ == true) {
         if (use_trt_) {
-            allocator_->free(trt_attention_mask_);
-            allocator_->free(trt_relative_position_bias_);
-            allocator_->free(qkv_buf_);
-            allocator_->free(q_buf_);
+            allocator_->free((void**)(&trt_attention_mask_));
+            allocator_->free((void**)(&trt_relative_position_bias_));
+            allocator_->free((void**)(&qkv_buf_));
+            allocator_->free((void**)(&q_buf_));
         }
         else {
-            allocator_->free(qkv_buf_);
-            allocator_->free(q_buf_);
-            allocator_->free(qk_buf_);
+            allocator_->free((void**)(&qkv_buf_));
+            allocator_->free((void**)(&q_buf_));
+            allocator_->free((void**)(&qk_buf_));
         }
         is_allocate_buffer_ = false;
     }
 }
 
 template<typename T>
-WindowAttention<T>::WindowAttention(int max_batch,
-                                    int window_size,
-                                    cudaStream_t stream,
+WindowAttention<T>::WindowAttention(int              max_batch,
+                                    int              window_size,
+                                    cudaStream_t     stream,
                                     cublasMMWrapper* cublas_wrapper,
-                                    IAllocator* allocator,
-                                    bool is_free_buffer_after_forward,
-                                    bool qkv_bias,
-                                    float qk_scale):
+                                    IAllocator*      allocator,
+                                    bool             is_free_buffer_after_forward,
+                                    bool             qkv_bias,
+                                    float            qk_scale):
     BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     max_batch_(max_batch),
     window_size_(window_size),
@@ -154,9 +157,9 @@ WindowAttention<T>::~WindowAttention()
 }
 
 template<typename T>
-void WindowAttention<T>::forward(std::vector<fastertransformer::Tensor>* output_tensors,
+void WindowAttention<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                                  const std::vector<fastertransformer::Tensor>* input_tensors,
-                                 const AttentionWeight<T>* attention_weights)
+                                 const AttentionWeight<T>*                     attention_weights)
 {
     // input_tensors:
     //      input [batch * window_num * window_len, dim]
@@ -166,28 +169,28 @@ void WindowAttention<T>::forward(std::vector<fastertransformer::Tensor>* output_
     // output_tensors:
     //      output [batch * window_num * window_len, dim]
 
-    T* output = (T*)output_tensors->at(0).data;
-    const T* input = (const T*)input_tensors->at(0).data;
-    const T* attention_mask = (const T*)input_tensors->at(1).data;
-    const T* attention_relative_pos_bias = (const T*)input_tensors->at(2).data;
-    const int* additional_params = (const int*)input_tensors->at(3).data;
-    const int batch = additional_params[0];
-    const int dim = additional_params[1];
-    const int input_resolution = additional_params[2];
-    const int num_head = additional_params[3];
-    const int shift_size = additional_params[4];
-    const int sm = additional_params[5];
+    T*         output                      = (T*)output_tensors->at(0).data;
+    const T*   input                       = (const T*)input_tensors->at(0).data;
+    const T*   attention_mask              = (const T*)input_tensors->at(1).data;
+    const T*   attention_relative_pos_bias = (const T*)input_tensors->at(2).data;
+    const int* additional_params           = (const int*)input_tensors->at(3).data;
+    const int  batch                       = additional_params[0];
+    const int  dim                         = additional_params[1];
+    const int  input_resolution            = additional_params[2];
+    const int  num_head                    = additional_params[3];
+    const int  shift_size                  = additional_params[4];
+    const int  sm                          = additional_params[5];
 
     int size_per_head = dim / num_head;
-    int trt_S = 1024;
+    int trt_S         = 1024;
     if ((sm == 75 || sm == 80 || sm == 86) && size_per_head == 32 && window_len_ <= TRT_MAX_LEN
         && std::is_same<T, half>::value) {
-        trt_S = trt_getS(window_len_);
+        trt_S    = trt_getS(window_len_);
         use_trt_ = true;
     }
-    num_head_ = num_head;
+    num_head_   = num_head;
     window_num_ = (input_resolution / window_size_) * (input_resolution / window_size_);
-    embed_dim_ = dim;
+    embed_dim_  = dim;
     allocateBuffer();
 
     float scale = 1.0f / sqrt(size_per_head);
@@ -387,5 +390,8 @@ void WindowAttention<T>::forward(std::vector<fastertransformer::Tensor>* output_
 
 template class WindowAttention<float>;
 template class WindowAttention<half>;
+#ifdef ENABLE_BF16
+template class WindowAttention<__nv_bfloat16>;
+#endif
 
 }  // namespace fastertransformer

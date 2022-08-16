@@ -17,7 +17,7 @@
 #include "3rdparty/INIReader.h"
 #include "examples/cpp/multi_gpu_gpt/gpt_example_utils.h"
 #include "src/fastertransformer/models/gptj/GptJ.h"
-#include "src/fastertransformer/utils/mpi_utils.h"
+#include "src/fastertransformer/utils/nccl_utils.h"
 #include "src/fastertransformer/utils/nvtx_utils.h"
 #include "src/fastertransformer/utils/word_list.h"
 
@@ -39,7 +39,7 @@ void gptj_example(const INIReader reader);
 
 int main(int argc, char* argv[])
 {
-    MPICHECK(MPI_Init(&argc, &argv));
+    mpi::initialize(&argc, &argv);
     srand(0);
 
     std::string ini_name;
@@ -55,65 +55,72 @@ int main(int argc, char* argv[])
         std::cout << "[ERROR] Can't load '" << ini_name << "'\n";
         return -1;
     }
-    const int is_half = reader.GetInteger("ft_instance_hyperparameter", "is_half");
+    const std::string data_type = reader.Get("ft_instance_hyperparameter", "data_type");
 
-    if (is_half == 0) {
+    if (data_type == "fp32") {
         gptj_example<float>(reader);
     }
-    else if (is_half == 1) {
+    else if (data_type == "fp16") {
         gptj_example<half>(reader);
     }
+#ifdef ENABLE_BF16
+    else if (data_type == "bf16") {
+        gptj_example<__nv_bfloat16>(reader);
+    }
+#endif
     else {
-        printf("[ERROR] is_fp16 should be 0 (use float) or 1 (use half). \n");
+        FT_LOG_ERROR("data_type should be fp32, fp16 or bf16!");
         return -1;
     }
-    MPI_Finalize();
+    mpi::finalize();
     return 0;
 }
 
 template<typename T>
 void gptj_example(const INIReader reader)
 {
-    const std::string model_name = reader.Get("ft_instance_hyperparameter", "model_name");
-    const size_t max_seq_len = reader.GetInteger("ft_instance_hyperparameter", "max_seq_len");
-    const size_t beam_width = reader.GetInteger("ft_instance_hyperparameter", "beam_width");
-    const int top_k = reader.GetInteger("ft_instance_hyperparameter", "top_k");
-    const float top_p = reader.GetFloat("ft_instance_hyperparameter", "top_p");
-    const float temperature = reader.GetFloat("ft_instance_hyperparameter", "temperature");
-    const float repetition_penalty = reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty");
-    const float len_penalty = reader.GetFloat("ft_instance_hyperparameter", "len_penalty");
-    const float beam_search_diversity_rate =
+    print_mem_usage("Before loading model");
+    const std::string model_name         = reader.Get("ft_instance_hyperparameter", "model_name");
+    const size_t      max_seq_len        = reader.GetInteger("ft_instance_hyperparameter", "max_seq_len");
+    const size_t      beam_width         = reader.GetInteger("ft_instance_hyperparameter", "beam_width");
+    const uint        top_k              = (uint)reader.GetInteger("ft_instance_hyperparameter", "top_k");
+    const float       top_p              = reader.GetFloat("ft_instance_hyperparameter", "top_p");
+    const float       temperature        = reader.GetFloat("ft_instance_hyperparameter", "temperature");
+    const float       repetition_penalty = reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty");
+    const float       len_penalty        = reader.GetFloat("ft_instance_hyperparameter", "len_penalty");
+    const float       beam_search_diversity_rate =
         reader.GetFloat("ft_instance_hyperparameter", "beam_search_diversity_rate");
     std::string model_dir = std::string(reader.Get("ft_instance_hyperparameter", "model_dir"));
 
-    int tensor_para_size = reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size");
+    int tensor_para_size   = reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size");
     int pipeline_para_size = reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size");
 
-    const size_t head_num = reader.GetInteger(model_name, "head_num");
-    const size_t size_per_head = reader.GetInteger(model_name, "size_per_head");
-    const size_t vocab_size = reader.GetInteger(model_name, "vocab_size");
-    const size_t decoder_layers = reader.GetInteger(model_name, "decoder_layers");
+    const size_t head_num             = reader.GetInteger(model_name, "head_num");
+    const size_t size_per_head        = reader.GetInteger(model_name, "size_per_head");
+    const size_t vocab_size           = reader.GetInteger(model_name, "vocab_size");
+    const size_t decoder_layers       = reader.GetInteger(model_name, "decoder_layers");
     const size_t rotary_embedding_dim = reader.GetInteger(model_name, "rotary_embedding");
-    const int start_id = reader.GetInteger(model_name, "start_id");
-    const int end_id = reader.GetInteger(model_name, "end_id");
+    const int    start_id             = reader.GetInteger(model_name, "start_id");
+    const int    end_id               = reader.GetInteger(model_name, "end_id");
 
     const size_t hidden_units = head_num * size_per_head;
-    const size_t inter_size = 4 * hidden_units;
+    const size_t inter_size   = 4 * hidden_units;
 
     const size_t request_batch_size = reader.GetInteger("request", "request_batch_size");
     // The length of tokens we hope this model to generate
-    const int request_output_len = reader.GetInteger("request", "request_output_len");
+    const int      request_output_len = reader.GetInteger("request", "request_output_len");
+    const uint32_t memory_len         = reader.GetInteger("request", "memory_len", 0);
 
     FT_CHECK(head_num % tensor_para_size == 0);
     FT_CHECK(decoder_layers % pipeline_para_size == 0);
 
     // Prepare the parallelism parameters
-    int rank, world_size, device, device_count;
-    MPICHECK(MPI_Comm_rank(MPI_COMM_WORLD, &rank));
-    MPICHECK(MPI_Comm_size(MPI_COMM_WORLD, &world_size));
+    int rank       = mpi::getCommWorldRank();
+    int world_size = mpi::getCommWorldSize();
     if (rank == 0) {
         printf("Total ranks: %d.\n", world_size);
     }
+    int device, device_count;
     check_cuda_error(cudaGetDeviceCount(&device_count));
     check_cuda_error(cudaSetDevice(rank % device_count));
     check_cuda_error(cudaGetDevice(&device));
@@ -122,7 +129,7 @@ void gptj_example(const INIReader reader)
     check_cuda_error(cudaGetDeviceProperties(&prop, device));
     printf("Device %s\n", prop.name);
 
-    printf("P%d is runing with %d GPU.\n", rank, device);
+    printf("P%d is running with %d GPU.\n", rank, device);
 
     if (tensor_para_size * pipeline_para_size != world_size) {
         if (world_size % pipeline_para_size) {
@@ -133,8 +140,6 @@ void gptj_example(const INIReader reader)
         printf("[INFO] Setting tensor_para_size to %d \n", tensor_para_size);
     }
 
-    const int tensor_para_rank = rank % tensor_para_size;
-    const int pipeline_para_rank = rank / tensor_para_size;
     const int layers_per_group = decoder_layers / pipeline_para_size;
     if (layers_per_group * pipeline_para_size != (int)decoder_layers) {
         printf("[ERROR] layers_per_group (%d) * pipeline_para_size (%d) should equal to decoder_layers (%ld) \n",
@@ -147,46 +152,9 @@ void gptj_example(const INIReader reader)
     // assume gpu_num = k * n,
     // tensor parallelism group size is n
     // pipeline parallelism group size is k
-
-    // convert WORLD communicator into 2D grid (k * n) communicator
-    // comms of the same row means they are in the same tensor parallel group
-    // comms of the same col means they are in the same pipeline parallel group
-    MPI_Comm grid_comm;
-    int dims[2] = {pipeline_para_size, tensor_para_size};
-    int periods[2] = {0, 0};
-    MPI_Cart_create(MPI_COMM_WORLD, 2, dims, periods, 0, &grid_comm);
-
-    MPI_Comm comm_tensor_parallel, comm_pipeline_parallel;
-
-    int remain_dims_tensor_parallel[2] = {false, true};
-    int remain_dims_pipeline_parallel[2] = {true, false};
-    // split 2D communicator into rows and cols, each row = one tensor parallel group, each col = one pipeline parallel
-    // group
-    MPI_Cart_sub(grid_comm, remain_dims_tensor_parallel, &comm_tensor_parallel);
-    MPI_Cart_sub(grid_comm, remain_dims_pipeline_parallel, &comm_pipeline_parallel);
-
-    int rank_tensor_parallel, rank_pipeline_parallel;
-    MPI_Comm_rank(comm_tensor_parallel, &rank_tensor_parallel);
-    MPI_Comm_rank(comm_pipeline_parallel, &rank_pipeline_parallel);
-
-    ncclUniqueId tensor_para_nccl_uid;
-    ncclUniqueId pipeline_para_nccl_uid;
-    // root of tensor parallel group and pipeline parallel group creates the nccl uid
-    if (rank_tensor_parallel == 0) {
-        NCCLCHECK(ncclGetUniqueId(&tensor_para_nccl_uid));
-    }
-
-    if (rank_pipeline_parallel == 0) {
-        NCCLCHECK(ncclGetUniqueId(&pipeline_para_nccl_uid));
-    }
-    // broadcast nccl uid to the comms in the same tensor parallel group or pipeline parallel group
-    MPI_Bcast(&tensor_para_nccl_uid, sizeof(tensor_para_nccl_uid), MPI_BYTE, 0, comm_tensor_parallel);
-    MPI_Bcast(&pipeline_para_nccl_uid, sizeof(pipeline_para_nccl_uid), MPI_BYTE, 0, comm_pipeline_parallel);
-
-    ncclComm_t tensor_para_nccl_comm, pipeline_para_nccl_comm;
-    NCCLCHECK(ncclCommInitRank(&tensor_para_nccl_comm, tensor_para_size, tensor_para_nccl_uid, tensor_para_rank));
-    NCCLCHECK(
-        ncclCommInitRank(&pipeline_para_nccl_comm, pipeline_para_size, pipeline_para_nccl_uid, pipeline_para_rank));
+    NcclParam tensor_para;
+    NcclParam pipeline_para;
+    ftNcclInitialize(tensor_para, pipeline_para, tensor_para_size, pipeline_para_size);
 
     // Handle bad_words dictionary
     std::vector<int> bad_words;
@@ -212,7 +180,7 @@ void gptj_example(const INIReader reader)
     cudaH2Dcpy(d_stop_words, tiled_stop_words.data(), tiled_stop_words.size());
 
     // Read ids of request from file.
-    int max_input_len = -1;
+    int              max_input_len = -1;
     std::vector<int> v_start_lengths;
     std::vector<int> v_start_ids;
     read_start_ids(request_batch_size,
@@ -227,7 +195,7 @@ void gptj_example(const INIReader reader)
     int* d_input_lengths;
     if (max_input_len == 0) {
         // unconditional case, no input ids, so do nothing.
-        d_input_ids = nullptr;
+        d_input_ids     = nullptr;
         d_input_lengths = nullptr;
     }
     else {
@@ -237,8 +205,40 @@ void gptj_example(const INIReader reader)
         cudaH2Dcpy(d_input_ids, v_start_ids.data(), request_batch_size * max_input_len);
         cudaH2Dcpy(d_input_lengths, v_start_lengths.data(), request_batch_size);
     }
+
     std::vector<int> start_ids(request_batch_size, start_id);
     std::vector<int> end_ids(request_batch_size, end_id);
+
+    // Prompt Learning Configurations
+    // NOTE: if you don't need prefix prompts, remember to set max_prefix_len to 0 and others to nullptr
+    int prompt_learning_start_id = reader.GetInteger(model_name, "prompt_learning_start_id", end_id + 1);
+    fastertransformer::PromptLearningType prompt_learning_type =
+        static_cast<fastertransformer::PromptLearningType>(reader.GetInteger(model_name, "prompt_learning_type", 0));
+
+    // NOTE: specify task names, take name id, prompt length in order to load those prompt learning tables.
+    // NOTE: Please make sure task ids are continuous and start from 0
+    // for example:
+    // std::map<std::string, std::pair<int, int>> prefix_prompt_table_pair{{"no_prompt", {0, 0}},
+    //                                                                     {"prompt_1", {1, 1}},
+    //                                                                     {"prompt_2", {2, 2}},
+    //                                                                     {"prompt_3", {3, 3}},
+    //                                                                     {"prompt_4", {4, 4}},
+    //                                                                     {"prompt_5", {5, 5}}};
+
+    std::map<std::string, std::pair<int, int>> prefix_prompt_table_pair;
+
+    // NOTE: get prompt table pairs from configuration files
+    const int num_tasks = reader.GetInteger(model_name, "num_tasks", 0);
+    for (int task_name_id = 0; task_name_id < num_tasks; task_name_id++) {
+        std::string config_task_name = model_name + "_task_" + std::to_string(task_name_id);
+        std::string task_name        = reader.Get(config_task_name, "task_name");
+        const int   prompt_length    = reader.GetInteger(config_task_name, "prompt_length", 0);
+        prefix_prompt_table_pair.insert({task_name, {task_name_id, prompt_length}});
+    }
+
+    // NOTE: task_name_ids for each sequence in one batch
+    // Each sequence can have different prompt learning task ids
+    std::vector<int> prefix_prompt_task_ids{};
 
     const int total_output_len = max_input_len + request_output_len;
     if (total_output_len > (int)max_seq_len) {
@@ -246,8 +246,8 @@ void gptj_example(const INIReader reader)
         exit(-1);
     }
 
-    cudaStream_t stream;
-    cublasHandle_t cublas_handle;
+    cudaStream_t     stream;
+    cublasHandle_t   cublas_handle;
     cublasLtHandle_t cublaslt_handle;
     cudaStreamCreate(&stream);
     cublasCreate(&cublas_handle);
@@ -257,38 +257,43 @@ void gptj_example(const INIReader reader)
 
     Allocator<AllocatorType::CUDA> allocator(getDevice());
 
-    std::mutex* cublas_wrapper_mutex = new std::mutex();
+    std::mutex*     cublas_wrapper_mutex = new std::mutex();
     cublasMMWrapper cublas_wrapper =
         cublasMMWrapper(cublas_handle, cublaslt_handle, stream, cublas_algo_map, cublas_wrapper_mutex, &allocator);
     if (std::is_same<T, half>::value) {
         cublas_wrapper.setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
     }
+#ifdef ENABLE_BF16
+    else if (std::is_same<T, __nv_bfloat16>::value) {
+        cublas_wrapper.setBF16GemmConfig();
+    }
+#endif
     else if (std::is_same<T, float>::value) {
         cublas_wrapper.setFP32GemmConfig();
     }
 
-    fastertransformer::GptJWeight<T> gpt_weights(hidden_units,
-                                                 inter_size,
-                                                 vocab_size,
-                                                 decoder_layers,
-                                                 max_seq_len,
-                                                 tensor_para_size,
-                                                 tensor_para_rank,
-                                                 pipeline_para_size,
-                                                 pipeline_para_rank);
+    fastertransformer::GptJWeight<T> gpt_weights(
+        hidden_units,
+        inter_size,
+        vocab_size,
+        decoder_layers,
+        max_seq_len,
+        tensor_para.world_size_,
+        tensor_para.rank_,
+        pipeline_para.world_size_,
+        pipeline_para.rank_,
+        prompt_learning_type,
+        prefix_prompt_table_pair);  // optional if you don't need prefix prompts
 
-    model_dir = model_dir + "/" + std::to_string(tensor_para_size) + "-gpu/";
+    model_dir = model_dir + "/" + std::to_string(tensor_para.world_size_) + "-gpu/";
     gpt_weights.loadModel(model_dir);
     unsigned long long random_seed;
     if (rank == 0) {
         random_seed = (unsigned long long)(0);
     }
     if (world_size > 1) {
-        MPICHECK(MPI_Bcast(&random_seed, 1, MPI_UNSIGNED_LONG_LONG, 0, MPI_COMM_WORLD));
+        mpi::bcast(&random_seed, 1, mpi::MPI_TYPE_UNSIGNED_LONG_LONG, 0, mpi::COMM_WORLD);
     }
-
-    NcclParam tensor_para(tensor_para_rank, tensor_para_size, tensor_para_nccl_comm);
-    NcclParam pipeline_para(pipeline_para_rank, pipeline_para_size, pipeline_para_nccl_comm);
 
     GptJ<T> gpt = GptJ<T>(0,  // max_batch_size, FT will adjust the buffer automatically.
                           0,  // max_seq_len, FT will adjust the buffer automatically.
@@ -302,6 +307,8 @@ void gptj_example(const INIReader reader)
                           rotary_embedding_dim,
                           start_id,
                           end_id,
+                          prompt_learning_start_id,
+                          prompt_learning_type,
                           0.0f,
                           top_k,
                           top_p,
@@ -321,11 +328,16 @@ void gptj_example(const INIReader reader)
     int* d_sequence_lengths;
     deviceMalloc(&d_output_ids, request_batch_size * beam_width * total_output_len, false);
     deviceMalloc(&d_sequence_lengths, request_batch_size * beam_width, false);
+    std::vector<uint32_t>                   output_seq_len(request_batch_size, total_output_len);
     std::unordered_map<std::string, Tensor> input_tensors = std::unordered_map<std::string, Tensor>{
         {"input_ids",
          Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size, (size_t)max_input_len}, d_input_ids}},
         {"input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size}, d_input_lengths}},
-        {"max_output_seq_len", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{1}, &total_output_len}},
+        // NOTE: if you need prefix prompts, remember to add prefix_prompt_task_ids here
+        // {"prompt_learning_task_name_ids", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{request_batch_size},
+        // prefix_prompt_task_ids.data()}},
+        {"output_seq_len",
+         Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<size_t>{request_batch_size}, output_seq_len.data()}},
         {"bad_words_list", Tensor{MEMORY_GPU, TYPE_INT32, {2, bad_words.size() / 2}, d_bad_words}},
         {"stop_words_list", Tensor{MEMORY_GPU, TYPE_INT32, {request_batch_size, 2, stop_words_len}, d_stop_words}},
         {"temperature", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &temperature}},
@@ -344,8 +356,11 @@ void gptj_example(const INIReader reader)
             input_tensors.insert({"runtime_top_p", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &top_p}});
         }
         if (top_k != 0) {
-            input_tensors.insert({"runtime_top_k", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{1}, &top_k}});
+            input_tensors.insert({"runtime_top_k", Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<size_t>{1}, &top_k}});
         }
+    }
+    if (memory_len > 0) {
+        input_tensors.insert({"memory_len", {MEMORY_CPU, TYPE_UINT32, {1}, &memory_len}});
     }
 
     std::unordered_map<std::string, Tensor> output_tensors = std::unordered_map<std::string, Tensor>{
@@ -362,11 +377,11 @@ void gptj_example(const INIReader reader)
                 std::vector<size_t>{(size_t)request_output_len, request_batch_size, beam_width},
                 nullptr}}};
 
-    print_mem_usage();
+    print_mem_usage("After loading model");
 
     int ite = 1;
     cudaDeviceSynchronize();
-    MPI_Barrier(MPI_COMM_WORLD);
+    mpi::barrier();
 
     cudaProfilerStart();
     // warm up
@@ -376,22 +391,23 @@ void gptj_example(const INIReader reader)
     for (int i = 0; i < ite; ++i) {
         gpt.forward(&output_tensors, &input_tensors, &gpt_weights);
     }
+    print_mem_usage("After forward");
     cudaDeviceSynchronize();
-    MPI_Barrier(MPI_COMM_WORLD);
+    mpi::barrier();
 
     POP_RANGE;
     nvtx::resetScope();
 
     if (rank == 0) {
 
-        std::string fName = "out";
-        auto outFile = std::ofstream(fName, std::ios::out);
+        std::string fName   = "out";
+        auto        outFile = std::ofstream(fName, std::ios::out);
         if (!outFile.is_open()) {
             printf("[WARNING] Cannot write results into output file %s \n", fName.c_str());
         }
         else {
             size_t outCount = total_output_len * request_batch_size * beam_width;
-            int* hBuf = new int[outCount];
+            int*   hBuf     = new int[outCount];
             cudaD2Hcpy(hBuf, d_output_ids, outCount);
 
             {
@@ -421,7 +437,7 @@ void gptj_example(const INIReader reader)
 
     // test time
     struct timeval start, end;
-    MPI_Barrier(MPI_COMM_WORLD);
+    mpi::barrier();
     cudaDeviceSynchronize();
     gettimeofday(&start, NULL);
 
@@ -432,7 +448,7 @@ void gptj_example(const INIReader reader)
     }
 
     cudaDeviceSynchronize();
-    MPI_Barrier(MPI_COMM_WORLD);
+    mpi::barrier();
 
     POP_RANGE;
     nvtx::resetScope();
@@ -451,8 +467,8 @@ void gptj_example(const INIReader reader)
            vocab_size,
            ((end.tv_sec - start.tv_sec) * 1000 + (end.tv_usec - start.tv_usec) * 0.001) / ite);
 
-    ncclCommDestroy(tensor_para_nccl_comm);
-    ncclCommDestroy(pipeline_para_nccl_comm);
+    ftNcclParamDestroy(tensor_para);
+    ftNcclParamDestroy(pipeline_para);
 
     delete cublas_algo_map;
     delete cublas_wrapper_mutex;
@@ -464,6 +480,12 @@ void gptj_example(const INIReader reader)
     }
     if (d_input_lengths != nullptr) {
         cudaFree(d_input_lengths);
+    }
+    if (d_output_ids != nullptr) {
+        cudaFree(d_output_ids);
+    }
+    if (d_sequence_lengths != nullptr) {
+        cudaFree(d_sequence_lengths);
     }
 
     return;

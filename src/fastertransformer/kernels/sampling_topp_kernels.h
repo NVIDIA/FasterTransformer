@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,42 +19,66 @@
 
 namespace fastertransformer {
 
-void invokeTopPInitialize(int* topp_id_val_buf,
-                          int* topp_offset_buf,
-                          int* begin_topp_offset_buf_,
+void invokeTopPInitialize(int*         topp_id_val_buf,
+                          int*         topp_offset_buf,
+                          int*         begin_topp_offset_buf_,
                           const size_t batch_size,
-                          const int n,
+                          const int    n,
                           cudaStream_t stream);
 
 template<typename T>
-void invokeTopPSampling(void* workspace,
-                        size_t& workspace_size,
-                        size_t& cub_temp_storage_size,
-                        int* output_ids,
-                        int* sequence_length,
-                        bool* finished_buf,
-                        float* cum_log_probs,
-                        float* output_log_probs,
-                        const T* log_probs,
-                        const int* id_vals,
-                        int* offset_buf,
-                        int* begin_offset_buf,
-                        curandState_t* curandstate,
-                        const int batch_size,
-                        const size_t vocab_size_padded,
-                        const int* end_ids,
-                        const float top_p,
-                        cudaStream_t stream,
-                        cudaDeviceProp* cuda_device_prop);
+void invokeTopPSampling(void*           workspace,
+                        size_t&         workspace_size,
+                        size_t&         cub_temp_storage_size,
+                        int*            output_ids,
+                        int*            sequence_length,
+                        bool*           finished_buf,
+                        float*          cum_log_probs,
+                        float*          output_log_probs,
+                        const T*        log_probs,
+                        const int*      id_vals,
+                        int*            offset_buf,
+                        int*            begin_offset_buf,
+                        curandState_t*  curandstate,
+                        const int       batch_size,
+                        const size_t    vocab_size_padded,
+                        const int*      end_ids,
+                        const float     top_p,
+                        cudaStream_t    stream,
+                        cudaDeviceProp* cuda_device_prop,
+                        const bool*     skip_decode);
 
 template<typename T>
-void invokeAddBiasSoftMax(T* logits,
-                          const T* bias,
-                          const int* end_ids,
-                          const bool* finished,
-                          const int m,
-                          const int n_padded,
-                          const int n,
+void invokeBatchTopPSampling(void*           workspace,
+                             size_t&         workspace_size,
+                             size_t&         cub_temp_storage_size,
+                             int*            output_ids,
+                             int*            sequence_length,
+                             bool*           finished_buf,
+                             float*          cum_log_probs,
+                             float*          output_log_probs,
+                             const T*        log_probs,
+                             const int*      id_vals,
+                             int*            offset_buf,
+                             int*            begin_offset_buf,
+                             curandState_t*  curandstate,
+                             const int       batch_size,
+                             const size_t    vocab_size_padded,
+                             const int*      end_ids,
+                             const float     max_top_p,
+                             const float*    top_ps,
+                             cudaStream_t    stream,
+                             cudaDeviceProp* cuda_device_prop,
+                             const bool*     skip_decode);
+
+template<typename T>
+void invokeAddBiasSoftMax(T*           logits,
+                          const T*     bias,
+                          const int*   end_ids,
+                          const bool*  finished,
+                          const int    m,
+                          const int    n_padded,
+                          const int    n,
                           cudaStream_t stream);
 
 namespace segmented_topp_impl {
@@ -64,12 +88,12 @@ enum DType_t {
     kINT8
 };
 
-template<typename Key_Data_Type_ = float,
+template<typename Key_Data_Type_   = float,
          typename Value_Data_Type_ = int32_t,
-         int BLOCK_THREADS_ = 256,
-         int KEYS_PER_LDG_ = 1>
+         int BLOCK_THREADS_        = 256,
+         int KEYS_PER_LDG_         = 1>
 struct Segmented_topk_kernel_params {
-    typedef Key_Data_Type_ Key_Data_Type;
+    typedef Key_Data_Type_   Key_Data_Type;
     typedef Value_Data_Type_ Value_Data_Type;
     enum {
         BLOCK_THREADS = BLOCK_THREADS_
@@ -93,30 +117,30 @@ struct TopKPerSegmentContext {
 struct TopKPerSegmentParams {
     // input/output keys and values
     void *gmem_src_keys, *gmem_dst_keys, *gmem_dst_vals;
-    // not used in the custom implementaiton
+    // not used in the custom implementation
     void* gmem_src_vals;
     // int array of size num_segments
     int* gmem_active_count_per_segment;
     int* gmem_active_count_total;
     int* gmem_begin_offsets;
     // gmem_end_offsets will be populated
-    int* gmem_end_offsets;
+    int*  gmem_end_offsets;
     void* workspace;
     // total number of items for all segments
     int num_items;
     int num_segments;
     // top_k per segment
-    int num_top_k;
+    int   num_top_k;
     float top_p;
     float confidence_threshold;
 };
 
 int topPPerSegment(const TopKPerSegmentContext& context,
-                   TopKPerSegmentParams& params,
-                   const DType_t DT_SCORE,
-                   void* temp_storage,
-                   size_t& temp_storage_bytes,
-                   cudaStream_t stream);
+                   TopKPerSegmentParams&        params,
+                   const DType_t                DT_SCORE,
+                   void*                        temp_storage,
+                   size_t&                      temp_storage_bytes,
+                   cudaStream_t                 stream);
 }  // namespace segmented_topp_impl
 
 }  // namespace fastertransformer

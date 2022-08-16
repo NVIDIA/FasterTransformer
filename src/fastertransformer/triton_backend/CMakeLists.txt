@@ -14,8 +14,11 @@
 
 cmake_minimum_required(VERSION 3.8)
 
-if(BUILD_MULTI_GPU)
-    add_subdirectory(gptj)
-    add_subdirectory(t5)
-    add_subdirectory(multi_gpu_gpt)
-endif()
+add_library(TransformerTritonBackend SHARED transformer_triton_backend.cpp)
+target_link_libraries(TransformerTritonBackend PRIVATE nccl_utils mpi_utils)
+
+add_subdirectory(gptj)
+add_subdirectory(gptneox)
+add_subdirectory(t5)
+add_subdirectory(multi_gpu_gpt)
+add_subdirectory(bert)

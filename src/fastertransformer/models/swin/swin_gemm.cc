@@ -29,13 +29,13 @@ int main(int argc, char* argv[])
         return 0;
     }
 
-    const int batch_img = atoi(argv[1]);
-    const int image_width = atoi(argv[2]);
-    const int window_width = atoi(argv[3]);
-    const int head_num = atoi(argv[4]);
-    const int size_per_head = atoi(argv[5]);
-    const ft::CublasDataType data_type = static_cast<ft::CublasDataType>(atoi(argv[6]));  // 0 FP32, 1 FP16, 2 BF 16
-    const int is_int8 = atoi(argv[7]);
+    const int                batch_img     = atoi(argv[1]);
+    const int                image_width   = atoi(argv[2]);
+    const int                window_width  = atoi(argv[3]);
+    const int                head_num      = atoi(argv[4]);
+    const int                size_per_head = atoi(argv[5]);
+    const ft::CublasDataType data_type     = static_cast<ft::CublasDataType>(atoi(argv[6]));  // 0 FP32, 1 FP16, 2 BF 16
+    const int                is_int8       = atoi(argv[7]);
 
     printf("[INFO] arguments: \n");
     printf("  batch_img: %d \n", batch_img);
@@ -50,13 +50,13 @@ int main(int argc, char* argv[])
     const int patch_width = 4;
     const int batch_size =
         batch_img * (image_width / (patch_width * window_width)) * (image_width / (patch_width * window_width));
-    const int seq_len = window_width * window_width;
+    const int seq_len    = window_width * window_width;
     const int inter_size = 4 * head_num * size_per_head;
 
-    void* gemm_test_buf;
+    void*  gemm_test_buf;
     size_t buf_size_in_byte = ft::calGemmTestBufSizeInByte(
         batch_size, seq_len, head_num, size_per_head, inter_size, 0, 1, ft::FLOAT_DATATYPE);
-    int batch_tmp = batch_size;
+    int batch_tmp    = batch_size;
     int head_num_tmp = head_num;
     for (int i = 1; i < 4; i++) {
         batch_tmp /= 4;

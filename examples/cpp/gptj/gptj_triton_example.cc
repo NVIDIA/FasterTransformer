@@ -20,6 +20,7 @@
 #include "src/fastertransformer/triton_backend/gptj/GptJTritonModelInstance.h"
 #include "src/fastertransformer/utils/custom_ar_comm.h"
 #include "src/fastertransformer/utils/mpi_utils.h"
+#include "src/fastertransformer/utils/nccl_utils.h"
 #include "src/fastertransformer/utils/word_list.h"
 
 #include <memory>
@@ -28,35 +29,35 @@
 namespace ft = fastertransformer;
 
 struct RequestParam {
-    int beam_width;
-    int request_output_len;
-    float beam_search_diversity_rate;
-    int runtime_top_k;
-    float runtime_top_p;
-    float temperature;
-    float len_penalty;
-    float repetition_penalty;
+    int                    beam_width;
+    int                    request_output_len;
+    float                  beam_search_diversity_rate;
+    uint                   runtime_top_k;
+    float                  runtime_top_p;
+    float                  temperature;
+    float                  len_penalty;
+    float                  repetition_penalty;
     unsigned long long int random_seed;
-    int start_id;
-    int end_id;
+    int                    start_id;
+    int                    end_id;
 };
 
 std::vector<std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>>
 broadCastRequest(const std::vector<int>& v_start_ids,
                  const std::vector<int>& v_start_lengths,
                  const std::vector<int>& v_bad_words,
-                 const int node_id,
-                 const int gpu_count,
-                 const RequestParam param,
-                 std::vector<void*>* pointer_record)
+                 const int               node_id,
+                 const int               gpu_count,
+                 const RequestParam      param,
+                 std::vector<void*>*     pointer_record)
 {
     // broadcast the request to all nodes, and copy "gpu_count" copies on different gpu
-    int size_1 = v_start_ids.size();
-    int size_2 = v_start_lengths.size();
+    int size_1         = v_start_ids.size();
+    int size_2         = v_start_lengths.size();
     int size_bad_words = v_bad_words.size();
-    MPICHECK(MPI_Bcast(&size_1, 1, MPI_INT, 0, MPI_COMM_WORLD));
-    MPICHECK(MPI_Bcast(&size_2, 1, MPI_INT, 0, MPI_COMM_WORLD));
-    MPICHECK(MPI_Bcast(&size_bad_words, 1, MPI_INT, 0, MPI_COMM_WORLD));
+    ft::mpi::bcast(&size_1, 1, ft::mpi::MPI_TYPE_INT, 0, ft::mpi::COMM_WORLD);
+    ft::mpi::bcast(&size_2, 1, ft::mpi::MPI_TYPE_INT, 0, ft::mpi::COMM_WORLD);
+    ft::mpi::bcast(&size_bad_words, 1, ft::mpi::MPI_TYPE_INT, 0, ft::mpi::COMM_WORLD);
 
     std::vector<int> v_input_ids(size_1);
     std::vector<int> v_input_lengths(size_2);
@@ -67,14 +68,14 @@ broadCastRequest(const std::vector<int>& v_start_ids,
         memcpy(v_input_lengths.data(), v_start_lengths.data(), size_2 * sizeof(int));
         memcpy(v_input_bad_words.data(), v_bad_words.data(), size_bad_words * sizeof(int));
     }
-    MPI_Barrier(MPI_COMM_WORLD);
+    ft::mpi::barrier();
 
     int request_batch_size = size_2;
-    int max_input_len = size_1 / size_2;
+    int max_input_len      = size_1 / size_2;
 
-    MPICHECK(MPI_Bcast(v_input_ids.data(), size_1, MPI_INT, 0, MPI_COMM_WORLD));
-    MPICHECK(MPI_Bcast(v_input_lengths.data(), size_2, MPI_INT, 0, MPI_COMM_WORLD));
-    MPICHECK(MPI_Bcast(v_input_bad_words.data(), size_bad_words, MPI_INT, 0, MPI_COMM_WORLD));
+    ft::mpi::bcast(v_input_ids.data(), size_1, ft::mpi::MPI_TYPE_INT, 0, ft::mpi::COMM_WORLD);
+    ft::mpi::bcast(v_input_lengths.data(), size_2, ft::mpi::MPI_TYPE_INT, 0, ft::mpi::COMM_WORLD);
+    ft::mpi::bcast(v_input_bad_words.data(), size_bad_words, ft::mpi::MPI_TYPE_INT, 0, ft::mpi::COMM_WORLD);
 
     std::vector<std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>> request_list;
     for (int device_id = 0; device_id < gpu_count; device_id++) {
@@ -86,9 +87,9 @@ broadCastRequest(const std::vector<int>& v_start_ids,
 
         if (max_input_len == 0) {
             // unconditional case, no input ids, so do nothing.
-            d_input_ids = nullptr;
+            d_input_ids     = nullptr;
             d_input_lengths = nullptr;
-            max_input_len = 0;
+            max_input_len   = 0;
         }
         else {
             // conditional case.
@@ -100,13 +101,16 @@ broadCastRequest(const std::vector<int>& v_start_ids,
         ft::deviceMalloc(&d_input_bad_words, size_bad_words, false);
         ft::cudaH2Dcpy(d_input_bad_words, v_input_bad_words.data(), size_bad_words);
 
-        int* request_output_len_ptr = new int((int)(param.request_output_len));
+        uint32_t* request_output_len_ptr = (uint32_t*)malloc(request_batch_size * sizeof(uint32_t));
+        for (int i = 0; i < request_batch_size; i++) {
+            request_output_len_ptr[i] = param.request_output_len;
+        }
 
         int* start_ids_ptr = (int*)malloc(request_batch_size * sizeof(int));
-        int* end_ids_ptr = (int*)malloc(request_batch_size * sizeof(int));
+        int* end_ids_ptr   = (int*)malloc(request_batch_size * sizeof(int));
         for (int i = 0; i < request_batch_size; i++) {
             start_ids_ptr[i] = param.start_id;
-            end_ids_ptr[i] = param.end_id;
+            end_ids_ptr[i]   = param.end_id;
         }
         pointer_record->push_back(start_ids_ptr);
         pointer_record->push_back(end_ids_ptr);
@@ -123,9 +127,14 @@ broadCastRequest(const std::vector<int>& v_start_ids,
                                 triton::TYPE_INT32,
                                 std::vector<size_t>{(size_t)request_batch_size},
                                 d_input_lengths}},
+                // NOTE: add prefix prompt task ids here if you need
+                // {"prefix_prompt_task_ids", triton::Tensor{triton::MEMORY_CPU, triton::TYPE_INT32,
+                // std::vector<size_t>{request_batch_size}, task_name_ids}},
                 {"request_output_len",
-                 triton::Tensor{
-                     triton::MEMORY_CPU, triton::TYPE_INT32, std::vector<size_t>{(size_t)1}, request_output_len_ptr}},
+                 triton::Tensor{triton::MEMORY_CPU,
+                                triton::TYPE_UINT32,
+                                std::vector<size_t>{(size_t)request_batch_size},
+                                request_output_len_ptr}},
                 {"bad_words_list",
                  triton::Tensor{
                      triton::MEMORY_GPU, triton::TYPE_INT32, {2, v_input_bad_words.size() / 2}, d_input_bad_words}},
@@ -156,12 +165,12 @@ broadCastRequest(const std::vector<int>& v_start_ids,
                      triton::Tensor{triton::MEMORY_CPU, triton::TYPE_FP32, std::vector<size_t>{1}, runtime_top_p_ptr}});
             }
             if (param.runtime_top_k != 0) {
-                int* runtime_top_k_ptr = new int(param.runtime_top_k);
+                uint* runtime_top_k_ptr = new uint(param.runtime_top_k);
                 pointer_record->push_back(runtime_top_k_ptr);
                 request_list[device_id]->insert(
                     {"runtime_top_k",
                      triton::Tensor{
-                         triton::MEMORY_CPU, triton::TYPE_INT32, std::vector<size_t>{1}, runtime_top_k_ptr}});
+                         triton::MEMORY_CPU, triton::TYPE_UINT32, std::vector<size_t>{1}, runtime_top_k_ptr}});
             }
         }
         float* temperature_ptr = new float(param.temperature);
@@ -203,10 +212,10 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
         ft::FT_CHECK(false);
     }
 
-    const size_t request_batch_size = reader.GetInteger("request", "request_batch_size");
-
-    const int start_id = reader.GetInteger("gptj_6B", "start_id");
-    const int end_id = reader.GetInteger("gptj_6B", "end_id");
+    const size_t      request_batch_size = reader.GetInteger("request", "request_batch_size");
+    const std::string model_name         = reader.Get("ft_instance_hyperparameter", "model_name");
+    const int         start_id           = reader.GetInteger(model_name, "start_id");
+    const int         end_id             = reader.GetInteger(model_name, "end_id");
 
     std::vector<int> v_start_ids;
     std::vector<int> v_start_lengths;
@@ -224,45 +233,46 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
     ft::read_word_list("../examples/cpp/gptj/bad_words.csv", v_bad_words);
 
     RequestParam param;
-    param.beam_width = reader.GetInteger("ft_instance_hyperparameter", "beam_width");
-    param.request_output_len = reader.GetInteger("request", "request_output_len");
+    param.beam_width                 = reader.GetInteger("ft_instance_hyperparameter", "beam_width");
+    param.request_output_len         = reader.GetInteger("request", "request_output_len");
     param.beam_search_diversity_rate = reader.GetFloat("ft_instance_hyperparameter", "beam_search_diversity_rate");
-    param.runtime_top_k = reader.GetInteger("ft_instance_hyperparameter", "top_k");
-    param.runtime_top_p = reader.GetFloat("ft_instance_hyperparameter", "top_p");
-    param.temperature = reader.GetFloat("ft_instance_hyperparameter", "temperature");
-    param.len_penalty = reader.GetFloat("ft_instance_hyperparameter", "len_penalty");
-    param.repetition_penalty = reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty");
-    param.random_seed = (unsigned long long int)0;
-    param.start_id = start_id;
-    param.end_id = end_id;
+    param.runtime_top_k              = (uint)reader.GetInteger("ft_instance_hyperparameter", "top_k");
+    param.runtime_top_p              = reader.GetFloat("ft_instance_hyperparameter", "top_p");
+    param.temperature                = reader.GetFloat("ft_instance_hyperparameter", "temperature");
+    param.len_penalty                = reader.GetFloat("ft_instance_hyperparameter", "len_penalty");
+    param.repetition_penalty         = reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty");
+    param.random_seed                = (unsigned long long int)0;
+    param.start_id                   = start_id;
+    param.end_id                     = end_id;
 
     auto request_list =
         broadCastRequest(v_start_ids, v_start_lengths, v_bad_words, node_id, gpu_count, param, pointer_record);
     return request_list;
 }
 
-int threadCreateModelInstances(std::shared_ptr<AbstractTransformerModel> model,
-                               std::vector<std::unique_ptr<AbstractTransformerModelInstance>>* model_instances,
-                               const int device_id,
-                               const int rank,
-                               std::pair<std::vector<ncclComm_t>, std::vector<ncclComm_t>> nccl_comms,
+int threadCreateModelInstances(std::shared_ptr<AbstractTransformerModel>                         model,
+                               std::vector<std::unique_ptr<AbstractTransformerModelInstance>>*   model_instances,
+                               const int                                                         device_id,
+                               const int                                                         rank,
+                               std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
                                std::shared_ptr<ft::AbstractCustomComm> custom_all_reduce_comm = nullptr)
 {
     printf("[INFO] rank = %d \n", rank);
     ft::check_cuda_error(cudaSetDevice(device_id));
     cudaStream_t stream;
     ft::check_cuda_error(cudaStreamCreate(&stream));
-    auto model_instance = model->createModelInstance(device_id, rank, stream, nccl_comms, custom_all_reduce_comm);
+    model->createSharedWeights(device_id, rank);
+    auto model_instance = model->createModelInstance(device_id, rank, stream, nccl_params, custom_all_reduce_comm);
     model_instances->at(device_id) = std::move(model_instance);
     printf("model instance %d is created \n", device_id);
     ft::print_mem_usage();
     return 0;
 }
 
-int threadForward(std::unique_ptr<AbstractTransformerModelInstance>* model_instance,
-                  std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> request,
+int threadForward(std::unique_ptr<AbstractTransformerModelInstance>*                model_instance,
+                  std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>  request,
                   std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>* output_tensors,
-                  const int device_id)
+                  const int                                                         device_id)
 {
     ft::check_cuda_error(cudaSetDevice(device_id));
     *output_tensors = (*model_instance)->forward(request);
@@ -276,38 +286,26 @@ int main(int argc, char* argv[])
         by MPI or triton
     */
 
-    MPICHECK(MPI_Init(&argc, &argv));
-    int node_id;
-    int node_num;
-    MPICHECK(MPI_Comm_rank(MPI_COMM_WORLD, &node_id));
-    MPICHECK(MPI_Comm_size(MPI_COMM_WORLD, &node_num));
+    ft::mpi::initialize(&argc, &argv);
+    int node_id  = ft::mpi::getCommWorldRank();
+    int node_num = ft::mpi::getCommWorldSize();
 
     // Note: Only supports that all nodes have same gpu count
-    const int gpu_count = ft::getDeviceCount();
-    const int world_size = node_num * gpu_count;
-    std::string ini_name = argc >= 2 ? std::string(argv[1]) : "../examples/cpp/gptj/gptj_config.ini";
+    const int   gpu_count  = ft::getDeviceCount();
+    const int   world_size = node_num * gpu_count;
+    std::string ini_name   = argc >= 2 ? std::string(argv[1]) : "../examples/cpp/gptj/gptj_config.ini";
 
     // step 1: Create model
-    std::shared_ptr<AbstractTransformerModel> model = AbstractTransformerModel::createGptJModel(ini_name);
+    std::shared_ptr<AbstractTransformerModel> model              = AbstractTransformerModel::createGptJModel(ini_name);
+    int                                       tensor_para_size   = model->getTensorParaSize();
+    int                                       pipeline_para_size = model->getPipelineParaSize();
+    ft::FT_CHECK_WITH_INFO(world_size == (tensor_para_size * pipeline_para_size),
+                           "World Size != Tensor Parallel Size * Pipeline Parallel Size !");
+
     std::cout << model->toString();
 
     // step 2: Initialize the NCCL
-    std::vector<ncclUniqueId> nccl_ids;
-    if (node_id == 0) {
-        nccl_ids = model->createNcclIds(world_size);
-    }
-    int nccl_size = nccl_ids.size();
-    MPI_Barrier(MPI_COMM_WORLD);
-    MPICHECK(MPI_Bcast(&nccl_size, 1, MPI_INT, 0, MPI_COMM_WORLD));
-    if (node_id != 0) {
-        nccl_ids.resize(nccl_size);
-    }
-    MPI_Barrier(MPI_COMM_WORLD);
-    for (size_t i = 0; i < nccl_ids.size(); i++) {
-        MPICHECK(MPI_Bcast(&nccl_ids[i], sizeof(nccl_ids[i]), MPI_BYTE, 0, MPI_COMM_WORLD));
-    }
-    MPI_Barrier(MPI_COMM_WORLD);
-    std::pair<std::vector<ncclComm_t>, std::vector<ncclComm_t>> nccl_comms = model->createNcclComms(nccl_ids, node_id);
+    std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params = model->createNcclParams(node_id);
     cudaDeviceSynchronize();
 
     // Optional Step: create custom all reduce comm
@@ -316,7 +314,7 @@ int main(int argc, char* argv[])
 
     // step 3: Create model instances
     std::vector<std::unique_ptr<AbstractTransformerModelInstance>> model_instances((size_t)gpu_count);
-    std::vector<std::thread> threads;
+    std::vector<std::thread>                                       threads;
     for (int device_id = 0; device_id < gpu_count; device_id++) {
         const int rank = node_id * gpu_count + device_id;
         threads.push_back(std::thread(threadCreateModelInstances,
@@ -324,7 +322,7 @@ int main(int argc, char* argv[])
                                       &model_instances,
                                       device_id,
                                       rank,
-                                      nccl_comms,
+                                      nccl_params,
                                       custom_all_reduce_comms[rank]));
     }
     for (auto& t : threads) {
@@ -356,20 +354,20 @@ int main(int argc, char* argv[])
     printf("[INFO] forward is completed. \n");
 
     const int* d_output_ids = (const int*)output_tensors_lists[0].get()->at("output_ids").data;
-    const int batch_size = output_tensors_lists[0].get()->at("output_ids").shape[0];
-    const int beam_width = output_tensors_lists[0].get()->at("output_ids").shape[1];
-    const int seq_len = output_tensors_lists[0].get()->at("output_ids").shape[2];
+    const int  batch_size   = output_tensors_lists[0].get()->at("output_ids").shape[0];
+    const int  beam_width   = output_tensors_lists[0].get()->at("output_ids").shape[1];
+    const int  seq_len      = output_tensors_lists[0].get()->at("output_ids").shape[2];
     // step 6: check results
     if (node_id == 0) {
 
-        std::string fName = "out";
-        auto outFile = std::ofstream(fName, std::ios::out);
+        std::string fName   = "out";
+        auto        outFile = std::ofstream(fName, std::ios::out);
         if (!outFile.is_open()) {
             printf("[WARNING] Cannot write results into output file %s \n", fName.c_str());
         }
         else {
             size_t outCount = batch_size * beam_width * seq_len;
-            int* hBuf = new int[outCount];
+            int*   hBuf     = new int[outCount];
             ft::cudaD2Hcpy(hBuf, d_output_ids, outCount);
 
             {
@@ -399,7 +397,7 @@ int main(int argc, char* argv[])
 
     // test time
     struct timeval start, end;
-    MPI_Barrier(MPI_COMM_WORLD);
+    ft::mpi::barrier();
     cudaDeviceSynchronize();
     gettimeofday(&start, NULL);
 
@@ -419,7 +417,7 @@ int main(int argc, char* argv[])
     }
 
     cudaDeviceSynchronize();
-    MPI_Barrier(MPI_COMM_WORLD);
+    ft::mpi::barrier();
 
     gettimeofday(&end, NULL);
 
@@ -430,6 +428,6 @@ int main(int argc, char* argv[])
            seq_len,
            ((end.tv_sec - start.tv_sec) * 1000 + (end.tv_usec - start.tv_usec) * 0.001) / ite);
 
-    MPICHECK(MPI_Finalize());
+    ft::mpi::finalize();
     return 0;
 }

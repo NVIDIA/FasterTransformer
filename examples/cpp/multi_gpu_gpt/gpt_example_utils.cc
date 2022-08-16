@@ -20,26 +20,26 @@
 
 namespace fastertransformer {
 
-int read_start_ids(int batch_size,
+int read_start_ids(int               batch_size,
                    std::vector<int>* v_start_lengths,
                    std::vector<int>* v_start_ids,
-                   int& max_input_len,
-                   const int end_id,
-                   const int beam_width,
-                   std::string file_name)
+                   int&              max_input_len,
+                   const int         end_id,
+                   const int         beam_width,
+                   std::string       file_name)
 {
     std::vector<std::vector<int>> tmp_start_ids;
-    std::vector<int> tmp_start_lengths;
+    std::vector<int>              tmp_start_lengths;
 
     std::ifstream start_id_file(file_name, std::ios::in);
     if (start_id_file.is_open()) {
         std::string line;
-        int i0 = 0;
+        int         i0 = 0;
         while (std::getline(start_id_file, line)) {
             std::stringstream lineStream(line);
-            std::string vals;
-            int i1 = 0;
-            std::vector<int> tmp_vec;
+            std::string       vals;
+            int               i1 = 0;
+            std::vector<int>  tmp_vec;
             while (std::getline(lineStream, vals, ',')) {
                 tmp_vec.push_back(std::stoi(vals));
                 i1++;

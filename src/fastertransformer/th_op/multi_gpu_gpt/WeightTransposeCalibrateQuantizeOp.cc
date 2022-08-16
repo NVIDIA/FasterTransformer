@@ -38,7 +38,7 @@ void ldnTransposeQuantizeWeightPerChannel(int8_t* output, const float* scale, co
     for (int n_i = 0; n_i < n; n_i++) {
         float scale_val = scale[n_i];
         for (int k_i = 0; k_i < k; k_i++) {
-            float val = weight[k_i * n + n_i];
+            float val             = weight[k_i * n + n_i];
             output[n_i * k + k_i] = float_to_int8_rn_host(val / scale_val);
         }
     }
@@ -62,8 +62,8 @@ std::vector<Tensor> weight_transpose_calibrate_quantize(Tensor weight)
     if (weight.device() == torch::kCUDA) {
         auto int8_weight = torch::empty({k * n}, torch::dtype(torch::kInt8).device(torch::kCUDA).requires_grad(false));
         int8_t* int8_weight_out = get_ptr<int8_t>(int8_weight);
-        auto scale = torch::empty({n}, torch::dtype(torch::kFloat32).device(torch::kCUDA).requires_grad(false));
-        float* scale_out = get_ptr<float>(scale);
+        auto    scale     = torch::empty({n}, torch::dtype(torch::kFloat32).device(torch::kCUDA).requires_grad(false));
+        float*  scale_out = get_ptr<float>(scale);
 
         auto stream = at::cuda::getCurrentCUDAStream().stream();
 
@@ -76,8 +76,8 @@ std::vector<Tensor> weight_transpose_calibrate_quantize(Tensor weight)
     else {
         auto int8_weight = torch::empty({k * n}, torch::dtype(torch::kInt8).device(torch::kCPU).requires_grad(false));
         int8_t* int8_weight_out = get_ptr<int8_t>(int8_weight);
-        auto scale = torch::empty({n}, torch::dtype(torch::kFloat32).device(torch::kCPU).requires_grad(false));
-        float* scale_out = get_ptr<float>(scale);
+        auto    scale     = torch::empty({n}, torch::dtype(torch::kFloat32).device(torch::kCPU).requires_grad(false));
+        float*  scale_out = get_ptr<float>(scale);
 
         ldnCalibrateWeightPerChannel(scale_out, weight_, k, n);
         ldnTransposeQuantizeWeightPerChannel(int8_weight_out, scale_out, weight_, k, n);

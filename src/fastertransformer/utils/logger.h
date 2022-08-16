@@ -12,11 +12,11 @@ class Logger {
 
 public:
     enum Level {
-        TRACE = 0,
-        DEBUG = 10,
-        INFO = 20,
+        TRACE   = 0,
+        DEBUG   = 10,
+        INFO    = 20,
         WARNING = 30,
-        ERROR = 40
+        ERROR   = 40
     };
 
     static Logger& getLogger()
@@ -24,15 +24,15 @@ public:
         static Logger instance;
         return instance;
     }
-    Logger(Logger const&) = delete;
+    Logger(Logger const&)         = delete;
     void operator=(Logger const&) = delete;
 
     template<typename... Args>
     void log(const Level level, const std::string format, const Args&... args)
     {
         if (level_ <= level) {
-            std::string fmt = getPrefix(level) + format + "\n";
-            FILE* out = level_ < WARNING ? stdout : stderr;
+            std::string fmt    = getPrefix(level) + format + "\n";
+            FILE*       out    = level_ < WARNING ? stdout : stderr;
             std::string logstr = fmtstr(fmt, args...);
             fprintf(out, "%s", logstr.c_str());
         }
@@ -42,8 +42,8 @@ public:
     void log(const Level level, const int rank, const std::string format, const Args&... args)
     {
         if (level_ <= level) {
-            std::string fmt = getPrefix(level, rank) + format + "\n";
-            FILE* out = level_ < WARNING ? stdout : stderr;
+            std::string fmt    = getPrefix(level, rank) + format + "\n";
+            FILE*       out    = level_ < WARNING ? stdout : stderr;
             std::string logstr = fmtstr(fmt, args...);
             fprintf(out, "%s", logstr.c_str());
         }
@@ -56,7 +56,7 @@ public:
     }
 
 private:
-    const std::string PREFIX = "[FT]";
+    const std::string            PREFIX      = "[FT]";
     std::map<Level, std::string> level_name_ = {
         {TRACE, "TRACE"}, {DEBUG, "DEBUG"}, {INFO, "INFO"}, {WARNING, "WARNING"}, {ERROR, "ERROR"}};
 

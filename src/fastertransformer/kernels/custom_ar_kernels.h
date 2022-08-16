@@ -44,15 +44,15 @@ typedef struct bf168 {
 
 template<typename T>
 struct AllReduceParams {
-    size_t elts_total;
-    size_t elts_per_rank;
-    size_t elts_per_block;
-    size_t rank_offset;
-    size_t rank, local_rank, node_id;
-    uint32_t barrier_flag;
+    size_t    elts_total;
+    size_t    elts_per_rank;
+    size_t    elts_per_block;
+    size_t    rank_offset;
+    size_t    rank, local_rank, node_id;
+    uint32_t  barrier_flag;
     uint32_t* peer_barrier_ptrs[RANKS_PER_NODE];
-    T* peer_comm_buffer_ptrs[RANKS_PER_NODE];
-    T* local_output_buffer_ptr;
+    T*        peer_comm_buffer_ptrs[RANKS_PER_NODE];
+    T*        local_output_buffer_ptr;
 };
 
 template<typename T>

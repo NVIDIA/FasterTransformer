@@ -37,14 +37,14 @@ FasterTransformerEncoder::FasterTransformerEncoder(th::Tensor pre_attr_layernorm
                                                    th::Tensor output_bias,
                                                    th::Tensor post_transformer_layernorm_gamma,
                                                    th::Tensor post_transformer_layernorm_beta,
-                                                   int64_t head_num,
-                                                   int64_t head_size,
-                                                   int64_t inter_size,
-                                                   bool remove_padding,
-                                                   int64_t layer_num,
-                                                   bool allow_gemm_test,
-                                                   bool sparse,
-                                                   double q_scaling):
+                                                   int64_t    head_num,
+                                                   int64_t    head_size,
+                                                   int64_t    inter_size,
+                                                   bool       remove_padding,
+                                                   int64_t    layer_num,
+                                                   bool       allow_gemm_test,
+                                                   bool       sparse,
+                                                   double     q_scaling):
     _st(q_kernel.scalar_type()),
     _remove_padding(remove_padding),
     weights{pre_attr_layernorm_gamma,
@@ -94,18 +94,24 @@ FasterTransformerEncoder::FasterTransformerEncoder(th::Tensor pre_attr_layernorm
             ftencoder = new FTEncoder<half>(
                 head_num, head_size, inter_size, layer_num, allow_gemm_test, sparse, q_scaling, weights);
             break;
+#ifdef ENABLE_BF16
+        case at::ScalarType::BFloat16:
+            ftencoder = new FTEncoder<__nv_bfloat16>(
+                head_num, head_size, inter_size, layer_num, allow_gemm_test, sparse, q_scaling, weights);
+            break;
+#endif
         default:
             throw std::runtime_error("Wrong Tensor type.");
     }
-    head_info = torch::empty({7}, torch::dtype(torch::kInt64));
-    head_info[0] = head_num;
-    head_info[1] = head_size;
-    head_info[2] = (int64_t)remove_padding;
-    head_info[3] = layer_num;
-    head_info[4] = (int64_t)allow_gemm_test;
-    head_info[5] = (int64_t)sparse;
-    head_info[6] = inter_size;
-    scaling_info = torch::empty({1}, torch::dtype(torch::kFloat64));
+    head_info       = torch::empty({7}, torch::dtype(torch::kInt64));
+    head_info[0]    = head_num;
+    head_info[1]    = head_size;
+    head_info[2]    = (int64_t)remove_padding;
+    head_info[3]    = layer_num;
+    head_info[4]    = (int64_t)allow_gemm_test;
+    head_info[5]    = (int64_t)sparse;
+    head_info[6]    = inter_size;
+    scaling_info    = torch::empty({1}, torch::dtype(torch::kFloat64));
     scaling_info[0] = (double)q_scaling;
 }
 
@@ -121,7 +127,7 @@ th::Tensor FasterTransformerEncoder::forward(th::Tensor input, th::Tensor sequen
     CHECK_CONTIGUOUS(sequence_lengths);
     TORCH_CHECK(sequence_lengths.dtype() == torch::kInt32, "sequence_lengths dtype should be int32");
     size_t batch_size = (size_t)input.size(0);
-    size_t seq_len = (size_t)input.size(1);
+    size_t seq_len    = (size_t)input.size(1);
 
     auto output = torch::empty_like(input);
     ftencoder->forward(batch_size, seq_len, input, sequence_lengths, output, _remove_padding);
@@ -176,14 +182,14 @@ static auto fasterTransformerEncoderTHS =
                 return self->get_pickle_info();
             },
             [](std::vector<th::Tensor> state) -> c10::intrusive_ptr<torch_ext::FasterTransformerEncoder> {
-                int64_t head_num = state[18][0].item().to<int>();
-                int64_t head_size = state[18][1].item().to<int>();
-                bool remove_padding = (bool)(state[18][2].item().to<int>());
-                int64_t layer_num = state[18][3].item().to<int>();
-                bool allow_gemm_test = (bool)(state[18][4].item().to<int>());
-                bool sparse = (bool)(state[18][5].item().to<int>());
-                int64_t inter_size = state[18][6].item().to<int>();
-                double q_scaling = state[19][0].item().to<double>();
+                int64_t head_num        = state[18][0].item().to<int>();
+                int64_t head_size       = state[18][1].item().to<int>();
+                bool    remove_padding  = (bool)(state[18][2].item().to<int>());
+                int64_t layer_num       = state[18][3].item().to<int>();
+                bool    allow_gemm_test = (bool)(state[18][4].item().to<int>());
+                bool    sparse          = (bool)(state[18][5].item().to<int>());
+                int64_t inter_size      = state[18][6].item().to<int>();
+                double  q_scaling       = state[19][0].item().to<double>();
                 return c10::make_intrusive<torch_ext::FasterTransformerEncoder>(state[0],
                                                                                 state[1],
                                                                                 state[2],

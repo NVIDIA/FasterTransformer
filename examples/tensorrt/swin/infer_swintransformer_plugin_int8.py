@@ -23,11 +23,8 @@ import torch.backends.cudnn as cudnn
 
 import ctypes
 import tensorrt as trt
-import pycuda.driver as cuda
-import pycuda.autoinit
 
 import sys
-#sys.path.insert(0, "../third_party/Swin-Transformer")
 sys.path.insert(0, "../../pytorch/swin/Swin-Transformer-Quantization")
 sys.path.insert(0, "../../pytorch/swin")
 
@@ -95,7 +92,7 @@ def main(config, args):
     validate_with_random_data(config, args, model)
 
 @torch.no_grad()
-def run_swintransformer_plugin(args, config, model, image):
+def run_swintransformer_plugin(args, config, model, images):
     TRT_LOGGER = trt.Logger(trt.Logger.VERBOSE)
     # Import necessary plugins for BERT TensorRT
     ctypes.CDLL("../../../build/lib/libswinTransformer_plugin.so", mode=ctypes.RTLD_GLOBAL)
@@ -107,61 +104,48 @@ def run_swintransformer_plugin(args, config, model, image):
     in_chans = config.MODEL.SWIN.IN_CHANS
     embed_dim = config.MODEL.SWIN.EMBED_DIM
 
-    output_size = model.head.bias.shape[0]
-    print("output_size ", output_size)
-
     with open(args.engine, 'rb') as f, trt.Runtime(TRT_LOGGER) as runtime, \
             runtime.deserialize_cuda_engine(f.read()) as engine, \
             engine.create_execution_context() as context:
 
         context.active_optimization_profile = 0
 
-        input_nbytes0 = max_batch * in_chans * img_size * img_size * trt.float16.itemsize
-        stream = cuda.Stream()
-
-        d_inputs = [cuda.mem_alloc(input_nbytes0)]
-        output_shape = (max_batch * output_size)
-        h_output = cuda.pagelocked_empty(output_shape, dtype=np.float32)
-        d_output = cuda.mem_alloc(h_output.nbytes)
+        stream = torch.cuda.Stream()
 
         #import pdb;pdb.set_trace()
         context.set_binding_shape(0, (max_batch, in_chans, img_size, img_size))
+        output_shape = tuple(context.get_binding_shape(1))
+        print('output_shape binding:', output_shape)
 
-        image = image.astype(np.float16)
-
-        # Copy input h2d
-        h_input_embeds = cuda.register_host_memory(np.ascontiguousarray(image).ravel())
-        cuda.memcpy_htod_async(d_inputs[0], h_input_embeds, stream)
+        d_inputs = [images]
+        d_output = torch.empty(output_shape, dtype=torch.float32).cuda()
 
         # warm up
         for i in range(warmup_time):
-            context.execute_async_v2(bindings=[int(d_inp) for d_inp in d_inputs] + [int(d_output)], stream_handle=stream.handle)
+            context.execute_async_v2(bindings=[d_inp.data_ptr() for d_inp in d_inputs] + [d_output.data_ptr()], stream_handle=stream.cuda_stream)
         
         #ignore the last fc layer
+        torch.cuda.synchronize()
         op_end = time.time()
         for i in range(test_time):
-            context.execute_async_v2(bindings=[int(d_inp) for d_inp in d_inputs] + [int(d_output)], stream_handle=stream.handle)
+            context.execute_async_v2(bindings=[d_inp.data_ptr() for d_inp in d_inputs] + [d_output.data_ptr()], stream_handle=stream.cuda_stream)
         stream.synchronize()
 
+        torch.cuda.synchronize()
         print("plugin time : ", (time.time() - op_end)/test_time*1000.0, "ms")
 
-        cuda.memcpy_dtoh_async(h_output, d_output, stream)
-        stream.synchronize()
-
-        return h_output
+        return d_output.cpu().numpy()
 
 @torch.no_grad()
 def run_torch(model, images, mark):
     # warm up
     for i in range(warmup_time):
-        output = model(images)
+        output = model.forward_features(images)
 
     torch.cuda.synchronize()
     torch_start = time.time()
-    #_nvtx.rangePushA("torch")
     for i in range(test_time):
-        torch_output = model(images)
-    #_nvtx.rangePop()
+        torch_output = model.forward_features(images)
     torch.cuda.synchronize()
     torch_end = time.time()
     torch_output = torch_output.cpu().numpy()
@@ -183,15 +167,16 @@ def validate_with_random_data(config, args, model):
     images_float = images_float.cuda(non_blocking=True)
 
     ## run pytorch plugin
-    plugin_output = run_swintransformer_plugin(args, config, model, images)
+    plugin_output = run_swintransformer_plugin(args, config, model, images_half)
 
     # warm up
     model.half()
-    # traced_module = torch.jit.trace(model, images_half)
-    # torch_traced_output = run_torch(traced_module, images_half, "torch trace")
     torch_output = run_torch(model, images_half, "torch")
+    # torch_output = model.forward_features(images_half)
+    # torch_output = torch_output.cpu().numpy()
 
     diff = abs(torch_output - plugin_output.reshape(max_batch, -1))
+    print(diff.shape)
     print("torch_output vs plugin_output , avg diff : ", diff.mean((1)), "max diff : ", diff.max((1)))
 
 if __name__ == '__main__':

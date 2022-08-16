@@ -355,7 +355,7 @@ def main():
     parser.add_argument("--local_rank", type=int, default=-1, help="local_rank for distributed training on gpus")
     parser.add_argument("--threads", type=int, default=1, help="multiple threads for converting example to features")
     parser.add_argument("--model_type", type=str, help="ori, ths, thsext")
-    parser.add_argument("--data_type", type=str, help="fp32, fp16")
+    parser.add_argument("--data_type", type=str, help="fp32, fp16, bf16")
     parser.add_argument('--ths_path', type=str, default='./lib/libth_bert.so',
                         help='path of the pyt_fastertransformer dynamic lib file')
     parser.add_argument('--int8_mode', type=int, default=0, metavar='NUMBER',
@@ -442,6 +442,9 @@ def main():
             elif args.data_type == 'fp16':
                 logger.info("Use fp16")
                 model.half()
+            elif args.data_type == 'bf16':
+                logger.info("Use bf16")
+                model.bfloat16()
             if args.sparse:
                 logger.info("Sparse mode")
             if args.model_type == 'thsext':
@@ -454,6 +457,8 @@ def main():
                     weights.to_int8(args.sparse, args.ths_path)
                 elif args.data_type == 'fp16':
                     weights.to_half()
+                elif args.data_type == 'bf16':
+                    weights.to_bfloat16()
                 weights.to_cuda()
                 enc = CustomEncoder(model.config.num_hidden_layers,
                                     model.config.num_attention_heads,
@@ -474,6 +479,8 @@ def main():
                 fake_type_id = fake_input_id.clone().detach()
                 if args.data_type == 'fp16':
                     fake_mask = fake_mask.half()
+                elif args.data_type == 'bf16':
+                    fake_mask = fake_mask.bfloat16()
                 model.eval()
                 model_ = torch.jit.trace(model, (fake_input_id, fake_mask, fake_type_id))
                 model = model_

@@ -19,7 +19,7 @@ if [ "$1" != "ori" ] && [ "$1" != "ths" ] && [ "$1" != "thsext" ]; then
     echo "[Usage]: bash PATH_TO_THIS_SCRIPT model_type[ori, ths, thsext] data_type[fp32, fp16]"
     exit 1
 fi
-if [ "$2" != "fp32" ] && [ "$2" != "fp16" ]; then
+if [ "$2" != "fp32" ] && [ "$2" != "fp16" ] && [ "$2" != "bf16" ]; then
     echo "wrong data type"
     echo "[Usage]: bash PATH_TO_THIS_SCRIPT model_type[ori, ext] data_type[fp32, fp16]"
     exit 1
@@ -57,8 +57,10 @@ cd $MAIN_PATH
 if [ "$1" == "thsext" ]; then
     if [ "$2" == "fp32" ]; then
         $MAIN_PATH/bin/bert_gemm ${batch_size} ${seq_len} 12 64 0 0
-    else
+    elif [ "$2" == "fp16" ]; then
         $MAIN_PATH/bin/bert_gemm ${batch_size} ${seq_len} 12 64 1 0
+    else
+        $MAIN_PATH/bin/bert_gemm ${batch_size} ${seq_len} 12 64 2 0
     fi
 fi
 

@@ -13,4 +13,5 @@
 # limitations under the License.
 
 add_library(th_parallel_gpt SHARED ParallelGptOp.cc WeightTransposeCalibrateQuantizeOp.cc)
-target_link_libraries(th_parallel_gpt PRIVATE "${TORCH_LIBRARIES}" ParallelGpt th_utils calibrate_quantize_weight_kernels)
+target_link_libraries(th_parallel_gpt PRIVATE "${TORCH_LIBRARIES}"
+                      ParallelGpt th_utils calibrate_quantize_weight_kernels nccl_utils)

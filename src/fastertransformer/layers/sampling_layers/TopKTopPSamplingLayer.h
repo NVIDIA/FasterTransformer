@@ -24,15 +24,14 @@ namespace fastertransformer {
 template<typename T>
 class TopKTopPSamplingLayer: public BaseSamplingLayer<T> {
 private:
-    void runSampling(std::vector<fastertransformer::Tensor>* output_tensors,
+    void runSampling(std::vector<fastertransformer::Tensor>*       output_tensors,
                      const std::vector<fastertransformer::Tensor>* input_tensors) override;
-    void runSampling(std::unordered_map<std::string, Tensor>* output_tensors,
+    void runSampling(std::unordered_map<std::string, Tensor>*       output_tensors,
                      const std::unordered_map<std::string, Tensor>* input_tensors) override;
 
     void allocateBuffer() override;
-    void allocateBuffer(size_t batch_size, size_t top_k, float top_p) override;
+    void allocateBuffer(size_t batch_size, Tensor top_k, Tensor top_p) override;
     void freeBuffer() override;
-    void invokeInitialize(size_t batch_size, unsigned long long random_seed, curandState_t* curandstate_buf) override;
     bool isValidTopK(size_t runtime_top_k);
 
     using BaseSamplingLayer<T>::vocab_size_;
@@ -41,6 +40,7 @@ private:
     using BaseSamplingLayer<T>::sampling_workspace_size_;
     using BaseSamplingLayer<T>::sampling_workspace_;
     using BaseSamplingLayer<T>::curandstate_buf_;
+    using BaseSamplingLayer<T>::random_seeds_buf_;
 
     using BaseSamplingLayer<T>::stream_;
     using BaseSamplingLayer<T>::allocator_;
@@ -48,20 +48,20 @@ private:
 
 protected:
 public:
-    TopKTopPSamplingLayer(size_t max_batch_size,
-                          size_t vocab_size,
-                          size_t vocab_size_padded,
-                          int end_id,
-                          int top_k,
-                          float top_p,
+    TopKTopPSamplingLayer(size_t             max_batch_size,
+                          size_t             vocab_size,
+                          size_t             vocab_size_padded,
+                          int                end_id,
+                          int                top_k,
+                          float              top_p,
                           unsigned long long random_seed,
-                          float temperature,
-                          float len_penalty,
-                          float repetition_penalty,
-                          cudaStream_t stream,
-                          cublasMMWrapper* cublas_wrapper,
-                          IAllocator* allocator,
-                          bool is_free_buffer_after_forward);
+                          float              temperature,
+                          float              len_penalty,
+                          float              repetition_penalty,
+                          cudaStream_t       stream,
+                          cublasMMWrapper*   cublas_wrapper,
+                          IAllocator*        allocator,
+                          bool               is_free_buffer_after_forward);
 
     TopKTopPSamplingLayer(TopKTopPSamplingLayer<T> const& topk_topp_sampling_layer);
 

@@ -26,13 +26,13 @@ namespace ft = fastertransformer;
 template<typename T>
 struct GptJTritonModelInstance: AbstractTransformerModelInstance {
 
-    GptJTritonModelInstance(std::unique_ptr<ft::GptJ<T>> gpt,
-                            std::unique_ptr<ft::GptJWeight<T>> gpt_weight,
+    GptJTritonModelInstance(std::unique_ptr<ft::GptJ<T>>                            gpt,
+                            std::shared_ptr<ft::GptJWeight<T>>                      gpt_weight,
                             std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator,
-                            std::unique_ptr<ft::cublasAlgoMap> cublas_algo_map,
-                            std::unique_ptr<std::mutex> cublas_wrapper_mutex,
-                            std::unique_ptr<ft::cublasMMWrapper> cublas_wrapper,
-                            std::unique_ptr<cudaDeviceProp> cuda_device_prop_ptr);
+                            std::unique_ptr<ft::cublasAlgoMap>                      cublas_algo_map,
+                            std::unique_ptr<std::mutex>                             cublas_wrapper_mutex,
+                            std::unique_ptr<ft::cublasMMWrapper>                    cublas_wrapper,
+                            std::unique_ptr<cudaDeviceProp>                         cuda_device_prop_ptr);
     ~GptJTritonModelInstance();
 
     std::shared_ptr<std::vector<triton::Tensor>>
@@ -41,19 +41,20 @@ struct GptJTritonModelInstance: AbstractTransformerModelInstance {
     std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>
     forward(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors) override;
 
+    static std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>
+    convert_outputs(const std::unordered_map<std::string, ft::Tensor>& output_tensors);
+
 private:
-    const std::unique_ptr<ft::GptJ<T>> gpt_;
-    const std::unique_ptr<ft::GptJWeight<T>> gpt_weight_;
+    const std::unique_ptr<ft::GptJ<T>>                            gpt_;
+    const std::shared_ptr<ft::GptJWeight<T>>                      gpt_weight_;
     const std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator_;
-    const std::unique_ptr<ft::cublasAlgoMap> cublas_algo_map_;
-    const std::unique_ptr<std::mutex> cublas_wrapper_mutex_;
-    const std::unique_ptr<ft::cublasMMWrapper> cublas_wrapper_;
-    const std::unique_ptr<cudaDeviceProp> cuda_device_prop_ptr_;
+    const std::unique_ptr<ft::cublasAlgoMap>                      cublas_algo_map_;
+    const std::unique_ptr<std::mutex>                             cublas_wrapper_mutex_;
+    const std::unique_ptr<ft::cublasMMWrapper>                    cublas_wrapper_;
+    const std::unique_ptr<cudaDeviceProp>                         cuda_device_prop_ptr_;
 
     std::unordered_map<std::string, ft::Tensor>
     convert_inputs(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors);
-    std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>
-    convert_outputs(const std::unordered_map<std::string, ft::Tensor>& output_tensors);
 
     void allocateBuffer(const size_t request_batch_size,
                         const size_t beam_width,
@@ -61,17 +62,17 @@ private:
                         const size_t max_request_output_len);
     void freeBuffer();
 
-    int* d_input_ids_ = nullptr;
-    int* d_input_lengths_ = nullptr;
-    int* d_input_bad_words_ = nullptr;
-    int* d_input_stop_words_ = nullptr;
-    int* d_prefix_soft_prompt_lengths_ = nullptr;
-    float* d_prefix_soft_prompt_embedding_ = nullptr;
+    int* d_input_ids_                = nullptr;
+    int* d_input_lengths_            = nullptr;
+    int* d_input_bad_words_          = nullptr;
+    int* d_input_stop_words_         = nullptr;
+    int* d_request_prompt_lengths_   = nullptr;
+    T*   d_request_prompt_embedding_ = nullptr;
 
-    int* d_output_ids_ = nullptr;
-    int* d_sequence_lengths_ = nullptr;
+    int*   d_output_ids_       = nullptr;
+    int*   d_sequence_lengths_ = nullptr;
     float* d_output_log_probs_ = nullptr;
-    float* d_cum_log_probs_ = nullptr;
+    float* d_cum_log_probs_    = nullptr;
 
-    int* h_total_output_lengths_ = nullptr;
+    uint32_t* h_total_output_lengths_ = nullptr;
 };

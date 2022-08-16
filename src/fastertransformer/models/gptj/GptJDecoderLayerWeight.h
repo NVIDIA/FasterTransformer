@@ -41,15 +41,15 @@ public:
 
     LayerNormWeight<T> pre_layernorm_weights;
     AttentionWeight<T> self_attention_weights;
-    FfnWeight<T> ffn_weights;
+    FfnWeight<T>       ffn_weights;
 
 private:
-    int hidden_units_;
-    int inter_size_;
-    int tensor_para_size_;
-    int tensor_para_rank_;
+    int  hidden_units_;
+    int  inter_size_;
+    int  tensor_para_size_;
+    int  tensor_para_rank_;
     bool is_maintain_buffer = false;
-    T* weights_ptr[9];
+    T*   weights_ptr[9];
 
     void setWeightPtr();
     void mallocWeights();

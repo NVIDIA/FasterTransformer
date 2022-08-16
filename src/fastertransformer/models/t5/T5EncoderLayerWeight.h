@@ -34,7 +34,8 @@ struct T5EncoderLayerWeight {
                          const size_t inter_size,
                          const size_t tensor_para_size,
                          const size_t tensor_para_rank,
-                         const bool t5_with_bias);
+                         const bool   t5_with_bias,
+                         const bool   use_gated_activation);
     ~T5EncoderLayerWeight();
     T5EncoderLayerWeight(const T5EncoderLayerWeight& other);
     T5EncoderLayerWeight& operator=(const T5EncoderLayerWeight& other);
@@ -45,13 +46,13 @@ struct T5EncoderLayerWeight {
 
     AttentionWeight<T> attention_weights;
     LayerNormWeight<T> attn_layernorm_weights;
-    FfnWeight<T> ffn_weights;
+    FfnWeight<T>       ffn_weights;
     LayerNormWeight<T> ffn_layernorm_weights;
-    bool t5_with_bias_;
+    bool               t5_with_bias_;
+    bool               use_gated_activation_;
 
     void loadModel(std::string dir_path, FtCudaDataType model_file_type);
-
-    void setT5WithBias(bool t5_with_bias_para);
+    void setT5WithBias(bool t5_with_bias_para, bool use_gated_activation_para);
 
 private:
     void setWeightPtr();
@@ -69,12 +70,12 @@ private:
 
     bool is_maintain_buffer = false;
 
-    // Assume bias added
-    const static int weights_num_ = 16;
-    T* weights_ptr[weights_num_];
-    size_t weights_size[weights_num_];
+    // Assume bias added, and gated activation used
+    const static int weights_num_ = 18;
+    T*               weights_ptr[weights_num_];
+    size_t           weights_size[weights_num_];
 
-    T* sp_weights_ptr[6];
+    T*   sp_weights_ptr[6];
     bool is_maintain_sp_buffer = false;
 };
 

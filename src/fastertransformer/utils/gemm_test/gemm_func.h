@@ -44,47 +44,47 @@ struct ScaleTypeConverter<half, true> {
 };
 
 template<typename T, typename scaleT>
-int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
-                      int batch_size,
-                      int seq_len,
-                      int head_num,
-                      int size_per_head,
-                      int m,
-                      int n,
-                      int k,
-                      const scaleT* alpha, /* host pointer */
-                      const T* A,
-                      const T* B,
-                      const scaleT* beta, /* host pointer */
-                      T* C,
-                      void* workSpace,
-                      size_t workSpaceSize,
-                      FILE* fout,
+int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
+                      int                batch_size,
+                      int                seq_len,
+                      int                head_num,
+                      int                size_per_head,
+                      int                m,
+                      int                n,
+                      int                k,
+                      const scaleT*      alpha, /* host pointer */
+                      const T*           A,
+                      const T*           B,
+                      const scaleT*      beta, /* host pointer */
+                      T*                 C,
+                      void*              workSpace,
+                      size_t             workSpaceSize,
+                      FILE*              fout,
                       customMatmulPerf_t perfResults[],
-                      int AlgoCombinations);
+                      int                AlgoCombinations);
 
-size_t calGemmTestBufSizeInByte(int batch_size,
-                                int seq_len,
-                                int head_num,
-                                int size_per_head,
-                                int inter_size,
-                                int vocab_size,
-                                int int8_mode,
+size_t calGemmTestBufSizeInByte(int            batch_size,
+                                int            seq_len,
+                                int            head_num,
+                                int            size_per_head,
+                                int            inter_size,
+                                int            vocab_size,
+                                int            int8_mode,
                                 CublasDataType data_type);
 
 size_t calGemmTestBufSizeInByteXlnet(
     int batch_size, int seq_len, int head_num, int size_per_head, int inter_size, int hidden_units, int is_fp16);
 
-int printPerfStructure(int batch_size,
-                       int seq_len,
-                       int head_num,
-                       int size_per_head,
-                       int m,
-                       int n,
-                       int k,
+int printPerfStructure(int                       batch_size,
+                       int                       seq_len,
+                       int                       head_num,
+                       int                       size_per_head,
+                       int                       m,
+                       int                       n,
+                       int                       k,
                        const customMatmulPerf_t& perf,
-                       FILE* fout,
-                       CublasDataType data_type,
-                       int hasPrint);
+                       FILE*                     fout,
+                       CublasDataType            data_type,
+                       int                       hasPrint);
 
 }  // namespace fastertransformer

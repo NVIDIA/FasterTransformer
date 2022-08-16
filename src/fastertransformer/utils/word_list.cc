@@ -26,12 +26,12 @@ int read_word_list(const std::string& filename, std::vector<int>& file_data)
     std::ifstream word_list_file(filename, std::ios::in);
 
     std::string line_buf;
-    int line_count = 0;
-    size_t id_counts[2] = {0, 0};
+    int         line_count   = 0;
+    size_t      id_counts[2] = {0, 0};
     while (std::getline(word_list_file, line_buf)) {
 
         std::stringstream line_stream(line_buf);
-        std::string vals;
+        std::string       vals;
         while (std::getline(line_stream, vals, ',')) {
             file_data.push_back(std::stoi(vals));
             id_counts[line_count]++;

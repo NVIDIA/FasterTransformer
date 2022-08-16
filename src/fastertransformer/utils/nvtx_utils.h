@@ -23,10 +23,10 @@ extern bool NVTX_ON;
 
 namespace nvtx {
 static std::string scope;
-std::string getScope();
-void addScope(std::string name);
-void setScope(std::string name);
-void resetScope();
+std::string        getScope();
+void               addScope(std::string name);
+void               setScope(std::string name);
+void               resetScope();
 }  // namespace nvtx
 
 #ifdef USE_NVTX

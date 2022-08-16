@@ -18,4 +18,4 @@ set(swin_transformer_nv_files
 )
 add_executable(swin_example ${swin_transformer_nv_files})
 target_link_libraries(swin_example PUBLIC trt_fused_multi_head_attention Swin 
-  cublasMMWrapper memory_utils -lcublas -lcublasLt -lcudart -lcudnn)
+  cublasMMWrapper memory_utils -lcublas -lcublasLt -lcudart -lcudnn tensor)

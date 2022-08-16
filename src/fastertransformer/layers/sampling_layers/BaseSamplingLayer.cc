@@ -17,26 +17,73 @@
 
 #include "src/fastertransformer/layers/sampling_layers/BaseSamplingLayer.h"
 #include "src/fastertransformer/kernels/sampling_penalty_kernels.h"
+#include "src/fastertransformer/kernels/sampling_topk_kernels.h"
 #include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/fastertransformer/utils/memory_utils.h"
+
+#include <algorithm>
 
 namespace fastertransformer {
 
 template<typename T>
-BaseSamplingLayer<T>::BaseSamplingLayer(size_t max_batch_size,
-                                        size_t vocab_size,
-                                        size_t vocab_size_padded,
-                                        int end_id,
-                                        size_t top_k,
-                                        float top_p,
+void BaseSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tensor top_p)
+{
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    curandstate_buf_ = reinterpret_cast<curandState_t*>(
+        allocator_->reMalloc(curandstate_buf_, sizeof(curandState_t) * batch_size, false));
+    random_seeds_buf_ = reinterpret_cast<unsigned long long*>(
+        allocator_->reMalloc(random_seeds_buf_, sizeof(unsigned long long) * batch_size, false));
+    temperature_buf_ =
+        reinterpret_cast<float*>(allocator_->reMalloc(temperature_buf_, sizeof(float) * batch_size, false));
+    repetition_penalty_buf_ =
+        reinterpret_cast<float*>(allocator_->reMalloc(repetition_penalty_buf_, sizeof(float) * batch_size, false));
+    runtime_logits_buf_ = reinterpret_cast<T*>(
+        allocator_->reMalloc(runtime_logits_buf_, sizeof(T) * batch_size * vocab_size_padded_, false));
+    skip_decode_buf_ =
+        reinterpret_cast<bool*>(allocator_->reMalloc(skip_decode_buf_, sizeof(bool) * batch_size, false));
+
+    // host buffers.
+    temperature_        = new float[batch_size];
+    repetition_penalty_ = new float[batch_size];
+    skip_decode_        = new bool[batch_size];
+
+    is_allocate_buffer_ = true;
+}
+
+template<typename T>
+void BaseSamplingLayer<T>::freeBuffer()
+{
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    if (is_allocate_buffer_) {
+        allocator_->free((void**)(&curandstate_buf_));
+        allocator_->free((void**)(&random_seeds_buf_));
+        allocator_->free((void**)(&temperature_buf_));
+        allocator_->free((void**)(&repetition_penalty_buf_));
+        allocator_->free((void**)(&runtime_logits_buf_));
+        allocator_->free((void**)(&skip_decode_buf_));
+        delete[] temperature_;
+        delete[] repetition_penalty_;
+        delete[] skip_decode_;
+        is_allocate_buffer_ = false;
+    }
+}
+
+template<typename T>
+BaseSamplingLayer<T>::BaseSamplingLayer(size_t             max_batch_size,
+                                        size_t             vocab_size,
+                                        size_t             vocab_size_padded,
+                                        int                end_id,
+                                        size_t             top_k,
+                                        float              top_p,
                                         unsigned long long random_seed,
-                                        float temperature_,
-                                        float len_penalty_,
-                                        float repetition_penalty_,
-                                        cudaStream_t stream,
-                                        cublasMMWrapper* cublas_wrapper,
-                                        IAllocator* allocator,
-                                        bool is_free_buffer_after_forward,
-                                        cudaDeviceProp* cuda_device_prop):
+                                        float              temperature,
+                                        float              len_penalty,
+                                        float              repetition_penalty,
+                                        cudaStream_t       stream,
+                                        cublasMMWrapper*   cublas_wrapper,
+                                        IAllocator*        allocator,
+                                        bool               is_free_buffer_after_forward,
+                                        cudaDeviceProp*    cuda_device_prop):
     DynamicDecodeBaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, cuda_device_prop),
     vocab_size_(vocab_size),
     vocab_size_padded_(vocab_size_padded)
@@ -55,6 +102,79 @@ BaseSamplingLayer<T>::BaseSamplingLayer(BaseSamplingLayer const& sampling_layer)
 template<typename T>
 BaseSamplingLayer<T>::~BaseSamplingLayer()
 {
+}
+
+template<typename T>
+void BaseSamplingLayer<T>::setup(const size_t                                   batch_size,
+                                 const size_t                                   beam_width,
+                                 const std::unordered_map<std::string, Tensor>* runtime_args)
+{
+    // Set up the sampling layer for given runtime arguments.
+    //
+    // runtime_args:
+    //     runtime_top_k [1] or [batch_size] on cpu, optional.
+    //     runtime_top_p [1] or [batch_size] on cpu, optional
+    //     temperature [1] or [batch_size] on cpu, optional
+    //     repetition_penalty [1] or [batch_size] on cpu, optional
+
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    Tensor runtime_top_k = runtime_args->count("runtime_top_k") ? runtime_args->at("runtime_top_k") : Tensor();
+    Tensor runtime_top_p = runtime_args->count("runtime_top_p") ? runtime_args->at("runtime_top_p") : Tensor();
+    allocateBuffer(batch_size, runtime_top_k, runtime_top_p);
+
+    // If runtime argument has single random seed, using this random seed to initialize the random table of all
+    // sentences. If the argument has [batch_size] random seeds, initializing the random table by different random seeds
+    // respectively. If no random seed, initialize the random table of all sentences by 0 directly.
+    if (runtime_args->count("random_seed")) {
+        Tensor random_seeds = runtime_args->at("random_seed");
+        FT_CHECK_WITH_INFO(random_seeds.shape.size() == 1
+                               && (random_seeds.size() == 1 || random_seeds.size() == batch_size),
+                           fmtstr("random_seeds must be of shape [1] or [batch_size(%ld)], got random_seeds.shape=%s",
+                                  batch_size,
+                                  vec2str(random_seeds.shape).c_str()));
+        if (random_seeds.size() == 1) {
+            invokeCurandInitialize(curandstate_buf_, batch_size, random_seeds.getVal<unsigned long long>(), stream_);
+            sync_check_cuda_error();
+        }
+        else {
+            unsigned long long* random_seed_ptr = random_seeds.getPtr<unsigned long long>();
+            cudaAutoCpy(random_seeds_buf_, random_seed_ptr, batch_size, stream_);
+            invokeCurandBatchInitialize(curandstate_buf_, batch_size, random_seeds_buf_, stream_);
+            sync_check_cuda_error();
+        }
+    }
+    else {
+        // Initialize curand states using the default seed 0.
+        invokeCurandInitialize(curandstate_buf_, batch_size, 0, stream_);
+    }
+
+    // Setup penalties.
+    const float default_temperature = 1.0f;
+    Tensor      temperature         = runtime_args->count("temperature") ? runtime_args->at("temperature") :
+                                                                           Tensor(MEMORY_CPU, TYPE_FP32, {1}, &default_temperature);
+    if (temperature.size() == 1) {
+        float tp = temperature.getVal<float>();
+        deviceFill(temperature_buf_, batch_size, tp, stream_);
+        std::fill_n(temperature_, batch_size, tp);
+    }
+    else {
+        cudaAutoCpy(temperature_buf_, temperature.getPtr<float>(), batch_size, stream_);
+        std::copy_n(temperature.getPtr<float>(), batch_size, temperature_);
+    }
+
+    const float default_repetition_penalty = 1.0f;
+    Tensor      repetition_penalty         = runtime_args->count("repetition_penalty") ?
+                                                 runtime_args->at("repetition_penalty") :
+                                                 Tensor(MEMORY_CPU, TYPE_FP32, {1}, &default_repetition_penalty);
+    if (repetition_penalty.size() == 1) {
+        float rp = repetition_penalty.getVal<float>();
+        deviceFill(repetition_penalty_buf_, batch_size, rp, stream_);
+        std::fill_n(repetition_penalty_, batch_size, rp);
+    }
+    else {
+        cudaAutoCpy(repetition_penalty_buf_, repetition_penalty.getPtr<float>(), batch_size, stream_);
+        std::copy_n(repetition_penalty.getPtr<float>(), batch_size, repetition_penalty_);
+    }
 }
 
 template<typename T>
@@ -94,7 +214,7 @@ void BaseSamplingLayer<T>::forward(std::vector<Tensor>* output_tensors, const st
 }
 
 template<typename T>
-void BaseSamplingLayer<T>::forward(std::unordered_map<std::string, Tensor>* output_tensors,
+void BaseSamplingLayer<T>::forward(std::unordered_map<std::string, Tensor>*       output_tensors,
                                    const std::unordered_map<std::string, Tensor>* input_tensors)
 {
     // input_tensors:
@@ -104,12 +224,6 @@ void BaseSamplingLayer<T>::forward(std::unordered_map<std::string, Tensor>* outp
     //      max_input_length [1] on cpu
     //      input_lengths [local_batch_size]
     //      ite [1] on cpu
-    //      runtime_top_k [1] on cpu, optional.
-    //      runtime_top_p [1] on cpu, optional
-    //      temperature [1] on cpu, optional
-    //      len_penalty [1] on cpu, optional
-    //      repetition_penalty [1] on cpu, optional
-    //      random_seed [1] on cpu, unsigned long long, optional
 
     // output_tensors:
     //      output_ids [max_seq_len, batch_size]
@@ -123,43 +237,56 @@ void BaseSamplingLayer<T>::forward(std::unordered_map<std::string, Tensor>* outp
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     FT_CHECK(input_tensors->size() >= 6);
     FT_CHECK(output_tensors->size() >= 3);
-    const int batch_size = output_tensors->at("output_ids").shape[1];
-
+    const int batch_size       = output_tensors->at("output_ids").shape[1];
     const int local_batch_size = input_tensors->at("logits").shape[0];
-    const int step = *((int*)input_tensors->at("step").data);
-    const int ite = *((int*)input_tensors->at("ite").data);
+    const int step             = input_tensors->at("step").getVal<int>();
+    const int ite              = input_tensors->at("ite").getVal<int>();
+    T*        logits           = input_tensors->at("logits").getPtr<T>();
 
-    float temperature = input_tensors->count("temperature") ? input_tensors->at("temperature").getVal<float>() : 1.0f;
+#define ALL_OF(p_, sz_, dt_, v_) (std::all_of(p_, p_ + sz_, [](dt_ b) { return b == v_; }))
 
-    if ((const T*)(input_tensors->at("embedding_bias").data) != nullptr || temperature != 1.0f) {
-        invokeApplyTemperaturePenalty((T*)input_tensors->at("logits").data,
-                                      (const T*)(input_tensors->at("embedding_bias").data),
-                                      temperature,
-                                      local_batch_size,
-                                      vocab_size_,
-                                      vocab_size_padded_,
-                                      stream_);
+    bool* skip_decode = skip_decode_ + ite * local_batch_size;
+    if (ALL_OF(skip_decode, local_batch_size, bool, true)) {
+        // No sample in the current batch to do TopX sampling.
+        return;
+    }
+    skip_any_ = std::any_of(skip_decode, skip_decode + local_batch_size, [](bool b) { return b; });
+    if (skip_any_) {
+        // A TopX Sampling layer directly changes the logit values. In case of skip_any==true,
+        // meaning topk and topp layers will run simultaneously for a batch in the same step.
+        // We copy the logits to an internal buffer, not affecting the other sampling layers.
+        FT_CHECK(input_tensors->at("logits").size() == local_batch_size * vocab_size_padded_);
+        cudaD2Dcpy(runtime_logits_buf_, logits, input_tensors->at("logits").size());
+        logits = runtime_logits_buf_;
+    }
+
+    T* embedding_bias = input_tensors->at("embedding_bias").getPtr<T>();
+    if (embedding_bias != nullptr || !ALL_OF(temperature_ + ite * local_batch_size, local_batch_size, float, 1.0f)) {
+        invokeBatchApplyTemperaturePenalty(logits,
+                                           embedding_bias,
+                                           temperature_buf_ + ite * local_batch_size,
+                                           local_batch_size,
+                                           vocab_size_,
+                                           vocab_size_padded_,
+                                           stream_);
     }
     sync_check_cuda_error();
 
-    if (step > 1
-        && (input_tensors->count("repetition_penalty")
-            && input_tensors->at("repetition_penalty").getVal<float>() != 1.0f)) {
-        invokeApplyRepetitionPenalty((T*)input_tensors->at("logits").data,
-                                     input_tensors->at("repetition_penalty").getVal<float>(),
-                                     nullptr,
-                                     (int*)output_tensors->at("output_ids").data,
-                                     batch_size,
-                                     local_batch_size,
-                                     vocab_size_,
-                                     vocab_size_padded_,
-                                     (int*)input_tensors->at("input_lengths").data,
-                                     *((int*)input_tensors->at("max_input_length").data),
-                                     step,
-                                     ite,
-                                     stream_);
+    if (step > 1 && !ALL_OF(repetition_penalty_ + ite * local_batch_size, local_batch_size, float, 1.0f)) {
+        invokeBatchApplyRepetitionPenalty(
+            logits,
+            repetition_penalty_buf_ + ite * local_batch_size,
+            output_tensors->at("output_ids").getPtrWithOffset<int>(ite * local_batch_size),
+            batch_size,
+            local_batch_size,
+            vocab_size_padded_,
+            input_tensors->at("input_lengths").getPtr<int>(),
+            input_tensors->at("max_input_length").getVal<int>(),
+            step,
+            stream_);
         sync_check_cuda_error();
     }
+#undef ALL_OF
 
     runSampling(output_tensors, input_tensors);
 

@@ -24,7 +24,7 @@ void generate_swin_gemm_config(
 {
     void* cublas_workspace;
     void* buffer;
-    int workSpaceSize;
+    int   workSpaceSize;
 #ifdef ENABLE_BF16
     if (std::is_same<T, half>::value || std::is_same<T, __nv_bfloat16>::value) {
 #else
@@ -33,13 +33,13 @@ void generate_swin_gemm_config(
         // cublas_workspace_ should be the start pointer of cudaMalloc()
         // to ensure 16B alignemnet
         cublas_workspace = buffer_in;
-        buffer = (void*)((char*)cublas_workspace + CUBLAS_WORKSPACE_SIZE);
-        workSpaceSize = CUBLAS_WORKSPACE_SIZE;
+        buffer           = (void*)((char*)cublas_workspace + CUBLAS_WORKSPACE_SIZE);
+        workSpaceSize    = CUBLAS_WORKSPACE_SIZE;
     }
     else {
         cublas_workspace = nullptr;
-        buffer = buffer_in;
-        workSpaceSize = 0;
+        buffer           = buffer_in;
+        workSpaceSize    = 0;
     }
 
     struct cudaDeviceProp prop;
@@ -48,7 +48,7 @@ void generate_swin_gemm_config(
 
     // check config
     FILE* fd;
-    int line_count = 0;
+    int   line_count = 0;
     if (!isAppend) {
         fd = fopen(GEMM_CONFIG, "w+");
         fprintf(
@@ -58,7 +58,7 @@ void generate_swin_gemm_config(
     else {
         fd = fopen(GEMM_CONFIG, "a+");
         std::vector<std::string> config;
-        char line[1024];
+        char                     line[1024];
         while (fgets(line, 1024, fd) != NULL) {
             config.push_back(std::string(line));
         }
@@ -76,14 +76,14 @@ void generate_swin_gemm_config(
         }
     }
 
-    const int gemm_num = 7;
+    const int gemm_num            = 7;
     const int NUM_OF_BASIC_LAYERS = 4;
-    int M[gemm_num];
-    int N[gemm_num];
-    int K[gemm_num];
-    int batchCount[gemm_num] = {1, 1, 1, 1, 1, 1, 1};
-    char mess[gemm_num][256];
-    float exec_times[gemm_num];
+    int       M[gemm_num];
+    int       N[gemm_num];
+    int       K[gemm_num];
+    int       batchCount[gemm_num] = {1, 1, 1, 1, 1, 1, 1};
+    char      mess[gemm_num][256];
+    float     exec_times[gemm_num];
 
     printf("***Encoder Gemm Testing Begin***\n");
     printf("***Cublas Gemm Testing Begin***\n");
@@ -117,15 +117,15 @@ void generate_swin_gemm_config(
         N[4] = 2 * K[0];
         strcpy(mess[4], "patchMerge gemm");
 
-        M[5] = seq_len;
-        N[5] = seq_len;
-        K[5] = size_per_head;
+        M[5]          = seq_len;
+        N[5]          = seq_len;
+        K[5]          = size_per_head;
         batchCount[5] = batch_size * head_num;
         strcpy(mess[5], "attention batched Gemm1");
 
-        M[6] = seq_len;
-        N[6] = size_per_head;
-        K[6] = seq_len;
+        M[6]          = seq_len;
+        N[6]          = size_per_head;
+        K[6]          = seq_len;
         batchCount[6] = batch_size * head_num;
         strcpy(mess[6], "attention batched Gemm2");
 
@@ -138,44 +138,44 @@ void generate_swin_gemm_config(
         cudaDataType_t BType;
         cudaDataType_t CType;
         cudaDataType_t computeType;
-        int startAlgo, endAlgo;
-        const int ites = 100;
+        int            startAlgo, endAlgo;
+        const int      ites = 100;
         struct timeval start, end;
 
         CublasDataType data_type;
         if (std::is_same<T, float>::value) {
-            data_type = FLOAT_DATATYPE;
-            AType = CUDA_R_32F;
-            BType = CUDA_R_32F;
-            CType = CUDA_R_32F;
+            data_type   = FLOAT_DATATYPE;
+            AType       = CUDA_R_32F;
+            BType       = CUDA_R_32F;
+            CType       = CUDA_R_32F;
             computeType = CUDA_R_32F;
-            startAlgo = (int)CUBLAS_GEMM_DEFAULT;
-            endAlgo = (int)CUBLAS_GEMM_ALGO23;
+            startAlgo   = (int)CUBLAS_GEMM_DEFAULT;
+            endAlgo     = (int)CUBLAS_GEMM_ALGO23;
         }
         else if (std::is_same<T, half>::value) {
-            data_type = HALF_DATATYPE;
-            AType = CUDA_R_16F;
-            BType = CUDA_R_16F;
-            CType = CUDA_R_16F;
+            data_type   = HALF_DATATYPE;
+            AType       = CUDA_R_16F;
+            BType       = CUDA_R_16F;
+            CType       = CUDA_R_16F;
             computeType = CUDA_R_32F;
-            startAlgo = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
-            endAlgo = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
+            startAlgo   = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+            endAlgo     = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
         }
 #ifdef ENABLE_BF16
         else if (std::is_same<T, __nv_bfloat16>::value) {
-            data_type = BFLOAT16_DATATYPE;
-            AType = CUDA_R_16BF;
-            BType = CUDA_R_16BF;
-            CType = CUDA_R_16BF;
+            data_type   = BFLOAT16_DATATYPE;
+            AType       = CUDA_R_16BF;
+            BType       = CUDA_R_16BF;
+            CType       = CUDA_R_16BF;
             computeType = CUDA_R_32F;
-            startAlgo = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
-            endAlgo = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
+            startAlgo   = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+            endAlgo     = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
         }
 #endif
         using scaleT = typename ScaleTypeConverter<T, false>::Type;
 
         scaleT alpha = (scaleT)1.0f;
-        scaleT beta = (scaleT)0.0f;
+        scaleT beta  = (scaleT)0.0f;
 
         for (int i = 0; i < gemm_num; ++i) {
             // if(i != 0 && i != 5) continue;
@@ -189,14 +189,14 @@ void generate_swin_gemm_config(
 
             // array of pointer for batchedGemm
             T* harray[12];
-            harray[0] = (T*)buffer;
-            harray[1] = (T*)((char*)buffer + sizeof(T) * m * k);
-            harray[2] = (T*)((char*)buffer + 2 * sizeof(T) * m * k);
-            harray[4] = (T*)((char*)buffer + 3 * sizeof(T) * m * k);
-            harray[5] = (T*)((char*)buffer + 3 * sizeof(T) * m * k + sizeof(T) * k * n);
-            harray[6] = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 2 * sizeof(T) * k * n);
-            harray[8] = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 3 * sizeof(T) * k * n);
-            harray[9] = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 3 * sizeof(T) * k * n + sizeof(T) * m * n);
+            harray[0]  = (T*)buffer;
+            harray[1]  = (T*)((char*)buffer + sizeof(T) * m * k);
+            harray[2]  = (T*)((char*)buffer + 2 * sizeof(T) * m * k);
+            harray[4]  = (T*)((char*)buffer + 3 * sizeof(T) * m * k);
+            harray[5]  = (T*)((char*)buffer + 3 * sizeof(T) * m * k + sizeof(T) * k * n);
+            harray[6]  = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 2 * sizeof(T) * k * n);
+            harray[8]  = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 3 * sizeof(T) * k * n);
+            harray[9]  = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 3 * sizeof(T) * k * n + sizeof(T) * m * n);
             harray[10] = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 3 * sizeof(T) * k * n + 2 * sizeof(T) * m * n);
 
             T** darray = 0;
@@ -207,7 +207,7 @@ void generate_swin_gemm_config(
             T** dCarray = darray + 8;
 
             float exec_time = 99999.0f;
-            int fast_algo = 0;
+            int   fast_algo = 0;
             for (int algo = startAlgo; algo <= endAlgo; algo++) {
                 cublasStatus_t status;
                 cudaDeviceSynchronize();
@@ -304,7 +304,7 @@ void generate_swin_gemm_config(
             if (i < 5 && data_type != FLOAT_DATATYPE) {
                 printf("***cublasLt Gemm Testing Beign***\n");
                 // Let try a fixed number of combinations
-                int ALGO_COMBINATIONS = 5000;
+                int                ALGO_COMBINATIONS = 5000;
                 customMatmulPerf_t perfResults[ALGO_COMBINATIONS];
 
                 LtHgemmCustomFind<T, scaleT>(ltHandle,
@@ -368,7 +368,7 @@ void generate_swin_gemm_config(
 
         if (basic_layer != NUM_OF_BASIC_LAYERS - 1) {
             batch_size = batch_size / 4;
-            head_num = head_num * 2;
+            head_num   = head_num * 2;
         }
     }
     printf("***cublas Gemm Testing End***\n\n");

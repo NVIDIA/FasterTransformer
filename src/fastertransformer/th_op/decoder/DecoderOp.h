@@ -24,8 +24,8 @@ namespace torch_ext {
 class IFDecoder {
 public:
     virtual ~IFDecoder() {}
-    virtual void forward(size_t batch_size,
-                         size_t step,
+    virtual void forward(size_t      batch_size,
+                         size_t      step,
                          th::Tensor& from_tensor,
                          th::Tensor& memory_tensor,
                          th::Tensor& memory_sequence_length,
@@ -40,11 +40,11 @@ public:
 template<typename T>
 class FTDecoder: public IFDecoder {
 public:
-    FTDecoder(int head_num,
-              int head_size,
-              int inter_size,
-              int layer_num,
-              int mem_hidden_dim,
+    FTDecoder(int                            head_num,
+              int                            head_size,
+              int                            inter_size,
+              int                            layer_num,
+              int                            mem_hidden_dim,
               const std::vector<th::Tensor>& w):
         _head_num(head_num),
         _head_size(head_size),
@@ -63,7 +63,7 @@ public:
 
         for (int i = 0; i < _layer_num; ++i) {
             decoder_layer_weights[i].pre_layernorm_weights.gamma = get_ptr<T>(_weights[0]) + i * hidden_dim;
-            decoder_layer_weights[i].pre_layernorm_weights.beta = get_ptr<T>(_weights[1]) + i * hidden_dim;
+            decoder_layer_weights[i].pre_layernorm_weights.beta  = get_ptr<T>(_weights[1]) + i * hidden_dim;
             decoder_layer_weights[i].self_attention_weights.query_weight.kernel =
                 get_ptr<T>(_weights[2]) + i * hidden_dim * 3 * hidden_dim;
             decoder_layer_weights[i].self_attention_weights.query_weight.bias =
@@ -73,7 +73,7 @@ public:
             decoder_layer_weights[i].self_attention_weights.attention_output_weight.bias =
                 get_ptr<T>(_weights[5]) + i * hidden_dim;
             decoder_layer_weights[i].self_attn_layernorm_weights.gamma = get_ptr<T>(_weights[6]) + i * hidden_dim;
-            decoder_layer_weights[i].self_attn_layernorm_weights.beta = get_ptr<T>(_weights[7]) + i * hidden_dim;
+            decoder_layer_weights[i].self_attn_layernorm_weights.beta  = get_ptr<T>(_weights[7]) + i * hidden_dim;
             decoder_layer_weights[i].cross_attention_weights.query_weight.kernel =
                 get_ptr<T>(_weights[8]) + i * hidden_dim * hidden_dim;
             decoder_layer_weights[i].cross_attention_weights.key_weight.kernel =
@@ -91,7 +91,7 @@ public:
             decoder_layer_weights[i].cross_attention_weights.attention_output_weight.bias =
                 get_ptr<T>(_weights[15]) + i * hidden_dim;
             decoder_layer_weights[i].cross_attn_layernorm_weights.gamma = get_ptr<T>(_weights[16]) + i * hidden_dim;
-            decoder_layer_weights[i].cross_attn_layernorm_weights.beta = get_ptr<T>(_weights[17]) + i * hidden_dim;
+            decoder_layer_weights[i].cross_attn_layernorm_weights.beta  = get_ptr<T>(_weights[17]) + i * hidden_dim;
             decoder_layer_weights[i].ffn_weights.intermediate_weight.kernel =
                 get_ptr<T>(_weights[18]) + i * hidden_dim * _inter_size;
             decoder_layer_weights[i].ffn_weights.intermediate_weight.bias = get_ptr<T>(_weights[19]) + i * _inter_size;
@@ -108,8 +108,8 @@ public:
         delete cublas_wrapper_mutex_;
     }
 
-    void forward(size_t batch_size,
-                 size_t step,
+    void forward(size_t      batch_size,
+                 size_t      step,
                  th::Tensor& from_tensor,
                  th::Tensor& memory_tensor,
                  th::Tensor& memory_sequence_length,
@@ -120,16 +120,21 @@ public:
                  th::Tensor& memory_cache_keys_tensor,
                  th::Tensor& memory_cache_values_tensor) override
     {
-        auto stream = at::cuda::getCurrentCUDAStream().stream();
+        auto           stream        = at::cuda::getCurrentCUDAStream().stream();
         cublasHandle_t _cublasHandle = at::cuda::getCurrentCUDABlasHandle();
         cublasSetStream(_cublasHandle, stream);
-        ft::Allocator<ft::AllocatorType::TH>* allocator = new ft::Allocator<ft::AllocatorType::TH>();
-        ft::cublasMMWrapper* cublas_wrapper = new ft::cublasMMWrapper(
+        ft::Allocator<ft::AllocatorType::TH>* allocator      = new ft::Allocator<ft::AllocatorType::TH>();
+        ft::cublasMMWrapper*                  cublas_wrapper = new ft::cublasMMWrapper(
             _cublasHandle, _cublasltHandle, stream, cublas_algo_map_, cublas_wrapper_mutex_, allocator);
 
         if (std::is_same<T, half>::value) {
             cublas_wrapper->setFP16GemmConfig();
         }
+#ifdef ENABLE_BF16
+        else if (std::is_same<T, __nv_bfloat16>::value) {
+            cublas_wrapper->setBF16GemmConfig();
+        }
+#endif
         else if (std::is_same<T, float>::value) {
             cublas_wrapper->setFP32GemmConfig();
         }
@@ -137,7 +142,7 @@ public:
         ft::Decoder<T>* decoder = new ft::Decoder<T>(
             batch_size, _head_num, _head_size, _inter_size, _layer_num, stream, cublas_wrapper, allocator, true);
 
-        int tmp_step = step + 1;
+        int                     tmp_step      = step + 1;
         std::vector<ft::Tensor> input_tensors = std::vector<ft::Tensor>{
             convert_tensor<T>(from_tensor),
             convert_tensor<T>(memory_tensor),
@@ -173,15 +178,15 @@ public:
     }
 
 private:
-    const int _head_num;
-    const int _head_size;
-    const int _inter_size;
-    std::vector<th::Tensor> _weights;
-    const int _layer_num;
-    const int _mem_hidden_dim;
-    cublasLtHandle_t _cublasltHandle;
-    std::mutex* cublas_wrapper_mutex_;
-    ft::cublasAlgoMap* cublas_algo_map_;
+    const int                              _head_num;
+    const int                              _head_size;
+    const int                              _inter_size;
+    std::vector<th::Tensor>                _weights;
+    const int                              _layer_num;
+    const int                              _mem_hidden_dim;
+    cublasLtHandle_t                       _cublasltHandle;
+    std::mutex*                            cublas_wrapper_mutex_;
+    ft::cublasAlgoMap*                     cublas_algo_map_;
     std::vector<ft::DecoderLayerWeight<T>> decoder_layer_weights;
 };
 
@@ -209,15 +214,15 @@ public:
                              th::Tensor inter_bias,
                              th::Tensor output_kernel,
                              th::Tensor output_bias,
-                             int64_t head_num,
-                             int64_t head_size,
-                             int64_t inter_size,
-                             int64_t layer_num,
-                             int64_t mem_hidden_dim);
+                             int64_t    head_num,
+                             int64_t    head_size,
+                             int64_t    inter_size,
+                             int64_t    layer_num,
+                             int64_t    mem_hidden_dim);
 
     ~FasterTransformerDecoder();
 
-    std::vector<th::Tensor> forward(int64_t step,
+    std::vector<th::Tensor> forward(int64_t    step,
                                     th::Tensor from_tensor,
                                     th::Tensor memory_tensor,
                                     th::Tensor memory_sequence_length,
@@ -230,9 +235,9 @@ public:
     std::vector<th::Tensor> get_pickle_info() const;
 
 private:
-    const at::ScalarType _st;
-    IFDecoder* ftdecoder;
-    th::Tensor head_info;
+    const at::ScalarType    _st;
+    IFDecoder*              ftdecoder;
+    th::Tensor              head_info;
     std::vector<th::Tensor> weights;
 };
 

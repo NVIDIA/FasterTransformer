@@ -74,26 +74,26 @@ int main(int argc, char* argv[])
     return 0;
 }
 
-int read_start_ids(int batch_size,
+int read_start_ids(int               batch_size,
                    std::vector<int>* v_start_lengths,
                    std::vector<int>* v_start_ids,
-                   int& max_input_len,
-                   const int end_id,
-                   const int beam_width)
+                   int&              max_input_len,
+                   const int         end_id,
+                   const int         beam_width)
 {
     std::vector<std::vector<int>> tmp_start_ids;
-    std::vector<int> tmp_start_lengths;
+    std::vector<int>              tmp_start_lengths;
 
-    std::string file_name = "../examples/cpp/gpt/start_ids.csv";
+    std::string   file_name = "../examples/cpp/gpt/start_ids.csv";
     std::ifstream start_id_file(file_name, std::ios::in);
     if (start_id_file.is_open()) {
         std::string line;
-        int i0 = 0;
+        int         i0 = 0;
         while (std::getline(start_id_file, line)) {
             std::stringstream lineStream(line);
-            std::string vals;
-            int i1 = 0;
-            std::vector<int> tmp_vec;
+            std::string       vals;
+            int               i1 = 0;
+            std::vector<int>  tmp_vec;
             while (std::getline(lineStream, vals, ',')) {
                 tmp_vec.push_back(std::stoi(vals));
                 i1++;
@@ -145,26 +145,28 @@ int read_start_ids(int batch_size,
 template<typename T>
 void gpt_example(const INIReader reader)
 {
-    const std::string model_name = reader.Get("ft_instance_hyperparameter", "model_name");
-    const size_t max_batch_size = reader.GetInteger("ft_instance_hyperparameter", "max_batch_size");
-    const size_t max_seq_len = reader.GetInteger("ft_instance_hyperparameter", "max_seq_len");
-    const size_t beam_width = reader.GetInteger("ft_instance_hyperparameter", "beam_width");
-    const int top_k = reader.GetInteger("ft_instance_hyperparameter", "top_k");
-    const float top_p = reader.GetFloat("ft_instance_hyperparameter", "top_p");
-    const float temperature = reader.GetFloat("ft_instance_hyperparameter", "temperature");
-    const float repetition_penalty = reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty");
-    const std::string model_dir = std::string(reader.Get("ft_instance_hyperparameter", "model_dir"));
-    const bool sparse = static_cast<bool>(reader.GetInteger("ft_instance_hyperparameter", "sparse"));
-    const float len_penalty = 1.0f;
-    const float beam_search_diversity_rate = 0.0f;
+    const std::string model_name         = reader.Get("ft_instance_hyperparameter", "model_name");
+    const size_t      max_batch_size     = reader.GetInteger("ft_instance_hyperparameter", "max_batch_size");
+    const size_t      max_seq_len        = reader.GetInteger("ft_instance_hyperparameter", "max_seq_len");
+    const size_t      beam_width         = reader.GetInteger("ft_instance_hyperparameter", "beam_width");
+    const uint        top_k              = (uint)reader.GetInteger("ft_instance_hyperparameter", "top_k");
+    const float       top_p              = reader.GetFloat("ft_instance_hyperparameter", "top_p");
+    const float       temperature        = reader.GetFloat("ft_instance_hyperparameter", "temperature");
+    const float       repetition_penalty = reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty");
+    const std::string model_dir          = std::string(reader.Get("ft_instance_hyperparameter", "model_dir"));
+    const bool        sparse             = static_cast<bool>(reader.GetInteger("ft_instance_hyperparameter", "sparse"));
+    const float shared_contexts_ratio    = reader.GetFloat("ft_instance_hyperparameter", "shared_contexts_ratio", 1.0f);
+    const float len_penalty              = reader.GetFloat("ft_instance_hyperparameter", "len_penalty");
+    const float beam_search_diversity_rate =
+        reader.GetFloat("ft_instance_hyperparameter", "beam_search_diversity_rate");
     const unsigned long long int random_seed = 0;
 
-    const size_t head_num = reader.GetInteger(model_name, "head_num");
-    const size_t size_per_head = reader.GetInteger(model_name, "size_per_head");
-    const size_t vocab_size = reader.GetInteger(model_name, "vocab_size");
+    const size_t head_num       = reader.GetInteger(model_name, "head_num");
+    const size_t size_per_head  = reader.GetInteger(model_name, "size_per_head");
+    const size_t vocab_size     = reader.GetInteger(model_name, "vocab_size");
     const size_t decoder_layers = reader.GetInteger(model_name, "decoder_layers");
-    const size_t hidden_units = head_num * size_per_head;
-    const size_t inter_size = 4 * hidden_units;
+    const size_t hidden_units   = head_num * size_per_head;
+    const size_t inter_size     = 4 * hidden_units;
 
     const size_t request_batch_size = reader.GetInteger("request", "request_batch_size");
     // The length of tokens we hope this model to generate
@@ -178,12 +180,12 @@ void gpt_example(const INIReader reader)
     }
 
     const int start_id = 50256;
-    const int end_id = 50256;
+    const int end_id   = 50256;
 
     const int rank = 0;
 
     // Read ids of request from file.
-    int max_input_len = -1;
+    int              max_input_len = -1;
     std::vector<int> v_start_lengths;
     std::vector<int> v_start_ids;
     read_start_ids(request_batch_size, &v_start_lengths, &v_start_ids, max_input_len, end_id, 1);
@@ -192,7 +194,7 @@ void gpt_example(const INIReader reader)
     int* d_input_lengths;
     if (max_input_len == 0) {
         // unconditional case, no input ids, so do nothing.
-        d_input_ids = nullptr;
+        d_input_ids     = nullptr;
         d_input_lengths = nullptr;
     }
     else {
@@ -209,8 +211,8 @@ void gpt_example(const INIReader reader)
         exit(-1);
     }
 
-    cudaStream_t stream;
-    cublasHandle_t cublas_handle;
+    cudaStream_t     stream;
+    cublasHandle_t   cublas_handle;
     cublasLtHandle_t cublaslt_handle;
     cudaStreamCreate(&stream);
     cublasCreate(&cublas_handle);
@@ -221,7 +223,7 @@ void gpt_example(const INIReader reader)
     CHECK_CUSPARSE(cusparseLtInit(&cusparselt_handle));
     cublasAlgoMap* cublas_algo_map = new cublasAlgoMap(GEMM_CONFIG, SPGEMM_CONFIG);
 #else
-    cublasAlgoMap* cublas_algo_map = new cublasAlgoMap(GEMM_CONFIG);
+    cublasAlgoMap*  cublas_algo_map = new cublasAlgoMap(GEMM_CONFIG);
 #endif
 
     Allocator<AllocatorType::CUDA> allocator(getDevice());
@@ -249,8 +251,7 @@ void gpt_example(const INIReader reader)
     struct cudaDeviceProp prop;
     check_cuda_error(cudaGetDeviceProperties(&prop, 0));
 
-    fastertransformer::ParallelGptWeight<T> gpt_weights(
-        hidden_units, inter_size, vocab_size, decoder_layers, max_seq_len, 1, 0, 1, 0, 0);
+    ParallelGptWeight<T> gpt_weights(hidden_units, inter_size, vocab_size, decoder_layers, max_seq_len, 1, 0, 1, 0, 0);
 
     gpt_weights.loadModel(model_dir);
 
@@ -276,12 +277,15 @@ void gpt_example(const INIReader reader)
                                         vocab_size,
                                         start_id,
                                         end_id,
+                                        end_id + 1,  // p_prompt_tuning token start id
+                                        PromptLearningType::no_prompt,
+                                        gptVariantParams{},
                                         0.0f,  // beam_search_diversity_rate,
                                         0,     // top_k,
                                         0.0,   // top_p,
                                         0,     // random_seed,
                                         1.0f,  // temperature,
-                                        1.0f,  // len_penalty,
+                                        0.0f,  // len_penalty,
                                         1.0f,  // repetition_penalty,
                                         tensor_para,
                                         pipeline_para,
@@ -291,20 +295,24 @@ void gpt_example(const INIReader reader)
                                         false,
                                         &prop,
                                         sparse,
-                                        0);
+                                        0,
+                                        nullptr,
+                                        0,
+                                        true,
+                                        shared_contexts_ratio);
 
     int* d_output_ids;
-    int* d_parent_ids;
     int* d_sequence_lengths;
     deviceMalloc(&d_output_ids, request_batch_size * beam_width * total_output_len, false);
-    deviceMalloc(&d_parent_ids, request_batch_size * beam_width * total_output_len, false);
     deviceMalloc(&d_sequence_lengths, request_batch_size * beam_width, false);
+    std::vector<uint32_t> output_seq_len(request_batch_size, total_output_len);
 
     std::unordered_map<std::string, Tensor> input_tensors = std::unordered_map<std::string, Tensor>{
         {"input_ids",
          Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size, (size_t)max_input_len}, d_input_ids}},
         {"input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size}, d_input_lengths}},
-        {"max_output_seq_len", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{1}, &total_output_len}},
+        {"output_seq_len",
+         Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<size_t>{request_batch_size}, output_seq_len.data()}},
         {"temperature", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &temperature}},
         {"len_penalty", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &len_penalty}},
         {"repetition_penalty", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &repetition_penalty}}};
@@ -319,7 +327,7 @@ void gpt_example(const INIReader reader)
             input_tensors.insert({"runtime_top_p", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &top_p}});
         }
         if (top_k != 0) {
-            input_tensors.insert({"runtime_top_k", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{1}, &top_k}});
+            input_tensors.insert({"runtime_top_k", Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<size_t>{1}, &top_k}});
         }
     }
 
@@ -329,16 +337,11 @@ void gpt_example(const INIReader reader)
                 TYPE_INT32,
                 std::vector<size_t>{request_batch_size, beam_width, (size_t)total_output_len},
                 d_output_ids}},
-        {"parent_ids",
-         Tensor{MEMORY_GPU,
-                TYPE_INT32,
-                std::vector<size_t>{(size_t)total_output_len, request_batch_size, beam_width},
-                d_parent_ids}},
         {"sequence_length",
          Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size, beam_width}, d_sequence_lengths}}};
 
     float* output_log_probs = nullptr;
-    float* d_cum_log_probs = nullptr;
+    float* d_cum_log_probs  = nullptr;
     if (is_return_log_probs) {
         deviceMalloc(&output_log_probs, request_batch_size * beam_width * request_output_len);
         output_tensors.insert({"output_log_probs",
@@ -400,14 +403,14 @@ void gpt_example(const INIReader reader)
 
     if (rank == 0) {
 
-        std::string fName = "out";
-        auto outFile = std::ofstream(fName, std::ios::out);
+        std::string fName   = "out";
+        auto        outFile = std::ofstream(fName, std::ios::out);
         if (!outFile.is_open()) {
             printf("[WARNING] Cannot write results into output file %s \n", fName.c_str());
         }
         else {
             size_t outCount = total_output_len * request_batch_size * beam_width;
-            int* hBuf = new int[outCount];
+            int*   hBuf     = new int[outCount];
             cudaD2Hcpy(hBuf, d_output_ids, outCount);
 
             {
@@ -436,8 +439,8 @@ void gpt_example(const INIReader reader)
         outFile.close();
 
         if (d_cum_log_probs != nullptr) {
-            std::string logprob_fname = "logprob.out";
-            std::ofstream logprob_file = std::ofstream("logprob.out", std::ios::out);
+            std::string   logprob_fname = "logprob.out";
+            std::ofstream logprob_file  = std::ofstream("logprob.out", std::ios::out);
             if (!logprob_file.is_open()) {
                 printf("[WARNING] Cannot write results into output file %s \n", logprob_fname.c_str());
             }

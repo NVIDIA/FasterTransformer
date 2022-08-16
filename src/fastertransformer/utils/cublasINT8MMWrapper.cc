@@ -22,33 +22,33 @@
 
 namespace fastertransformer {
 cublasINT8MMWrapper::cublasINT8MMWrapper(cublasLtHandle_t cublaslt_handle,
-                                         cudaStream_t stream,
-                                         cublasAlgoMap* cublas_algo_map,
-                                         std::mutex* mu,
-                                         bool use_ORDER_COL32_2R_4R4):
+                                         cudaStream_t     stream,
+                                         cublasAlgoMap*   cublas_algo_map,
+                                         std::mutex*      mu,
+                                         bool             use_ORDER_COL32_2R_4R4):
     cublasMMWrapper(nullptr, cublaslt_handle, stream, cublas_algo_map, mu, nullptr),
     use_ORDER_COL32_2R_4R4_(use_ORDER_COL32_2R_4R4)
 {
 }
 
-cublasINT8MMWrapper::cublasINT8MMWrapper(cublasHandle_t cublas_handle,
+cublasINT8MMWrapper::cublasINT8MMWrapper(cublasHandle_t   cublas_handle,
                                          cublasLtHandle_t cublaslt_handle,
-                                         cudaStream_t stream,
-                                         cublasAlgoMap* cublas_algo_map,
-                                         std::mutex* mu,
-                                         bool use_ORDER_COL32_2R_4R4):
+                                         cudaStream_t     stream,
+                                         cublasAlgoMap*   cublas_algo_map,
+                                         std::mutex*      mu,
+                                         bool             use_ORDER_COL32_2R_4R4):
     cublasMMWrapper(cublas_handle, cublaslt_handle, stream, cublas_algo_map, mu, nullptr),
     use_ORDER_COL32_2R_4R4_(use_ORDER_COL32_2R_4R4)
 {
 }
 
 #ifdef SPARSITY_ENABLED
-cublasINT8MMWrapper::cublasINT8MMWrapper(cublasLtHandle_t cublaslt_handle,
+cublasINT8MMWrapper::cublasINT8MMWrapper(cublasLtHandle_t   cublaslt_handle,
                                          cusparseLtHandle_t cusparselt_handle,
-                                         cudaStream_t stream,
-                                         cublasAlgoMap* cublas_algo_map,
-                                         std::mutex* mu,
-                                         bool use_ORDER_COL32_2R_4R4):
+                                         cudaStream_t       stream,
+                                         cublasAlgoMap*     cublas_algo_map,
+                                         std::mutex*        mu,
+                                         bool               use_ORDER_COL32_2R_4R4):
     cublasMMWrapper(nullptr, cublaslt_handle, cusparselt_handle, stream, cublas_algo_map, mu, nullptr),
     use_ORDER_COL32_2R_4R4_(use_ORDER_COL32_2R_4R4)
 {
@@ -81,14 +81,14 @@ cublasINT8MMWrapper::cublasINT8MMWrapper(const cublasINT8MMWrapper& wrapper):
 // ATransform should be m*n, CUBLASLT_ORDER_COL32
 // kernel should be n*k, CUBLASLT_ORDER_COL4_4R2_8C or CUBLASLT_ORDER_COL32_2R_4R4
 // res is m*n, CUBLASLT_ORDER_COL32
-void cublasINT8MMWrapper::Gemm(int* res,
-                               int batchCount,
-                               int m,
-                               int n,
-                               int k,
-                               int64_t stridea,
-                               int64_t strideb,
-                               int64_t stridec,
+void cublasINT8MMWrapper::Gemm(int*          res,
+                               int           batchCount,
+                               int           m,
+                               int           n,
+                               int           k,
+                               int64_t       stridea,
+                               int64_t       strideb,
+                               int64_t       stridec,
                                const int8_t* ATransform,
                                const int8_t* kernel)
 {
@@ -99,11 +99,11 @@ void cublasINT8MMWrapper::Gemm(int* res,
 #else
     cudaDataType_t computeType = CUDA_R_32I;
 #endif
-    cublasLtMatmulDesc_t matmulDesc;
+    cublasLtMatmulDesc_t   matmulDesc;
     cublasLtMatrixLayout_t AtransformDesc = NULL;
     cublasLtMatrixLayout_t BtransformDesc = NULL;
     cublasLtMatrixLayout_t CtransformDesc = NULL;
-    cublasLtOrder_t order_COL32 = CUBLASLT_ORDER_COL32;
+    cublasLtOrder_t        order_COL32    = CUBLASLT_ORDER_COL32;
 
     cublasLtOrder_t order_matrixB;
 #if (CUDART_VERSION >= 11000)
@@ -114,7 +114,7 @@ void cublasINT8MMWrapper::Gemm(int* res,
         order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
     }
 #else
-    order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
+    order_matrixB              = CUBLASLT_ORDER_COL4_4R2_8C;
 #endif
 
     int ldaTransform = 32 * m;
@@ -157,11 +157,11 @@ void cublasINT8MMWrapper::Gemm(int* res,
     }
 
     int alphaI = 1;
-    int betaI = 0;
+    int betaI  = 0;
 
     // get algo
     cublasLtMatmulAlgo_t algo;
-    int findAlgo = 0;
+    int                  findAlgo = 0;
     if (cublas_algo_map_->isExist(batchCount, m, n, k, INT8_DATATYPE)) {
         // printf("find algo %s\n", markStr.c_str());
         findAlgo = 1;
@@ -201,10 +201,10 @@ void cublasINT8MMWrapper::Gemm(int* res,
         else {
             algoId = 6;
         }
-        int swizzle = 0;
-        int customOption = 0;
-        int tile = 20;
-        int splitK_val = 0;
+        int swizzle         = 0;
+        int customOption    = 0;
+        int tile            = 20;
+        int splitK_val      = 0;
         int reductionScheme = 0;
         cublasLtMatmulAlgoInit(
             cublaslt_handle_, computeType, CUDA_R_32I, CUDA_R_8I, CUDA_R_8I, CUDA_R_32I, CUDA_R_32I, algoId, &algo);
@@ -256,15 +256,15 @@ void cublasINT8MMWrapper::Gemm(int* res,
 // ATransform should be m*k CUBLASLT_ORDER_COL32
 // kernel should be n*k CUBLASLT_ORDER_COL4_4R2_8C
 // res is m*n CUBLASLT_ORDER_COL32
-void cublasINT8MMWrapper::Gemm(int8_t* res,
-                               int batchCount,
-                               int m,
-                               int n,
-                               int k,
-                               int64_t stridea,
-                               int64_t strideb,
-                               int64_t stridec,
-                               const float alpha,
+void cublasINT8MMWrapper::Gemm(int8_t*       res,
+                               int           batchCount,
+                               int           m,
+                               int           n,
+                               int           k,
+                               int64_t       stridea,
+                               int64_t       strideb,
+                               int64_t       stridec,
+                               const float   alpha,
                                const int8_t* ATransform,
                                const int8_t* kernel)
 {
@@ -278,11 +278,11 @@ void cublasINT8MMWrapper::Gemm(int8_t* res,
 #else
     cudaDataType_t computeType = CUDA_R_32I;
 #endif
-    cublasLtMatmulDesc_t matmulDesc;
+    cublasLtMatmulDesc_t   matmulDesc;
     cublasLtMatrixLayout_t AtransformDesc = NULL;
     cublasLtMatrixLayout_t BtransformDesc = NULL;
     cublasLtMatrixLayout_t CtransformDesc = NULL;
-    cublasLtOrder_t order_COL32 = CUBLASLT_ORDER_COL32;
+    cublasLtOrder_t        order_COL32    = CUBLASLT_ORDER_COL32;
 
     cublasLtOrder_t order_matrixB;
 #if (CUDART_VERSION >= 11000)
@@ -293,7 +293,7 @@ void cublasINT8MMWrapper::Gemm(int8_t* res,
         order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
     }
 #else
-    order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
+    order_matrixB              = CUBLASLT_ORDER_COL4_4R2_8C;
 #endif
 
     int ldaTransform = 32 * m;
@@ -342,7 +342,7 @@ void cublasINT8MMWrapper::Gemm(int8_t* res,
 
     // get algo
     cublasLtMatmulAlgo_t algo;
-    int findAlgo = 0;
+    int                  findAlgo = 0;
     if (cublas_algo_map_->isExist(batchCount, m, n, k, INT8_DATATYPE)) {
         findAlgo = 1;
 
@@ -381,10 +381,10 @@ void cublasINT8MMWrapper::Gemm(int8_t* res,
         else {
             algoId = 6;
         }
-        int swizzle = 0;
-        int customOption = 0;
-        int tile = 20;
-        int splitK_val = 0;
+        int swizzle         = 0;
+        int customOption    = 0;
+        int tile            = 20;
+        int splitK_val      = 0;
         int reductionScheme = 0;
         cublasLtMatmulAlgoInit(
             cublaslt_handle_, computeType, CUDA_R_32F, CUDA_R_8I, CUDA_R_8I, CUDA_R_8I, CUDA_R_8I, algoId, &algo);
@@ -437,10 +437,10 @@ template<typename T>
 int cublasINT8MMWrapper::getFusedINT8QKVType(const int k, const int n, const AttentionWeight<T>* attention_weights)
 {
 
-    int fusedINT8QKV_type = 0;
-    const int8_t* Q_weight = (const int8_t*)(attention_weights->query_weight.kernel);
-    const int8_t* K_weight = (const int8_t*)(attention_weights->key_weight.kernel);
-    const int8_t* V_weight = (const int8_t*)(attention_weights->value_weight.kernel);
+    int           fusedINT8QKV_type = 0;
+    const int8_t* Q_weight          = (const int8_t*)(attention_weights->query_weight.kernel);
+    const int8_t* K_weight          = (const int8_t*)(attention_weights->key_weight.kernel);
+    const int8_t* V_weight          = (const int8_t*)(attention_weights->value_weight.kernel);
     // for QKV weight are DataType_ & continue
     if ((attention_weights->query_weight.kernel + n * k == attention_weights->key_weight.kernel)
         && (attention_weights->key_weight.kernel + n * k == attention_weights->value_weight.kernel)) {
@@ -470,29 +470,29 @@ cublasINT8MMWrapper::getFusedINT8QKVType(const int k, const int n, const Attenti
 void cublasINT8MMWrapper::SpGemm(
     const int m, const int n, const int k, const float alpha, const void* A, const void* B, void* C)
 {
-    cudaDataType_t Atype = CUDA_R_8I;
-    cudaDataType_t Btype = CUDA_R_8I;
-    cudaDataType_t Ctype = CUDA_R_8I;
-    cusparseComputeType compute_type = CUSPARSE_COMPUTE_32I;
-    cusparseOrder_t col_order = CUSPARSE_ORDER_COL;
-    cusparseOrder_t row_order = CUSPARSE_ORDER_ROW;
-    cusparseOperation_t opA = CUSPARSE_OPERATION_NON_TRANSPOSE;
-    cusparseOperation_t opB = CUSPARSE_OPERATION_NON_TRANSPOSE;
-    cusparseLtMatmulDescriptor_t matmul;
+    cudaDataType_t                 Atype        = CUDA_R_8I;
+    cudaDataType_t                 Btype        = CUDA_R_8I;
+    cudaDataType_t                 Ctype        = CUDA_R_8I;
+    cusparseComputeType            compute_type = CUSPARSE_COMPUTE_32I;
+    cusparseOrder_t                col_order    = CUSPARSE_ORDER_COL;
+    cusparseOrder_t                row_order    = CUSPARSE_ORDER_ROW;
+    cusparseOperation_t            opA          = CUSPARSE_OPERATION_NON_TRANSPOSE;
+    cusparseOperation_t            opB          = CUSPARSE_OPERATION_NON_TRANSPOSE;
+    cusparseLtMatmulDescriptor_t   matmul;
     cusparseLtMatmulAlgSelection_t alg_sel;
-    cusparseLtMatmulPlan_t plan;
+    cusparseLtMatmulPlan_t         plan;
 
-    auto num_A_rows = m;
-    auto num_A_cols = k;
-    auto num_B_rows = k;
-    auto num_B_cols = n;
-    auto num_C_rows = m;
-    auto num_C_cols = n;
-    unsigned alignment = 16;
-    auto lda = num_A_cols;
-    auto ldb = num_B_rows;
-    auto ldc = num_C_rows;
-    float _beta(0.0f);
+    auto     num_A_rows = m;
+    auto     num_A_cols = k;
+    auto     num_B_rows = k;
+    auto     num_B_cols = n;
+    auto     num_C_rows = m;
+    auto     num_C_cols = n;
+    unsigned alignment  = 16;
+    auto     lda        = num_A_cols;
+    auto     ldb        = num_B_rows;
+    auto     ldc        = num_C_rows;
+    float    _beta(0.0f);
 
     char mark[256];
     sprintf(mark, "%d_%d_%d_%d", 1, m, n, k);
@@ -546,9 +546,9 @@ void cublasINT8MMWrapper::SpGemm(
     CHECK_CUSPARSE(cusparseLtMatmulGetWorkspace(&cusparselt_handle_, &alg_sel, &workspace_size))
     CHECK_CUSPARSE(cusparseLtMatmulPlanInit(&cusparselt_handle_, &plan, &matmul, &alg_sel, workspace_size))
 
-    void* d_workspace = nullptr;
-    int num_streams = 1;
-    cudaStream_t streams[1] = {stream_};
+    void*        d_workspace = nullptr;
+    int          num_streams = 1;
+    cudaStream_t streams[1]  = {stream_};
     CHECK_CUSPARSE(
         cusparseLtMatmul(&cusparselt_handle_, &plan, &alpha, A, B, &_beta, C, C, d_workspace, streams, num_streams))
     CHECK_CUSPARSE(cusparseLtMatmulPlanDestroy(&plan))

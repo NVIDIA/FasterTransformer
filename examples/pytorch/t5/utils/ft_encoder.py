@@ -17,15 +17,28 @@ import torch.nn as nn
 import torch.distributed as dist
 import numpy as np
 
+
 class FTT5EncoderWeight(object):
-    def __init__(self, config, tensor_para_size, pipeline_para_size, t5_with_bias = False, position_embedding_type = 0):
+    def __init__(
+            self,
+            config,
+            tensor_para_size,
+            pipeline_para_size,
+            *,
+            t5_with_bias=False,
+            use_gated_activation=False,
+            position_embedding_type=0,
+            weight_data_type
+    ):
         self.num_layer = config.num_layers
         self.config = config
         self.tensor_para_size = tensor_para_size
         self.pipeline_para_size = pipeline_para_size
         self.t5_with_bias = t5_with_bias
-        self.real_weights_num = 20 if t5_with_bias else 11
+        self.use_gated_activation = use_gated_activation
+        self.real_weights_num = 22  # assume all weights are allocated
         self.position_embedding_type = position_embedding_type
+        self.weight_data_type = weight_data_type
         self.w = []
         self.use_mpi = dist.is_mpi_available()
 
@@ -33,7 +46,7 @@ class FTT5EncoderWeight(object):
             try:
                 dist.init_process_group(backend='mpi')
             except:
-                print("[INFO] WARNING: Exception occurred in dist.init_process_group(backend='mpi'). Maybe the process group has been initialized somewhere else.")
+                print("[INFO] WARNING: Exception occurred in dist.init_process_group(backend = 'mpi'). Maybe the process group has been initialized somewhere else.")
         else:
             print("[INFO] MPI is not available in this PyTorch build.")
             assert tensor_para_size == 1, "[FATAL] MPI is required for tensor_para_size > 1."
@@ -45,14 +58,18 @@ class FTT5EncoderWeight(object):
         torch.cuda.set_device(self.device)
 
         world_size = dist.get_world_size() if self.use_mpi else 1
-        assert world_size == tensor_para_size * pipeline_para_size, "[ERROR] world_size != tensor_para_size * pipeline_para_size"
+        assert world_size == tensor_para_size * \
+            pipeline_para_size, "[ERROR] world_size != tensor_para_size * pipeline_para_size"
         self.tensor_para_rank = self.rank % self.tensor_para_size
         self.pipeline_para_rank = self.rank // self.tensor_para_size
 
-    def load_from_model(self, model): # assume this only applies to huggingface models
-        start_layer = self.pipeline_para_rank * self.num_layer //  self.pipeline_para_size
-        end_layer = (self.pipeline_para_rank + 1) * self.num_layer //  self.pipeline_para_size
-        
+    def load_from_model(self, model):  # assume this only applies to huggingface models
+        start_layer = self.pipeline_para_rank * self.num_layer // self.pipeline_para_size
+        end_layer = (self.pipeline_para_rank + 1) * self.num_layer // self.pipeline_para_size
+
+        np_weight_dtype = self.weight_data_type
+        torch_weight_dtype = {np.float32: torch.float32, np.float16: torch.float16}[np_weight_dtype]
+
         encoder_weight_dict = {}
         for name, param in model.named_parameters():
             if param.dim() == 2:
@@ -64,21 +81,31 @@ class FTT5EncoderWeight(object):
             if name.find("encoder.block") != -1 or name.find("encoder.final_layer_norm.weight") != -1:
                 encoder_weight_dict[name] = param_t
 
-        t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.0.layer_norm.weight".format(i)] for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+        t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.0.layer_norm.weight".format(i)]
+                        for i in range(start_layer, end_layer)], 0).contiguous().cuda()
         self.w.append(t)
-        t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.0.SelfAttention.q.weight".format(i)] for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+        t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.0.SelfAttention.q.weight".format(i)]
+                        for i in range(start_layer, end_layer)], 0).contiguous().cuda()
         self.w.append(t.split(t.shape[-1] // self.tensor_para_size, dim=-1)[self.tensor_para_rank].contiguous())
-        t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.0.SelfAttention.k.weight".format(i)] for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+        t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.0.SelfAttention.k.weight".format(i)]
+                        for i in range(start_layer, end_layer)], 0).contiguous().cuda()
         self.w.append(t.split(t.shape[-1] // self.tensor_para_size, dim=-1)[self.tensor_para_rank].contiguous())
-        t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.0.SelfAttention.v.weight".format(i)] for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+        t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.0.SelfAttention.v.weight".format(i)]
+                        for i in range(start_layer, end_layer)], 0).contiguous().cuda()
         self.w.append(t.split(t.shape[-1] // self.tensor_para_size, dim=-1)[self.tensor_para_rank].contiguous())
-        t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.0.SelfAttention.o.weight".format(i)] for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+        t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.0.SelfAttention.o.weight".format(i)]
+                        for i in range(start_layer, end_layer)], 0).contiguous().cuda()
         self.w.append(t.split(t.shape[1] // self.tensor_para_size, dim=1)[self.tensor_para_rank].contiguous())
-        t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.1.layer_norm.weight".format(i)] for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+        t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.1.layer_norm.weight".format(i)]
+                        for i in range(start_layer, end_layer)], 0).contiguous().cuda()
         self.w.append(t)
-        t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.1.DenseReluDense.wi.weight".format(i)] for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+        t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.1.DenseReluDense.wi.weight".format(i)]
+                        for i in range(start_layer, end_layer)], 0).contiguous().cuda()
         self.w.append(t.split(t.shape[-1] // self.tensor_para_size, dim=-1)[self.tensor_para_rank].contiguous())
-        t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.1.DenseReluDense.wo.weight".format(i)] for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+        # add empty wi2
+        self.w.append(torch.empty((1, 1), dtype=torch_weight_dtype).contiguous().cuda())
+        t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.1.DenseReluDense.wo.weight".format(i)]
+                        for i in range(start_layer, end_layer)], 0).contiguous().cuda()
         self.w.append(t.split(t.shape[1] // self.tensor_para_size, dim=1)[self.tensor_para_rank].contiguous())
         t = encoder_weight_dict["encoder.final_layer_norm.weight"].contiguous().cuda()
         self.w.append(t)
@@ -87,77 +114,127 @@ class FTT5EncoderWeight(object):
         t = model.get_input_embeddings().weight.contiguous().cuda()
         self.w.append(t)
 
-        #TODO: pass None Type to Torch Op
-        for i in range(9):
-            self.w.append(torch.empty((1,1), dtype=torch.float32).contiguous().cuda())
-        
-    def load_from_bin(self, ckpt_path): # assume this only applies to megatron models
-        start_layer = self.pipeline_para_rank * self.num_layer //  self.pipeline_para_size
-        end_layer = (self.pipeline_para_rank + 1) * self.num_layer //  self.pipeline_para_size
+        # TODO: pass None Type to Torch Op
+        for i in range(10):
+            self.w.append(torch.empty((1, 1), dtype=torch_weight_dtype).contiguous().cuda())
+
+    def load_from_bin(self, ckpt_path):  # assume this only applies to megatron models
+        start_layer = self.pipeline_para_rank * self.num_layer // self.pipeline_para_size
+        end_layer = (self.pipeline_para_rank + 1) * self.num_layer // self.pipeline_para_size
+
+        np_weight_dtype = self.weight_data_type
+        torch_weight_dtype = {np.float32: torch.float32, np.float16: torch.float16}[np_weight_dtype]
+
         # load by binary files
-        t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.0.layer_norm.weight.bin", dtype=np.single)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+        t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.0.layer_norm.weight.bin",
+                        dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
         self.w.append(t)
-        t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.0.SelfAttention.q.weight.{self.tensor_para_rank}.bin", dtype=np.single)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+        t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.0.SelfAttention.q.weight.{self.tensor_para_rank}.bin",
+                        dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
         self.w.append(t)
-        t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.0.SelfAttention.k.weight.{self.tensor_para_rank}.bin", dtype=np.single)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+        t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.0.SelfAttention.k.weight.{self.tensor_para_rank}.bin",
+                        dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
         self.w.append(t)
-        t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.0.SelfAttention.v.weight.{self.tensor_para_rank}.bin", dtype=np.single)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+        t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.0.SelfAttention.v.weight.{self.tensor_para_rank}.bin",
+                        dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
         self.w.append(t)
-        t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.0.SelfAttention.o.weight.{self.tensor_para_rank}.bin", dtype=np.single)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+        t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.0.SelfAttention.o.weight.{self.tensor_para_rank}.bin",
+                        dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
         self.w.append(t)
-        t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.1.layer_norm.weight.bin", dtype=np.single)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+        t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.1.layer_norm.weight.bin",
+                        dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
         self.w.append(t)
-        t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.1.DenseReluDense.wi.weight.{self.tensor_para_rank}.bin", dtype=np.single)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+        t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.1.DenseReluDense.wi.weight.{self.tensor_para_rank}.bin",
+                        dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
         self.w.append(t)
-        t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.1.DenseReluDense.wo.weight.{self.tensor_para_rank}.bin", dtype=np.single)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+        if self.use_gated_activation:
+            t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.1.DenseReluDense.wi2.weight.{self.tensor_para_rank}.bin",
+                            dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+            self.w.append(t)
+        else:
+            self.w.append(torch.empty((1, 1), dtype=torch_weight_dtype).contiguous().cuda())
+        t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.1.DenseReluDense.wo.weight.{self.tensor_para_rank}.bin",
+                        dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
         self.w.append(t)
-        t = torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.final_layer_norm.weight.bin", dtype=np.single)).contiguous().cuda()
+        t = torch.from_numpy(np.fromfile(
+            f"{ckpt_path}/encoder.final_layer_norm.weight.bin", dtype=np_weight_dtype)).contiguous().cuda()
         self.w.append(t)
         t = None
-        if (self.position_embedding_type == 0):   
-            t = torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight.{self.tensor_para_rank}.bin", dtype=np.single)).contiguous().cuda()
+        if (self.position_embedding_type == 0):
+            t = torch.from_numpy(np.fromfile(
+                f"{ckpt_path}/encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight.{self.tensor_para_rank}.bin", dtype=np_weight_dtype)).contiguous().cuda()
         else:
-            t = torch.from_numpy(np.fromfile(f"{ckpt_path}/shared.ape.bin", dtype=np.single)).contiguous().cuda()
+            t = torch.from_numpy(np.fromfile(f"{ckpt_path}/shared.ape.bin", dtype=np_weight_dtype)).contiguous().cuda()
         self.w.append(t)
-        t = torch.from_numpy(np.fromfile(f"{ckpt_path}/shared.weight_T.bin", dtype=np.single).reshape([self.config.d_model, self.config.vocab_size])).contiguous().cuda()
+        t = torch.from_numpy(np.fromfile(f"{ckpt_path}/shared.weight_T.bin", dtype=np_weight_dtype).reshape(
+            [self.config.d_model, self.config.vocab_size])).contiguous().cuda()
         self.w.append(t)
-        
-        # add 9 additional bias if it is t5 megatron structure
+
+        # add 10 additional bias if it is t5 megatron structure
         if self.t5_with_bias:
-            t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.0.layer_norm.bias.bin", dtype=np.single)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+            t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.0.layer_norm.bias.bin",
+                            dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
             self.w.append(t)
-            t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.0.SelfAttention.q.bias.{self.tensor_para_rank}.bin", dtype=np.single)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+            t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.0.SelfAttention.q.bias.{self.tensor_para_rank}.bin",
+                            dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
             self.w.append(t)
-            t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.0.SelfAttention.k.bias.{self.tensor_para_rank}.bin", dtype=np.single)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+            t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.0.SelfAttention.k.bias.{self.tensor_para_rank}.bin",
+                            dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
             self.w.append(t)
-            t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.0.SelfAttention.v.bias.{self.tensor_para_rank}.bin", dtype=np.single)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+            t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.0.SelfAttention.v.bias.{self.tensor_para_rank}.bin",
+                            dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
             self.w.append(t)
-            t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.0.SelfAttention.o.bias.bin", dtype=np.single)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+            t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.0.SelfAttention.o.bias.bin",
+                            dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
             self.w.append(t)
-            t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.1.layer_norm.bias.bin", dtype=np.single)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+            t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.1.layer_norm.bias.bin",
+                            dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
             self.w.append(t)
-            t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.1.DenseReluDense.wi.bias.{self.tensor_para_rank}.bin", dtype=np.single)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+            t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.1.DenseReluDense.wi.bias.{self.tensor_para_rank}.bin",
+                            dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
             self.w.append(t)
-            t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.1.DenseReluDense.wo.bias.bin", dtype=np.single)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+            if self.use_gated_activation:
+                t = torch.stack([torch.from_numpy(np.fromfile(
+                    f"{ckpt_path}/encoder.block.{i}.layer.1.DenseReluDense.wi2.bias.{self.tensor_para_rank}.bin", dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+                self.w.append(t)
+            else:
+                self.w.append(torch.empty((1, 1), dtype=torch_weight_dtype).contiguous().cuda())
+            t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.block.{i}.layer.1.DenseReluDense.wo.bias.bin",
+                            dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
             self.w.append(t)
-            t = torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.final_layer_norm.bias.bin", dtype=np.single)).contiguous().cuda()
+            t = torch.from_numpy(np.fromfile(
+                f"{ckpt_path}/encoder.final_layer_norm.bias.bin", dtype=np_weight_dtype)).contiguous().cuda()
             self.w.append(t)
         else:
-            #TODO: pass None Type to Torch Op
-            for i in range(9):
-                self.w.append(torch.empty((1,1), dtype=torch.float32).contiguous().cuda())
-        
+            # TODO: pass None Type to Torch Op
+            for i in range(10):
+                self.w.append(torch.empty((1, 1), dtype=torch_weight_dtype).contiguous().cuda())
+
     def to_cuda(self):
         for i in range(self.real_weights_num):
             self.w[i] = self.w[i].cuda()
+
+    def to_float(self):
+        for i in range(self.real_weights_num):
+            self.w[i] = self.w[i].float()
 
     def to_half(self):
         for i in range(self.real_weights_num):
             self.w[i] = self.w[i].half()
 
+    def to_single(self):
+        for i in range(self.real_weights_num):
+            self.w[i] = self.w[i].float()
+
+    def to_bfloat16(self):
+        for i in range(self.real_weights_num):
+            self.w[i] = self.w[i].bfloat16()
+
+
 class FTT5Encoder(nn.Module):
     def __init__(self, encoder_weight_list, lib_path, head_num, head_size, inter_size, d_model, is_remove_padding,
-                 num_layer, num_bucket=32, max_distance=128, sparse=False, q_scaling=1.0, tensor_para_size=1, pipeline_para_size=1, t5_with_bias=False, position_embedding_type=0):
+                 num_layer, num_bucket=32, max_distance=128, sparse=False, q_scaling=1.0, tensor_para_size=1, pipeline_para_size=1, t5_with_bias=False,
+                 position_embedding_type=0, activation_type="relu"):
         super().__init__()
 
         self.use_mpi = dist.is_mpi_available()
@@ -166,7 +243,7 @@ class FTT5Encoder(nn.Module):
             try:
                 dist.init_process_group(backend='mpi')
             except:
-                print("[INFO] WARNING: Exception occurred in dist.init_process_group(backend='mpi'). Maybe the process group has been initialized somewhere else.")
+                print("[INFO] WARNING: Exception occurred in dist.init_process_group(backend = 'mpi'). Maybe the process group has been initialized somewhere else.")
         else:
             print("[INFO] MPI is not available in this PyTorch build.")
             assert tensor_para_size == 1, "[FATAL] MPI is required for tensor_para_size > 1."
@@ -175,11 +252,13 @@ class FTT5Encoder(nn.Module):
         torch.classes.load_library(lib_path)
         try:
             self.encoder = torch.classes.FasterTransformer.T5Encoder(*encoder_weight_list, head_num, head_size, inter_size, d_model,
-                is_remove_padding, num_layer, num_bucket, max_distance, sparse, q_scaling, tensor_para_size, pipeline_para_size, t5_with_bias, position_embedding_type)
+                                                                     is_remove_padding, num_layer, num_bucket, max_distance, sparse, q_scaling, tensor_para_size, pipeline_para_size,
+                                                                     t5_with_bias, position_embedding_type, activation_type)
         except:
             self.encoder = torch.classes.FasterTransformerT5Encoder(*encoder_weight_list, head_num, head_size, inter_size, d_model,
-                is_remove_padding, num_layer, num_bucket, max_distance, sparse, q_scaling, tensor_para_size, pipeline_para_size, t5_with_bias, position_embedding_type)
+                                                                    is_remove_padding, num_layer, num_bucket, max_distance, sparse, q_scaling, tensor_para_size, pipeline_para_size,
+                                                                    t5_with_bias, position_embedding_type, activation_type)
 
-    def forward(self, input, seq_len):
-        output = self.encoder.forward(input, seq_len)
+    def forward(self, input, seq_len, inputs_embeds=None):
+        output = self.encoder.forward(input, seq_len, inputs_embeds)
         return output

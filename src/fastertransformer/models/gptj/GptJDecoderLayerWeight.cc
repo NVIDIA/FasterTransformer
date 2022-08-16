@@ -41,17 +41,17 @@ GptJDecoderLayerWeight<T>::~GptJDecoderLayerWeight()
             deviceFree(weights_ptr[i]);
         }
 
-        pre_layernorm_weights.beta = nullptr;
-        pre_layernorm_weights.gamma = nullptr;
-        self_attention_weights.query_weight.kernel = nullptr;
-        self_attention_weights.query_weight.bias = nullptr;
+        pre_layernorm_weights.beta                            = nullptr;
+        pre_layernorm_weights.gamma                           = nullptr;
+        self_attention_weights.query_weight.kernel            = nullptr;
+        self_attention_weights.query_weight.bias              = nullptr;
         self_attention_weights.attention_output_weight.kernel = nullptr;
 
         ffn_weights.intermediate_weight.kernel = nullptr;
-        ffn_weights.intermediate_weight.bias = nullptr;
-        ffn_weights.output_weight.kernel = nullptr;
-        ffn_weights.output_weight.bias = nullptr;
-        is_maintain_buffer = false;
+        ffn_weights.intermediate_weight.bias   = nullptr;
+        ffn_weights.output_weight.kernel       = nullptr;
+        ffn_weights.output_weight.bias         = nullptr;
+        is_maintain_buffer                     = false;
     }
 }
 
@@ -81,8 +81,8 @@ GptJDecoderLayerWeight<T>::GptJDecoderLayerWeight(const GptJDecoderLayerWeight& 
 template<typename T>
 GptJDecoderLayerWeight<T>& GptJDecoderLayerWeight<T>::operator=(const GptJDecoderLayerWeight& other)
 {
-    hidden_units_ = other.hidden_units_;
-    inter_size_ = other.inter_size_;
+    hidden_units_     = other.hidden_units_;
+    inter_size_       = other.inter_size_;
     tensor_para_size_ = other.tensor_para_size_;
     tensor_para_rank_ = other.tensor_para_rank_;
 
@@ -109,48 +109,51 @@ void GptJDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType m
     FT_CHECK(is_maintain_buffer == true);
     const std::string rank_spec = std::to_string(tensor_para_rank_);
 
-    loadWeightFromBin<T>(weights_ptr[0], {hidden_units_}, dir_path + ".input_layernorm.bias.bin", model_file_type);
-    loadWeightFromBin<T>(weights_ptr[1], {hidden_units_}, dir_path + ".input_layernorm.weight.bin", model_file_type);
+    loadWeightFromBin<T>(
+        weights_ptr[0], {(size_t)hidden_units_}, dir_path + ".input_layernorm.bias.bin", model_file_type);
+    loadWeightFromBin<T>(
+        weights_ptr[1], {(size_t)hidden_units_}, dir_path + ".input_layernorm.weight.bin", model_file_type);
     loadWeightFromBin<T>(weights_ptr[2],
-                         {hidden_units_, 3 * hidden_units_ / tensor_para_size_},
+                         {(size_t)hidden_units_, (size_t)(3 * hidden_units_ / tensor_para_size_)},
                          dir_path + ".attention.query_key_value.weight." + rank_spec + ".bin",
                          model_file_type);
 
     // GPT-J does not have bias for QKV
     cudaMemset(weights_ptr[3], 0, sizeof(T) * 3 * hidden_units_ / tensor_para_size_);
     loadWeightFromBin<T>(weights_ptr[4],
-                         {hidden_units_ / tensor_para_size_, hidden_units_},
+                         {(size_t)(hidden_units_ / tensor_para_size_), (size_t)hidden_units_},
                          dir_path + ".attention.dense.weight." + rank_spec + ".bin",
                          model_file_type);
 
     loadWeightFromBin<T>(weights_ptr[5],
-                         {hidden_units_, inter_size_ / tensor_para_size_},
+                         {(size_t)hidden_units_, (size_t)(inter_size_ / tensor_para_size_)},
                          dir_path + ".mlp.dense_h_to_4h.weight." + rank_spec + ".bin",
                          model_file_type);
     loadWeightFromBin<T>(weights_ptr[6],
-                         {inter_size_ / tensor_para_size_},
+                         {(size_t)(inter_size_ / tensor_para_size_)},
                          dir_path + ".mlp.dense_h_to_4h.bias." + rank_spec + ".bin",
                          model_file_type);
     loadWeightFromBin<T>(weights_ptr[7],
-                         {inter_size_ / tensor_para_size_, hidden_units_},
+                         {(size_t)(inter_size_ / tensor_para_size_), (size_t)hidden_units_},
                          dir_path + ".mlp.dense_4h_to_h.weight." + rank_spec + ".bin",
                          model_file_type);
-    loadWeightFromBin<T>(weights_ptr[8], {hidden_units_}, dir_path + ".mlp.dense_4h_to_h.bias.bin", model_file_type);
+    loadWeightFromBin<T>(
+        weights_ptr[8], {(size_t)hidden_units_}, dir_path + ".mlp.dense_4h_to_h.bias.bin", model_file_type);
 }
 
 template<typename T>
 void GptJDecoderLayerWeight<T>::setWeightPtr()
 {
-    pre_layernorm_weights.beta = weights_ptr[0];
-    pre_layernorm_weights.gamma = weights_ptr[1];
-    self_attention_weights.query_weight.kernel = weights_ptr[2];
-    self_attention_weights.query_weight.bias = weights_ptr[3];
+    pre_layernorm_weights.beta                            = weights_ptr[0];
+    pre_layernorm_weights.gamma                           = weights_ptr[1];
+    self_attention_weights.query_weight.kernel            = weights_ptr[2];
+    self_attention_weights.query_weight.bias              = weights_ptr[3];
     self_attention_weights.attention_output_weight.kernel = weights_ptr[4];
 
     ffn_weights.intermediate_weight.kernel = weights_ptr[5];
-    ffn_weights.intermediate_weight.bias = weights_ptr[6];
-    ffn_weights.output_weight.kernel = weights_ptr[7];
-    ffn_weights.output_weight.bias = weights_ptr[8];
+    ffn_weights.intermediate_weight.bias   = weights_ptr[6];
+    ffn_weights.output_weight.kernel       = weights_ptr[7];
+    ffn_weights.output_weight.bias         = weights_ptr[8];
 
     is_maintain_buffer = true;
 }
@@ -172,5 +175,8 @@ void GptJDecoderLayerWeight<T>::mallocWeights()
 
 template struct GptJDecoderLayerWeight<float>;
 template struct GptJDecoderLayerWeight<half>;
+#ifdef ENABLE_BF16
+template struct GptJDecoderLayerWeight<__nv_bfloat16>;
+#endif
 
 }  // namespace fastertransformer

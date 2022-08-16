@@ -17,12 +17,14 @@ cmake_minimum_required(VERSION 3.8)
 add_library(UnfusedAttentionLayerINT8 STATIC UnfusedAttentionLayerINT8.cc)
 set_property(TARGET UnfusedAttentionLayerINT8 PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET UnfusedAttentionLayerINT8 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(UnfusedAttentionLayerINT8 PUBLIC -lcublasLt -lcublas -lcudart cublasMMWrapper cublasINT8MMWrapper softmax_int8_kernels transpose_int8_kernels unfused_attention_int8_kernels)
+target_link_libraries(UnfusedAttentionLayerINT8 PUBLIC -lcublasLt -lcublas -lcudart nvtx_utils cublasMMWrapper
+                        cublasINT8MMWrapper softmax_int8_kernels transpose_int8_kernels unfused_attention_int8_kernels)
 
 add_library(FusedAttentionLayerINT8 STATIC FusedAttentionLayerINT8.cu)
 set_property(TARGET FusedAttentionLayerINT8 PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET FusedAttentionLayerINT8 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(FusedAttentionLayerINT8 PUBLIC -lcublasLt -lcublas -lcudart cublasMMWrapper cublasINT8MMWrapper trt_fused_multi_head_attention)
+target_link_libraries(FusedAttentionLayerINT8 PUBLIC -lcublasLt -lcublas -lcudart nvtx_utils cublasMMWrapper
+                        cublasINT8MMWrapper trt_fused_multi_head_attention)
 
 add_library(WindowAttentionINT8 STATIC WindowAttentionINT8.cu)
 set_property(TARGET WindowAttentionINT8 PROPERTY POSITION_INDEPENDENT_CODE  ON)

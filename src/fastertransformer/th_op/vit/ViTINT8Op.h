@@ -32,32 +32,32 @@ public:
 template<typename T>
 class VisionTransformerINT8Func: public IViTFunc {
 public:
-    int sm_;
-    bool _use_ORDER_COL32_2R_4R4;
-    int max_batch_;
-    int img_size_;
-    int patch_size_;
-    int in_chans_;
-    int embed_dim_;
-    int num_heads_;
-    int head_dim_;
-    int inter_size_;
-    int layer_num_;
+    int   sm_;
+    bool  _use_ORDER_COL32_2R_4R4;
+    int   max_batch_;
+    int   img_size_;
+    int   patch_size_;
+    int   in_chans_;
+    int   embed_dim_;
+    int   num_heads_;
+    int   head_dim_;
+    int   inter_size_;
+    int   layer_num_;
     float q_scaling_;
-    int int8_mode_;
-    bool with_cls_token_;
+    int   int8_mode_;
+    bool  with_cls_token_;
 
-    VisionTransformerINT8Func(const int max_batch,
-                              const int img_size,
-                              const int patch_size,
-                              const int in_chans,
-                              const int embed_dim,
-                              const int num_heads,
-                              const int inter_size,
-                              const int layer_num,
-                              const float q_scaling,
-                              const int int8_mode,
-                              const bool with_cls_token,
+    VisionTransformerINT8Func(const int                      max_batch,
+                              const int                      img_size,
+                              const int                      patch_size,
+                              const int                      in_chans,
+                              const int                      embed_dim,
+                              const int                      num_heads,
+                              const int                      inter_size,
+                              const int                      layer_num,
+                              const float                    q_scaling,
+                              const int                      int8_mode,
+                              const bool                     with_cls_token,
                               const std::vector<th::Tensor>& w):
         weights_(w),
         max_batch_(max_batch),
@@ -71,7 +71,9 @@ public:
         layer_num_(layer_num),
         q_scaling_(q_scaling),
         int8_mode_(int8_mode),
-        with_cls_token_(with_cls_token)
+        with_cls_token_(with_cls_token),
+        params_(ft::ViTINT8Weight<T>(
+            embed_dim, inter_size, layer_num, img_size, patch_size, in_chans, with_cls_token, false))
     {
         ft::check_cuda_error(cublasCreate(&cublas_handle_));
         ft::check_cuda_error(cublasLtCreate(&cublaslt_handle_));
@@ -83,51 +85,51 @@ public:
         if (sm_ >= 80) {
             _use_ORDER_COL32_2R_4R4 = true;
         }
-        cublas_algo_map_ = new ft::cublasAlgoMap("gemm_config.in", std::string(""));
+        cublas_algo_map_      = new ft::cublasAlgoMap("gemm_config.in", std::string(""));
         cublas_wrapper_mutex_ = new std::mutex();
         params_.vit_layer_weights.clear();
         params_.vit_layer_weights.resize(layer_num_);
 
-        int idx_w = 0;
+        int idx_w                                   = 0;
         params_.pre_transform_embeds.position_embed = get_ptr<T>(weights_[idx_w++]);
         if (with_cls_token) {
             params_.pre_transform_embeds.class_embed = get_ptr<T>(weights_[idx_w++]);
         }
         params_.pre_encoder_conv_weights.kernel = get_ptr<T>(weights_[idx_w++]);
-        params_.pre_encoder_conv_weights.bias = get_ptr<T>(weights_[idx_w++]);
+        params_.pre_encoder_conv_weights.bias   = get_ptr<T>(weights_[idx_w++]);
 
         for (int i = 0; i < layer_num_; i++) {
-            auto& layer_weight = params_.vit_layer_weights[i];
-            layer_weight.attn_layernorm_weights.gamma = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.attn_layernorm_weights.beta = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.ffn_layernorm_weights.gamma = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.ffn_layernorm_weights.beta = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.ffn_weights.intermediate_weight.kernel = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.ffn_weights.intermediate_weight.bias = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.ffn_weights.output_weight.kernel = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.ffn_weights.output_weight.bias = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.attention_weights.query_weight.kernel = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.attention_weights.query_weight.bias = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.attention_weights.key_weight.kernel = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.attention_weights.key_weight.bias = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.attention_weights.value_weight.kernel = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.attention_weights.value_weight.bias = get_ptr<T>(weights_[idx_w++]);
+            auto& layer_weight                                            = params_.vit_layer_weights[i];
+            layer_weight.attn_layernorm_weights.gamma                     = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.attn_layernorm_weights.beta                      = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.ffn_layernorm_weights.gamma                      = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.ffn_layernorm_weights.beta                       = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.ffn_weights.intermediate_weight.kernel           = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.ffn_weights.intermediate_weight.bias             = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.ffn_weights.output_weight.kernel                 = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.ffn_weights.output_weight.bias                   = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.attention_weights.query_weight.kernel            = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.attention_weights.query_weight.bias              = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.attention_weights.key_weight.kernel              = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.attention_weights.key_weight.bias                = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.attention_weights.value_weight.kernel            = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.attention_weights.value_weight.bias              = get_ptr<T>(weights_[idx_w++]);
             layer_weight.attention_weights.attention_output_weight.kernel = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.attention_weights.attention_output_weight.bias = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.attention_weights.attention_output_weight.bias   = get_ptr<T>(weights_[idx_w++]);
         }
         params_.post_transformer_layernorm_weights.gamma = get_ptr<T>(weights_[idx_w++]);
-        params_.post_transformer_layernorm_weights.beta = get_ptr<T>(weights_[idx_w++]);
+        params_.post_transformer_layernorm_weights.beta  = get_ptr<T>(weights_[idx_w++]);
 
         for (int i = 0; i < layer_num_; i++) {
-            auto& layer_weight = params_.vit_layer_weights[i];
-            layer_weight.scale_list_.size_ = ACTIVATION_AMAX_NUM + 9 * embed_dim + INT8O_GEMM_NUM + TRT_AMAX_NUM;
+            auto& layer_weight                  = params_.vit_layer_weights[i];
+            layer_weight.scale_list_.size_      = ACTIVATION_AMAX_NUM + 9 * embed_dim + INT8O_GEMM_NUM + TRT_AMAX_NUM;
             layer_weight.scale_list_.p2_offset_ = ACTIVATION_AMAX_NUM;
             layer_weight.scale_list_.p3_offset_ = ACTIVATION_AMAX_NUM + 9 * embed_dim;
             layer_weight.scale_list_.p4_offset_ = ACTIVATION_AMAX_NUM + 9 * embed_dim + INT8O_GEMM_NUM;
-            layer_weight.scale_list_.d_scale_list_ = get_ptr<float>(weights_[idx_w++]);
-            layer_weight.scale_list_.h_scale_list_ = get_ptr<float>(weights_[idx_w++]);
+            layer_weight.scale_list_.d_scale_list_        = get_ptr<float>(weights_[idx_w++]);
+            layer_weight.scale_list_.h_scale_list_        = get_ptr<float>(weights_[idx_w++]);
             layer_weight.attention_weights.scale_list_ptr = &(layer_weight.scale_list_);
-            layer_weight.ffn_weights.scale_list_ptr = &(layer_weight.scale_list_);
+            layer_weight.ffn_weights.scale_list_ptr       = &(layer_weight.scale_list_);
         }
     }
 
@@ -157,7 +159,7 @@ public:
             cublas_wrapper->setFP32GemmConfig();
         }
 
-        int seq_len = (img_size_ / patch_size_) * (img_size_ / patch_size_) + (with_cls_token_ ? 1 : 0);
+        int               seq_len = (img_size_ / patch_size_) * (img_size_ / patch_size_) + (with_cls_token_ ? 1 : 0);
         ft::AttentionType attention_type = ft::getAttentionType<T>(head_dim_, sm_, true, seq_len);
 
         auto vit = new ft::ViTTransformerINT8<T>(max_batch_,
@@ -179,8 +181,8 @@ public:
                                                  true,
                                                  attention_type);
 
-        ft::DataType data_type = ft::getTensorType<T>();
-        int sm_ptr[1] = {sm_};
+        ft::DataType            data_type     = ft::getTensorType<T>();
+        int                     sm_ptr[1]     = {sm_};
         std::vector<ft::Tensor> input_tensors = std::vector<ft::Tensor>{
             ft::Tensor{ft::MEMORY_GPU,
                        data_type,
@@ -202,27 +204,27 @@ public:
 
 private:
     std::vector<th::Tensor> weights_;
-    cublasHandle_t cublas_handle_ = nullptr;
-    cublasLtHandle_t cublaslt_handle_ = nullptr;
-    cudnnHandle_t cudnn_handle_ = nullptr;
-    ft::ViTINT8Weight<T> params_;
-    std::mutex* cublas_wrapper_mutex_;
-    ft::cublasAlgoMap* cublas_algo_map_;
+    cublasHandle_t          cublas_handle_   = nullptr;
+    cublasLtHandle_t        cublaslt_handle_ = nullptr;
+    cudnnHandle_t           cudnn_handle_    = nullptr;
+    ft::ViTINT8Weight<T>    params_;
+    std::mutex*             cublas_wrapper_mutex_;
+    ft::cublasAlgoMap*      cublas_algo_map_;
 };
 
 class VisionTransformerINT8Class: public torch::jit::CustomClassHolder {
 public:
     VisionTransformerINT8Class(std::vector<th::Tensor> w,
-                               int64_t max_batch,
-                               int64_t img_size,
-                               int64_t patch_size,
-                               int64_t in_chans,
-                               int64_t embed_dim,
-                               int64_t num_heads,
-                               int64_t inter_size,
-                               int64_t layer_num,
-                               int64_t with_cls_token,
-                               int64_t int8_mode);
+                               int64_t                 max_batch,
+                               int64_t                 img_size,
+                               int64_t                 patch_size,
+                               int64_t                 in_chans,
+                               int64_t                 embed_dim,
+                               int64_t                 num_heads,
+                               int64_t                 inter_size,
+                               int64_t                 layer_num,
+                               int64_t                 with_cls_token,
+                               int64_t                 int8_mode);
 
     ~VisionTransformerINT8Class();
 
@@ -231,12 +233,12 @@ public:
     std::vector<th::Tensor> get_pickle_info() const;
 
 private:
-    const at::ScalarType st_;
-    IViTFunc* vit_func_;
+    const at::ScalarType    st_;
+    IViTFunc*               vit_func_;
     std::vector<th::Tensor> weights_;
-    th::Tensor info_int_;
-    int output_seq_len_;
-    int output_emb_dim_;
+    th::Tensor              info_int_;
+    int                     output_seq_len_;
+    int                     output_emb_dim_;
 };
 
 }  // namespace torch_ext

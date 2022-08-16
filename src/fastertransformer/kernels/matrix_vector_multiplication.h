@@ -24,12 +24,12 @@ namespace fastertransformer {
 
 template<typename T>
 void int8WeightPerChannelLdkMultiplicationLauncher(const int8_t* weight,
-                                                   const T* input,
-                                                   const float* scale_list,
-                                                   T* output,
-                                                   const int m,
-                                                   const int n,
-                                                   const int k,
-                                                   cudaStream_t stream);
+                                                   const T*      input,
+                                                   const float*  scale_list,
+                                                   T*            output,
+                                                   const int     m,
+                                                   const int     n,
+                                                   const int     k,
+                                                   cudaStream_t  stream);
 
 }  // namespace fastertransformer

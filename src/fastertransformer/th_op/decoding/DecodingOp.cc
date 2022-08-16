@@ -21,20 +21,20 @@ namespace th = torch;
 namespace torch_ext {
 using torch::Tensor;
 
-FasterTransformerDecoding::FasterTransformerDecoding(int64_t head_num,
-                                                     int64_t size_per_head,
-                                                     int64_t inter_size,
-                                                     int64_t mem_hidden_dim,
-                                                     int64_t layer_num,
-                                                     int64_t vocab_size,
-                                                     int64_t start_id,
-                                                     int64_t end_id,
-                                                     double beam_search_diversity_rate,
-                                                     int64_t top_k,
-                                                     double top_p,
-                                                     double temperature,
-                                                     double len_penalty,
-                                                     double repetition_penalty,
+FasterTransformerDecoding::FasterTransformerDecoding(int64_t    head_num,
+                                                     int64_t    size_per_head,
+                                                     int64_t    inter_size,
+                                                     int64_t    mem_hidden_dim,
+                                                     int64_t    layer_num,
+                                                     int64_t    vocab_size,
+                                                     int64_t    start_id,
+                                                     int64_t    end_id,
+                                                     double     beam_search_diversity_rate,
+                                                     int64_t    top_k,
+                                                     double     top_p,
+                                                     double     temperature,
+                                                     double     len_penalty,
+                                                     double     repetition_penalty,
                                                      th::Tensor self_layernorm_gamma,
                                                      th::Tensor self_layernorm_beta,
                                                      th::Tensor self_kernel_q,
@@ -134,11 +134,30 @@ FasterTransformerDecoding::FasterTransformerDecoding(int64_t head_num,
                                                          (float)repetition_penalty,
                                                          weights);
             break;
+#ifdef ENABLE_BF16
+        case at::ScalarType::BFloat16:
+            ftdecoding = new torch_ext::FTDecoding<__nv_bfloat16>(head_num,
+                                                                  size_per_head,
+                                                                  inter_size,
+                                                                  mem_hidden_dim,
+                                                                  layer_num,
+                                                                  vocab_size,
+                                                                  start_id,
+                                                                  end_id,
+                                                                  (float)beam_search_diversity_rate,
+                                                                  top_k,
+                                                                  (float)top_p,
+                                                                  (float)temperature,
+                                                                  (float)len_penalty,
+                                                                  (float)repetition_penalty,
+                                                                  weights);
+            break;
+#endif
         default:
             throw std::runtime_error("Wrong Tensor type.");
     }
-    int_info_ = torch::empty({11}, torch::dtype(torch::kInt64));
-    float_info_ = torch::empty({5}, torch::dtype(torch::kFloat64));
+    int_info_    = torch::empty({11}, torch::dtype(torch::kInt64));
+    float_info_  = torch::empty({5}, torch::dtype(torch::kFloat64));
     int_info_[0] = head_num;
     int_info_[1] = size_per_head;
     int_info_[2] = inter_size;
@@ -161,8 +180,8 @@ FasterTransformerDecoding::~FasterTransformerDecoding()
     delete ftdecoding;
 }
 
-std::vector<th::Tensor> FasterTransformerDecoding::forward(int64_t beam_width,
-                                                           int64_t max_seq_len,
+std::vector<th::Tensor> FasterTransformerDecoding::forward(int64_t    beam_width,
+                                                           int64_t    max_seq_len,
                                                            th::Tensor memory,
                                                            th::Tensor memory_seq_lens)
 {
@@ -171,7 +190,7 @@ std::vector<th::Tensor> FasterTransformerDecoding::forward(int64_t beam_width,
     CHECK_CONTIGUOUS(memory_seq_lens);
     TORCH_CHECK(memory_seq_lens.dtype() == torch::kInt32, "mem_seq_lens dtype should be int32");
 
-    int batch_size = (int)(memory.size(0) / beam_width);
+    int  batch_size = (int)(memory.size(0) / beam_width);
     auto output_ids = torch::empty({batch_size * beam_width * max_seq_len},
                                    torch::dtype(torch::kInt32).device(torch::kCUDA).requires_grad(false));
     auto parent_ids = torch::empty({batch_size * beam_width * max_seq_len},
@@ -247,22 +266,22 @@ static auto fasterTransformerDecodingTHS =
                 return self->get_pickle_info();
             },
             [](std::vector<th::Tensor> state) -> c10::intrusive_ptr<torch_ext::FasterTransformerDecoding> {
-                int head_num = state[28][0].item().to<int>();
-                int size_per_head = state[28][1].item().to<int>();
-                int inter_size = state[28][2].item().to<int>();
+                int head_num       = state[28][0].item().to<int>();
+                int size_per_head  = state[28][1].item().to<int>();
+                int inter_size     = state[28][2].item().to<int>();
                 int mem_hidden_dim = state[28][3].item().to<int>();
-                int layer_num = state[28][4].item().to<int>();
-                int vocab_size = state[28][5].item().to<int>();
-                int start_id = state[28][6].item().to<int>();
-                int end_id = state[28][7].item().to<int>();
-                int top_k = state[28][8].item().to<int>();
+                int layer_num      = state[28][4].item().to<int>();
+                int vocab_size     = state[28][5].item().to<int>();
+                int start_id       = state[28][6].item().to<int>();
+                int end_id         = state[28][7].item().to<int>();
+                int top_k          = state[28][8].item().to<int>();
 
                 // TODO(bhsueh) Here may have bugs
                 double beam_search_diversity_rate = state[33][0].item().to<double>();
-                double top_p = state[33][1].item().to<double>();
-                double temperature = state[33][2].item().to<double>();
-                double len_penalty = state[33][3].item().to<double>();
-                double repetition_penalty = state[33][4].item().to<double>();
+                double top_p                      = state[33][1].item().to<double>();
+                double temperature                = state[33][2].item().to<double>();
+                double len_penalty                = state[33][3].item().to<double>();
+                double repetition_penalty         = state[33][4].item().to<double>();
 
                 return c10::make_intrusive<torch_ext::FasterTransformerDecoding>(head_num,
                                                                                  size_per_head,

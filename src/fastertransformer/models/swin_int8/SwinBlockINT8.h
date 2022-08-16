@@ -27,15 +27,16 @@ namespace fastertransformer {
 template<typename T>
 class SwinTransformerINT8Block: public BaseLayer {
 private:
-    int int8_mode = 0;
-    int max_batch_ = 1;
-    int window_size_ = 7;
-    int window_len_ = 49;
-    int patches_resolution_ = 56;
-    int embed_dim_ = 96;
-    float mlp_ratio_ = 4.0f;
-    bool qkv_bias_ = true;
-    float qk_scale_ = 1.0f;
+    int    int8_mode           = 0;
+    int    max_batch_          = 1;
+    int    window_size_        = 7;
+    int    window_len_         = 49;
+    int    patches_resolution_ = 56;
+    int    embed_dim_          = 96;
+    float  mlp_ratio_          = 4.0f;
+    float  layernorm_eps_;
+    bool   qkv_bias_     = true;
+    float  qk_scale_     = 1.0f;
     size_t max_buf_size_ = 0;
 
     int8_t* buf_ = nullptr;
@@ -49,23 +50,24 @@ private:
     void freeBuffer();
 
 public:
-    SwinTransformerINT8Block(int int8_mode,
-                             int max_batch,
-                             int window_size,
-                             int patches_resolution,
-                             int embed_dim,
-                             float mlp_ratio,
-                             bool qkv_bias,
-                             cudaStream_t stream,
+    SwinTransformerINT8Block(int              int8_mode,
+                             int              max_batch,
+                             int              window_size,
+                             int              patches_resolution,
+                             int              embed_dim,
+                             float            mlp_ratio,
+                             float            layernorm_eps_,
+                             bool             qkv_bias,
+                             cudaStream_t     stream,
                              cublasMMWrapper* cublas_wrapper,
-                             IAllocator* allocator,
-                             bool is_free_buffer_after_forward,
-                             float qk_scale = 1.0f);
+                             IAllocator*      allocator,
+                             bool             is_free_buffer_after_forward,
+                             float            qk_scale = 1.0f);
 
     ~SwinTransformerINT8Block();
 
-    void forward(std::vector<Tensor>* output_tensors,
-                 const std::vector<Tensor>* input_tensors,
+    void forward(std::vector<Tensor>*               output_tensors,
+                 const std::vector<Tensor>*         input_tensors,
                  SwinTransformerINT8BlockWeight<T>& swin_block_weights);
 
 };  // class SwinTransformerINT8Block

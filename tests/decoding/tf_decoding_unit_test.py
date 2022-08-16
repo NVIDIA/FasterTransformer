@@ -47,14 +47,15 @@ class TestDecoding(unittest.TestCase):
                         "max_iteration": 10,
                         }
 
-    def check_result(self, beam_width, datatype, test_time, topk=4, topp=0.0, batch_size=-1):
-        result = Value('i', -1)
-        p = Process(target=self.run_translate, args=(beam_width, datatype, test_time, topk, topp, batch_size, result))
+    def check_result(self, beam_width, datatype, test_time, topk=4, topp=0.0, batch_size=-1,
+                     decoder_bleu_score_threshold=None, decoding_bleu_score_threshold=None):
+        p = Process(target=self.run_translate, args=(beam_width, datatype, test_time, topk, topp,
+                                                     batch_size, decoder_bleu_score_threshold, decoding_bleu_score_threshold))
         p.start()
         p.join()
-        # self.assertTrue(result.value == 1)
     
-    def run_translate(self, beam_width, datatype, test_time, topk=4, topp=0.0, batch_size=-1, result=None):
+    def run_translate(self, beam_width, datatype, test_time, topk=4, topp=0.0, batch_size=-1,
+                      decoder_bleu_score_threshold=None, decoding_bleu_score_threshold=None):
         args_dict = copy.deepcopy(self.common_args_dict)
         args_dict['beam_width'] = beam_width
         args_dict['data_type'] = datatype
@@ -68,63 +69,62 @@ class TestDecoding(unittest.TestCase):
         tf.reset_default_graph()
 
         translation_result_list = translate(args_dict)
-        tf_bleu_score = translation_result_list[0].bleu_score.score
+        #  translation_result_list[0] is warmup, skip it
         op_decoder_bleu_score = translation_result_list[1].bleu_score.score
         op_decoding_bleu_score = translation_result_list[2].bleu_score.score
-
+        if decoder_bleu_score_threshold != None:
+            self.assertTrue(op_decoder_bleu_score >= decoder_bleu_score_threshold)
+        if decoding_bleu_score_threshold != None:
+            self.assertTrue(op_decoding_bleu_score >= decoding_bleu_score_threshold)
         sys.stdout.flush()
-        if op_decoder_bleu_score >= tf_bleu_score - 1.0 and op_decoding_bleu_score >= tf_bleu_score - 1.0:
-            result.value = 1
-        else:
-            result.value = 0
-        
+
     def test_decoding_beamsearch_fp32(self):
-        os.system("./bin/decoding_gemm 32 4 8 64 2048 32001 128 512 0 > .tmp.gemm.log && cat .tmp.gemm.log")
-        self.check_result(4, 'fp32', '012', batch_size=32)
+        os.system("./bin/decoding_gemm 32 4 8 64 2048 32001 128 512 0 > .tmp.gemm.log && cat gemm_config.in")
+        self.check_result(4, 'fp32', '12', batch_size=32, decoder_bleu_score_threshold=37.0, decoding_bleu_score_threshold=37.0)
         
     def test_decoding_beamsearch_fp16(self):
-        os.system("./bin/decoding_gemm 32 4 8 64 2048 32001 128 512 1 > .tmp.gemm.log && cat .tmp.gemm.log")
-        self.check_result(4, 'fp16', '012', batch_size=32)
+        os.system("./bin/decoding_gemm 32 4 8 64 2048 32001 128 512 1 > .tmp.gemm.log && cat gemm_config.in")
+        self.check_result(4, 'fp16', '12', batch_size=32, decoder_bleu_score_threshold=37.0, decoding_bleu_score_threshold=37.0)
         
     def test_decoding_beamsearch_fp32_2(self):
-        os.system("./bin/decoding_gemm 16 32 8 64 2048 32001 128 512 0 > .tmp.gemm.log && cat .tmp.gemm.log")
-        self.check_result(32, 'fp32', '012', batch_size=16)
+        os.system("./bin/decoding_gemm 16 32 8 64 2048 32001 128 512 0 > .tmp.gemm.log && cat gemm_config.in")
+        self.check_result(32, 'fp32', '12', batch_size=16, decoder_bleu_score_threshold=35.0, decoding_bleu_score_threshold=35.0)
         
     def test_decoding_beamsearch_fp16_2(self):
-        os.system("./bin/decoding_gemm 16 32 8 64 2048 32001 128 512 1 > .tmp.gemm.log && cat .tmp.gemm.log")
-        self.check_result(32, 'fp16', '012', batch_size=16)
+        os.system("./bin/decoding_gemm 16 32 8 64 2048 32001 128 512 1 > .tmp.gemm.log && cat gemm_config.in")
+        self.check_result(32, 'fp16', '12', batch_size=16, decoder_bleu_score_threshold=35.0, decoding_bleu_score_threshold=35.0)
     
     def test_decoding_topk_sampling_fp32(self):
-        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 0 > .tmp.gemm.log && cat .tmp.gemm.log")
-        self.check_result(1, 'fp32', '345', 4, 0.0)
+        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 0 > .tmp.gemm.log && cat gemm_config.in")
+        self.check_result(1, 'fp32', '45', 4, 0.0, decoder_bleu_score_threshold=25.0, decoding_bleu_score_threshold=25.0)
         
     def test_decoding_topk_sampling_fp16(self):
-        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 1 > .tmp.gemm.log && cat .tmp.gemm.log")
-        self.check_result(1, 'fp16', '345', 4, 0.0)
+        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 1 > .tmp.gemm.log && cat gemm_config.in")
+        self.check_result(1, 'fp16', '45', 4, 0.0, decoder_bleu_score_threshold=25.0, decoding_bleu_score_threshold=25.0)
 
     def test_decoding_topk_sampling_fp32_2(self):
-        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 0 > .tmp.gemm.log && cat .tmp.gemm.log")
-        self.check_result(1, 'fp32', '345', 64, 0.0)
+        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 0 > .tmp.gemm.log && cat gemm_config.in")
+        self.check_result(1, 'fp32', '45', 64, 0.0, decoder_bleu_score_threshold=19.0, decoding_bleu_score_threshold=17.0)
 
     def test_decoding_topk_sampling_fp16_2(self):
-        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 1 > .tmp.gemm.log && cat .tmp.gemm.log")
-        self.check_result(1, 'fp16', '345', 64, 0.0)
+        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 1 > .tmp.gemm.log && cat gemm_config.in")
+        self.check_result(1, 'fp16', '45', 64, 0.0, decoder_bleu_score_threshold=19.0, decoding_bleu_score_threshold=17.0)
 
     def test_decoding_topp_sampling_fp32(self):
-        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 0 > .tmp.gemm.log && cat .tmp.gemm.log")
-        self.check_result(1, 'fp32', '345', 0, 0.5)
+        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 0 > .tmp.gemm.log && cat gemm_config.in")
+        self.check_result(1, 'fp32', '45', 0, 0.5, decoder_bleu_score_threshold=30.0, decoding_bleu_score_threshold=29.0)
         
     def test_decoding_topp_sampling_fp16(self):
-        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 1 > .tmp.gemm.log && cat .tmp.gemm.log")
-        self.check_result(1, 'fp16', '345', 0, 0.5)
+        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 1 > .tmp.gemm.log && cat gemm_config.in")
+        self.check_result(1, 'fp16', '45', 0, 0.5, decoder_bleu_score_threshold=30.0, decoding_bleu_score_threshold=29.0)
 
     def test_decoding_topp_sampling_fp32_2(self):
-        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 0 > .tmp.gemm.log && cat .tmp.gemm.log")
-        self.check_result(1, 'fp32', '345', 0, 0.9)
+        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 0 > .tmp.gemm.log && cat gemm_config.in")
+        self.check_result(1, 'fp32', '45', 0, 0.9, decoder_bleu_score_threshold=16.0, decoding_bleu_score_threshold=14.5)
 
     def test_decoding_topp_sampling_fp16_2(self):
-        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 1 > .tmp.gemm.log && cat .tmp.gemm.log")
-        self.check_result(1, 'fp16', '345', 0, 0.9)
+        os.system("./bin/decoding_gemm 128 1 8 64 2048 32001 128 512 1 > .tmp.gemm.log && cat gemm_config.in")
+        self.check_result(1, 'fp16', '45', 0, 0.9, decoder_bleu_score_threshold=16.0, decoding_bleu_score_threshold=14.5)
 
 if __name__ == "__main__":
     unittest.main()

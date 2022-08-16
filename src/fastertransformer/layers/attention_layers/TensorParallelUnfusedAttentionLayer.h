@@ -25,33 +25,33 @@ namespace fastertransformer {
 template<typename T>
 class TensorParallelUnfusedAttentionLayer: public UnfusedAttentionLayer<T> {
 private:
-    NcclParam tensor_para_;
+    NcclParam                           tensor_para_;
     std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm_;
-    int enable_custom_all_reduce_;
+    int                                 enable_custom_all_reduce_;
 
 public:
-    TensorParallelUnfusedAttentionLayer(size_t max_batch_size,
-                                        size_t max_seq_len,
-                                        size_t head_num,
-                                        size_t size_per_head,
-                                        size_t d_model,
-                                        float q_scaling,
-                                        NcclParam tensor_para,
-                                        cudaStream_t stream,
-                                        cublasMMWrapper* cublas_wrapper,
-                                        IAllocator* allocator,
-                                        bool is_free_buffer_after_forward,
-                                        bool is_sparse,
-                                        std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm = nullptr,
-                                        int enable_custom_all_reduce = 0);
+    TensorParallelUnfusedAttentionLayer(size_t                              max_batch_size,
+                                        size_t                              max_seq_len,
+                                        size_t                              head_num,
+                                        size_t                              size_per_head,
+                                        size_t                              d_model,
+                                        float                               q_scaling,
+                                        NcclParam                           tensor_para,
+                                        cudaStream_t                        stream,
+                                        cublasMMWrapper*                    cublas_wrapper,
+                                        IAllocator*                         allocator,
+                                        bool                                is_free_buffer_after_forward,
+                                        bool                                is_sparse,
+                                        std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
+                                        int                                 enable_custom_all_reduce = 0);
 
     TensorParallelUnfusedAttentionLayer(TensorParallelUnfusedAttentionLayer<T> const& attention_layer);
 
     ~TensorParallelUnfusedAttentionLayer() = default;
 
-    void forward(std::vector<fastertransformer::Tensor>* output_tensors,
+    void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                  const std::vector<fastertransformer::Tensor>* input_tensors,
-                 const AttentionWeight<T>* attention_weights) override;
+                 const AttentionWeight<T>*                     attention_weights) override;
 };
 
 }  // namespace fastertransformer

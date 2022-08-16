@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022, SK Telecom Authored by A. Dialog
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,50 +30,81 @@ void ParallelGptDecoder<T>::initialize()
                                                                            stream_,
                                                                            cublas_wrapper_,
                                                                            allocator_,
+                                                                           true,
                                                                            is_free_buffer_after_forward_,
                                                                            sparse_,
                                                                            int8_mode_,
                                                                            custom_all_reduce_comm_,
                                                                            enable_custom_all_reduce_);
 
-    ffn_layer_ = new TensorParallelGeluFfnLayer<T>(max_batch_size_,
-                                                   1,
-                                                   head_num_,
-                                                   size_per_head_,
-                                                   inter_size_,
-                                                   tensor_para_,
-                                                   stream_,
-                                                   cublas_wrapper_,
-                                                   allocator_,
-                                                   is_free_buffer_after_forward_,
-                                                   sparse_,
-                                                   int8_mode_,
-                                                   custom_all_reduce_comm_,
-                                                   enable_custom_all_reduce_);
+    bool use_gated_activation = activation_type_ == ActivationType::GeGLU || activation_type_ == ActivationType::ReGLU;
+    size_t max_inter_size     = has_adapters_ ? std::max(inter_size_, adapter_inter_size_) : inter_size_;
+    if (activation_type_ == ActivationType::Gelu || activation_type_ == ActivationType::GeGLU) {
+        ffn_layer_ = new TensorParallelGeluFfnLayer<T>(max_batch_size_,
+                                                       1,
+                                                       head_num_,
+                                                       size_per_head_,
+                                                       max_inter_size,
+                                                       tensor_para_,
+                                                       stream_,
+                                                       cublas_wrapper_,
+                                                       allocator_,
+                                                       true,
+                                                       is_free_buffer_after_forward_,
+                                                       sparse_,
+                                                       int8_mode_,
+                                                       use_gated_activation,
+                                                       custom_all_reduce_comm_,
+                                                       enable_custom_all_reduce_);
+    }
+    else if (activation_type_ == ActivationType::Relu || activation_type_ == ActivationType::ReGLU) {
+        ffn_layer_ = new TensorParallelReluFfnLayer<T>(max_batch_size_,
+                                                       1,
+                                                       head_num_,
+                                                       size_per_head_,
+                                                       max_inter_size,
+                                                       tensor_para_,
+                                                       stream_,
+                                                       cublas_wrapper_,
+                                                       allocator_,
+                                                       true,
+                                                       is_free_buffer_after_forward_,
+                                                       sparse_,
+                                                       use_gated_activation,
+                                                       custom_all_reduce_comm_,
+                                                       enable_custom_all_reduce_);
+    }
 }
 
 template<typename T>
-ParallelGptDecoder<T>::ParallelGptDecoder(size_t max_batch_size,
-                                          size_t head_num,
-                                          size_t size_per_head,
-                                          size_t inter_size,
-                                          size_t num_layer,
-                                          NcclParam tensor_para,
-                                          NcclParam pipeline_para,
-                                          cudaStream_t stream,
-                                          cublasMMWrapper* cublas_wrapper,
-                                          IAllocator* allocator,
-                                          bool is_free_buffer_after_forward,
-                                          bool sparse,
-                                          int int8_mode,
+ParallelGptDecoder<T>::ParallelGptDecoder(size_t                              max_batch_size,
+                                          size_t                              head_num,
+                                          size_t                              size_per_head,
+                                          size_t                              inter_size,
+                                          size_t                              num_layer,
+                                          float                               layernorm_eps,
+                                          gptVariantParams                    gpt_variant_params,
+                                          NcclParam                           tensor_para,
+                                          NcclParam                           pipeline_para,
+                                          cudaStream_t                        stream,
+                                          cublasMMWrapper*                    cublas_wrapper,
+                                          IAllocator*                         allocator,
+                                          bool                                is_free_buffer_after_forward,
+                                          bool                                sparse,
+                                          int                                 int8_mode,
                                           std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
-                                          int enable_custom_all_reduce):
+                                          int                                 enable_custom_all_reduce):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, nullptr, sparse),
     max_batch_size_(max_batch_size),
     head_num_(head_num),
     size_per_head_(size_per_head),
     inter_size_(inter_size),
     num_layer_(num_layer),
+    layernorm_eps_(layernorm_eps),
+    layernorm_type_(gpt_variant_params.layernorm_type),
+    activation_type_(gpt_variant_params.activation_type),
+    adapter_inter_size_(gpt_variant_params.adapter_inter_size),
+    has_adapters_(gpt_variant_params.has_adapters),
     hidden_units_(head_num_ * size_per_head_),
     tensor_para_(tensor_para),
     pipeline_para_(pipeline_para),
@@ -96,6 +128,11 @@ ParallelGptDecoder<T>::ParallelGptDecoder(ParallelGptDecoder<T> const& decoder):
     size_per_head_(decoder.size_per_head_),
     inter_size_(decoder.inter_size_),
     num_layer_(decoder.num_layer_),
+    layernorm_eps_(decoder.layernorm_eps_),
+    layernorm_type_(decoder.layernorm_type_),
+    activation_type_(decoder.activation_type_),
+    adapter_inter_size_(decoder.adapter_inter_size_),
+    has_adapters_(decoder.has_adapters_),
     hidden_units_(decoder.hidden_units_),
     tensor_para_(decoder.tensor_para_),
     pipeline_para_(decoder.pipeline_para_),
@@ -110,17 +147,6 @@ template<typename T>
 void ParallelGptDecoder<T>::allocateBuffer()
 {
     FT_CHECK(false);
-    if (is_allocate_buffer_ == false) {
-        decoder_layer_output_ =
-            reinterpret_cast<T*>(allocator_->malloc(sizeof(T) * max_batch_size_ * hidden_units_, false));
-        decoder_normed_input_ =
-            reinterpret_cast<T*>(allocator_->malloc(sizeof(T) * max_batch_size_ * hidden_units_, false));
-        self_attn_output_ =
-            reinterpret_cast<T*>(allocator_->malloc(sizeof(T) * max_batch_size_ * hidden_units_, false));
-        normed_self_attn_output_ =
-            reinterpret_cast<T*>(allocator_->malloc(sizeof(T) * max_batch_size_ * hidden_units_, false));
-        is_allocate_buffer_ = true;
-    }
 }
 
 template<typename T>
@@ -135,7 +161,11 @@ void ParallelGptDecoder<T>::allocateBuffer(size_t batch_size)
         reinterpret_cast<T*>(allocator_->reMalloc(self_attn_output_, sizeof(T) * batch_size * hidden_units_, false));
     normed_self_attn_output_ = reinterpret_cast<T*>(
         allocator_->reMalloc(normed_self_attn_output_, sizeof(T) * batch_size * hidden_units_, false));
-    is_allocate_buffer_ = true;
+    // only allocate additionl buffers when has adapters
+    after_adapter_attn_output_ = has_adapters_ ? reinterpret_cast<T*>(allocator_->reMalloc(
+                                     after_adapter_attn_output_, sizeof(T) * batch_size * hidden_units_, false)) :
+                                                 self_attn_output_;
+    is_allocate_buffer_        = true;
 }
 
 template<typename T>
@@ -143,24 +173,14 @@ void ParallelGptDecoder<T>::freeBuffer()
 {
     if (is_allocate_buffer_) {
         FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-        allocator_->free(decoder_layer_output_);
-        allocator_->free(decoder_normed_input_);
-        allocator_->free(self_attn_output_);
-        allocator_->free(normed_self_attn_output_);
+        allocator_->free((void**)(&decoder_layer_output_));
+        allocator_->free((void**)(&decoder_normed_input_));
+        allocator_->free((void**)(&self_attn_output_));
+        allocator_->free((void**)(&normed_self_attn_output_));
+        if (has_adapters_) {
+            allocator_->free((void**)(&after_adapter_attn_output_));
+        }
         is_allocate_buffer_ = false;
-    }
-}
-
-template<typename T>
-bool ParallelGptDecoder<T>::isValidBatchSize(size_t batch_size)
-{
-    if (batch_size <= max_batch_size_) {
-        return true;
-    }
-    else {
-        freeBuffer();
-        max_batch_size_ = batch_size * 1.2;
-        return true;
     }
 }
 
@@ -202,35 +222,36 @@ ParallelGptDecoder<T>::~ParallelGptDecoder()
 }
 
 template<typename T>
-void ParallelGptDecoder<T>::forward(std::vector<Tensor>* output_tensors,
-                                    const std::vector<Tensor>* input_tensors,
+void ParallelGptDecoder<T>::forward(std::vector<Tensor>*                                  output_tensors,
+                                    const std::vector<Tensor>*                            input_tensors,
                                     const std::vector<ParallelGptDecoderLayerWeight<T>*>* gpt_decoder_layer_weight)
 {
     // input tensors:
     //      decoder_input [local_batch_size, hidden_dimension],
     //      finished [local_batch_size],
-    //      sequence_lengths [local_batch_size]
     //      input_lengths [local_batch_size],
+    //      total_padding_tokens [local_batch_size]
     //      max_input_length [1] on cpu
     //      step [1] on cpu
     //      ite [1] on cpu
-    //      cache_indirection [local_batch_size / beam_width, beam_width, max_seq_len]
+    //      cache_indirection [local_batch_size / beam_width, beam_width, memory_len]
     //              Here, local_batch_size contains the beam_width, so local_batch_size / beam_width
     //              is real local_batch_size.
+    //      masked_tokens [local_batch_size, memory_len]
 
     // output tensors:
     //      decoder_output [local_batch_size, hidden_dimension],
-    //      key_cache [num_layer, batch_size, head_num, size_per_head // x, max_seq_len, x]
-    //      value_cache [num_layer, batch_size, head_num, max_seq_len, size_per_head]
+    //      key_cache [num_layer, batch_size, head_num, size_per_head // x, memory_len, x]
+    //      value_cache [num_layer, batch_size, head_num, memory_len, size_per_head]
 
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    FT_CHECK(input_tensors->size() == 8);
+    FT_CHECK(input_tensors->size() == 9);
     FT_CHECK(output_tensors->size() == 3);
     const size_t local_batch_size = input_tensors->at(0).shape[0];
     allocateBuffer(local_batch_size);
 
     const DataType data_type = getTensorType<T>();
-    const int ite = *((int*)(input_tensors->at(6).data));
+    const int      ite       = *((int*)(input_tensors->at(6).data));
 
     std::vector<size_t> self_k_cache_size;
     self_k_cache_size.push_back(local_batch_size);
@@ -247,7 +268,7 @@ void ParallelGptDecoder<T>::forward(std::vector<Tensor>* output_tensors,
         if (isValidLayerParallelId(l) == false) {
             continue;
         }
-        T* decoder_input = (T*)((l == 0) ? input_tensors->at(0).data : decoder_layer_output_);
+        T* decoder_input  = (T*)((l == 0) ? input_tensors->at(0).data : decoder_layer_output_);
         T* decoder_output = (T*)((l == num_layer_ - 1) ? output_tensors->at(0).data : decoder_layer_output_);
 
         if (isFirstLayerParallelId(l) == true && pipeline_para_.rank_ != 0 && pipeline_para_.world_size_ > 1) {
@@ -279,23 +300,34 @@ void ParallelGptDecoder<T>::forward(std::vector<Tensor>* output_tensors,
         }
         cache_offset += ite_cache_offset;
 
-        invokeGeneralLayerNorm(decoder_normed_input_,
-                               decoder_input,
-                               gpt_decoder_layer_weight->at(l)->pre_layernorm_weights.gamma,
-                               gpt_decoder_layer_weight->at(l)->pre_layernorm_weights.beta,
-                               local_batch_size,
-                               hidden_units_,
-                               stream_);
+        if (layernorm_type_ == LayerNormType::pre_layernorm) {
+            invokeGeneralLayerNorm(decoder_normed_input_,
+                                   decoder_input,
+                                   gpt_decoder_layer_weight->at(l)->pre_layernorm_weights.gamma,
+                                   gpt_decoder_layer_weight->at(l)->pre_layernorm_weights.beta,
+                                   layernorm_eps_,
+                                   local_batch_size,
+                                   hidden_units_,
+                                   stream_);
+        }
         sync_check_cuda_error();
 
+        const int           max_prefix_prompt_length = 0;
         std::vector<Tensor> self_attention_input_tensors{
-            Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, decoder_normed_input_},
+            Tensor{MEMORY_GPU,
+                   data_type,
+                   {local_batch_size, hidden_units_},
+                   layernorm_type_ == LayerNormType::pre_layernorm ? decoder_normed_input_ : decoder_input},
             input_tensors->at(1),
             input_tensors->at(2),
             input_tensors->at(3),
+            Tensor{
+                MEMORY_GPU, data_type, {(size_t)local_batch_size, (size_t)l}, nullptr},  // prefix prompt weight batch
+            Tensor{MEMORY_CPU, TYPE_INT32, {(size_t)1}, &max_prefix_prompt_length},      // max prefix prompt length
             input_tensors->at(4),
             input_tensors->at(5),
-            input_tensors->at(7)};
+            input_tensors->at(7),
+            input_tensors->at(8)};
 
         std::vector<Tensor> self_attention_output_tensors{
             Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, self_attn_output_},
@@ -306,30 +338,111 @@ void ParallelGptDecoder<T>::forward(std::vector<Tensor>* output_tensors,
                                        &self_attention_input_tensors,
                                        &gpt_decoder_layer_weight->at(l)->self_attention_weights);
 
-        invokeGeneralAddBiasResidualPreLayerNorm(
-            self_attn_output_,
-            normed_self_attn_output_,
-            decoder_input,
-            gpt_decoder_layer_weight->at(l)->self_attn_layernorm_weights.gamma,
-            gpt_decoder_layer_weight->at(l)->self_attn_layernorm_weights.beta,
-            gpt_decoder_layer_weight->at(l)->self_attention_weights.attention_output_weight.bias,
-            local_batch_size,
-            hidden_units_,
-            stream_);
+        // the adapter after attention
+        if (has_adapters_) {
+            invokeAddBias(self_attn_output_,
+                          gpt_decoder_layer_weight->at(l)->self_attention_weights.attention_output_weight.bias,
+                          local_batch_size,
+                          hidden_units_,
+                          stream_);
+
+            std::vector<Tensor> ffn_input_tensors{
+                Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, self_attn_output_}};
+            std::vector<Tensor> ffn_output_tensors{
+                Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, after_adapter_attn_output_}};
+
+            ffn_layer_->resetInterSize(adapter_inter_size_ / tensor_para_.world_size_);
+            ffn_layer_->forward(&ffn_output_tensors,
+                                &ffn_input_tensors,
+                                &gpt_decoder_layer_weight->at(l)->after_attention_adapter_weights);
+        }
+
+        if (layernorm_type_ == LayerNormType::pre_layernorm) {
+            invokeGeneralAddBiasResidualPreLayerNorm(
+                after_adapter_attn_output_,
+                normed_self_attn_output_,
+                decoder_input,
+                has_adapters_ ? self_attn_output_ : nullptr,
+                gpt_decoder_layer_weight->at(l)->self_attn_layernorm_weights.gamma,
+                gpt_decoder_layer_weight->at(l)->self_attn_layernorm_weights.beta,
+                has_adapters_ ? gpt_decoder_layer_weight->at(l)->after_attention_adapter_weights.output_weight.bias :
+                                gpt_decoder_layer_weight->at(l)->self_attention_weights.attention_output_weight.bias,
+                layernorm_eps_,
+                local_batch_size,
+                hidden_units_,
+                stream_);
+        }
+        else if (layernorm_type_ == LayerNormType::post_layernorm) {
+            invokeAddBiasResidualLayerNorm(
+                after_adapter_attn_output_,
+                decoder_input,
+                has_adapters_ ? gpt_decoder_layer_weight->at(l)->after_attention_adapter_weights.output_weight.bias :
+                                gpt_decoder_layer_weight->at(l)->self_attention_weights.attention_output_weight.bias,
+                gpt_decoder_layer_weight->at(l)->pre_layernorm_weights.gamma,
+                gpt_decoder_layer_weight->at(l)->pre_layernorm_weights.beta,
+                layernorm_eps_,
+                local_batch_size,
+                hidden_units_,
+                stream_);
+        }
 
         sync_check_cuda_error();
 
-        std::vector<Tensor> ffn_input_tensors{
-            Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, normed_self_attn_output_}};
+        T* ffn_output_ptr = has_adapters_ ? self_attn_output_ : decoder_output;
+
+        std::vector<Tensor> ffn_input_tensors{Tensor{
+            MEMORY_GPU,
+            data_type,
+            {local_batch_size, hidden_units_},
+            layernorm_type_ == LayerNormType::pre_layernorm ? normed_self_attn_output_ : after_adapter_attn_output_}};
         std::vector<Tensor> ffn_output_tensors{
-            Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, decoder_output}};
+            Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, ffn_output_ptr}};
+
+        ffn_layer_->resetInterSize(inter_size_ / tensor_para_.world_size_);
         ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &gpt_decoder_layer_weight->at(l)->ffn_weights);
-        invokeAddBiasResidual(decoder_output,
-                              self_attn_output_,
-                              gpt_decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
-                              local_batch_size,
-                              hidden_units_,
-                              stream_);
+
+        // the adapter after ffn
+        if (has_adapters_) {
+            invokeAddBias(ffn_output_ptr,
+                          gpt_decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
+                          local_batch_size,
+                          hidden_units_,
+                          stream_);
+
+            std::vector<Tensor> ffn_input_tensors{
+                Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, ffn_output_ptr}};
+            std::vector<Tensor> ffn_output_tensors{
+                Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, decoder_output}};
+
+            ffn_layer_->resetInterSize(adapter_inter_size_ / tensor_para_.world_size_);
+            ffn_layer_->forward(
+                &ffn_output_tensors, &ffn_input_tensors, &gpt_decoder_layer_weight->at(l)->after_ffn_adapter_weights);
+        }
+
+        if (layernorm_type_ == LayerNormType::pre_layernorm) {
+            invokeAddBiasResidual(decoder_output,
+                                  after_adapter_attn_output_,
+                                  has_adapters_ ? ffn_output_ptr : nullptr,
+                                  has_adapters_ ?
+                                      gpt_decoder_layer_weight->at(l)->after_ffn_adapter_weights.output_weight.bias :
+                                      gpt_decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
+                                  local_batch_size,
+                                  hidden_units_,
+                                  stream_);
+        }
+        else if (layernorm_type_ == LayerNormType::post_layernorm) {
+            invokeAddBiasResidualLayerNorm(
+                decoder_output,
+                after_adapter_attn_output_,
+                has_adapters_ ? gpt_decoder_layer_weight->at(l)->after_ffn_adapter_weights.output_weight.bias :
+                                gpt_decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
+                gpt_decoder_layer_weight->at(l)->self_attn_layernorm_weights.gamma,
+                gpt_decoder_layer_weight->at(l)->self_attn_layernorm_weights.beta,
+                layernorm_eps_,
+                local_batch_size,
+                hidden_units_,
+                stream_);
+        }
         sync_check_cuda_error();
 
         if (isLastLayerParallelId(l) == true && pipeline_para_.rank_ != pipeline_para_.world_size_ - 1

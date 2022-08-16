@@ -41,31 +41,31 @@ struct DecoderLayerWeight {
                 deviceFree(weights_ptr[i]);
             }
 
-            pre_layernorm_weights.beta = nullptr;
-            pre_layernorm_weights.gamma = nullptr;
-            self_attention_weights.query_weight.kernel = nullptr;
-            self_attention_weights.query_weight.bias = nullptr;
+            pre_layernorm_weights.beta                            = nullptr;
+            pre_layernorm_weights.gamma                           = nullptr;
+            self_attention_weights.query_weight.kernel            = nullptr;
+            self_attention_weights.query_weight.bias              = nullptr;
             self_attention_weights.attention_output_weight.kernel = nullptr;
-            self_attention_weights.attention_output_weight.bias = nullptr;
-            self_attn_layernorm_weights.beta = nullptr;
-            self_attn_layernorm_weights.gamma = nullptr;
+            self_attention_weights.attention_output_weight.bias   = nullptr;
+            self_attn_layernorm_weights.beta                      = nullptr;
+            self_attn_layernorm_weights.gamma                     = nullptr;
 
-            cross_attention_weights.query_weight.kernel = nullptr;
-            cross_attention_weights.query_weight.bias = nullptr;
-            cross_attention_weights.key_weight.kernel = nullptr;
-            cross_attention_weights.key_weight.bias = nullptr;
-            cross_attention_weights.value_weight.kernel = nullptr;
-            cross_attention_weights.value_weight.bias = nullptr;
+            cross_attention_weights.query_weight.kernel            = nullptr;
+            cross_attention_weights.query_weight.bias              = nullptr;
+            cross_attention_weights.key_weight.kernel              = nullptr;
+            cross_attention_weights.key_weight.bias                = nullptr;
+            cross_attention_weights.value_weight.kernel            = nullptr;
+            cross_attention_weights.value_weight.bias              = nullptr;
             cross_attention_weights.attention_output_weight.kernel = nullptr;
-            cross_attention_weights.attention_output_weight.bias = nullptr;
-            cross_attn_layernorm_weights.beta = nullptr;
-            cross_attn_layernorm_weights.gamma = nullptr;
+            cross_attention_weights.attention_output_weight.bias   = nullptr;
+            cross_attn_layernorm_weights.beta                      = nullptr;
+            cross_attn_layernorm_weights.gamma                     = nullptr;
 
             ffn_weights.intermediate_weight.kernel = nullptr;
-            ffn_weights.intermediate_weight.bias = nullptr;
-            ffn_weights.output_weight.kernel = nullptr;
-            ffn_weights.output_weight.bias = nullptr;
-            is_maintain_buffer = false;
+            ffn_weights.intermediate_weight.bias   = nullptr;
+            ffn_weights.output_weight.kernel       = nullptr;
+            ffn_weights.output_weight.bias         = nullptr;
+            is_maintain_buffer                     = false;
         }
     }
 
@@ -103,8 +103,8 @@ struct DecoderLayerWeight {
 
     DecoderLayerWeight& operator=(const DecoderLayerWeight& other)
     {
-        hidden_units_ = other.hidden_units_;
-        inter_size_ = other.inter_size_;
+        hidden_units_     = other.hidden_units_;
+        inter_size_       = other.inter_size_;
         mem_hidden_units_ = other.mem_hidden_units_;
 
         mallocWeights();
@@ -141,35 +141,35 @@ struct DecoderLayerWeight {
     LayerNormWeight<T> self_attn_layernorm_weights;
     AttentionWeight<T> cross_attention_weights;
     LayerNormWeight<T> cross_attn_layernorm_weights;
-    FfnWeight<T> ffn_weights;
+    FfnWeight<T>       ffn_weights;
 
 private:
     void setWeightPtr()
     {
-        pre_layernorm_weights.beta = weights_ptr[0];
-        pre_layernorm_weights.gamma = weights_ptr[1];
-        self_attention_weights.query_weight.kernel = weights_ptr[2];
-        self_attention_weights.query_weight.bias = weights_ptr[3];
+        pre_layernorm_weights.beta                            = weights_ptr[0];
+        pre_layernorm_weights.gamma                           = weights_ptr[1];
+        self_attention_weights.query_weight.kernel            = weights_ptr[2];
+        self_attention_weights.query_weight.bias              = weights_ptr[3];
         self_attention_weights.attention_output_weight.kernel = weights_ptr[4];
-        self_attention_weights.attention_output_weight.bias = weights_ptr[5];
-        self_attn_layernorm_weights.beta = weights_ptr[6];
-        self_attn_layernorm_weights.gamma = weights_ptr[7];
+        self_attention_weights.attention_output_weight.bias   = weights_ptr[5];
+        self_attn_layernorm_weights.beta                      = weights_ptr[6];
+        self_attn_layernorm_weights.gamma                     = weights_ptr[7];
 
-        cross_attention_weights.query_weight.kernel = weights_ptr[8];
-        cross_attention_weights.query_weight.bias = weights_ptr[9];
-        cross_attention_weights.key_weight.kernel = weights_ptr[10];
-        cross_attention_weights.key_weight.bias = weights_ptr[11];
-        cross_attention_weights.value_weight.kernel = weights_ptr[12];
-        cross_attention_weights.value_weight.bias = weights_ptr[13];
+        cross_attention_weights.query_weight.kernel            = weights_ptr[8];
+        cross_attention_weights.query_weight.bias              = weights_ptr[9];
+        cross_attention_weights.key_weight.kernel              = weights_ptr[10];
+        cross_attention_weights.key_weight.bias                = weights_ptr[11];
+        cross_attention_weights.value_weight.kernel            = weights_ptr[12];
+        cross_attention_weights.value_weight.bias              = weights_ptr[13];
         cross_attention_weights.attention_output_weight.kernel = weights_ptr[14];
-        cross_attention_weights.attention_output_weight.bias = weights_ptr[15];
-        cross_attn_layernorm_weights.beta = weights_ptr[16];
-        cross_attn_layernorm_weights.gamma = weights_ptr[17];
+        cross_attention_weights.attention_output_weight.bias   = weights_ptr[15];
+        cross_attn_layernorm_weights.beta                      = weights_ptr[16];
+        cross_attn_layernorm_weights.gamma                     = weights_ptr[17];
 
         ffn_weights.intermediate_weight.kernel = weights_ptr[18];
-        ffn_weights.intermediate_weight.bias = weights_ptr[19];
-        ffn_weights.output_weight.kernel = weights_ptr[20];
-        ffn_weights.output_weight.bias = weights_ptr[21];
+        ffn_weights.intermediate_weight.bias   = weights_ptr[19];
+        ffn_weights.output_weight.kernel       = weights_ptr[20];
+        ffn_weights.output_weight.bias         = weights_ptr[21];
     }
 
     void mallocWeights()
@@ -201,11 +201,11 @@ private:
         is_maintain_buffer = true;
     }
 
-    int hidden_units_;
-    int inter_size_;
-    int mem_hidden_units_;
+    int  hidden_units_;
+    int  inter_size_;
+    int  mem_hidden_units_;
     bool is_maintain_buffer = false;
-    T* weights_ptr[22];
+    T*   weights_ptr[22];
 };
 
 }  // namespace fastertransformer

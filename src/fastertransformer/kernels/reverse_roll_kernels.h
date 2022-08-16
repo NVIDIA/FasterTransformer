@@ -21,29 +21,29 @@
 
 namespace fastertransformer {
 
-void invokeReverseRollCol32(int8_t* dst,
+void invokeReverseRollCol32(int8_t*       dst,
                             const int8_t* src,
-                            int batch,
-                            int window_num,
-                            int window_len,
-                            int window_size,
-                            int H,
-                            int W,
-                            int dim,
-                            int shift_size,
-                            cudaStream_t stream);
+                            int           batch,
+                            int           window_num,
+                            int           window_len,
+                            int           window_size,
+                            int           H,
+                            int           W,
+                            int           dim,
+                            int           shift_size,
+                            cudaStream_t  stream);
 
 template<typename T>
-void invokeReverseRoll(T* dst,
-                       const T* src,
-                       int batch,
-                       int window_num,
-                       int window_len,
-                       int window_size,
-                       int H,
-                       int W,
-                       int dim,
-                       int shift_size,
+void invokeReverseRoll(T*           dst,
+                       const T*     src,
+                       int          batch,
+                       int          window_num,
+                       int          window_len,
+                       int          window_size,
+                       int          H,
+                       int          W,
+                       int          dim,
+                       int          shift_size,
                        cudaStream_t stream);
 
 }  // namespace fastertransformer

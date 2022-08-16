@@ -26,27 +26,27 @@ template<typename T>
 class SwinTransformerBlockWeight {
 public:
     AttentionWeight<T> attention_weights;
-    FfnWeight<T> ffn_weights;
+    FfnWeight<T>       ffn_weights;
     LayerNormWeight<T> attn_layernorm_weights;
     LayerNormWeight<T> ffn_layernorm_weights;
-    const T* attention_relative_pos_bias = nullptr;
+    const T*           attention_relative_pos_bias = nullptr;
 };  // SwinTransformerBlockWeight
 
 template<typename T>
 class SwinTransformerBasicLayerWeight {
 public:
-    LayerNormWeight<T> merge_layernorm_weights;
-    DenseWeight<T> merge_linear_weights;
-    const T* attn_mask = nullptr;
+    LayerNormWeight<T>                         merge_layernorm_weights;
+    DenseWeight<T>                             merge_linear_weights;
+    const T*                                   attn_mask = nullptr;
     std::vector<SwinTransformerBlockWeight<T>> block_weight_list;
 };  // SwinTransformerBasicLayerWeight
 
 template<typename T>
 class SwinTransformerWeight {
 public:
-    DenseWeight<T> patchEmbed_linear_weights;
-    LayerNormWeight<T> patchEmbed_norm_weights;
-    LayerNormWeight<T> norm_weights;
+    DenseWeight<T>                                  patchEmbed_linear_weights;
+    LayerNormWeight<T>                              patchEmbed_norm_weights;
+    LayerNormWeight<T>                              norm_weights;
     std::vector<SwinTransformerBasicLayerWeight<T>> basic_layer_weight_list;
 };  // class SwinTransformerWeight
 

@@ -13,4 +13,4 @@
 # limitations under the License.
 
 add_executable(bert_int8_example bert_int8_example.cc)
-target_link_libraries(bert_int8_example PUBLIC -lcublas -lcublasLt -lcudart BertINT8)
+target_link_libraries(bert_int8_example PUBLIC -lcublas -lcublasLt -lcudart BertINT8 nvtx_utils)

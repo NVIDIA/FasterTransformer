@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,9 +20,9 @@
 namespace fastertransformer {
 
 template<typename T>
-void UnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* output_tensors,
+void UnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                                        const std::vector<fastertransformer::Tensor>* input_tensors,
-                                       const AttentionWeight<T>* attention_weights)
+                                       const AttentionWeight<T>*                     attention_weights)
 {
     // input_tensors:
     //      input_query (token_num, d_model),
@@ -32,26 +32,23 @@ void UnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* o
     // If padding_offset.data is nullptr, then not remove padding
 
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    FT_CHECK(isValidBatchSize(input_tensors->at(1).shape[0]));
-    FT_CHECK(isValidSeqLen(input_tensors->at(1).shape[2]));
     FT_CHECK(input_tensors->size() == 3 || input_tensors->size() == 4);
-    // allocateBuffer();
     const int request_batch_size = input_tensors->at(1).shape[0];
-    const int request_seq_len = input_tensors->at(1).shape[2];
+    const int request_seq_len    = input_tensors->at(1).shape[2];
     allocateBuffer(request_batch_size, request_seq_len);
 
-    T* attention_out = (T*)output_tensors->at(0).data;
-    const T* from_tensor = (const T*)input_tensors->at(0).data;
-    const T* attention_mask = (const T*)input_tensors->at(1).data;
-    const int* padding_offset = (const int*)input_tensors->at(2).data;
-    const T* relative_attention_bias = input_tensors->size() == 4 ? (const T*)input_tensors->at(3).data : nullptr;
+    T*         attention_out           = (T*)output_tensors->at(0).data;
+    const T*   from_tensor             = (const T*)input_tensors->at(0).data;
+    const T*   attention_mask          = (const T*)input_tensors->at(1).data;
+    const int* padding_offset          = (const int*)input_tensors->at(2).data;
+    const T*   relative_attention_bias = input_tensors->size() == 4 ? (const T*)input_tensors->at(3).data : nullptr;
 
-    bool with_bias = attention_weights->query_weight.bias != nullptr ? true : false;
+    bool with_bias                  = attention_weights->query_weight.bias != nullptr ? true : false;
     bool use_relative_position_bias = relative_attention_bias != nullptr ? true : false;
 
     const int m = input_tensors->at(0).shape[0];
-    int k = d_model_;
-    int n = hidden_units_;
+    int       k = d_model_;
+    int       n = hidden_units_;
 #ifdef SPARSITY_ENABLED
     int m_tmp = m;
     if (m_tmp % 8 != 0) {
@@ -195,8 +192,15 @@ void UnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* o
             qk_buf_, relative_attention_bias, request_batch_size, head_num_, request_seq_len, stream_);
     }
 
-    invokeMaskedSoftMax(
-        qk_buf_, qk_buf_, attention_mask, request_batch_size, request_seq_len, head_num_, (T)1.0f, stream_);
+    invokeMaskedSoftMax(qk_buf_,
+                        qk_buf_,
+                        attention_mask,
+                        request_batch_size,
+                        request_seq_len,
+                        request_seq_len,
+                        head_num_,
+                        (T)1.0f,
+                        stream_);
     sync_check_cuda_error();
 
     cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_N,
@@ -270,16 +274,16 @@ void UnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* o
 }
 
 template<typename T>
-UnfusedAttentionLayer<T>::UnfusedAttentionLayer(size_t max_batch_size,
-                                                size_t max_seq_len,
-                                                size_t head_num,
-                                                size_t size_per_head,
-                                                float q_scaling,
-                                                cudaStream_t stream,
+UnfusedAttentionLayer<T>::UnfusedAttentionLayer(size_t           max_batch_size,
+                                                size_t           max_seq_len,
+                                                size_t           head_num,
+                                                size_t           size_per_head,
+                                                float            q_scaling,
+                                                cudaStream_t     stream,
                                                 cublasMMWrapper* cublas_wrapper,
-                                                IAllocator* allocator,
-                                                bool is_free_buffer_after_forward,
-                                                bool sparse):
+                                                IAllocator*      allocator,
+                                                bool             is_free_buffer_after_forward,
+                                                bool             sparse):
     UnfusedAttentionLayer(max_batch_size,
                           max_seq_len,
                           head_num,
@@ -295,20 +299,18 @@ UnfusedAttentionLayer<T>::UnfusedAttentionLayer(size_t max_batch_size,
 }
 
 template<typename T>
-UnfusedAttentionLayer<T>::UnfusedAttentionLayer(size_t max_batch_size,
-                                                size_t max_seq_len,
-                                                size_t head_num,
-                                                size_t size_per_head,
-                                                size_t d_model,
-                                                float q_scaling,
-                                                cudaStream_t stream,
+UnfusedAttentionLayer<T>::UnfusedAttentionLayer(size_t           max_batch_size,
+                                                size_t           max_seq_len,
+                                                size_t           head_num,
+                                                size_t           size_per_head,
+                                                size_t           d_model,
+                                                float            q_scaling,
+                                                cudaStream_t     stream,
                                                 cublasMMWrapper* cublas_wrapper,
-                                                IAllocator* allocator,
-                                                bool is_free_buffer_after_forward,
-                                                bool sparse):
+                                                IAllocator*      allocator,
+                                                bool             is_free_buffer_after_forward,
+                                                bool             sparse):
     BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
-    max_batch_size_(max_batch_size),
-    max_seq_len_(max_seq_len),
     head_num_(head_num),
     size_per_head_(size_per_head),
     d_model_(d_model),
@@ -324,8 +326,6 @@ UnfusedAttentionLayer<T>::UnfusedAttentionLayer(UnfusedAttentionLayer<T> const& 
                           attention_layer.cublas_wrapper_,
                           attention_layer.allocator_,
                           attention_layer.is_free_buffer_after_forward_),
-    max_batch_size_(attention_layer.max_batch_size_),
-    max_seq_len_(attention_layer.max_seq_len_),
     head_num_(attention_layer.head_num_),
     size_per_head_(attention_layer.size_per_head_),
     d_model_(attention_layer.d_model_),
@@ -346,39 +346,26 @@ UnfusedAttentionLayer<T>::~UnfusedAttentionLayer()
 template<typename T>
 void UnfusedAttentionLayer<T>::allocateBuffer()
 {
-    if (is_allocate_buffer_ == false) {
-        q_buf_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
-        k_buf_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
-        v_buf_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
-        q_buf_2_ = (T*)allocator_->malloc(sizeof(T) * 3 * max_batch_size_ * max_seq_len_ * hidden_units_, false);
-        k_buf_2_ = q_buf_2_ + max_batch_size_ * max_seq_len_ * hidden_units_;
-        v_buf_2_ = k_buf_2_ + max_batch_size_ * max_seq_len_ * hidden_units_;
-        qk_buf_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * head_num_ * max_seq_len_ * max_seq_len_, false);
-        qkv_buf_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
-        qkv_buf_2_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
-        batch_qkv_kernel_ptr_ = (T**)allocator_->malloc(sizeof(T*) * 12, false);
-        batch_qkv_input_ptr_ = batch_qkv_kernel_ptr_ + 4;
-        batch_qkv_buf_ptr_ = batch_qkv_input_ptr_ + 4;
-    }
+    FT_CHECK(false);
 }
 
 template<typename T>
 void UnfusedAttentionLayer<T>::allocateBuffer(size_t batch_size, size_t seq_len)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    q_buf_ = (T*)allocator_->reMalloc(q_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
-    k_buf_ = (T*)allocator_->reMalloc(k_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
-    v_buf_ = (T*)allocator_->reMalloc(v_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
-    q_buf_2_ = (T*)allocator_->reMalloc(q_buf_2_, sizeof(T) * 3 * batch_size * seq_len * hidden_units_, false);
-    k_buf_2_ = q_buf_2_ + batch_size * seq_len * hidden_units_;
-    v_buf_2_ = k_buf_2_ + batch_size * seq_len * hidden_units_;
-    qk_buf_ = (T*)allocator_->reMalloc(qk_buf_, sizeof(T) * batch_size * head_num_ * seq_len * seq_len, false);
-    qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
+    q_buf_     = (T*)allocator_->reMalloc(q_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
+    k_buf_     = (T*)allocator_->reMalloc(k_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
+    v_buf_     = (T*)allocator_->reMalloc(v_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
+    q_buf_2_   = (T*)allocator_->reMalloc(q_buf_2_, sizeof(T) * 3 * batch_size * seq_len * hidden_units_, false);
+    k_buf_2_   = q_buf_2_ + batch_size * seq_len * hidden_units_;
+    v_buf_2_   = k_buf_2_ + batch_size * seq_len * hidden_units_;
+    qk_buf_    = (T*)allocator_->reMalloc(qk_buf_, sizeof(T) * batch_size * head_num_ * seq_len * seq_len, false);
+    qkv_buf_   = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
     qkv_buf_2_ = (T*)allocator_->reMalloc(qkv_buf_2_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
     batch_qkv_kernel_ptr_ = (T**)allocator_->reMalloc(batch_qkv_kernel_ptr_, sizeof(T*) * 12, false);
-    batch_qkv_input_ptr_ = batch_qkv_kernel_ptr_ + 4;
-    batch_qkv_buf_ptr_ = batch_qkv_input_ptr_ + 4;
-    is_allocate_buffer_ = true;
+    batch_qkv_input_ptr_  = batch_qkv_kernel_ptr_ + 4;
+    batch_qkv_buf_ptr_    = batch_qkv_input_ptr_ + 4;
+    is_allocate_buffer_   = true;
 }
 
 template<typename T>
@@ -386,38 +373,23 @@ void UnfusedAttentionLayer<T>::freeBuffer()
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_) {
-        allocator_->free(q_buf_);
-        allocator_->free(k_buf_);
-        allocator_->free(v_buf_);
-        allocator_->free(q_buf_2_);
-        allocator_->free(qk_buf_);
-        allocator_->free(qkv_buf_);
-        allocator_->free(qkv_buf_2_);
-        allocator_->free(batch_qkv_kernel_ptr_);
+        allocator_->free((void**)(&q_buf_));
+        allocator_->free((void**)(&k_buf_));
+        allocator_->free((void**)(&v_buf_));
+        allocator_->free((void**)(&q_buf_2_));
+        allocator_->free((void**)(&qk_buf_));
+        allocator_->free((void**)(&qkv_buf_));
+        allocator_->free((void**)(&qkv_buf_2_));
+        allocator_->free((void**)(&batch_qkv_kernel_ptr_));
         sync_check_cuda_error();
         is_allocate_buffer_ = false;
     }
 }
 
-template<typename T>
-bool UnfusedAttentionLayer<T>::isValidBatchSize(size_t batch_size)
-{
-    if (max_batch_size_ < batch_size) {
-        max_batch_size_ = batch_size;
-    }
-    return true;
-}
-
-template<typename T>
-bool UnfusedAttentionLayer<T>::isValidSeqLen(size_t seq_len)
-{
-    if (max_seq_len_ < seq_len) {
-        max_seq_len_ = seq_len;
-    }
-    return true;
-}
-
 template class UnfusedAttentionLayer<float>;
 template class UnfusedAttentionLayer<half>;
+#ifdef ENABLE_BF16
+template class UnfusedAttentionLayer<__nv_bfloat16>;
+#endif
 
 }  // namespace fastertransformer

@@ -394,7 +394,7 @@ def transformer_xl(inp_k, n_token, n_layer, d_model, n_head,
                    use_tpu=True, input_mask=None,
                    perm_mask=None, seg_id=None, reuse_len=None,
                    ff_activation='relu', target_mapping=None,
-                   use_float16=False, scope='transformer', **kwargs):
+                   data_type="fp32", scope='transformer', **kwargs):
     """
         Defines a Transformer-XL computation graph with additional
         support for XLNet.
@@ -442,7 +442,7 @@ def transformer_xl(inp_k, n_token, n_layer, d_model, n_head,
         init_std: float, initialize the parameters with a normal distribution
             with mean 0 and stddev init_std. Only effective when init="normal".
         mem_len: int, the number of tokens to cache.
-        reuse_len: int, the number of tokens in the currect batch to be cached
+        reuse_len: int, the number of tokens in the current batch to be cached
             and reused in the future.
         bi_data: bool, whether to use bidirectional input pipeline.
             Usually set to True during pretraining and False during finetuning.
@@ -456,7 +456,11 @@ def transformer_xl(inp_k, n_token, n_layer, d_model, n_head,
     """
 
     tf.logging.info('memory input {}'.format(mems))
-    tf_float = tf.float16 if use_float16 else tf.float32
+    tf_float = tf.float32
+    if data_type == "fp16":
+        tf_float = tf.float16
+    elif data_type == "bf16":
+        tf_float = tf.bfloat16
     tf.logging.info('Use float type {}'.format(tf_float))
 
     new_mems = []

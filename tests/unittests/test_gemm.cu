@@ -86,7 +86,7 @@ public:
     ~TensorWrapper()
     {
         delete tensor;
-        allocator->free(data);
+        allocator->free((void**)(&data));
     }
 
     void setInvalidValues()
@@ -755,7 +755,7 @@ void testSpGemmCorrectnessMatmul(size_t m, size_t n, size_t k) {
                    c_tensor.data);
         EXPECT_ALMOST_EQUAL(tc_name + " api4", T, computeType, c_tensor, expected);
 
-        allocator.free(b_compressed);
+        allocator.free((void**)(&b_compressed));
     }
     check_cuda_error(cudaStreamDestroy(stream));
 }

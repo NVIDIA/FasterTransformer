@@ -30,7 +30,7 @@ __all__ = ["Calibrator", "get_calibrators"]
 
 
 class Calibrator():
-  """A calibrator that wraps up a collector and relavent tensors and does calibration
+  """A calibrator that wraps up a collector and relevant tensors and does calibration
 
     Args:
       tensor_name_prefix: A string. The common name prefix of `quant_min`, `quant_max`, and `calib_tensor`.
@@ -63,7 +63,7 @@ class Calibrator():
     """get the op for one step of calibration
 
     Args:
-      graph: The being excuted TensorFlow Graph.
+      graph: The being executed TensorFlow Graph.
 
     Returns:
       A wrapped TensorFlow op of `tf.py_function` for one calib step.
@@ -258,7 +258,7 @@ class Calibrator():
 
   def compute_and_load_range(self, sess, **compute_range_args):
     """wraps :func:`compute_range <quantization.Calibrator.compute_range>`
-    and :func:`load_range <quantization.Calibrator.load_range>` for convinience"""
+    and :func:`load_range <quantization.Calibrator.load_range>` for convenience"""
     self.compute_range(**compute_range_args)
     self.load_range(sess)
 
@@ -306,7 +306,7 @@ def get_calibrators(collection_name_prefix,
     collection_name_prefix: A string. Determine the collection of tensors. Need to be unified with FakeQuantizer.
     graph: an instance of `tf.Graph`, if None, use default graph. Default None.
     collector_types: A string. What collector to use. One of `["max", "histogram"]`. Default `"max"`.
-    Collector arugments can be passed by collector_args.
+    Collector arguments can be passed by collector_args.
         If :func:`MaxCollector <quantization.MaxCollector>` is used,
         only `axis` and `track_minmax` can be passed to collector_args.
         If :func:`HistogramCollector <quantization.HistogramCollector>` is used,

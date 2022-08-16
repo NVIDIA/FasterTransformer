@@ -20,11 +20,11 @@ namespace fastertransformer {
 
 template<typename T>
 void generate_encoder_gemm_config(
-    int batch_size, int seq_len, int head_num, int size_per_head, void* buffer_in, bool isAppend)
+    int batch_size, int seq_len, int head_num, int size_per_head, void* buffer_in, bool isAppend, int tensor_para_size)
 {
     void* cublas_workspace;
     void* buffer;
-    int workSpaceSize;
+    int   workSpaceSize;
 
 #ifdef ENABLE_BF16
     if (std::is_same<T, half>::value || std::is_same<T, __nv_bfloat16>::value) {
@@ -34,13 +34,13 @@ void generate_encoder_gemm_config(
         // cublas_workspace_ should be the start pointer of cudaMalloc()
         // to ensure 16B alignemnet
         cublas_workspace = buffer_in;
-        buffer = (void*)((char*)cublas_workspace + CUBLAS_WORKSPACE_SIZE);
-        workSpaceSize = CUBLAS_WORKSPACE_SIZE;
+        buffer           = (void*)((char*)cublas_workspace + CUBLAS_WORKSPACE_SIZE);
+        workSpaceSize    = CUBLAS_WORKSPACE_SIZE;
     }
     else {
         cublas_workspace = nullptr;
-        buffer = buffer_in;
-        workSpaceSize = 0;
+        buffer           = buffer_in;
+        workSpaceSize    = 0;
     }
 
     struct cudaDeviceProp prop;
@@ -49,14 +49,14 @@ void generate_encoder_gemm_config(
 
     // check config
     FILE* fd;
-    int line_count = 0;
+    int   line_count = 0;
     if (!isAppend) {
         fd = fopen(GEMM_CONFIG, "w+");
     }
     else {
         fd = fopen(GEMM_CONFIG, "a+");
         std::vector<std::string> config;
-        char line[1024];
+        char                     line[1024];
         while (fgets(line, 1024, fd) != NULL) {
             config.push_back(std::string(line));
         }
@@ -74,49 +74,54 @@ void generate_encoder_gemm_config(
         }
     }
 
-    const int gemm_num = 6;
-    int M[gemm_num];
-    int N[gemm_num];
-    int K[gemm_num];
-    int batchCount[gemm_num] = {1, 1, 1, 1, 1, 1};
-    char mess[gemm_num][256];
-    float exec_times[gemm_num];
+    const int gemm_num = 7;
+    int       M[gemm_num];
+    int       N[gemm_num];
+    int       K[gemm_num];
+    int       batchCount[gemm_num] = {1, 1, 1, 1, 1, 1, 1};
+    char      mess[gemm_num][256];
+    float     exec_times[gemm_num];
 
     // gemm1
     M[0] = batch_size * seq_len;
     K[0] = head_num * size_per_head;
-    N[0] = K[0];
-    strcpy(mess[0], "from_tensor * weightQ/K/V, attr * output_kernel");
+    N[0] = (head_num / tensor_para_size) * size_per_head;
+    strcpy(mess[0], "from_tensor * weightQ/K/V");
 
     // gemm2
     M[1] = M[0];
-    K[1] = K[0];
-    N[1] = 4 * N[0];
+    K[1] = head_num * size_per_head;
+    N[1] = 4 * head_num * size_per_head / tensor_para_size;
     strcpy(mess[1], "attr_output * inter_kernel");
 
     // gemm3
     M[2] = M[0];
-    K[2] = 4 * K[0];
-    N[2] = N[0];
+    K[2] = 4 * head_num * size_per_head / tensor_para_size;
+    N[2] = head_num * size_per_head;
     strcpy(mess[2], "inter_matmul * output_kernel");
 
-    M[3] = seq_len;
-    N[3] = seq_len;
-    K[3] = size_per_head;
-    batchCount[3] = batch_size * head_num;
+    M[3]          = seq_len;
+    N[3]          = seq_len;
+    K[3]          = size_per_head;
+    batchCount[3] = batch_size * (head_num / tensor_para_size);
     strcpy(mess[3], "attention batched Gemm1");
 
-    M[4] = seq_len;
-    N[4] = size_per_head;
-    K[4] = seq_len;
-    batchCount[4] = batch_size * head_num;
+    M[4]          = seq_len;
+    N[4]          = size_per_head;
+    K[4]          = seq_len;
+    batchCount[4] = batch_size * (head_num / tensor_para_size);
     strcpy(mess[4], "attention batched Gemm2");
 
-    M[5] = batch_size * seq_len;
-    N[5] = head_num * size_per_head;
-    K[5] = N[5];
+    M[5]          = batch_size * seq_len;
+    N[5]          = (head_num / tensor_para_size) * size_per_head;
+    K[5]          = head_num * size_per_head;
     batchCount[5] = 3;
     strcpy(mess[5], "from_tensor * weight_QKV in BatchGemm");
+    
+    M[6] = batch_size * seq_len;
+    K[6] = (head_num / tensor_para_size) * size_per_head;
+    N[6] = head_num * size_per_head;
+    strcpy(mess[6], "attr * output_kernel");
 
     cublasHandle_t cublas_handle;
     check_cuda_error(cublasCreate(&cublas_handle));
@@ -127,44 +132,44 @@ void generate_encoder_gemm_config(
     cudaDataType_t BType;
     cudaDataType_t CType;
     cudaDataType_t computeType;
-    int startAlgo, endAlgo;
-    const int ites = 100;
+    int            startAlgo, endAlgo;
+    const int      ites = 100;
     struct timeval start, end;
 
     CublasDataType data_type;
     if (std::is_same<T, float>::value) {
-        data_type = FLOAT_DATATYPE;
-        AType = CUDA_R_32F;
-        BType = CUDA_R_32F;
-        CType = CUDA_R_32F;
+        data_type   = FLOAT_DATATYPE;
+        AType       = CUDA_R_32F;
+        BType       = CUDA_R_32F;
+        CType       = CUDA_R_32F;
         computeType = CUDA_R_32F;
-        startAlgo = (int)CUBLAS_GEMM_DEFAULT;
-        endAlgo = (int)CUBLAS_GEMM_ALGO23;
+        startAlgo   = (int)CUBLAS_GEMM_DEFAULT;
+        endAlgo     = (int)CUBLAS_GEMM_ALGO23;
     }
     else if (std::is_same<T, half>::value) {
-        data_type = HALF_DATATYPE;
-        AType = CUDA_R_16F;
-        BType = CUDA_R_16F;
-        CType = CUDA_R_16F;
+        data_type   = HALF_DATATYPE;
+        AType       = CUDA_R_16F;
+        BType       = CUDA_R_16F;
+        CType       = CUDA_R_16F;
         computeType = CUDA_R_32F;
-        startAlgo = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
-        endAlgo = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
+        startAlgo   = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+        endAlgo     = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
     }
 #ifdef ENABLE_BF16
     else if (std::is_same<T, __nv_bfloat16>::value) {
-        data_type = BFLOAT16_DATATYPE;
-        AType = CUDA_R_16BF;
-        BType = CUDA_R_16BF;
-        CType = CUDA_R_16BF;
+        data_type   = BFLOAT16_DATATYPE;
+        AType       = CUDA_R_16BF;
+        BType       = CUDA_R_16BF;
+        CType       = CUDA_R_16BF;
         computeType = CUDA_R_32F;
-        startAlgo = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
-        endAlgo = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
+        startAlgo   = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+        endAlgo     = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
     }
 #endif
     using scaleT = typename ScaleTypeConverter<T, false>::Type;
 
     scaleT alpha = (scaleT)1.0f;
-    scaleT beta = (scaleT)0.0f;
+    scaleT beta  = (scaleT)0.0f;
 
     printf("***Encoder Gemm Testing Begin***\n");
     printf("***Cublas Gemm Testing Begin***\n");
@@ -185,14 +190,14 @@ void generate_encoder_gemm_config(
 
         // array of pointer for batchedGemm
         T* harray[12];
-        harray[0] = (T*)buffer;
-        harray[1] = (T*)((char*)buffer + sizeof(T) * m * k);
-        harray[2] = (T*)((char*)buffer + 2 * sizeof(T) * m * k);
-        harray[4] = (T*)((char*)buffer + 3 * sizeof(T) * m * k);
-        harray[5] = (T*)((char*)buffer + 3 * sizeof(T) * m * k + sizeof(T) * k * n);
-        harray[6] = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 2 * sizeof(T) * k * n);
-        harray[8] = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 3 * sizeof(T) * k * n);
-        harray[9] = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 3 * sizeof(T) * k * n + sizeof(T) * m * n);
+        harray[0]  = (T*)buffer;
+        harray[1]  = (T*)((char*)buffer + sizeof(T) * m * k);
+        harray[2]  = (T*)((char*)buffer + 2 * sizeof(T) * m * k);
+        harray[4]  = (T*)((char*)buffer + 3 * sizeof(T) * m * k);
+        harray[5]  = (T*)((char*)buffer + 3 * sizeof(T) * m * k + sizeof(T) * k * n);
+        harray[6]  = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 2 * sizeof(T) * k * n);
+        harray[8]  = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 3 * sizeof(T) * k * n);
+        harray[9]  = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 3 * sizeof(T) * k * n + sizeof(T) * m * n);
         harray[10] = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 3 * sizeof(T) * k * n + 2 * sizeof(T) * m * n);
 
         T** darray = 0;
@@ -203,7 +208,7 @@ void generate_encoder_gemm_config(
         T** dCarray = darray + 8;
 
         float exec_time = 99999.0f;
-        int fast_algo = 0;
+        int   fast_algo = 0;
         for (int algo = startAlgo; algo <= endAlgo; algo++) {
             cublasStatus_t status;
             cudaDeviceSynchronize();
@@ -322,7 +327,7 @@ void generate_encoder_gemm_config(
         if (i < 3 && data_type != FLOAT_DATATYPE) {
             printf("***cublasLt Gemm Testing Beign***\n");
             // Let try a fixed number of combinations
-            int ALGO_COMBINATIONS = 5000;
+            int                ALGO_COMBINATIONS = 5000;
             customMatmulPerf_t perfResults[ALGO_COMBINATIONS];
             LtHgemmCustomFind<T, scaleT>(ltHandle,
                                          batch_size,
@@ -401,7 +406,7 @@ void generate_encoder_gemm_config(
         else {
             fd = fopen(SPGEMM_CONFIG, "a+");
             std::vector<std::string> config;
-            char line[1024];
+            char                     line[1024];
             while (fgets(line, 1024, fd) != NULL) {
                 config.push_back(std::string(line));
             }
@@ -425,16 +430,16 @@ void generate_encoder_gemm_config(
         }
         cusparseLtHandle_t handle;
         CHECK_CUSPARSE(cusparseLtInit(&handle));
-        cusparseOrder_t order = CUSPARSE_ORDER_COL;
-        cusparseOperation_t opA = CUSPARSE_OPERATION_NON_TRANSPOSE;
-        cusparseOperation_t opB = CUSPARSE_OPERATION_NON_TRANSPOSE;
+        cusparseOrder_t     order        = CUSPARSE_ORDER_COL;
+        cusparseOperation_t opA          = CUSPARSE_OPERATION_NON_TRANSPOSE;
+        cusparseOperation_t opB          = CUSPARSE_OPERATION_NON_TRANSPOSE;
         cusparseComputeType compute_type = CUSPARSE_COMPUTE_16F;
-        unsigned alignment = 16;
-        cudaStream_t stream = 0;
-        float alpha2 = 1.0f;
-        float beta2 = 0.0f;
+        unsigned            alignment    = 16;
+        cudaStream_t        stream       = 0;
+        float               alpha2       = 1.0f;
+        float               beta2        = 0.0f;
         for (int i = 0; i < spgemm_num; ++i) {
-            // to be compatable with spgemm wrapper, we let A be the weight matrix
+            // to be compatible with spgemm wrapper, we let A be the weight matrix
             // so m and n are swapped
             // A: mxk B: kxn C:mxn
             int m = N[i], n = M[i], k = K[i];
@@ -457,13 +462,13 @@ void generate_encoder_gemm_config(
             }
 
             float exec_time = 99999.0f;
-            int fast_algo = 0;
+            int   fast_algo = 0;
             for (int alg = 0; alg < 4; ++alg) {
                 cudaDeviceSynchronize();
                 cusparseLtMatDescriptor_t matA, matB, matC;
-                void* d_workspace = nullptr;
-                int num_streams = 1;
-                cudaStream_t streams[1] = {stream};
+                void*                     d_workspace = nullptr;
+                int                       num_streams = 1;
+                cudaStream_t              streams[1]  = {stream};
                 CHECK_CUSPARSE(cusparseLtStructuredDescriptorInit(
                     &handle, &matA, m, k, m, alignment, CUDA_R_16F, order, CUSPARSELT_SPARSITY_50_PERCENT))
                 CHECK_CUSPARSE(cusparseLtDenseDescriptorInit(&handle, &matB, k, n, k, alignment, CUDA_R_16F, order))
@@ -473,9 +478,9 @@ void generate_encoder_gemm_config(
                     // initializing MatDesc takes a lot of time
                     // and these descs can be stored to other place
                     // whereas storing MatMulPlan to other place will cause errors
-                    cusparseLtMatmulDescriptor_t matmul;
+                    cusparseLtMatmulDescriptor_t   matmul;
                     cusparseLtMatmulAlgSelection_t alg_sel;
-                    cusparseLtMatmulPlan_t plan;
+                    cusparseLtMatmulPlan_t         plan;
                     CHECK_CUSPARSE(cusparseLtMatmulDescriptorInit(
                         &handle, &matmul, opA, opB, &matA, &matB, &matC, &matC, compute_type))
                     CHECK_CUSPARSE(
@@ -535,12 +540,12 @@ void generate_encoder_gemm_config(
 }
 
 template void generate_encoder_gemm_config<float>(
-    int batch_size, int seq_len, int head_num, int size_per_head, void* buffer, bool isAppend);
+    int batch_size, int seq_len, int head_num, int size_per_head, void* buffer, bool isAppend, int tensor_para_size);
 template void generate_encoder_gemm_config<half>(
-    int batch_size, int seq_len, int head_num, int size_per_head, void* buffer, bool isAppend);
+    int batch_size, int seq_len, int head_num, int size_per_head, void* buffer, bool isAppend, int tensor_para_size);
 #ifdef ENABLE_BF16
 template void generate_encoder_gemm_config<__nv_bfloat16>(
-    int batch_size, int seq_len, int head_num, int size_per_head, void* buffer, bool isAppend);
+    int batch_size, int seq_len, int head_num, int size_per_head, void* buffer, bool isAppend, int tensor_para_size);
 #endif
 
 }  // namespace fastertransformer

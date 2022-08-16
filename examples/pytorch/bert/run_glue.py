@@ -46,6 +46,14 @@ def set_seed(args):
     if args.n_gpu > 0:
         torch.cuda.manual_seed_all(args.seed)
 
+def convert_type(tensor, data_type):
+    if data_type == 'fp16':
+        return tensor.half()
+    elif data_type == 'fp32':
+        return tensor.float()
+    elif data_type == 'bf16':
+        return tensor.bfloat16()
+
 
 def evaluate(args, model, tokenizer, prefix=""):
     # Loop to handle MNLI double evaluation (matched, mis-matched)
@@ -59,7 +67,8 @@ def evaluate(args, model, tokenizer, prefix=""):
         if not os.path.exists(eval_output_dir) and args.local_rank in [-1, 0]:
             os.makedirs(eval_output_dir)
 
-        args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
+        # args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
+        args.eval_batch_size = 1
         # Note that DistributedSampler samples randomly
         eval_sampler = SequentialSampler(eval_dataset)
         eval_dataloader = DataLoader(eval_dataset, sampler=eval_sampler, batch_size=args.eval_batch_size)
@@ -83,19 +92,20 @@ def evaluate(args, model, tokenizer, prefix=""):
             batch = tuple(t.to(args.device) for t in batch)
 
             with torch.no_grad():
-                inputs = [batch[0], batch[1].half() if args.data_type == 'fp16' else batch[1], batch[2]]
+                inputs = [batch[0], convert_type(batch[1], args.data_type), batch[2]]
                 outputs = model(*inputs)
                 # tmp_eval_loss, logits = outputs[:2]
                 logits = outputs[0]
 
                 # eval_loss += tmp_eval_loss.mean().item()
+                
             nb_eval_steps += 1
             if preds is None:
-                preds = logits.detach().cpu().numpy()
-                out_label_ids = batch[3].detach().cpu().numpy()
+                preds = logits.detach().float().cpu().numpy()
+                out_label_ids = batch[3].detach().float().cpu().numpy()
             else:
-                preds = np.append(preds, logits.detach().cpu().numpy(), axis=0)
-                out_label_ids = np.append(out_label_ids, batch[3].detach().cpu().numpy(), axis=0)
+                preds = np.append(preds, logits.detach().float().cpu().numpy(), axis=0)
+                out_label_ids = np.append(out_label_ids, batch[3].detach().float().cpu().numpy(), axis=0)
 
         evalTime = timeit.default_timer() - start_time
         logger.info("  Evaluation for " + eval_task + " done in total %f secs (%f sec per example)", evalTime, evalTime / len(eval_dataset))
@@ -244,7 +254,7 @@ def main():
     parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
 
     parser.add_argument("--model_type", type=str, help="ori, ths, thsext")
-    parser.add_argument("--data_type", type=str, help="fp32, fp16")
+    parser.add_argument('--data_type', type=str, choices=['fp32', 'fp16', 'bf16'], default='fp32')
     parser.add_argument('--ths_path', type=str, default='./lib/libth_bert.so',
                         help='path of the pyt_fastertransformer dynamic lib file')
     parser.add_argument('--remove_padding', action='store_true',
@@ -325,6 +335,9 @@ def main():
             if args.data_type == 'fp16':
                 logger.info("Use fp16")
                 model.half()
+            elif args.data_type == 'bf16':
+                logger.info("Use bf16")
+                model.bfloat16()
             if args.model_type == 'thsext':
                 logger.info("Use custom BERT encoder for TorchScript")
                 from utils.encoder import EncoderWeights, CustomEncoder
@@ -334,6 +347,8 @@ def main():
                 weights.to_cuda()
                 if args.data_type == 'fp16':
                     weights.to_half()
+                elif args.data_type == 'bf16':
+                    weights.to_bfloat16()
                 enc = CustomEncoder(model.config.num_hidden_layers,
                                     model.config.num_attention_heads,
                                     model.config.hidden_size//model.config.num_attention_heads,
@@ -351,6 +366,8 @@ def main():
                 fake_type_id = fake_input_id.clone().detach()
                 if args.data_type == 'fp16':
                     fake_mask = fake_mask.half()
+                elif args.data_type == 'bf16':
+                    fake_mask = fake_mask.bfloat16()
                 model.eval()
                 with torch.no_grad():
                     model_ = torch.jit.trace(model, (fake_input_id, fake_mask, fake_type_id))

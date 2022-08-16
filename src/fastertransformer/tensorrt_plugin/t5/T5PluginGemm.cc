@@ -44,24 +44,24 @@ int t5_gemm(int argv[16])
         return 0;
     }
 
-    const int batch_size = argv[1];
-    const int beam_width = argv[2];
+    const int batch_size      = argv[1];
+    const int beam_width      = argv[2];
     const int max_mem_seq_len = argv[3];
 
-    const int encoder_d_model = argv[4];
-    const int encoder_head_num = argv[5];
+    const int encoder_d_model       = argv[4];
+    const int encoder_head_num      = argv[5];
     const int encoder_size_per_head = argv[6];
-    const int encoder_inter_size = argv[7];
+    const int encoder_inter_size    = argv[7];
 
-    const int decoder_d_model = argv[8];
-    const int decoder_head_num = argv[9];
+    const int decoder_d_model       = argv[8];
+    const int decoder_head_num      = argv[9];
     const int decoder_size_per_head = argv[10];
-    const int decoder_inter_size = argv[11];
-    const int decoder_vocab_size = argv[12];
+    const int decoder_inter_size    = argv[11];
+    const int decoder_vocab_size    = argv[12];
 
-    const ft::CublasDataType data_type = static_cast<ft::CublasDataType>(argv[13]);  // 0 FP32, 1 FP16, 2 BF 16
-    const int tensor_para_size = argc <= 14 ? 1 : argv[14];
-    const int is_fp16_compute_type = argc <= 15 ? 1 : argv[15];
+    const ft::CublasDataType data_type        = static_cast<ft::CublasDataType>(argv[13]);  // 0 FP32, 1 FP16, 2 BF 16
+    const int                tensor_para_size = argc <= 14 ? 1 : argv[14];
+    const int                is_fp16_compute_type = argc <= 15 ? 1 : argv[15];
 
     std::cout << "[INFO] arguments: " << std::endl
               << "    batch_size: " << batch_size << std::endl
@@ -80,7 +80,7 @@ int t5_gemm(int argv[16])
               << "    tensor_para_size: " << tensor_para_size << std::endl
               << "    is_fp16_compute_type: " << is_fp16_compute_type << std::endl;
 
-    void* gemm_test_buf;
+    void*  gemm_test_buf;
     size_t buf_size_in_byte = ft::calT5GemmTestBufSizeInByte(batch_size,
                                                              beam_width,
                                                              max_mem_seq_len,
@@ -127,7 +127,7 @@ int t5_gemm(int argv[16])
                                            false,
                                            is_fp16_compute_type);
     }
-    if (data_type == ft::HALF_DATATYPE) {
+    else if (data_type == ft::HALF_DATATYPE) {
         ft::generate_t5_gemm_config<half>(batch_size,
                                           beam_width,
                                           max_mem_seq_len,
@@ -146,7 +146,7 @@ int t5_gemm(int argv[16])
                                           is_fp16_compute_type);
     }
 #ifdef ENABLE_BF16
-    if (data_type == ft::BFLOAT16_DATATYPE) {
+    else if (data_type == ft::BFLOAT16_DATATYPE) {
         ft::generate_t5_gemm_config<__nv_bfloat16>(batch_size,
                                                    beam_width,
                                                    max_mem_seq_len,
@@ -166,8 +166,8 @@ int t5_gemm(int argv[16])
     }
 #endif
     else {
-        printf("[ERROR] data type only supports fp32(0), fp16(1), bf16(2). \n");
-        return -1;
+        FT_LOG_ERROR("data type %d is invalid, only supports fp32(0), fp16(1), bf16(2).", (int)(data_type));
+        ft::FT_CHECK(false);
     }
 
     ft::check_cuda_error(cudaFree(gemm_test_buf));

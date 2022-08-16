@@ -21,6 +21,7 @@ import sys
 dir_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(dir_path + "/../..")
 from examples.pytorch.bert.bert_example import bert_example
+from examples.pytorch.encoder.encoder_example import encoder_example
 
 class TestEncoder(unittest.TestCase):
     
@@ -33,15 +34,18 @@ class TestEncoder(unittest.TestCase):
                         'allow_gemm_test': False,
                         'sparse': False,
                         'time': False,
-                        'fp16': False,
+                        'data_type': 'fp32',
                         'remove_padding': False,
                         'avg_seq_len': -1,
                         'thread_num': 1,
                         'ths_path': 'lib/libth_bert.so',
                         'weight_path': None,
-                        'int8_mode': 0
+                        'int8_mode': 0,
+                        'tensor_para_size': 1,
+                        'pipeline_para_size': 1,
+                        'error_threshold': None,
                         }
-    threshold = {False: 3e-5, True: 4e-2 }
+    threshold = {'fp32': 4e-5, 'fp16': 4e-2, 'bf16': 5e-2 }
 
     def test_batch_fp32(self):
         args_dict = copy.deepcopy(self.common_args_dict)
@@ -49,24 +53,34 @@ class TestEncoder(unittest.TestCase):
         for batch in [1, 8, 64, 128]:
             args_dict['batch_size'] = batch
             
-            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['seq_len'],
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat gemm_config.in".format(args_dict['batch_size'], args_dict['seq_len'],
                                                             args_dict['head_num'], args_dict['head_size'],
-                                                            args_dict['fp16'] == True))
+                                                            args_dict['data_type'] == 'fp16'))
             max_diff = bert_example(args_dict)
-            self.assertTrue(max_diff < self.threshold[args_dict['fp16']])
+            sys.stdout.flush()
+            self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
+            args_dict['ths_path'] = 'lib/libth_encoder.so'
+            max_diff = encoder_example(args_dict)
+            sys.stdout.flush()
+            self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
 
     def test_batch_fp16(self):
         args_dict = copy.deepcopy(self.common_args_dict)
-        args_dict['fp16'] = True
+        args_dict['data_type'] = 'fp16'
         
         for batch in [1, 8, 64, 128]:
             args_dict['batch_size'] = batch
             
-            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['seq_len'],
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat gemm_config.in".format(args_dict['batch_size'], args_dict['seq_len'],
                                                             args_dict['head_num'], args_dict['head_size'],
-                                                            args_dict['fp16'] == True))
+                                                            args_dict['data_type'] == 'fp16'))
             max_diff = bert_example(args_dict)
-            self.assertTrue(max_diff < self.threshold[args_dict['fp16']])
+            sys.stdout.flush()
+            self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
+            args_dict['ths_path'] = 'lib/libth_encoder.so'
+            max_diff = encoder_example(args_dict)
+            sys.stdout.flush()
+            self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
 
     def test_hidden_fp32(self):
         args_dict = copy.deepcopy(self.common_args_dict)
@@ -76,26 +90,36 @@ class TestEncoder(unittest.TestCase):
             args_dict['head_size'] = p[1]
             args_dict['inter_size'] = p[0] * p[1] * 4
             
-            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['seq_len'],
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat gemm_config.in".format(args_dict['batch_size'], args_dict['seq_len'],
                                                             args_dict['head_num'], args_dict['head_size'],
-                                                            args_dict['fp16'] == True))
+                                                            args_dict['data_type'] == 'fp16'))
             max_diff = bert_example(args_dict)
-            self.assertTrue(max_diff < self.threshold[args_dict['fp16']])
+            sys.stdout.flush()
+            self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
+            args_dict['ths_path'] = 'lib/libth_encoder.so'
+            max_diff = encoder_example(args_dict)
+            sys.stdout.flush()
+            self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
 
     def test_hidden_fp16(self):
         args_dict = copy.deepcopy(self.common_args_dict)
-        args_dict['fp16'] = True
+        args_dict['data_type'] = 'fp16'
         
         for p in [tuple([12, 64]), tuple([16, 64]), tuple([4, 32]), tuple([8, 96])]:
             args_dict['head_num'] = p[0]
             args_dict['head_size'] = p[1]
             args_dict['inter_size'] = p[0] * p[1] * 4
             
-            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['seq_len'],
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat gemm_config.in".format(args_dict['batch_size'], args_dict['seq_len'],
                                                             args_dict['head_num'], args_dict['head_size'],
-                                                            args_dict['fp16'] == True))
+                                                            args_dict['data_type'] == 'fp16'))
             max_diff = bert_example(args_dict)
-            self.assertTrue(max_diff < self.threshold[args_dict['fp16']])
+            sys.stdout.flush()
+            self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
+            args_dict['ths_path'] = 'lib/libth_encoder.so'
+            max_diff = encoder_example(args_dict)
+            sys.stdout.flush()
+            self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
 
     def test_seqlen_fp32(self):
         args_dict = copy.deepcopy(self.common_args_dict)
@@ -105,26 +129,38 @@ class TestEncoder(unittest.TestCase):
             if seqlen == 1536:
                 args_dict['layer_num'] = 6
             
-            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['seq_len'],
+            threshold_tmp = {'fp32': 1e-4, 'fp16': 4e-2, 'bf16': 5e-2} # The error of encoder on this test is larger
+
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat gemm_config.in".format(args_dict['batch_size'], args_dict['seq_len'],
                                                             args_dict['head_num'], args_dict['head_size'],
-                                                            args_dict['fp16'] == True))
+                                                            args_dict['data_type'] == 'fp16'))
             max_diff = bert_example(args_dict)
-            self.assertTrue(max_diff < self.threshold[args_dict['fp16']])
+            sys.stdout.flush()
+            self.assertTrue(max_diff < threshold_tmp[args_dict['data_type']])
+            args_dict['ths_path'] = 'lib/libth_encoder.so'
+            max_diff = encoder_example(args_dict)
+            sys.stdout.flush()
+            self.assertTrue(max_diff < threshold_tmp[args_dict['data_type']])
 
     def test_seqlen_fp16(self):
         args_dict = copy.deepcopy(self.common_args_dict)
-        args_dict['fp16'] = True
+        args_dict['data_type'] = 'fp16'
         
         for seqlen in [32, 130, 511, 1024, 1536]:
             args_dict['seq_len'] = seqlen
             if seqlen == 1536:
                 args_dict['layer_num'] = 6
 
-            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat .tmp.gemm.log".format(args_dict['batch_size'], args_dict['seq_len'],
+            os.system("./bin/bert_gemm {} {} {} {} {} 0 > .tmp.gemm.log && cat gemm_config.in".format(args_dict['batch_size'], args_dict['seq_len'],
                                                             args_dict['head_num'], args_dict['head_size'],
-                                                            args_dict['fp16'] == True))
+                                                            args_dict['data_type'] == 'fp16'))
             max_diff = bert_example(args_dict)
-            self.assertTrue(max_diff < self.threshold[args_dict['fp16']])
+            sys.stdout.flush()
+            self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
+            args_dict['ths_path'] = 'lib/libth_encoder.so'
+            max_diff = encoder_example(args_dict)
+            sys.stdout.flush()
+            self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
 
 if __name__ == "__main__":
     unittest.main()

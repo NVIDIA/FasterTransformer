@@ -16,7 +16,7 @@
 
 #include "src/fastertransformer/models/t5/T5Decoder.h"
 #include "src/fastertransformer/th_op/th_utils.h"
-#include "src/fastertransformer/utils/mpi_utils.h"
+#include "src/fastertransformer/utils/nccl_utils.h"
 
 namespace ft = fastertransformer;
 namespace th = torch;
@@ -25,8 +25,8 @@ namespace torch_ext {
 class IFT5Decoder {
 public:
     virtual ~IFT5Decoder() {}
-    virtual void forward(size_t batch_size,
-                         size_t step,
+    virtual void forward(size_t      batch_size,
+                         size_t      step,
                          th::Tensor& from_tensor,
                          th::Tensor& memory_tensor,
                          th::Tensor& memory_sequence_length,
@@ -42,26 +42,30 @@ public:
 template<typename T>
 class FTT5Decoder: public IFT5Decoder {
 public:
-    FTT5Decoder(int head_num,
-                int head_size,
-                int inter_size,
-                int d_model,
-                int layer_num,
-                int mem_d_model,
-                int tensor_para_size,
-                int pipeline_para_size,
+    FTT5Decoder(int                            head_num,
+                int                            head_size,
+                int                            inter_size,
+                int                            d_model,
+                int                            layer_num,
+                int                            mem_d_model,
+                int                            tensor_para_size,
+                int                            pipeline_para_size,
+                bool                           t5_with_bias,
+                bool                           use_gated_activation,
+                int                            position_embedding_type,
                 const std::vector<th::Tensor>& w):
         _head_num(head_num),
         _head_size(head_size),
         _inter_size(inter_size),
+        _t5_with_bias(t5_with_bias),
+        _use_gated_activation(use_gated_activation),
+        _position_embedding_type(position_embedding_type),
         _d_model(d_model),
         _weights(w),
         _layer_num(layer_num),
         _mem_d_model(mem_d_model)
     {
-        tensor_para_.world_size_ = tensor_para_size;
-        pipeline_para_.world_size_ = pipeline_para_size;
-        init_nccl_comm();
+        ft::ftNcclInitialize(tensor_para_, pipeline_para_, tensor_para_size, pipeline_para_size);
 
         int hidden_dim = _head_num * _head_size;
         ft::check_cuda_error(cublasLtCreate(&_cublasltHandle));
@@ -82,124 +86,76 @@ public:
             decoder_layer_weights[i]->pre_layernorm_weights.gamma =
                 get_ptr<T>(_weights[0]) + (i - first_layer_index) * _d_model;
             decoder_layer_weights[i]->self_attention_weights.query_weight.kernel =
-                get_ptr<T>(_weights[1]) + (i - first_layer_index) * _d_model * 3 * hidden_dim;
+                get_ptr<T>(_weights[1])
+                + (i - first_layer_index) * _d_model * 3 * hidden_dim / tensor_para_.world_size_;
             decoder_layer_weights[i]->self_attention_weights.attention_output_weight.kernel =
-                get_ptr<T>(_weights[2]) + (i - first_layer_index) * hidden_dim * _d_model;
+                get_ptr<T>(_weights[2]) + (i - first_layer_index) * hidden_dim / tensor_para_.world_size_ * _d_model;
             decoder_layer_weights[i]->self_attn_layernorm_weights.gamma =
                 get_ptr<T>(_weights[3]) + (i - first_layer_index) * _d_model;
             decoder_layer_weights[i]->cross_attention_weights.query_weight.kernel =
-                get_ptr<T>(_weights[4]) + (i - first_layer_index) * _d_model * hidden_dim;
+                get_ptr<T>(_weights[4]) + (i - first_layer_index) * _d_model * hidden_dim / tensor_para_.world_size_;
             decoder_layer_weights[i]->cross_attention_weights.key_weight.kernel =
-                get_ptr<T>(_weights[5]) + (i - first_layer_index) * _mem_d_model * hidden_dim;
+                get_ptr<T>(_weights[5])
+                + (i - first_layer_index) * _mem_d_model * hidden_dim / tensor_para_.world_size_;
             decoder_layer_weights[i]->cross_attention_weights.value_weight.kernel =
-                get_ptr<T>(_weights[6]) + (i - first_layer_index) * _mem_d_model * hidden_dim;
+                get_ptr<T>(_weights[6])
+                + (i - first_layer_index) * _mem_d_model * hidden_dim / tensor_para_.world_size_;
             decoder_layer_weights[i]->cross_attention_weights.attention_output_weight.kernel =
-                get_ptr<T>(_weights[7]) + (i - first_layer_index) * hidden_dim * _d_model;
+                get_ptr<T>(_weights[7]) + (i - first_layer_index) * hidden_dim / tensor_para_.world_size_ * _d_model;
             decoder_layer_weights[i]->cross_attn_layernorm_weights.gamma =
                 get_ptr<T>(_weights[8]) + (i - first_layer_index) * _d_model;
             decoder_layer_weights[i]->ffn_weights.intermediate_weight.kernel =
-                get_ptr<T>(_weights[9]) + (i - first_layer_index) * _d_model * _inter_size;
+                get_ptr<T>(_weights[9]) + (i - first_layer_index) * _d_model * _inter_size / tensor_para_.world_size_;
+            if (_use_gated_activation) {
+                decoder_layer_weights[i]->ffn_weights.intermediate_weight2.kernel =
+                    get_ptr<T>(_weights[10])
+                    + (i - first_layer_index) * _d_model * _inter_size / tensor_para_.world_size_;
+            }
             decoder_layer_weights[i]->ffn_weights.output_weight.kernel =
-                get_ptr<T>(_weights[10]) + (i - first_layer_index) * _inter_size * _d_model;
-        }
-    }
+                get_ptr<T>(_weights[11]) + (i - first_layer_index) * _inter_size / tensor_para_.world_size_ * _d_model;
 
-    void init_nccl_comm()
-    {
-        int mpi_initialized;
-        MPICHECK(MPI_Initialized(&mpi_initialized));
-        if (!mpi_initialized) {
-            printf("[INFO] MPI is not initialized! Skipped the NCCL communication initialization.\n");
-            if (tensor_para_.world_size_ != 1) {
-                printf("[FATAL] MPI initialization can only be skipped when tensor_para_size=1, but got %d!\n",
-                       tensor_para_.world_size_);
-            }
-            if (pipeline_para_.world_size_ != 1) {
-                printf("[FATAL] MPI initialization can only be skipped when pipeline_para_size=1, but got %d!\n",
-                       pipeline_para_.world_size_);
-            }
-            return;
-        }
-
-        int rank, world_size;
-        MPICHECK(MPI_Comm_rank(MPI_COMM_WORLD, &rank));
-        MPICHECK(MPI_Comm_size(MPI_COMM_WORLD, &world_size));
-        tensor_para_.rank_ = rank % tensor_para_.world_size_;
-        pipeline_para_.rank_ = rank / tensor_para_.world_size_;
-
-        ncclUniqueId tensor_para_nccl_uid;
-        ncclUniqueId pipeline_para_nccl_uid;
-
-        // assume gpu_num = n * k,
-        // tensor parallelism group size is n
-        // pipeline parallelism group size is k
-        if (tensor_para_.rank_ == 0) {
-            // get the uid of each tensor parallelism group
-            // here, 0, 1, ..., n-1 are in group 0,
-            //       n, ..., 2n - 1 are in group 1.
-            NCCLCHECK(ncclGetUniqueId(&tensor_para_nccl_uid));
-            for (int i = 1; i < (int)tensor_para_.world_size_; i++) {
-                FT_LOG_INFO("rank %d sends tensor_para_nccl_uid to rank %d \n", rank, rank + i);
-                MPICHECK(MPI_Send(
-                    &tensor_para_nccl_uid, sizeof(tensor_para_nccl_uid), MPI_BYTE, rank + i, 0, MPI_COMM_WORLD));
+            if (_t5_with_bias) {
+                decoder_layer_weights[i]->pre_layernorm_weights.beta =
+                    get_ptr<T>(_weights[12]) + (i - first_layer_index) * _d_model;
+                decoder_layer_weights[i]->self_attention_weights.query_weight.bias =
+                    get_ptr<T>(_weights[13]) + (i - first_layer_index) * 3 * hidden_dim / tensor_para_.world_size_;
+                decoder_layer_weights[i]->self_attention_weights.attention_output_weight.bias =
+                    get_ptr<T>(_weights[14]) + (i - first_layer_index) * _d_model;
+                decoder_layer_weights[i]->self_attn_layernorm_weights.beta =
+                    get_ptr<T>(_weights[15]) + (i - first_layer_index) * _d_model;
+                decoder_layer_weights[i]->cross_attention_weights.query_weight.bias =
+                    get_ptr<T>(_weights[16]) + (i - first_layer_index) * hidden_dim / tensor_para_.world_size_;
+                decoder_layer_weights[i]->cross_attention_weights.key_weight.bias =
+                    get_ptr<T>(_weights[17]) + (i - first_layer_index) * hidden_dim / tensor_para_.world_size_;
+                decoder_layer_weights[i]->cross_attention_weights.value_weight.bias =
+                    get_ptr<T>(_weights[18]) + (i - first_layer_index) * hidden_dim / tensor_para_.world_size_;
+                decoder_layer_weights[i]->cross_attention_weights.attention_output_weight.bias =
+                    get_ptr<T>(_weights[19]) + (i - first_layer_index) * _d_model;
+                decoder_layer_weights[i]->cross_attn_layernorm_weights.beta =
+                    get_ptr<T>(_weights[20]) + (i - first_layer_index) * _d_model;
+                decoder_layer_weights[i]->ffn_weights.intermediate_weight.bias =
+                    get_ptr<T>(_weights[21]) + (i - first_layer_index) * _inter_size / tensor_para_.world_size_;
+                if (_use_gated_activation) {
+                    decoder_layer_weights[i]->ffn_weights.intermediate_weight2.bias =
+                        get_ptr<T>(_weights[22]) + (i - first_layer_index) * _inter_size / tensor_para_.world_size_;
+                }
+                decoder_layer_weights[i]->ffn_weights.output_weight.bias =
+                    get_ptr<T>(_weights[23]) + (i - first_layer_index) * _d_model;
             }
         }
-        else {
-            MPI_Status status;
-            FT_LOG_INFO("rank %d receives tensor_para_nccl_uid from rank %d \n", rank, rank - (int)tensor_para_.rank_);
-            MPICHECK(MPI_Recv(&tensor_para_nccl_uid,
-                              sizeof(tensor_para_nccl_uid),
-                              MPI_BYTE,
-                              rank - tensor_para_.rank_,
-                              0,
-                              MPI_COMM_WORLD,
-                              &status));
-        }
-
-        if (pipeline_para_.rank_ == 0) {
-            // get the uid of each pipeline parallelism group
-            // 0, k, 2k, are in group 0
-            // 1, k+1, 2k+1 are in group 1
-            NCCLCHECK(ncclGetUniqueId(&pipeline_para_nccl_uid));
-            for (int i = 1; i < (int)pipeline_para_.world_size_; i++) {
-                FT_LOG_INFO("rank %d sends pipeline_para_nccl_uid to rank %d \n",
-                            rank,
-                            rank + i * (int)tensor_para_.world_size_);
-                MPICHECK(MPI_Send(&pipeline_para_nccl_uid,
-                                  sizeof(pipeline_para_nccl_uid),
-                                  MPI_BYTE,
-                                  rank + i * tensor_para_.world_size_,
-                                  0,
-                                  MPI_COMM_WORLD));
-            }
-        }
-        else {
-            MPI_Status status;
-            FT_LOG_INFO(
-                "rank %d receives pipeline_para_nccl_uid from rank %d \n", rank, rank % (int)tensor_para_.world_size_);
-            MPICHECK(MPI_Recv(&pipeline_para_nccl_uid,
-                              sizeof(pipeline_para_nccl_uid),
-                              MPI_BYTE,
-                              rank % tensor_para_.world_size_,
-                              0,
-                              MPI_COMM_WORLD,
-                              &status));
-        }
-        NCCLCHECK(ncclCommInitRank(
-            &tensor_para_.nccl_comm_, tensor_para_.world_size_, tensor_para_nccl_uid, tensor_para_.rank_));
-        NCCLCHECK(ncclCommInitRank(
-            &pipeline_para_.nccl_comm_, pipeline_para_.world_size_, pipeline_para_nccl_uid, pipeline_para_.rank_));
     }
 
     ~FTT5Decoder() override
     {
+        ft::ftNcclParamDestroy(tensor_para_);
+        ft::ftNcclParamDestroy(pipeline_para_);
         cublasLtDestroy(_cublasltHandle);
         delete cublas_algo_map_;
         delete cublas_wrapper_mutex_;
     }
 
-    void forward(size_t batch_size,
-                 size_t step,
+    void forward(size_t      batch_size,
+                 size_t      step,
                  th::Tensor& from_tensor,
                  th::Tensor& memory_tensor,
                  th::Tensor& memory_sequence_length,
@@ -211,7 +167,7 @@ public:
                  th::Tensor& memory_cache_values_tensor,
                  th::Tensor& relative_attention_bias_tensor) override
     {
-        auto stream = at::cuda::getCurrentCUDAStream().stream();
+        auto           stream        = at::cuda::getCurrentCUDAStream().stream();
         cublasHandle_t _cublasHandle = at::cuda::getCurrentCUDABlasHandle();
         cublasSetStream(_cublasHandle, stream);
         fastertransformer::Allocator<ft::AllocatorType::TH>* allocator =
@@ -222,9 +178,19 @@ public:
         if (std::is_same<T, half>::value) {
             cublas_wrapper->setFP16GemmConfig();
         }
+#ifdef ENABLE_BF16
+        else if (std::is_same<T, __nv_bfloat16>::value) {
+            cublas_wrapper->setBF16GemmConfig();
+        }
+#endif
         else if (std::is_same<T, float>::value) {
             cublas_wrapper->setFP32GemmConfig();
         }
+
+        // NeMo Megatron T5 with bias and use gelu or geglu.
+        ft::ActivationType activation_type =
+            _t5_with_bias ? (_use_gated_activation ? ft::ActivationType::GeGLU : ft::ActivationType::Gelu) :
+                            ft::ActivationType::Relu;
 
         ft::T5Decoder<T> decoder = ft::T5Decoder<T>(batch_size,
                                                     _head_num,
@@ -232,15 +198,16 @@ public:
                                                     _inter_size,
                                                     _d_model,
                                                     _layer_num,
+                                                    _layernorm_eps,
                                                     stream,
                                                     cublas_wrapper,
                                                     allocator,
                                                     true,
                                                     tensor_para_,
                                                     pipeline_para_,
-                                                    ft::ActivationType::Relu);
+                                                    activation_type);
 
-        int tmp_step = step + 1;
+        int                     tmp_step = step + 1;
         std::vector<ft::Tensor> input_tensors =
             std::vector<ft::Tensor>{convert_tensor<T>(from_tensor),
                                     convert_tensor<T>(memory_tensor),
@@ -272,20 +239,25 @@ public:
     }
 
 private:
-    const int _head_num;
-    const int _head_size;
-    const int _inter_size;
-    const int _d_model;
-    std::vector<th::Tensor> _weights;
-    const int _layer_num;
-    const int _mem_d_model;
-    cublasLtHandle_t _cublasltHandle;
-    std::mutex* cublas_wrapper_mutex_;
-    ft::cublasAlgoMap* cublas_algo_map_;
+    const int                                 _head_num;
+    const int                                 _head_size;
+    const int                                 _inter_size;
+    const int                                 _d_model;
+    std::vector<th::Tensor>                   _weights;
+    const int                                 _layer_num;
+    static constexpr float                    _layernorm_eps = 1e-6f;
+    const int                                 _mem_d_model;
+    cublasLtHandle_t                          _cublasltHandle;
+    std::mutex*                               cublas_wrapper_mutex_;
+    ft::cublasAlgoMap*                        cublas_algo_map_;
     std::vector<ft::T5DecoderLayerWeight<T>*> decoder_layer_weights;
 
     ft::NcclParam tensor_para_;
     ft::NcclParam pipeline_para_;
+
+    bool _t5_with_bias;
+    bool _use_gated_activation;
+    int  _position_embedding_type;
 };
 
 class FasterTransformerT5Decoder: public th::jit::CustomClassHolder {
@@ -300,19 +272,35 @@ public:
                                th::Tensor cross_output_kernel,
                                th::Tensor ffn_layernorm_gamma,
                                th::Tensor inter_kernel,
+                               th::Tensor inter_kernel2,
                                th::Tensor output_kernel,
-                               int64_t head_num,
-                               int64_t head_size,
-                               int64_t inter_size,
-                               int64_t d_model,
-                               int64_t layer_num,
-                               int64_t mem_d_model,
-                               int64_t tensor_para_size,
-                               int64_t pipeline_para_size);
+                               th::Tensor self_layernorm_beta,
+                               th::Tensor self_bias_qkv,
+                               th::Tensor self_output_bias,
+                               th::Tensor cross_layernorm_beta,
+                               th::Tensor cross_bias_q,
+                               th::Tensor cross_bias_k,
+                               th::Tensor cross_bias_v,
+                               th::Tensor cross_output_bias,
+                               th::Tensor ffn_layernorm_beta,
+                               th::Tensor inter_bias,
+                               th::Tensor inter_bias2,
+                               th::Tensor output_bias,
+                               int64_t    head_num,
+                               int64_t    head_size,
+                               int64_t    inter_size,
+                               int64_t    d_model,
+                               int64_t    layer_num,
+                               int64_t    mem_d_model,
+                               int64_t    tensor_para_size,
+                               int64_t    pipeline_para_size,
+                               bool       t5_with_bias,
+                               bool       use_gated_activation,
+                               int64_t    position_embedding_type);
 
     ~FasterTransformerT5Decoder();
 
-    std::vector<th::Tensor> forward(int64_t step,
+    std::vector<th::Tensor> forward(int64_t    step,
                                     th::Tensor from_tensor,
                                     th::Tensor memory_tensor,
                                     th::Tensor memory_sequence_length,
@@ -326,9 +314,9 @@ public:
     std::vector<th::Tensor> get_pickle_info() const;
 
 private:
-    const at::ScalarType _st;
-    IFT5Decoder* ftdecoder;
-    th::Tensor head_info;
+    const at::ScalarType    _st;
+    IFT5Decoder*            ftdecoder;
+    th::Tensor              head_info;
     std::vector<th::Tensor> weights;
 };
 

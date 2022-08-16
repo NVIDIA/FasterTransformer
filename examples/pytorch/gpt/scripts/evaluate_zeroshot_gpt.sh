@@ -1,21 +1,21 @@
 #!/bin/bash
 
-TASK="LAMBADA"
-LAMBADA_PATH="../models/megatron-models/lambada_test.jsonl"
-VALID_DATA=$LAMBADA_PATH
+VOCAB_FILE=$1
+MERGE_FILE=$2
+LAMBADA_PATH=$3
+CHECKPOINT=$4
 
-VOCAB_FILE=../models/gpt2-vocab.json
-MERGE_FILE=../models/gpt2-merges.txt
-CHECKPOINT=../models/megatron-models/345m/
+TASK="LAMBADA"
+VALID_DATA=$LAMBADA_PATH
 
 python -m torch.distributed.run --nproc_per_node 1 ../examples/pytorch/gpt/evaluate_zeroshot_gpt.py \
                --task $TASK \
-               --valid-data $VALID_DATA \
+               --valid-data "${VALID_DATA}" \
                --tokenizer-type GPT2BPETokenizer \
                --strict-lambada \
-               --vocab-file $VOCAB_FILE \
-               --merge-file $MERGE_FILE \
-               --load $CHECKPOINT \
+               --vocab-file "${VOCAB_FILE}" \
+               --merge-file "${MERGE_FILE}" \
+               --load "${CHECKPOINT}" \
                --tensor-model-parallel-size 1 \
                --num-layers 24 \
                --hidden-size 1024 \
@@ -28,7 +28,7 @@ python -m torch.distributed.run --nproc_per_node 1 ../examples/pytorch/gpt/evalu
                --fp16 \
                --no-load-optim \
                --no-load-rng \
-               --ckpt-path '../models/megatron-models/c-model/345m/1-gpu' \
+               --ckpt-path "${CHECKPOINT}" \
                --lib-path "lib/libth_gpt.so" \
                --beam_width 1 \
                --top_k 1 \
@@ -38,11 +38,11 @@ sleep 20
 
 python -m torch.distributed.run --nproc_per_node 1 ../examples/pytorch/gpt/evaluate_zeroshot_gpt.py \
                --task $TASK \
-               --valid-data $VALID_DATA \
+               --valid-data "${VALID_DATA}" \
                --tokenizer-type GPT2BPETokenizer \
                --strict-lambada \
-               --vocab-file $VOCAB_FILE \
-               --merge-file $MERGE_FILE \
+               --vocab-file "${VOCAB_FILE}" \
+               --merge-file "${MERGE_FILE}" \
                --load $CHECKPOINT \
                --tensor-model-parallel-size 1 \
                --num-layers 24 \
@@ -56,7 +56,7 @@ python -m torch.distributed.run --nproc_per_node 1 ../examples/pytorch/gpt/evalu
                --fp16 \
                --no-load-optim \
                --no-load-rng \
-               --ckpt-path '../models/megatron-models/c-model/345m/1-gpu' \
+               --ckpt-path "${CHECKPOINT}" \
                --lib-path "lib/libth_gpt.so" \
                --beam_width 1 \
                --top_k 0 \

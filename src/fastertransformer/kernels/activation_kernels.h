@@ -26,9 +26,27 @@ template<typename T>
 void invokeAddBiasGelu(T* out, const T* bias, const int m, const int n, cudaStream_t stream);
 
 template<typename T>
+void invokeAddBiasGatedGelu(
+    T* hidden1, const T* hidden2, const T* bias1, const T* bias2, const int m, const int n, cudaStream_t stream);
+
+template<typename T>
 void invokeAddBiasRelu(T* out, const T* bias, const int m, const int n, cudaStream_t stream);
+
+template<typename T>
+void invokeAddBiasGatedRelu(
+    T* hidden1, const T* hidden2, const T* bias1, const T* bias2, const int m, const int n, cudaStream_t stream);
 
 template<typename F_T, typename B_T>
 void invokeAddBias(F_T* out, const B_T* bias, const int m, const int n, cudaStream_t stream);
+
+template<typename T>
+void invokeAddBiasGeluV2(T* out, const T* bias, const int m, const int n, cudaStream_t stream);
+
+template<typename T>
+void invokeAddBiasGatedSilu(
+    T* hidden1, const T* hidden2, const T* bias1, const T* bias2, const int m, const int n, cudaStream_t stream);
+
+template<typename T>
+void invokeAddBiasSilu(T* out, const T* bias, const int m, const int n, cudaStream_t stream);
 
 }  // namespace fastertransformer

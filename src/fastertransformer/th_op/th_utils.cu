@@ -30,14 +30,37 @@ std::vector<size_t> convert_shape(torch::Tensor tensor)
 template<typename T>
 fastertransformer::Tensor convert_tensor(torch::Tensor tensor)
 {
-    return fastertransformer::Tensor{fastertransformer::MEMORY_GPU,
-                                     fastertransformer::getTensorType<T>(),
-                                     convert_shape(tensor),
-                                     get_ptr<T>(tensor)};
+    return convert_tensor<T>(tensor, fastertransformer::MEMORY_GPU);
 }
 
 template fastertransformer::Tensor convert_tensor<float>(torch::Tensor tensor);
 template fastertransformer::Tensor convert_tensor<half>(torch::Tensor tensor);
+#ifdef ENABLE_BF16
+template fastertransformer::Tensor convert_tensor<__nv_bfloat16>(torch::Tensor tensor);
+#endif
 template fastertransformer::Tensor convert_tensor<int>(torch::Tensor tensor);
+template fastertransformer::Tensor convert_tensor<unsigned long long int>(torch::Tensor tensor);
+template fastertransformer::Tensor convert_tensor<unsigned int>(torch::Tensor tensor);
+
+template<typename T>
+fastertransformer::Tensor convert_tensor(torch::Tensor tensor, fastertransformer::MemoryType memory_type)
+{
+    return fastertransformer::Tensor{
+        memory_type, fastertransformer::getTensorType<T>(), convert_shape(tensor), get_ptr<T>(tensor)};
+}
+
+template fastertransformer::Tensor convert_tensor<float>(torch::Tensor                 tensor,
+                                                         fastertransformer::MemoryType memory_type);
+template fastertransformer::Tensor convert_tensor<half>(torch::Tensor                 tensor,
+                                                        fastertransformer::MemoryType memory_type);
+#ifdef ENABLE_BF16
+template fastertransformer::Tensor convert_tensor<__nv_bfloat16>(torch::Tensor                 tensor,
+                                                                 fastertransformer::MemoryType memory_type);
+#endif
+template fastertransformer::Tensor convert_tensor<int>(torch::Tensor tensor, fastertransformer::MemoryType memory_type);
+template fastertransformer::Tensor convert_tensor<unsigned long long int>(torch::Tensor                 tensor,
+                                                                          fastertransformer::MemoryType memory_type);
+template fastertransformer::Tensor convert_tensor<unsigned int>(torch::Tensor                 tensor,
+                                                                fastertransformer::MemoryType memory_type);
 
 }  // namespace torch_ext

@@ -4,71 +4,74 @@ This repository provides a script and recipe to train the BERT model for TensorF
 
 ## Table Of Contents
 
-- [Model overview](#model-overview)
-  * [Model architecture](#model-architecture)
-  * [Default configuration](#default-configuration)
-  * [Feature support matrix](#feature-support-matrix)
-    * [Features](#features)
-  * [Mixed precision training](#mixed-precision-training)
-    * [Enabling mixed precision](#enabling-mixed-precision)
-    * [Glossary](#glossary)
-- [Setup](#setup)
-  * [Requirements](#requirements)
-- [Quick Start Guide](#quick-start-guide)
-- [Advanced](#advanced)
-  * [Scripts and sample code](#scripts-and-sample-code)
-  * [Parameters](#parameters)
-  * [Command-line options](#command-line-options)
-  * [Getting the data](#getting-the-data)
-    * [Dataset guidelines](#dataset-guidelines)
-    * [Multi-dataset](#multi-dataset)
-  * [Training process](#training-process)
-    * [Pre-training](#pre-training)
-    * [Fine tuning](#fine-tuning)
-    * [Multi-node](#multi-node)
-  * [Inference process](#inference-process)
-  * [Inference Process With TensorRT](#inference-process-with-tensorrt)
-  * [Deploying the BERT model using TensorRT Inference Server](#deploying-the-bert-model-using-tensorrt-inference-server)
-  * [BioBERT](#biobert)
-- [Performance](#performance)
-  * [Benchmarking](#benchmarking)
-    * [Training performance benchmark](#training-performance-benchmark)
-    * [Inference performance benchmark](#inference-performance-benchmark)
-  * [Results](#results)
-    * [Training accuracy results](#training-accuracy-results)
-      * [Pre-training accuracy: single-node](#pre-training-accuracy-single-node)
-      * [Pre-training accuracy: multi-node](#pre-training-accuracy-multi-node)
-      * [Fine-tuning accuracy for SQuAD: NVIDIA DGX-2 (16x V100 32G)](#fine-tuning-accuracy-for-squad-nvidia-dgx-2-16x-v100-32g)
-      * [Training stability test](#training-stability-test)
-        * [Pre-training SQuAD stability test: NVIDIA DGX-2 (512x V100 32G)](#fine-tuning-squad-stability-test-nvidia-dgx-2-512x-v100-32g)
-        * [Fine-tuning SQuAD stability test: NVIDIA DGX-2 (16x V100 32G)](#fine-tuning-squad-stability-test-nvidia-dgx-2-16x-v100-32g)
-    * [Training performance results](#training-performance-results)
-      * [Training performance: NVIDIA DGX-1 (8x V100 16G)](#training-performance-nvidia-dgx-1-8x-v100-16g)
-        * [Pre-training training performance: single-node on 16G](#pre-training-training-performance-single-node-on-16g)
-        * [Pre-training training performance: multi-node on 16G](#pre-training-training-performance-multi-node-on-16g)
-        * [Fine-tuning training performance for SQuAD on 16G](#fine-tuning-training-performance-for-squad-on-16g)
-      * [Training performance: NVIDIA DGX-1 (8x V100 32G)](#training-performance-nvidia-dgx-1-8x-v100-32g)
-        * [Pre-training training performance: single-node on 32G](#pre-training-training-performance-single-node-on-32g)
-        * [Fine-tuning training performance for SQuAD on 32G](#fine-tuning-training-performance-for-squad-on-32g)
-      * [Training performance: NVIDIA DGX-2 (16x V100 32G)](#training-performance-nvidia-dgx-2-16x-v100-32g)
-        * [Pre-training training performance: single-node on DGX-2 32G](#pre-training-training-performance-single-node-on-dgx-2-32g)
-        * [Pre-training training performance: multi-node on DGX-2 32G](#pre-training-training-performance-multi-node-on-dgx-2-32g)
-        * [Fine-tuning training performance for SQuAD on DGX-2 32G](#fine-tuning-training-performance-for-squad-on-dgx-2-32g)
-    * [Inference performance results](#inference-performance-results)
-      * [Inference performance: NVIDIA DGX-1 (1x V100 16G)](#inference-performance-nvidia-dgx-1-1x-v100-16g)
-        * [Pre-training inference performance on 16G](#pre-training-inference-performance-on-16g)
-        * [Fine-tuning inference performance for SQuAD on 16G](#fine-tuning-inference-performance-for-squad-on-16g)
-      * [Inference performance: NVIDIA DGX-1 (1x V100 32G)](#inference-performance-nvidia-dgx-1-1x-v100-32g)
-        * [Pre-training inference performance on 32G](#pre-training-inference-performance-on-32g)
-        * [Fine-tuning inference performance for SQuAD on 32G](#fine-tuning-inference-performance-for-squad-on-32g)
-      * [Inference performance: NVIDIA DGX-2 (1x V100 32G)](#inference-performance-nvidia-dgx-2-1x-v100-32g)
-        * [Pre-training inference performance on DGX-2 32G](#pre-training-inference-performance-on-dgx-2-32g)
-        * [Fine-tuning inference performance for SQuAD on DGX-2  32G](#fine-tuning-inference-performance-for-squad-on-dgx-2-32g)
-      * [Inference performance: NVIDIA Tesla T4 (1x T4 16G)](#inference-performance-nvidia-tesla-t4-1x-t4-16g)
-        * [Fine-tuning inference performance for SQuAD on Tesla T4 16G](#fine-tuning-inference-performance-for-squad-on-tesla-t4-16g)
-- [Release notes](#release-notes)
-  * [Changelog](#changelog)
-  * [Known issues](#known-issues)
+- [BERT For TensorFlow](#bert-for-tensorflow)
+  - [Table Of Contents](#table-of-contents)
+  - [Model overview](#model-overview)
+    - [Model architecture](#model-architecture)
+    - [Default configuration](#default-configuration)
+    - [Feature support matrix](#feature-support-matrix)
+      - [Features](#features)
+    - [Mixed precision training](#mixed-precision-training)
+      - [Enabling mixed precision](#enabling-mixed-precision)
+    - [Glossary](#glossary)
+  - [Setup](#setup)
+    - [Requirements](#requirements)
+  - [Quick Start Guide](#quick-start-guide)
+  - [Advanced](#advanced)
+    - [Scripts and sample code](#scripts-and-sample-code)
+    - [Parameters](#parameters)
+    - [Command-line options](#command-line-options)
+    - [Getting the data](#getting-the-data)
+      - [Dataset guidelines](#dataset-guidelines)
+      - [Multi-dataset](#multi-dataset)
+    - [Training process](#training-process)
+      - [Pre-training](#pre-training)
+      - [Fine tuning](#fine-tuning)
+      - [Multi-node](#multi-node)
+    - [Inference process](#inference-process)
+    - [Inference Process With TensorRT](#inference-process-with-tensorrt)
+    - [Deploying the BERT model using TensorRT Inference Server](#deploying-the-bert-model-using-tensorrt-inference-server)
+    - [BioBERT](#biobert)
+  - [Performance](#performance)
+    - [Benchmarking](#benchmarking)
+      - [Training performance benchmark](#training-performance-benchmark)
+      - [Inference performance benchmark](#inference-performance-benchmark)
+    - [Results](#results)
+      - [Training accuracy results](#training-accuracy-results)
+        - [Training accuracy](#training-accuracy)
+          - [Pre-training accuracy: single-node](#pre-training-accuracy-single-node)
+          - [Pre-training accuracy: multi-node](#pre-training-accuracy-multi-node)
+          - [Fine-tuning accuracy for SQuAD: NVIDIA DGX-2 (16x V100 32G)](#fine-tuning-accuracy-for-squad-nvidia-dgx-2-16x-v100-32g)
+        - [Training stability test](#training-stability-test)
+          - [Pre-training stability test: NVIDIA DGX-2 (512x V100 32G)](#pre-training-stability-test-nvidia-dgx-2-512x-v100-32g)
+          - [Fine-tuning SQuAD stability test: NVIDIA DGX-2 (16x V100 32G)](#fine-tuning-squad-stability-test-nvidia-dgx-2-16x-v100-32g)
+      - [Training performance results](#training-performance-results)
+        - [Training performance: NVIDIA DGX-1 (8x V100 16G)](#training-performance-nvidia-dgx-1-8x-v100-16g)
+          - [Pre-training training performance: single-node on 16G](#pre-training-training-performance-single-node-on-16g)
+          - [Pre-training training performance: multi-node on 16G](#pre-training-training-performance-multi-node-on-16g)
+          - [Fine-tuning training performance for SQuAD on 16G](#fine-tuning-training-performance-for-squad-on-16g)
+        - [Training performance: NVIDIA DGX-1 (8x V100 32G)](#training-performance-nvidia-dgx-1-8x-v100-32g)
+          - [Pre-training training performance: single-node on 32G](#pre-training-training-performance-single-node-on-32g)
+          - [Fine-tuning training performance for SQuAD on 32G](#fine-tuning-training-performance-for-squad-on-32g)
+        - [Training performance: NVIDIA DGX-2 (16x V100 32G)](#training-performance-nvidia-dgx-2-16x-v100-32g)
+          - [Pre-training training performance: single-node on DGX-2 32G](#pre-training-training-performance-single-node-on-dgx-2-32g)
+          - [Pre-training training performance: multi-node on DGX-2H 32G](#pre-training-training-performance-multi-node-on-dgx-2h-32g)
+          - [Fine-tuning training performance for SQuAD on DGX-2 32G](#fine-tuning-training-performance-for-squad-on-dgx-2-32g)
+      - [Inference performance results](#inference-performance-results)
+        - [Inference performance: NVIDIA DGX-1 (1x V100 16G)](#inference-performance-nvidia-dgx-1-1x-v100-16g)
+          - [Pre-training inference performance on 16G](#pre-training-inference-performance-on-16g)
+          - [Fine-tuning inference performance for SQuAD on 16G](#fine-tuning-inference-performance-for-squad-on-16g)
+        - [Inference performance: NVIDIA DGX-1 (1x V100 32G)](#inference-performance-nvidia-dgx-1-1x-v100-32g)
+          - [Pre-training inference performance on 32G](#pre-training-inference-performance-on-32g)
+          - [Fine-tuning inference performance for SQuAD on 32G](#fine-tuning-inference-performance-for-squad-on-32g)
+        - [Inference performance: NVIDIA DGX-2 (1x V100 32G)](#inference-performance-nvidia-dgx-2-1x-v100-32g)
+          - [Pre-training inference performance on DGX-2 32G](#pre-training-inference-performance-on-dgx-2-32g)
+          - [Fine-tuning inference performance for SQuAD on DGX-2  32G](#fine-tuning-inference-performance-for-squad-on-dgx-2--32g)
+        - [Inference performance: NVIDIA Tesla T4 (1x T4 16G)](#inference-performance-nvidia-tesla-t4-1x-t4-16g)
+          - [Fine-tuning inference performance for SQuAD on Tesla T4 16G](#fine-tuning-inference-performance-for-squad-on-tesla-t4-16g)
+  - [Release notes](#release-notes)
+    - [Changelog](#changelog)
+    - [Known issues](#known-issues)
 
 
 
@@ -84,7 +87,7 @@ Other publicly available implementations of BERT include:
 4. [gluon-nlp](https://github.com/dmlc/gluon-nlp/tree/master/scripts/bert)
 5. [Google's official implementation](https://github.com/google-research/bert)
 
-This model is trained with mixed precision using Tensor Cores on NVIDIA Volta and Turing GPUs. Therefore, researchers can get results upto 4x faster than training without Tensor Cores, while experiencing the benefits of mixed precision training. This model is tested against each NGC monthly container release to ensure consistent accuracy and performance over time.
+This model is trained with mixed precision using Tensor Cores on NVIDIA Volta and Turing GPUs. Therefore, researchers can get results up to 4x faster than training without Tensor Cores, while experiencing the benefits of mixed precision training. This model is tested against each NGC monthly container release to ensure consistent accuracy and performance over time.
 
 ### Model architecture
 
@@ -137,7 +140,7 @@ Multi-GPU training with Horovod - Our model uses Horovod to implement efficient 
 
 [LAMB](https://arxiv.org/pdf/1904.00962.pdf) stands for Layerwise Adaptive Moments based optimizer, is a large batch optimization technique that helps accelerate training of deep neural networks using large minibatches. It allows using a global batch size of 65536 and 32768 on sequence lengths 128 and 512 respectively, compared to a batch size of 256 for Adam. The optimized implementation accumulates 1024 gradients batches in phase 1 and 4096 steps in phase 2 before updating weights once. This results in 27% training speedup on a single DGX2 node. On multi-node systems, LAMB allows scaling up to 1024 GPUs resulting in training speedups of up to 17x in comparison to [Adam](https://arxiv.org/pdf/1412.6980.pdf). Adam has limitations on the learning rate that can be used since it is applied globally on all parameters whereas LAMB follows a layerwise learning rate strategy.
 
-NVLAMB adds necessary tweaks to [LAMB version 1](https://arxiv.org/abs/1904.00962v1), to ensure correct convergence. A guide to implementating the LAMB optimizer can be found in our [article](https://medium.com/@NvidiaAI/a-guide-to-optimizer-implementation-for-bert-at-scale-8338cc7f45fd) on Medium.com. The algorithm is as follows:
+NVLAMB adds necessary tweaks to [LAMB version 1](https://arxiv.org/abs/1904.00962v1), to ensure correct convergence. A guide to implement the LAMB optimizer can be found in our [article](https://medium.com/@NvidiaAI/a-guide-to-optimizer-implementation-for-bert-at-scale-8338cc7f45fd) on Medium.com. The algorithm is as follows:
   ![NVLAMB](data/images/images_nvlamb.png)
 
 ### Mixed precision training
@@ -690,7 +693,7 @@ Our results were obtained by running the `scripts/run_pretraining_lamb.sh` train
 | DGX2H | 64 | FP16 | 32, 8 | 2, 4   | 2.44  | 1.64 |
 | DGX2H | 64 | FP32 | 32, 4 | 2, 8   | 5.76  | 1.66 |
 
-Note: Time to train includes upto 16 minutes of start up time for every restart. Experiments were run on clusters with a maximum wall clock time of 8 hours.
+Note: Time to train includes up to 16 minutes of start up time for every restart. Experiments were run on clusters with a maximum wall clock time of 8 hours.
 
 ###### Fine-tuning accuracy for SQuAD: NVIDIA DGX-2 (16x V100 32G)
 
@@ -1137,7 +1140,7 @@ To achieve these same results, follow the [Quick Start Guide](#quick-start-guide
 
 ### Changelog
 
-Janurary 2020
+January 2020
 - Added inference with TensorRT
 
 November 2019

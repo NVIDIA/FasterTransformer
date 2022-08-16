@@ -30,7 +30,7 @@ FasterTransformerLongformerEncoder::FasterTransformerLongformerEncoder(int64_t l
                                                                        int64_t max_global_token_num,
                                                                        int64_t max_batch_size,
                                                                        int64_t max_seq_len,
-                                                                       double attn_scaler):
+                                                                       double  attn_scaler):
     layer_num_(layer_num),
     in_dim_(in_dim),
     head_num_(head_num),
@@ -44,7 +44,7 @@ FasterTransformerLongformerEncoder::FasterTransformerLongformerEncoder(int64_t l
     hidden_units_(head_num * size_per_head)
 {
     ft::check_cuda_error(cublasLtCreate(&_cublasltHandle));
-    cublas_algo_map_ = new ft::cublasAlgoMap("gemm_config.in");
+    cublas_algo_map_      = new ft::cublasAlgoMap("gemm_config.in");
     cublas_wrapper_mutex_ = new std::mutex();
 }
 
@@ -66,13 +66,13 @@ th::Tensor FasterTransformerLongformerEncoder::forward(
     ft::check_cuda_error(cudaSetDevice(device_id));
 
     int batch_size = input.size(0);
-    int seq_len = input.size(1);
-    int in_dim_ = input.size(2);
+    int seq_len    = input.size(1);
+    int in_dim_    = input.size(2);
 
     auto options = th::TensorOptions().dtype(scalar_type).device(torch::kCUDA, device_id);
-    auto output = th::zeros({batch_size, seq_len, (int64_t)hidden_units_}, options);
+    auto output  = th::zeros({batch_size, seq_len, (int64_t)hidden_units_}, options);
 
-    auto stream = at::cuda::getCurrentCUDAStream().stream();
+    auto           stream        = at::cuda::getCurrentCUDAStream().stream();
     cublasHandle_t _cublasHandle = at::cuda::getCurrentCUDABlasHandle();
     cublasSetStream(_cublasHandle, stream);
 
@@ -88,6 +88,11 @@ th::Tensor FasterTransformerLongformerEncoder::forward(
     else if (scalar_type == at::ScalarType::Half) {
         data_type = ft::TYPE_FP16;
     }
+#ifdef ENABLE_BF16
+    else if (scalar_type == at::ScalarType::BFloat16) {
+        data_type = ft::TYPE_BF16;
+    }
+#endif
     else {
         throw std::runtime_error("Wrong Tensor type.");
     }
@@ -156,6 +161,30 @@ th::Tensor FasterTransformerLongformerEncoder::forward(
         ft::check_cuda_error(cudaStreamSynchronize(stream));
         delete encoder;
     }
+#ifdef ENABLE_BF16
+    else if (scalar_type == at::ScalarType::BFloat16) {
+        cublas_wrapper->setBF16GemmConfig();
+        auto encoder = new ft::LongformerEncoder<__nv_bfloat16>(layer_num_,
+                                                                in_dim_,
+                                                                head_num_,
+                                                                size_per_head_,
+                                                                intermediate_size_,
+                                                                local_attn_window_size_,
+                                                                max_global_token_num_,
+                                                                max_batch_size_,
+                                                                max_seq_len_,
+                                                                attn_scaler_,
+                                                                stream,
+                                                                cublas_wrapper,
+                                                                allocator,
+                                                                false);
+        setWeight<__nv_bfloat16>(
+            layer_num_, in_dim_, hidden_units_, intermediate_size_, th_weights, encoder->getWeightsPtr());
+        encoder->forward(&output_tensors, &input_tensors);
+        ft::check_cuda_error(cudaStreamSynchronize(stream));
+        delete encoder;
+    }
+#endif
     delete cublas_wrapper;
     delete allocator;
 

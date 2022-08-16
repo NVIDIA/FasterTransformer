@@ -100,21 +100,32 @@ def split_and_convert(args):
 
     factor = (int)(i_gpu_num / t_gpu_num)
 
-    # load position_embedding from rank 0 
-    model = GPT2Model.from_pretrained(args.in_file)
-    
+    # load position_embedding from rank 0
+    torch_device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = GPT2Model.from_pretrained(args.in_file).to(torch_device)
+
+    hf_config = vars(model.config)
+
+    # NOTE: save parameters to config files (loaded by triton backends)
+    config = configparser.ConfigParser()
+    config["gpt"] = {}
     try:
-        config = configparser.ConfigParser()
-        config["gpt"] = {}
-        for key in vars(args):
-            config["gpt"][key] = f"{vars(args)[key]}"
-        for k, v in vars(model.config).items():
-            config["gpt"][k] = f"{v}"
-        config["gpt"]["weight_data_type"] = args.weight_data_type
-        with open((Path(saved_dir) / f"config.ini").as_posix(), 'w') as configfile:
+        config["gpt"]["model_name"] = "gpt" if hf_config["_name_or_path"] == '' else hf_config["_name_or_path"]
+        config["gpt"]["head_num"] = str(hf_config["n_head"])
+        n_embd = hf_config["n_embd"]
+        config["gpt"]["size_per_head"] = str(n_embd // hf_config["n_head"])
+        config["gpt"]["inter_size"] = str(n_embd * 4)
+        config['gpt']['max_pos_seq_len'] = str(hf_config['n_positions'])
+        config["gpt"]["num_layer"] = str(hf_config["n_layer"])
+        config["gpt"]["vocab_size"] = str(hf_config["vocab_size"])
+        config["gpt"]["start_id"] = str(hf_config["bos_token_id"])
+        config["gpt"]["end_id"] = str(hf_config["eos_token_id"])
+        config['gpt']['weight_data_type'] = args.weight_data_type
+        with open(saved_dir + "/config.ini", 'w') as configfile:
             config.write(configfile)
     except:
         print(f"Fail to save the config in config.ini.")
+
     np_weight_data_type = get_weight_data_type(args.weight_data_type)
 
     huggingface_model_name_pattern = [
@@ -148,6 +159,7 @@ def split_and_convert(args):
     ]
     
     torch.multiprocessing.set_start_method("spawn")
+    torch.multiprocessing.set_sharing_strategy("file_system")
     pool = multiprocessing.Pool(args.processes)
     for name, param in model.named_parameters():
         if name.find("weight") == -1 and name.find("bias") == -1:

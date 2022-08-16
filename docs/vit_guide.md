@@ -56,7 +56,7 @@ In this demo, you can run Faster ViT as a C++ program.
 - Python 3 is recommended because some features are not supported in python 2
 - PyTorch: Verify on 1.10.0, >= 1.5.0 should work.
 
-Recommand to use image `nvcr.io/nvidia/pytorch:21.07-py3`.  
+Recommend to use image `nvcr.io/nvidia/pytorch:21.07-py3`.  
 
 > docker run -ti --gpus all --rm nvcr.io/nvidia/pytorch:21.07-py3 bash
 
@@ -153,12 +153,11 @@ Refer to [Guide of ViT Quantization Toolkit](../examples/pytorch/vit/ViT-quantiz
 ```bash
 cd $WORKSPACE/examples/pytorch/vit/ViT-quantization
 export DATA_DIR=Path to the dataset
-export CKPT_DIR=Path to the ViT checkpoints
 python -m torch.distributed.launch --nproc_per_node 1 \
     --master_port 12345 main.py \
     --calib \
     --name vit \
-    --pretrained_dir $CKPT_DIR/ViT-B_16.npz \
+    --pretrained_dir ViT-B_16.npz \
     --data-path $DATA_DIR \
     --model_type ViT-B_16 \
     --img_size 384 \
@@ -167,7 +166,7 @@ python -m torch.distributed.launch --nproc_per_node 1 \
     --quant-mode ft2 \
     --calibrator percentile \
     --percentile 99.99 \
-    --calib-output-path $CKPT_DIR
+    --calib-output-path .
 
 ```
 **NOTE: Difference between `--quant-mode ft1` and `--quant-mode ft2`**:
@@ -187,7 +186,7 @@ cd $WORKSPACE/examples/pytorch/vit
 python infer_visiontransformer_int8_op.py \
     --model_type=ViT-B_16  \
     --img_size 384 \
-    --calibrated_dir $CKPT_DIR/ViT-B_16_calib.pth \
+    --calibrated_dir ViT-B_16_calib.pth \
     --batch-size=32 \
     --th-path=$WORKSPACE/build/lib/libpyt_vit.so \
     --quant-mode ft2
@@ -211,6 +210,19 @@ python infer_visiontransformer_plugin.py \
   --model_type=ViT-B_16 \
   --img_size=384 \
   --pretrained_dir=$WORKSPACE/examples/pytorch/vit/ViT-quantization/ViT-B_16.npz \
+  --plugin_path=../../../build/lib/libvit_plugin.so \
+  --batch-size=32 
+
+```
+
+**INT8 TensorRT plugin** 
+```bash
+cd $WORKSPACE/examples/tensorrt/vit
+#INT8 engine build & infer
+python infer_visiontransformer_int8_plugin.py \
+  --model_type=ViT-B_16 \
+  --img_size=384 \
+  --pretrained_dir=$WORKSPACE/examples/pytorch/vit/ViT-quantization/ViT-B_16_calib.pth \
   --plugin_path=../../../build/lib/libvit_plugin.so \
   --batch-size=32 
 

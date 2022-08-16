@@ -33,6 +33,8 @@ endif()
 
 option(SPARSITY_SUPPORT "Build project with Ampere sparsity feature support" OFF)
 
+option(BUILD_FAST_MATH "Build in fast math mode" ON)
+
 if(BUILD_MULTI_GPU)
   message(STATUS "Add DBUILD_MULTI_GPU, requires MPI and NCCL")
   add_definitions("-DBUILD_MULTI_GPU")
@@ -157,6 +159,10 @@ set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} --std=c++${CXX_STD}")
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
 # set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} -Xcompiler -O3 --ptxas-options=--verbose")
 set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} -Xcompiler -O3")
+if(BUILD_FAST_MATH)
+set(CMAKE_CUDA_FLAGS_RELEASE "${CMAKE_CUDA_FLAGS_RELEASE} --use_fast_math")
+message("CMAKE_CUDA_FLAGS_RELEASE: ${CMAKE_CUDA_FLAGS_RELEASE}")
+endif()
 
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/lib)
@@ -227,7 +233,10 @@ print(torch._C._GLIBCXX_USE_CXX11_ABI,end='');"
   endif()
 endif()
 
-list(APPEND COMMON_HEADER_DIRS ${MPI_INCLUDE_PATH})
+if (BUILD_MULTI_GPU)
+  list(APPEND COMMON_HEADER_DIRS ${MPI_INCLUDE_PATH})
+  list(APPEND COMMON_LIB_DIRS /usr/local/mpi/lib)
+endif()
 
 if(USE_TRITONSERVER_DATATYPE)
   list(APPEND COMMON_HEADER_DIRS ${PROJECT_SOURCE_DIR}/../repo-core-src/include)
@@ -236,9 +245,6 @@ endif()
 include_directories(
   ${COMMON_HEADER_DIRS}
 )
-
-# set path of mpi
-list(APPEND COMMON_LIB_DIRS /usr/local/mpi/lib)
 
 link_directories(
   ${COMMON_LIB_DIRS}
@@ -249,9 +255,16 @@ add_subdirectory(src)
 add_subdirectory(examples)
 add_subdirectory(tests)
 
+# # Mesaure the compile time
+option(MEASURE_BUILD_TIME "Measure the build time of each module" OFF)
+if (MEASURE_BUILD_TIME)
+  set_property(GLOBAL PROPERTY RULE_LAUNCH_COMPILE "${CMAKE_COMMAND} -E time")
+  set_property(GLOBAL PROPERTY RULE_LAUNCH_CUSTOM "${CMAKE_COMMAND} -E time")
+  set_property(GLOBAL PROPERTY RULE_LAUNCH_LINK "${CMAKE_COMMAND} -E time")
+endif()
+
 ########################################
 
-if(BUILD_MULTI_GPU)
 # Following feature requires cmake 3.15
 # TODO Remove this part or modify such that we can run it under cmake 3.10
 cmake_minimum_required(VERSION 3.15 FATAL_ERROR)
@@ -259,6 +272,8 @@ add_library(transformer-static STATIC
   $<TARGET_OBJECTS:BaseBeamSearchLayer>
   $<TARGET_OBJECTS:BaseSamplingLayer>
   $<TARGET_OBJECTS:BeamSearchLayer>
+  $<TARGET_OBJECTS:Bert>
+  $<TARGET_OBJECTS:BertTritonBackend>
   $<TARGET_OBJECTS:DecoderCrossAttentionLayer>
   $<TARGET_OBJECTS:DecoderSelfAttentionLayer>
   $<TARGET_OBJECTS:DynamicDecodeLayer>
@@ -271,6 +286,12 @@ add_library(transformer-static STATIC
   $<TARGET_OBJECTS:GptJDecoderLayerWeight>
   $<TARGET_OBJECTS:GptJTritonBackend>
   $<TARGET_OBJECTS:GptJWeight>
+  $<TARGET_OBJECTS:GptNeoX>
+  $<TARGET_OBJECTS:GptNeoXContextDecoder>
+  $<TARGET_OBJECTS:GptNeoXDecoder>
+  $<TARGET_OBJECTS:GptNeoXDecoderLayerWeight>
+  $<TARGET_OBJECTS:GptNeoXTritonBackend>
+  $<TARGET_OBJECTS:GptNeoXWeight>
   $<TARGET_OBJECTS:OnlineBeamSearchLayer>
   $<TARGET_OBJECTS:ParallelGpt>
   $<TARGET_OBJECTS:ParallelGptContextDecoder>
@@ -285,55 +306,65 @@ add_library(transformer-static STATIC
   $<TARGET_OBJECTS:TensorParallelDecoderCrossAttentionLayer>
   $<TARGET_OBJECTS:TensorParallelDecoderSelfAttentionLayer>
   $<TARGET_OBJECTS:TensorParallelGeluFfnLayer>
+  $<TARGET_OBJECTS:TensorParallelSiluFfnLayer>
   $<TARGET_OBJECTS:TensorParallelGptContextAttentionLayer>
   $<TARGET_OBJECTS:TensorParallelReluFfnLayer>
   $<TARGET_OBJECTS:TensorParallelUnfusedAttentionLayer>
+  $<TARGET_OBJECTS:tensor>
   $<TARGET_OBJECTS:TopKSamplingLayer>
   $<TARGET_OBJECTS:TopKTopPSamplingLayer>
   $<TARGET_OBJECTS:TopPSamplingLayer>
+  $<TARGET_OBJECTS:TransformerTritonBackend>
   $<TARGET_OBJECTS:UnfusedAttentionLayer>
   $<TARGET_OBJECTS:activation_int8_kernels>
   $<TARGET_OBJECTS:activation_kernels>
   $<TARGET_OBJECTS:add_bias_transpose_kernels>
   $<TARGET_OBJECTS:add_residual_kernels>
   $<TARGET_OBJECTS:ban_bad_words>
-  $<TARGET_OBJECTS:stop_criteria>
   $<TARGET_OBJECTS:beam_search_penalty_kernels>
   $<TARGET_OBJECTS:beam_search_topk_kernels>
   $<TARGET_OBJECTS:bert_preprocess_kernels>
   $<TARGET_OBJECTS:calibrate_quantize_weight_kernels>
   $<TARGET_OBJECTS:cublasAlgoMap>
   $<TARGET_OBJECTS:cublasMMWrapper>
+  $<TARGET_OBJECTS:custom_ar_comm>
+  $<TARGET_OBJECTS:custom_ar_kernels>
   $<TARGET_OBJECTS:decoder_masked_multihead_attention>
   $<TARGET_OBJECTS:decoding_kernels>
   $<TARGET_OBJECTS:gpt_kernels>
   $<TARGET_OBJECTS:layernorm_int8_kernels>
   $<TARGET_OBJECTS:layernorm_kernels>
   $<TARGET_OBJECTS:layout_transformer_int8_kernels>
+  $<TARGET_OBJECTS:logprob_kernels>
   $<TARGET_OBJECTS:longformer_kernels>
   $<TARGET_OBJECTS:matrix_transpose_kernels>
   $<TARGET_OBJECTS:matrix_vector_multiplication>
   $<TARGET_OBJECTS:memory_utils>
+  $<TARGET_OBJECTS:mpi_utils>
   $<TARGET_OBJECTS:nccl_utils>
-  $<TARGET_OBJECTS:word_list>
   $<TARGET_OBJECTS:online_softmax_beamsearch_kernels>
   $<TARGET_OBJECTS:quantization_int8_kernels>
   $<TARGET_OBJECTS:sampling_penalty_kernels>
   $<TARGET_OBJECTS:sampling_topk_kernels>
   $<TARGET_OBJECTS:sampling_topp_kernels>
   $<TARGET_OBJECTS:softmax_int8_kernels>
+  $<TARGET_OBJECTS:stop_criteria>
+  $<TARGET_OBJECTS:tensor>
   $<TARGET_OBJECTS:transpose_int8_kernels>
   $<TARGET_OBJECTS:trt_fused_multi_head_attention>
   $<TARGET_OBJECTS:unfused_attention_kernels>
-  $<TARGET_OBJECTS:logprob_kernels>)
+  $<TARGET_OBJECTS:word_list>
+)
 set_property(TARGET transformer-static PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET transformer-static PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-target_link_libraries(transformer-static PUBLIC -lcudart -lnccl -lmpi -lcublas -lcublasLt -lcurand)
+target_link_libraries(transformer-static PUBLIC -lcudart -lcublas -lcublasLt -lcurand)
 
 add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:BaseBeamSearchLayer>
   $<TARGET_OBJECTS:BaseSamplingLayer>
   $<TARGET_OBJECTS:BeamSearchLayer>
+  $<TARGET_OBJECTS:Bert>
+  $<TARGET_OBJECTS:BertTritonBackend>
   $<TARGET_OBJECTS:DecoderCrossAttentionLayer>
   $<TARGET_OBJECTS:DecoderSelfAttentionLayer>
   $<TARGET_OBJECTS:DynamicDecodeLayer>
@@ -346,6 +377,12 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:GptJDecoderLayerWeight>
   $<TARGET_OBJECTS:GptJTritonBackend>
   $<TARGET_OBJECTS:GptJWeight>
+  $<TARGET_OBJECTS:GptNeoX>
+  $<TARGET_OBJECTS:GptNeoXContextDecoder>
+  $<TARGET_OBJECTS:GptNeoXDecoder>
+  $<TARGET_OBJECTS:GptNeoXDecoderLayerWeight>
+  $<TARGET_OBJECTS:GptNeoXTritonBackend>
+  $<TARGET_OBJECTS:GptNeoXWeight>
   $<TARGET_OBJECTS:OnlineBeamSearchLayer>
   $<TARGET_OBJECTS:ParallelGpt>
   $<TARGET_OBJECTS:ParallelGptContextDecoder>
@@ -360,53 +397,59 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:TensorParallelDecoderCrossAttentionLayer>
   $<TARGET_OBJECTS:TensorParallelDecoderSelfAttentionLayer>
   $<TARGET_OBJECTS:TensorParallelGeluFfnLayer>
+  $<TARGET_OBJECTS:TensorParallelSiluFfnLayer>
   $<TARGET_OBJECTS:TensorParallelGptContextAttentionLayer>
   $<TARGET_OBJECTS:TensorParallelReluFfnLayer>
   $<TARGET_OBJECTS:TensorParallelUnfusedAttentionLayer>
+  $<TARGET_OBJECTS:tensor>
   $<TARGET_OBJECTS:TopKSamplingLayer>
   $<TARGET_OBJECTS:TopKTopPSamplingLayer>
   $<TARGET_OBJECTS:TopPSamplingLayer>
+  $<TARGET_OBJECTS:TransformerTritonBackend>
   $<TARGET_OBJECTS:UnfusedAttentionLayer>
   $<TARGET_OBJECTS:activation_int8_kernels>
   $<TARGET_OBJECTS:activation_kernels>
   $<TARGET_OBJECTS:add_bias_transpose_kernels>
   $<TARGET_OBJECTS:add_residual_kernels>
   $<TARGET_OBJECTS:ban_bad_words>
-  $<TARGET_OBJECTS:stop_criteria>
   $<TARGET_OBJECTS:beam_search_penalty_kernels>
   $<TARGET_OBJECTS:beam_search_topk_kernels>
   $<TARGET_OBJECTS:bert_preprocess_kernels>
   $<TARGET_OBJECTS:calibrate_quantize_weight_kernels>
   $<TARGET_OBJECTS:cublasAlgoMap>
   $<TARGET_OBJECTS:cublasMMWrapper>
+  $<TARGET_OBJECTS:custom_ar_comm>
+  $<TARGET_OBJECTS:custom_ar_kernels>
   $<TARGET_OBJECTS:decoder_masked_multihead_attention>
   $<TARGET_OBJECTS:decoding_kernels>
   $<TARGET_OBJECTS:gpt_kernels>
   $<TARGET_OBJECTS:layernorm_int8_kernels>
   $<TARGET_OBJECTS:layernorm_kernels>
   $<TARGET_OBJECTS:layout_transformer_int8_kernels>
+  $<TARGET_OBJECTS:logprob_kernels>
   $<TARGET_OBJECTS:longformer_kernels>
   $<TARGET_OBJECTS:matrix_transpose_kernels>
   $<TARGET_OBJECTS:matrix_vector_multiplication>
   $<TARGET_OBJECTS:memory_utils>
+  $<TARGET_OBJECTS:mpi_utils>
   $<TARGET_OBJECTS:nccl_utils>
-  $<TARGET_OBJECTS:custom_ar_comm>
-  $<TARGET_OBJECTS:custom_ar_kernels>
-  $<TARGET_OBJECTS:word_list>
   $<TARGET_OBJECTS:online_softmax_beamsearch_kernels>
   $<TARGET_OBJECTS:quantization_int8_kernels>
   $<TARGET_OBJECTS:sampling_penalty_kernels>
   $<TARGET_OBJECTS:sampling_topk_kernels>
   $<TARGET_OBJECTS:sampling_topp_kernels>
   $<TARGET_OBJECTS:softmax_int8_kernels>
+  $<TARGET_OBJECTS:stop_criteria>
+  $<TARGET_OBJECTS:tensor>
   $<TARGET_OBJECTS:transpose_int8_kernels>
   $<TARGET_OBJECTS:trt_fused_multi_head_attention>
   $<TARGET_OBJECTS:unfused_attention_kernels>
-  $<TARGET_OBJECTS:logprob_kernels>)
+  $<TARGET_OBJECTS:word_list>
+)
 set_target_properties(transformer-shared PROPERTIES POSITION_INDEPENDENT_CODE ON)
 set_target_properties(transformer-shared PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 set_target_properties(transformer-shared PROPERTIES LINKER_LANGUAGE CXX)
-target_link_libraries(transformer-shared PUBLIC -lcudart -lnccl -lmpi -lcublas -lcublasLt -lcurand)
+target_link_libraries(transformer-shared PUBLIC -lcudart -lcublas -lcublasLt -lcurand)
 
 include(GNUInstallDirs)
 set(INSTALL_CONFIGDIR ${CMAKE_INSTALL_LIBDIR}/cmake/FasterTransformer)
@@ -465,5 +508,3 @@ export(
 )
 
 export(PACKAGE FasterTransformer)
-
-endif() # BUILD_MULTI_GPU

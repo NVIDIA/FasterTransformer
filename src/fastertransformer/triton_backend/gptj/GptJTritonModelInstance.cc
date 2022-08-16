@@ -26,15 +26,24 @@
 namespace ft = fastertransformer;
 
 template<typename T>
-GptJTritonModelInstance<T>::GptJTritonModelInstance(std::unique_ptr<ft::GptJ<T>> gpt,
-                                                    std::unique_ptr<ft::GptJWeight<T>> gpt_weight,
+void triton_stream_callback(std::unordered_map<std::string, ft::Tensor>* output_tensors, void* ctx)
+{
+    GptJTritonModelInstance<T>* model  = reinterpret_cast<GptJTritonModelInstance<T>*>(ctx);
+    auto                        result = GptJTritonModelInstance<T>::convert_outputs(*output_tensors);
+
+    model->stream_cb_(result, model->stream_ctx_);
+}
+
+template<typename T>
+GptJTritonModelInstance<T>::GptJTritonModelInstance(std::unique_ptr<ft::GptJ<T>>                            gpt,
+                                                    std::shared_ptr<ft::GptJWeight<T>>                      gpt_weight,
                                                     std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator,
-                                                    std::unique_ptr<ft::cublasAlgoMap> cublas_algo_map,
-                                                    std::unique_ptr<std::mutex> cublas_wrapper_mutex,
+                                                    std::unique_ptr<ft::cublasAlgoMap>   cublas_algo_map,
+                                                    std::unique_ptr<std::mutex>          cublas_wrapper_mutex,
                                                     std::unique_ptr<ft::cublasMMWrapper> cublas_wrapper,
-                                                    std::unique_ptr<cudaDeviceProp> cuda_device_prop_ptr):
+                                                    std::unique_ptr<cudaDeviceProp>      cuda_device_prop_ptr):
     gpt_(std::move(gpt)),
-    gpt_weight_(std::move(gpt_weight)),
+    gpt_weight_(gpt_weight),
     allocator_(std::move(allocator)),
     cublas_algo_map_(std::move(cublas_algo_map)),
     cublas_wrapper_mutex_(std::move(cublas_wrapper_mutex)),
@@ -49,72 +58,55 @@ std::unordered_map<std::string, ft::Tensor> GptJTritonModelInstance<T>::convert_
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    move_tensor_H2D(input_tensors->at("input_ids"), d_input_ids_);
-    move_tensor_H2D(input_tensors->at("input_lengths"), d_input_lengths_);
+    move_tensor_H2D(input_tensors->at("input_ids"), d_input_ids_, &allocator_);
+    move_tensor_H2D(input_tensors->at("input_lengths"), d_input_lengths_, &allocator_);
 
-    const int input_data_len = input_tensors->at("input_ids").shape[1];
-    size_t size = 1;
-    for (auto t : input_tensors->at("request_output_len").shape) {
-        size = size * t;
-    }
-
-    h_total_output_lengths_ = reinterpret_cast<int*>(malloc(size * sizeof(int)));
-    for (int i = 0; i < size; ++i) {
+    const size_t request_batch_size = input_tensors->at("input_ids").shape[0];
+    const size_t input_data_len     = input_tensors->at("input_ids").shape[1];
+    h_total_output_lengths_         = reinterpret_cast<uint32_t*>(malloc(request_batch_size * sizeof(uint32_t)));
+    for (int i = 0; i < request_batch_size; ++i) {
         h_total_output_lengths_[i] =
-            reinterpret_cast<const int*>(input_tensors->at("request_output_len").data)[i] + input_data_len;
+            reinterpret_cast<const uint32_t*>(input_tensors->at("request_output_len").data)[i] + input_data_len;
     }
 
     std::unordered_map<std::string, ft::Tensor> ft_input_tensors = std::unordered_map<std::string, ft::Tensor>{
         {"input_ids", as_GPU_tensor(input_tensors->at("input_ids"), d_input_ids_)},
         {"input_lengths", as_GPU_tensor(input_tensors->at("input_lengths"), d_input_lengths_)},
-        {"max_output_seq_len",
-         ft::Tensor{
-             ft::MEMORY_CPU, ft::TYPE_INT32, input_tensors->at("request_output_len").shape, h_total_output_lengths_}}};
+        {"output_seq_len",
+         ft::Tensor{ft::MEMORY_CPU,
+                    ft::TYPE_UINT32,
+                    {input_tensors->at("request_output_len").shape[0]},
+                    h_total_output_lengths_}}};
 
     if (input_tensors->find("bad_words_list") != input_tensors->end()) {
-        move_tensor_H2D(input_tensors->at("bad_words_list"), d_input_bad_words_);
+        move_tensor_H2D(input_tensors->at("bad_words_list"), d_input_bad_words_, &allocator_);
         ft_input_tensors.insert(
             {"bad_words_list", as_GPU_tensor(input_tensors->at("bad_words_list"), d_input_bad_words_)});
     }
 
     if (input_tensors->find("stop_words_list") != input_tensors->end()) {
-        move_tensor_H2D(input_tensors->at("stop_words_list"), d_input_stop_words_);
+        move_tensor_H2D(input_tensors->at("stop_words_list"), d_input_stop_words_, &allocator_);
         ft_input_tensors.insert(
             {"stop_words_list", as_GPU_tensor(input_tensors->at("stop_words_list"), d_input_stop_words_)});
     }
 
-    if (input_tensors->count("prefix_soft_prompt_embedding") && input_tensors->count("prefix_soft_prompt_lengths")) {
-        triton::Tensor soft_prompt_lengths_tensor = input_tensors->at("prefix_soft_prompt_lengths");
-        size_t length_size = std::accumulate(soft_prompt_lengths_tensor.shape.begin(),
-                                             soft_prompt_lengths_tensor.shape.end(),
-                                             1,
-                                             std::multiplies<size_t>());
-        ft::deviceMalloc(&d_prefix_soft_prompt_lengths_, length_size, false);
-        ft::cudaH2Dcpy(
-            d_prefix_soft_prompt_lengths_, reinterpret_cast<const int*>(soft_prompt_lengths_tensor.data), length_size);
-        ft_input_tensors.insert(
-            {"prefix_soft_prompt_lengths",
-             ft::Tensor{
-                 ft::MEMORY_GPU, ft::TYPE_INT32, soft_prompt_lengths_tensor.shape, d_prefix_soft_prompt_lengths_}});
+    if (input_tensors->count("request_prompt_embedding") && input_tensors->count("request_prompt_lengths")
+        && input_tensors->count("request_prompt_type")) {
 
-        triton::Tensor soft_prompt_embedding_tensor = input_tensors->at("prefix_soft_prompt_embedding");
-        size_t emb_size = std::accumulate(soft_prompt_embedding_tensor.shape.begin(),
-                                          soft_prompt_embedding_tensor.shape.end(),
-                                          1,
-                                          std::multiplies<size_t>());
-        ft::deviceMalloc(&d_prefix_soft_prompt_embedding_, emb_size, false);
-        ft::cudaH2Dcpy(d_prefix_soft_prompt_embedding_,
-                       reinterpret_cast<const float*>(soft_prompt_embedding_tensor.data),
-                       emb_size);
+        move_tensor_H2D(input_tensors->at("request_prompt_lengths"), d_request_prompt_lengths_, &allocator_);
         ft_input_tensors.insert(
-            {"prefix_soft_prompt_embedding",
-             ft::Tensor{
-                 ft::MEMORY_GPU, ft::TYPE_FP32, soft_prompt_embedding_tensor.shape, d_prefix_soft_prompt_embedding_}});
+            {"request_prompt_lengths",
+             as_GPU_tensor(input_tensors->at("request_prompt_lengths"), d_request_prompt_lengths_)});
+
+        move_tensor_H2D(input_tensors->at("request_prompt_embedding"), d_request_prompt_embedding_, &allocator_);
+        ft_input_tensors.insert(
+            {"request_prompt_embedding",
+             as_GPU_tensor(input_tensors->at("request_prompt_embedding"), d_request_prompt_embedding_)});
     }
 
     for (auto t = input_tensors->begin(); t != input_tensors->end(); ++t) {
         if (t->first.find("input_ids") == std::string::npos && t->first.find("input_lengths") == std::string::npos
-            && t->first.find("max_output_seq_len") == std::string::npos
+            && t->first.find("output_seq_len") == std::string::npos
             && t->first.find("prefix_soft_prompt_embedding") == std::string::npos
             && t->first.find("prefix_soft_prompt_lengths") == std::string::npos) {
             if (ft_input_tensors.count(t->first) == 0) {
@@ -159,15 +151,14 @@ GptJTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::stri
     ft::FT_CHECK_WITH_INFO(input_tensors->at("input_lengths").shape.size() == 1,
                            "input_tensors->at(\"input_lengths\").shape.size() == 1");
 
-    const size_t request_batch_size = input_tensors->at("input_ids").shape[0];
-    const size_t max_request_output_len = (size_t)*std::max_element(
+    const uint32_t request_batch_size     = input_tensors->at("input_ids").shape[0];
+    const uint32_t max_request_output_len = (size_t)*std::max_element(
         (int*)input_tensors->at("request_output_len").data,
         (int*)input_tensors->at("request_output_len").data + input_tensors->at("request_output_len").shape[0]);
-    const size_t total_output_len = max_request_output_len + input_tensors->at("input_ids").shape[1];
-    const size_t beam_width =
+    const uint32_t total_output_len = max_request_output_len + input_tensors->at("input_ids").shape[1];
+    const uint32_t beam_width =
         input_tensors->count("beam_width") ? (size_t)(*(uint*)input_tensors->at("beam_width").data) : 1;
 
-    freeBuffer();  // free buffer of previous iteration
     allocateBuffer(request_batch_size, beam_width, total_output_len, max_request_output_len);
 
     std::unordered_map<std::string, ft::Tensor> ft_input_tensors = convert_inputs(input_tensors);
@@ -196,36 +187,20 @@ GptJTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::stri
                                           std::vector<size_t>{request_batch_size, beam_width},
                                           d_cum_log_probs_}});
     }
-    gpt_->forward(&output_tensors, &ft_input_tensors, gpt_weight_.get());
 
-    if (d_input_ids_ != nullptr) {
-        ft::check_cuda_error(cudaFree(d_input_ids_));
-        d_input_ids_ = nullptr;
+    if (stream_cb_ != nullptr) {
+        gpt_->registerCallback(triton_stream_callback<T>, this);
     }
-    if (d_input_lengths_ != nullptr) {
-        ft::check_cuda_error(cudaFree(d_input_lengths_));
-        d_input_lengths_ = nullptr;
+    gpt_->forward(&output_tensors, &ft_input_tensors, gpt_weight_.get());
+    if (stream_cb_ != nullptr) {
+        gpt_->unRegisterCallback();
     }
+
     if (h_total_output_lengths_ != nullptr) {
         free(h_total_output_lengths_);
         h_total_output_lengths_ = nullptr;
     }
-    if (d_input_bad_words_ != nullptr) {
-        ft::check_cuda_error(cudaFree(d_input_bad_words_));
-        d_input_bad_words_ = nullptr;
-    }
-    if (d_input_stop_words_ != nullptr) {
-        ft::check_cuda_error(cudaFree(d_input_stop_words_));
-        d_input_stop_words_ = nullptr;
-    }
-    if (d_prefix_soft_prompt_embedding_ != nullptr) {
-        ft::check_cuda_error(cudaFree(d_prefix_soft_prompt_embedding_));
-        d_prefix_soft_prompt_embedding_ = nullptr;
-    }
-    if (d_prefix_soft_prompt_lengths_ != nullptr) {
-        ft::check_cuda_error(cudaFree(d_prefix_soft_prompt_lengths_));
-        d_prefix_soft_prompt_lengths_ = nullptr;
-    }
+
     return convert_outputs(output_tensors);
 }
 
@@ -241,20 +216,27 @@ void GptJTritonModelInstance<T>::allocateBuffer(const size_t request_batch_size,
                                                 const size_t total_output_len,
                                                 const size_t max_request_output_len)
 {
-    ft::deviceMalloc(&d_output_ids_, request_batch_size * beam_width * total_output_len);
-    ft::deviceMalloc(&d_sequence_lengths_, request_batch_size * beam_width);
-    ft::deviceMalloc(&d_output_log_probs_, max_request_output_len * request_batch_size * beam_width);
-    ft::deviceMalloc(&d_cum_log_probs_, request_batch_size * beam_width);
+    d_output_ids_ = (int*)(allocator_->reMalloc(
+        d_output_ids_, sizeof(int) * request_batch_size * beam_width * total_output_len, false));
+    d_sequence_lengths_ =
+        (int*)(allocator_->reMalloc(d_sequence_lengths_, sizeof(int) * request_batch_size * beam_width, false));
+    d_output_log_probs_ = (float*)(allocator_->reMalloc(
+        d_output_log_probs_, sizeof(float) * request_batch_size * beam_width * max_request_output_len, false));
+    d_cum_log_probs_ =
+        (float*)(allocator_->reMalloc(d_cum_log_probs_, sizeof(float) * request_batch_size * beam_width, false));
 }
 
 template<typename T>
 void GptJTritonModelInstance<T>::freeBuffer()
 {
-    ft::deviceFree(d_output_ids_);
-    ft::deviceFree(d_sequence_lengths_);
-    ft::deviceFree(d_output_log_probs_);
-    ft::deviceFree(d_cum_log_probs_);
+    allocator_->free((void**)(&d_output_ids_));
+    allocator_->free((void**)(&d_sequence_lengths_));
+    allocator_->free((void**)(&d_output_log_probs_));
+    allocator_->free((void**)(&d_cum_log_probs_));
 }
 
 template struct GptJTritonModelInstance<float>;
 template struct GptJTritonModelInstance<half>;
+#ifdef ENABLE_BF16
+template struct GptJTritonModelInstance<__nv_bfloat16>;
+#endif

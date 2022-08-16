@@ -31,7 +31,7 @@ void Xlnet<T>::initialize()
                                                   cublas_wrapper_,
                                                   allocator_,
                                                   is_free_buffer_after_forward_);
-    ffn_layer_ = new GeluFfnLayer<T>(max_batch_size_,
+    ffn_layer_       = new GeluFfnLayer<T>(max_batch_size_,
                                      max_seq_len_,
                                      head_num_,
                                      size_per_head_,
@@ -44,17 +44,17 @@ void Xlnet<T>::initialize()
 }
 
 template<typename T>
-Xlnet<T>::Xlnet(size_t max_batch_size,
-                size_t max_seq_len,
-                size_t head_num,
-                size_t size_per_head,
-                size_t inter_size,
-                size_t num_layer,
-                float q_scaling,
-                cudaStream_t stream,
+Xlnet<T>::Xlnet(size_t           max_batch_size,
+                size_t           max_seq_len,
+                size_t           head_num,
+                size_t           size_per_head,
+                size_t           inter_size,
+                size_t           num_layer,
+                float            q_scaling,
+                cudaStream_t     stream,
                 cublasMMWrapper* cublas_wrapper,
-                IAllocator* allocator,
-                bool is_free_buffer_after_forward):
+                IAllocator*      allocator,
+                bool             is_free_buffer_after_forward):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     max_batch_size_(max_batch_size),
     max_seq_len_(max_seq_len),
@@ -95,11 +95,15 @@ template<typename T>
 void Xlnet<T>::allocateBuffer()
 {
     if (is_allocate_buffer_ == false) {
-        attn_mask_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * max_seq_len_, false);
-        seg_mat_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * max_seq_len_ * 2, false);
-        attr_k_head_r_ = (T*)allocator_->malloc(sizeof(T) * max_seq_len_ * hidden_units_ * 2, false);
-        attn_out_buf_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
-        output_fc2_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
+        attn_mask_ =
+            (T*)allocator_->reMalloc(attn_mask_, sizeof(T) * max_batch_size_ * max_seq_len_ * max_seq_len_, false);
+        seg_mat_ =
+            (T*)allocator_->reMalloc(seg_mat_, sizeof(T) * max_batch_size_ * max_seq_len_ * max_seq_len_ * 2, false);
+        attr_k_head_r_ = (T*)allocator_->reMalloc(attr_k_head_r_, sizeof(T) * max_seq_len_ * hidden_units_ * 2, false);
+        attn_out_buf_ =
+            (T*)allocator_->reMalloc(attn_out_buf_, sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
+        output_fc2_ =
+            (T*)allocator_->reMalloc(output_fc2_, sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
         is_allocate_buffer_ = true;
     }
 }
@@ -108,18 +112,18 @@ template<typename T>
 void Xlnet<T>::freeBuffer()
 {
     if (is_allocate_buffer_ == true) {
-        allocator_->free(attn_mask_);
-        allocator_->free(seg_mat_);
-        allocator_->free(attr_k_head_r_);
-        allocator_->free(output_fc2_);
+        allocator_->free((void**)(&attn_mask_));
+        allocator_->free((void**)(&seg_mat_));
+        allocator_->free((void**)(&attr_k_head_r_));
+        allocator_->free((void**)(&output_fc2_));
 
         is_allocate_buffer_ = false;
     }
 }
 
 template<typename T>
-void Xlnet<T>::forward(std::vector<Tensor>* output_tensors,
-                       const std::vector<Tensor>* input_tensors,
+void Xlnet<T>::forward(std::vector<Tensor>*                    output_tensors,
+                       const std::vector<Tensor>*              input_tensors,
                        const std::vector<XlnetLayerWeight<T>>* xlnet_layer_weights)
 {
     // input_tensors:
@@ -131,13 +135,13 @@ void Xlnet<T>::forward(std::vector<Tensor>* output_tensors,
     // out_tensor [batch_size, seq_len, hidden_units]
 
     const size_t request_batch_size = input_tensors->at(0).shape[0];
-    const size_t request_seq_len = input_tensors->at(0).shape[1];
+    const size_t request_seq_len    = input_tensors->at(0).shape[1];
 
-    T* input_ptr = (T*)input_tensors->at(0).data;
+    T* input_ptr  = (T*)input_tensors->at(0).data;
     T* output_ptr = (T*)output_tensors->at(0).data;
 
     float* input_mask = (float*)input_tensors->at(1).data;
-    int* seg_id = (int*)input_tensors->at(2).data;
+    int*   seg_id     = (int*)input_tensors->at(2).data;
 
     FT_CHECK(input_tensors->size() == 3);
     FT_CHECK(isValidBatchSize(request_batch_size));
@@ -163,8 +167,8 @@ void Xlnet<T>::forward(std::vector<Tensor>* output_tensors,
 
     DataType data_type = getTensorType<T>();
     for (uint i = 0; i < num_layer_; i++) {
-        const T* in_tensor = (const T*)(i == 0 ? input_ptr : output_ptr);
-        T* out_tensor = output_ptr;
+        const T* in_tensor  = (const T*)(i == 0 ? input_ptr : output_ptr);
+        T*       out_tensor = output_ptr;
 
         std::vector<Tensor> attn_input_tensors{
             Tensor{MEMORY_GPU,
@@ -217,6 +221,7 @@ void Xlnet<T>::forward(std::vector<Tensor>* output_tensors,
                                        xlnet_layer_weights->at(i).ffn_weights.output_weight.bias,
                                        xlnet_layer_weights->at(i).ffn_layernorm_weights.gamma,
                                        xlnet_layer_weights->at(i).ffn_layernorm_weights.beta,
+                                       layernorm_eps_,
                                        request_batch_size * request_seq_len,
                                        hidden_units_,
                                        stream_);
@@ -249,5 +254,8 @@ bool Xlnet<T>::isValidSeqLen(size_t seq_len)
 
 template class Xlnet<float>;
 template class Xlnet<half>;
+#ifdef ENABLE_BF16
+template class Xlnet<__nv_bfloat16>;
+#endif
 
 }  // namespace fastertransformer

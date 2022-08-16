@@ -24,27 +24,27 @@ namespace fastertransformer {
 // block(8, 32)
 // size should be a multiple of 4
 template<typename T>
-__global__ void swin_trt_add_QKV_bias_COL32_int8IO(char4* output,
+__global__ void swin_trt_add_QKV_bias_COL32_int8IO(char4*       output,
                                                    const char4* QKV,
-                                                   const T* bias_Q,
-                                                   const T* bias_K,
-                                                   const T* bias_V,
+                                                   const T*     bias_Q,
+                                                   const T*     bias_K,
+                                                   const T*     bias_V,
                                                    const float* q_bias_QFactor_ptr,
                                                    const float* k_bias_QFactor_ptr,
                                                    const float* v_bias_QFactor_ptr,
-                                                   const float qkv_deQFactor,
-                                                   const int valid_word_num,
-                                                   const int head_num,
-                                                   const int size_per_head,
-                                                   const int head_num_x_size_per_head)
+                                                   const float  qkv_deQFactor,
+                                                   const int    valid_word_num,
+                                                   const int    head_num,
+                                                   const int    size_per_head,
+                                                   const int    head_num_x_size_per_head)
 {
-    const int qkv_id = blockIdx.z;
-    const int seq_id = (blockIdx.y << 5) + threadIdx.y;
+    const int qkv_id     = blockIdx.z;
+    const int seq_id     = (blockIdx.y << 5) + threadIdx.y;
     const int threadIdx4 = threadIdx.x << 2;
-    const int hidden_id = (blockIdx.x << 5) + threadIdx4;
-    const int size_id = hidden_id % size_per_head;
-    const int head_id = hidden_id / size_per_head;
-    const int col_id = qkv_id * head_num_x_size_per_head + hidden_id;
+    const int hidden_id  = (blockIdx.x << 5) + threadIdx4;
+    const int size_id    = hidden_id % size_per_head;
+    const int head_id    = hidden_id / size_per_head;
+    const int col_id     = qkv_id * head_num_x_size_per_head + hidden_id;
 
     const bool qual = (seq_id < valid_word_num) && (hidden_id < head_num_x_size_per_head);
     if (qual) {
@@ -82,22 +82,22 @@ __global__ void swin_trt_add_QKV_bias_COL32_int8IO(char4* output,
 }
 
 template<typename T>
-void invokeSwinTrtAddQkvBiasInt8IO(int8_t* output,
-                                   const int8_t* Q,
-                                   const T* bias_Q,
-                                   const T* bias_K,
-                                   const T* bias_V,
-                                   const size_t token_num,
-                                   const size_t head_num,
-                                   const size_t size_per_head,
-                                   const float* q_bias_QFactor_ptr,
-                                   const float* k_bias_QFactor_ptr,
-                                   const float* v_bias_QFactor_ptr,
-                                   const float qkv_deQFactor,
+void invokeSwinTrtAddQkvBiasInt8IO(int8_t*            output,
+                                   const int8_t*      Q,
+                                   const T*           bias_Q,
+                                   const T*           bias_K,
+                                   const T*           bias_V,
+                                   const size_t       token_num,
+                                   const size_t       head_num,
+                                   const size_t       size_per_head,
+                                   const float*       q_bias_QFactor_ptr,
+                                   const float*       k_bias_QFactor_ptr,
+                                   const float*       v_bias_QFactor_ptr,
+                                   const float        qkv_deQFactor,
                                    const cudaStream_t stream)
 {
 
-    int head_num_x_size_per_head = head_num * size_per_head;
+    int  head_num_x_size_per_head = head_num * size_per_head;
     dim3 grid((head_num_x_size_per_head + 31) / 32, (token_num + 31) / 32, 3);
     dim3 block(8, 32);
 
@@ -152,37 +152,44 @@ void WindowAttentionINT8<T>::allocateBuffer()
     }
     if (is_allocate_buffer_ == false) {
         if (use_trt_) {
-            int S = trt_getS(window_len_);
-            trt_attention_mask_ = (half*)allocator_->malloc(roundByteSize(window_num_ * S * S * sizeof(T), 4), false);
-            trt_relative_position_bias_ =
-                (half*)allocator_->malloc(roundByteSize(num_head * S * S * sizeof(T), 4), false);
-            Q_buf_ = (int8_t*)allocator_->malloc(
-                3 * max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_ * sizeof(int8_t), false);
-            K_buf_ = Q_buf_ + max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_;
-            V_buf_ = K_buf_ + max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_;
-            q_buf_ = (int8_t*)allocator_->malloc(
-                3 * max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_ * sizeof(int8_t), false);
-            k_buf_ = q_buf_ + max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_;
-            v_buf_ = k_buf_ + max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_;
-            dst_buf_ = (int8_t*)allocator_->malloc(
-                max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_ * sizeof(int8_t), false);
+            int S               = trt_getS(window_len_);
+            trt_attention_mask_ = (half*)allocator_->reMalloc(
+                trt_attention_mask_, roundByteSize(window_num_ * S * S * sizeof(T), 4), false);
+            trt_relative_position_bias_ = (half*)allocator_->reMalloc(
+                trt_relative_position_bias_, roundByteSize(num_head * S * S * sizeof(T), 4), false);
+            Q_buf_   = (int8_t*)allocator_->reMalloc(Q_buf_,
+                                                   3 * max_batch_ * patches_resolution_ * patches_resolution_
+                                                       * embed_dim_ * sizeof(int8_t),
+                                                   false);
+            K_buf_   = Q_buf_ + max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_;
+            V_buf_   = K_buf_ + max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_;
+            q_buf_   = (int8_t*)allocator_->reMalloc(q_buf_,
+                                                   3 * max_batch_ * patches_resolution_ * patches_resolution_
+                                                       * embed_dim_ * sizeof(int8_t),
+                                                   false);
+            k_buf_   = q_buf_ + max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_;
+            v_buf_   = k_buf_ + max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_;
+            dst_buf_ = (int8_t*)allocator_->reMalloc(
+                dst_buf_, max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_ * sizeof(int8_t), false);
         }
         else {
             int padded_winlen = (window_len_ + 31) / 32 * 32;
-            Q_buf_ = (int8_t*)allocator_->malloc(
-                3 * max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_ * sizeof(int8_t), false);
-            K_buf_ = Q_buf_ + max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_;
-            V_buf_ = K_buf_ + max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_;
-            q_buf_ = (int8_t*)allocator_->malloc(max_batch_ * window_num_ * window_len_ * embed_dim_ * sizeof(int8_t),
-                                                 false);
-            k_buf_ = (int8_t*)allocator_->malloc(max_batch_ * window_num_ * padded_winlen * embed_dim_ * sizeof(int8_t),
-                                                 false);
-            v_buf_ = (int8_t*)allocator_->malloc(max_batch_ * window_num_ * padded_winlen * embed_dim_ * sizeof(int8_t),
-                                                 false);
-            qk_buf_ =
-                (int8_t*)allocator_->malloc(max_batch_ * window_num_ * num_head * window_len_ * padded_winlen, false);
-            dst_buf_ = (int8_t*)allocator_->malloc(max_batch_ * window_num_ * window_len_ * embed_dim_ * sizeof(int8_t),
+            Q_buf_            = (int8_t*)allocator_->reMalloc(Q_buf_,
+                                                   3 * max_batch_ * patches_resolution_ * patches_resolution_
+                                                       * embed_dim_ * sizeof(int8_t),
                                                    false);
+            K_buf_            = Q_buf_ + max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_;
+            V_buf_            = K_buf_ + max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_;
+            q_buf_            = (int8_t*)allocator_->reMalloc(
+                q_buf_, max_batch_ * window_num_ * window_len_ * embed_dim_ * sizeof(int8_t), false);
+            k_buf_ = (int8_t*)allocator_->reMalloc(
+                k_buf_, max_batch_ * window_num_ * padded_winlen * embed_dim_ * sizeof(int8_t), false);
+            v_buf_ = (int8_t*)allocator_->reMalloc(
+                v_buf_, max_batch_ * window_num_ * padded_winlen * embed_dim_ * sizeof(int8_t), false);
+            qk_buf_ = (int8_t*)allocator_->reMalloc(
+                qk_buf_, max_batch_ * window_num_ * num_head * window_len_ * padded_winlen, false);
+            dst_buf_ = (int8_t*)allocator_->reMalloc(
+                dst_buf_, max_batch_ * window_num_ * window_len_ * embed_dim_ * sizeof(int8_t), false);
         }
         is_allocate_buffer_ = true;
     }
@@ -193,34 +200,34 @@ void WindowAttentionINT8<T>::freeBuffer()
 {
     if (is_allocate_buffer_ == true) {
         if (use_trt_) {
-            allocator_->free(trt_attention_mask_);
-            allocator_->free(trt_relative_position_bias_);
-            allocator_->free(Q_buf_);
-            allocator_->free(q_buf_);
-            allocator_->free(dst_buf_);
+            allocator_->free((void**)(&trt_attention_mask_));
+            allocator_->free((void**)(&trt_relative_position_bias_));
+            allocator_->free((void**)(&Q_buf_));
+            allocator_->free((void**)(&q_buf_));
+            allocator_->free((void**)(&dst_buf_));
         }
         else {
-            allocator_->free(Q_buf_);
-            allocator_->free(q_buf_);
-            allocator_->free(k_buf_);
-            allocator_->free(v_buf_);
-            allocator_->free(dst_buf_);
+            allocator_->free((void**)(&Q_buf_));
+            allocator_->free((void**)(&q_buf_));
+            allocator_->free((void**)(&k_buf_));
+            allocator_->free((void**)(&v_buf_));
+            allocator_->free((void**)(&dst_buf_));
         }
         is_allocate_buffer_ = false;
     }
 }
 
 template<typename T>
-WindowAttentionINT8<T>::WindowAttentionINT8(int max_batch,
-                                            int window_size,
-                                            int patches_resolution,
-                                            int embed_dim,
-                                            cudaStream_t stream,
+WindowAttentionINT8<T>::WindowAttentionINT8(int              max_batch,
+                                            int              window_size,
+                                            int              patches_resolution,
+                                            int              embed_dim,
+                                            cudaStream_t     stream,
                                             cublasMMWrapper* cublas_wrapper,
-                                            IAllocator* allocator,
-                                            bool is_free_buffer_after_forward,
-                                            bool qkv_bias,
-                                            float qk_scale):
+                                            IAllocator*      allocator,
+                                            bool             is_free_buffer_after_forward,
+                                            bool             qkv_bias,
+                                            float            qk_scale):
     BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     patches_resolution_(patches_resolution),
     embed_dim_(embed_dim),
@@ -238,9 +245,9 @@ WindowAttentionINT8<T>::~WindowAttentionINT8()
 }
 
 template<typename T>
-void WindowAttentionINT8<T>::forward(std::vector<fastertransformer::Tensor>* output_tensors,
+void WindowAttentionINT8<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                                      const std::vector<fastertransformer::Tensor>* input_tensors,
-                                     const AttentionWeight<T>* attention_weights)
+                                     const AttentionWeight<T>*                     attention_weights)
 {
     // input_tensors:
     //      input [batch * window_num * window_len, dim]
@@ -250,32 +257,32 @@ void WindowAttentionINT8<T>::forward(std::vector<fastertransformer::Tensor>* out
     // output_tensors:
     //      output [batch * window_num * window_len, dim]
 
-    cublasINT8MMWrapper* cublas_wrapper = (cublasINT8MMWrapper*)cublas_wrapper_;
-    int8_t* attention_out = (int8_t*)output_tensors->at(0).data;
-    const int8_t* from_tensor = (const int8_t*)input_tensors->at(0).data;
-    const T* attention_mask = (const T*)input_tensors->at(1).data;
-    const T* attention_relative_pos_bias = (const T*)input_tensors->at(2).data;
-    const int* input_parameters = (const int*)input_tensors->at(3).data;
-    const int batch = input_parameters[0];
-    const int dim = input_parameters[1];
-    const int input_resolution = input_parameters[2];
-    const int num_head = input_parameters[3];
-    const int shift_size = input_parameters[4];
-    const int sm = input_parameters[5];
+    cublasINT8MMWrapper* cublas_wrapper              = (cublasINT8MMWrapper*)cublas_wrapper_;
+    int8_t*              attention_out               = (int8_t*)output_tensors->at(0).data;
+    const int8_t*        from_tensor                 = (const int8_t*)input_tensors->at(0).data;
+    const T*             attention_mask              = (const T*)input_tensors->at(1).data;
+    const T*             attention_relative_pos_bias = (const T*)input_tensors->at(2).data;
+    const int*           input_parameters            = (const int*)input_tensors->at(3).data;
+    const int            batch                       = input_parameters[0];
+    const int            dim                         = input_parameters[1];
+    const int            input_resolution            = input_parameters[2];
+    const int            num_head                    = input_parameters[3];
+    const int            shift_size                  = input_parameters[4];
+    const int            sm                          = input_parameters[5];
 
     int use_ORDER_COL32_2R_4R4 = (sm >= 80 ? 1 : 0);
 
     int size_per_head = dim / num_head;
-    int trt_S = 1024;
+    int trt_S         = 1024;
     if ((sm == 75 || sm == 80 || sm == 86) && size_per_head == 32 && window_len_ <= TRT_MAX_LEN
         && std::is_same<T, half>::value) {
-        trt_S = trt_getS(window_len_);
+        trt_S    = trt_getS(window_len_);
         use_trt_ = true;
     }
-    num_head_ = num_head;
+    num_head_           = num_head;
     patches_resolution_ = input_resolution;
-    window_num_ = (input_resolution / window_size_) * (input_resolution / window_size_);
-    embed_dim_ = dim;
+    window_num_         = (input_resolution / window_size_) * (input_resolution / window_size_);
+    embed_dim_          = dim;
     allocateBuffer();
 
     float scale = 1.0f / sqrt(size_per_head);

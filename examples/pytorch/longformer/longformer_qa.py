@@ -30,15 +30,17 @@ def parse_from_config(model_dir):
 def build_ft_longformer(hf_model_dir, layer_num, head_num, size_per_head,
                         intermediate_size, local_attn_window_size,
                         max_global_token_num, batch_size, seq_len,
-                        attn_scaler, ft_longformer_lib, fp16):
+                        attn_scaler, ft_longformer_lib, data_type):
     weights_file = os.path.join(hf_model_dir, 'pytorch_model.bin')
     ft_encoder = FTLongformerEncoder(weights_file, layer_num, head_num, size_per_head,
                                      intermediate_size, local_attn_window_size,
                                      max_global_token_num, batch_size, seq_len,
-                                     attn_scaler, ft_longformer_lib, fp16)
+                                     attn_scaler, ft_longformer_lib, data_type)
     ft_longformer = build_hf_longformer(hf_model_dir)
-    if fp16:
+    if data_type == 'fp16':
         ft_longformer = ft_longformer.half()
+    elif data_type == 'bf16':
+        ft_longformer = ft_longformer.bfloat16()
     ft_longformer.cuda()
     ft_longformer.eval()
     ft_encoder.set_hf_plugin_mode(True)
@@ -53,7 +55,7 @@ def build_hf_longformer(model_dir):
     return hf_longformer
 
 
-def prepare_input(question, passage_text, seq_len, batch_size, model_dir, fp16):
+def prepare_input(question, passage_text, seq_len, batch_size, model_dir, data_type):
     tokenizer = LongformerTokenizer.from_pretrained(model_dir)
     encoding = tokenizer(question, passage_text, return_token_type_ids=True)
     qa_sep_index = 0
@@ -78,9 +80,12 @@ def prepare_input(question, passage_text, seq_len, batch_size, model_dir, fp16):
     local_attn_mask_b = torch.stack([local_attn_mask for _ in range(batch_size)], axis=0).contiguous()
     global_attn_mask_b = torch.stack([global_attn_mask for _ in range(batch_size)], axis=0).contiguous()
 
-    if fp16:
+    if data_type == 'fp16':
         local_attn_mask_b = local_attn_mask_b.half()
         global_attn_mask_b = global_attn_mask_b.half()
+    elif data_type == 'bf16':
+        local_attn_mask_b = local_attn_mask_b.bfloat16()
+        global_attn_mask_b = global_attn_mask_b.bfloat16()
 
     local_attn_mask_b = local_attn_mask_b.cuda()
     global_attn_mask_b = global_attn_mask_b.cuda()
@@ -107,7 +112,7 @@ def main():
                         help='Path to huggingface model dir where model file and config file is stored')
     parser.add_argument('-l', '--ft-longformer-lib', type=str, default=os.path.join(project_root, 'build', 'lib', 'libth_longformer.so'),
                         help='Path to fastertransformer longformer pytorch op lib')
-    parser.add_argument('--fp16', action='store_true', help="Use FP16")
+    parser.add_argument('--data_type', type=str, choices=['fp32', 'fp16', 'bf16'], default='fp32')
     parser.add_argument('-p', '--passage', type=str, nargs='*', help='Text for paragraph/passage for LongformerBERT QA',
                         default=None)
     parser.add_argument('-pf', '--passage-file', type=str, help='File containing input passage',
@@ -123,7 +128,7 @@ def main():
     parser.add_argument("-g", "--max-global-attention-num", default=128,
                         help="Max global attention token num from start of the sequence to the end.", type=int)
     parser.add_argument('-r', '--repeat-test-num',
-                        help='If specified, will run inference serveral rounds, to test average performace.',
+                        help='If specified, will run inference several rounds, to test average performance.',
                         type=int,
                         default=None)
     args, _ = parser.parse_known_args()
@@ -157,36 +162,44 @@ def main():
 
     # huggeingFace longformer
     hf_longformer = build_hf_longformer(model_dir)
-    if args.fp16:
+    if args.data_type == 'fp16':
         hf_longformer = hf_longformer.half()
+
     # fastertransformer longformer
     ft_longformer = build_ft_longformer(model_dir, layer_num, head_num, size_per_head,
                                         intermediate_size, local_attn_window_size,
                                         max_global_token_num, batch_size, seq_len,
-                                        attn_scaler, ft_longformer_lib, args.fp16)
+                                        attn_scaler, ft_longformer_lib, args.data_type)
     # prepare input
     input_ids_b, local_attn_mask_b, global_attn_mask_b, input_ids, actual_seq_len = prepare_input(
-        question, passage_text, seq_len, batch_size, model_dir, args.fp16)
+        question, passage_text, seq_len, batch_size, model_dir, args.data_type)
 
     # 1. Compare the performance between HF and FT, using dummy input
     dummy_local_attn_mask_b = torch.ones_like(local_attn_mask_b)
     extended_mask_b = (global_attn_mask_b + dummy_local_attn_mask_b) * 10000. - 10000.
     dummy_embedding_out = torch.rand(batch_size, seq_len, hidden_size, dtype=torch.float32)
-    if args.fp16:
+    if args.data_type == 'fp16':
         dummy_embedding_out = dummy_embedding_out.half()
+    elif args.data_type == 'bf16':
+        dummy_embedding_out = dummy_embedding_out.bfloat16()
     dummy_embedding_out = dummy_embedding_out.cuda()
+
     hf_encoder = hf_longformer.longformer.encoder
     ft_encoder = ft_longformer.longformer.encoder
 
+    if args.data_type == 'bf16':
+        print("HF longerformer encoder doesn't support BFloat16, FallBack to FP32 !")
+
     with torch.no_grad():
         # HuggingFace warmup
+
         for i in range(10):
-            output = hf_encoder(dummy_embedding_out, attention_mask=extended_mask_b, head_mask=None,
+            output = hf_encoder(dummy_embedding_out.float(), attention_mask=extended_mask_b, head_mask=None,
                                 output_attentions=None, output_hidden_states=None, return_dict=True)
 
         start = time.time()
         for i in range(repeat_num):
-            output = hf_encoder(dummy_embedding_out, attention_mask=extended_mask_b, head_mask=None,
+            output = hf_encoder(dummy_embedding_out.float(), attention_mask=extended_mask_b, head_mask=None,
                                 output_attentions=None, output_hidden_states=None, return_dict=True)
         stop = time.time()
         print("HuggingFace Longformer encoder average latency {:.3f} second ({} iterations)".format((stop - start) / repeat_num, repeat_num))
@@ -212,8 +225,8 @@ def main():
         ft_answer = decode_output(outputs, model_dir, input_ids, actual_seq_len)
 
         outputs = hf_longformer(input_ids_b,
-                                attention_mask=local_attn_mask_b,
-                                global_attention_mask=global_attn_mask_b)
+                                attention_mask=local_attn_mask_b.float(),
+                                global_attention_mask=global_attn_mask_b.float())
         hf_answer = decode_output(outputs, model_dir, input_ids, actual_seq_len)
         print("HuggingFace Answer: " + hf_answer)
         print("FasterTransformer Answer: " + ft_answer)

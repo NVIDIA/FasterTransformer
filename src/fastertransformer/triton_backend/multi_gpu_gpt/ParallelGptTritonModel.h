@@ -28,59 +28,73 @@ namespace ft = fastertransformer;
 
 template<typename T>
 struct ParallelGptTritonModel: public AbstractTransformerModel {
-    ParallelGptTritonModel(size_t max_seq_len,
-                           size_t head_num,
-                           size_t size_per_head,
-                           size_t inter_size,
-                           size_t num_layer,
-                           size_t vocab_size,
-                           int start_id,
-                           int end_id,
-                           size_t tensor_para_size,
-                           size_t pipeline_para_size,
-                           std::string model_name,
+    ParallelGptTritonModel(size_t                                     max_seq_len,
+                           size_t                                     head_num,
+                           size_t                                     size_per_head,
+                           size_t                                     inter_size,
+                           size_t                                     num_layer,
+                           size_t                                     vocab_size,
+                           int                                        start_id,
+                           int                                        end_id,
+                           int                                        prompt_learning_start_id,
+                           ft::PromptLearningType                     prompt_learning_type,
+                           std::map<std::string, std::pair<int, int>> prompt_learning_table_pair,
+                           ft::gptVariantParams                       gpt_variant_params,
+                           size_t                                     tensor_para_size,
+                           size_t                                     pipeline_para_size,
+                           std::string                                model_name,
+                           std::string                                model_dir,
+                           int                                        int8_mode,
+                           int                                        enable_custom_all_reduce);
+
+    ParallelGptTritonModel(size_t      tensor_para_size,
+                           size_t      pipeline_para_size,
+                           int         enable_custom_all_reduce,
                            std::string model_dir,
-                           int int8_mode,
-                           int enable_custom_all_reduce);
+                           int         int8_mode);
 
     virtual std::unique_ptr<AbstractTransformerModelInstance>
-    createModelInstance(int deviceId,
-                        int rank,
-                        cudaStream_t stream,
-                        std::pair<std::vector<ncclComm_t>, std::vector<ncclComm_t>> nccl_comms,
+    createModelInstance(int                                                               deviceId,
+                        int                                                               rank,
+                        cudaStream_t                                                      stream,
+                        std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
                         std::shared_ptr<ft::AbstractCustomComm> custom_all_reduce_comm = nullptr) override;
 
-    virtual std::pair<std::vector<ncclComm_t>, std::vector<ncclComm_t>>
-    createNcclComms(std::vector<ncclUniqueId> nccl_ids,
-                    const int node_id,
-                    bool multi_instances = false,
-                    int instance_id = 0) override;
+    virtual void createSharedWeights(int deviceId, int rank) override;
 
     virtual void createCustomComms(std::vector<std::shared_ptr<ft::AbstractCustomComm>>* custom_all_reduce_comms,
-                                   int world_size) override;
-
-    virtual std::vector<ncclUniqueId> createNcclIds(const uint32_t world_size, bool multi_instances = false) override;
+                                   int                                                   world_size) override;
 
     virtual std::string toString() override;
-    virtual int getTensorParaSize() override;
-    virtual int getPipelineParaSize() override;
+    virtual int         getTensorParaSize() override;
+    virtual int         getPipelineParaSize() override;
 
 private:
-    const size_t max_seq_len_;
-    const size_t head_num_;
-    const size_t size_per_head_;
-    const size_t inter_size_;
-    const size_t num_layer_;
-    const size_t vocab_size_;
-    const int start_id_;
-    const int end_id_;
-    const size_t tensor_para_size_;
-    const size_t pipeline_para_size_;
+    size_t max_seq_len_;  // needed for position embedding table
+    size_t head_num_;
+    size_t size_per_head_;
+    size_t inter_size_;
+    size_t num_layer_;
+    size_t vocab_size_;
+    int    start_id_;
+    int    end_id_;
+    size_t tensor_para_size_;
+    size_t pipeline_para_size_;
 
-    bool is_fp16_;
+    // shared weights for each device
+    std::vector<std::shared_ptr<ft::ParallelGptWeight<T>>> shared_weights_;
+
+    // model variants parameters
+    ft::gptVariantParams gpt_variant_params_ = {};
 
     std::string model_name_;
     std::string model_dir_;
-    int int8_mode_ = 0;
-    int enable_custom_all_reduce_ = 0;
+    int         int8_mode_                = 0;
+    int         enable_custom_all_reduce_ = 0;
+
+    // number of tasks (for prefix-prompt, p/prompt-tuning)
+    size_t                                     num_tasks_                  = 0;
+    int                                        prompt_learning_start_id_   = 0;
+    ft::PromptLearningType                     prompt_learning_type_       = ft::PromptLearningType::no_prompt;
+    std::map<std::string, std::pair<int, int>> prompt_learning_table_pair_ = {};
 };

@@ -15,9 +15,15 @@
  */
 
 #include "src/fastertransformer/models/bert_int8/BertINT8.h"
+#include "src/fastertransformer/utils/nvtx_utils.h"
+#include <cuda_profiler_api.h>
 
 #ifndef CUDART_VERSION
 #error CUDART_VERSION Undefined!
+#endif
+
+#ifdef USE_NVTX
+bool NVTX_ON = true;
 #endif
 
 using namespace fastertransformer;
@@ -28,9 +34,9 @@ int bertINT8Example(size_t batch_size,
                     size_t seq_len,
                     size_t head_num,
                     size_t size_per_head,
-                    int int8_mode,
-                    bool is_remove_padding,
-                    bool allow_gemm_test = false);
+                    int    int8_mode,
+                    bool   is_remove_padding,
+                    bool   allow_gemm_test = false);
 
 int main(int argc, char** argv)
 {
@@ -45,12 +51,12 @@ int main(int argc, char** argv)
         allow_gemm_test = (atoi(argv[9]) == 1) ? true : false;
     }
 
-    int batch_size = atoi(argv[1]);
-    int num_layers = atoi(argv[2]);
-    int seq_len = atoi(argv[3]);
-    int head_num = atoi(argv[4]);
-    int size_per_head = atoi(argv[5]);
-    int int8_mode = atoi(argv[8]);
+    int  batch_size        = atoi(argv[1]);
+    int  num_layers        = atoi(argv[2]);
+    int  seq_len           = atoi(argv[3]);
+    int  head_num          = atoi(argv[4]);
+    int  size_per_head     = atoi(argv[5]);
+    int  int8_mode         = atoi(argv[8]);
     bool is_remove_padding = static_cast<bool>(atoi(argv[7]));
 
     if (atoi(argv[6]) == 0) {
@@ -73,16 +79,16 @@ int bertINT8Example(size_t batch_size,
                     size_t seq_len,
                     size_t head_num,
                     size_t size_per_head,
-                    int int8_mode,
-                    bool is_remove_padding,
-                    bool allow_gemm_test)
+                    int    int8_mode,
+                    bool   is_remove_padding,
+                    bool   allow_gemm_test)
 {
     printf("[INFO] Device: %s \n", getDeviceName().c_str());
 
     const size_t hidden_units = head_num * size_per_head;
-    const size_t inter_size = 4 * hidden_units;
+    const size_t inter_size   = 4 * hidden_units;
 
-    cudaStream_t stream;
+    cudaStream_t     stream;
     cublasLtHandle_t cublaslt_handle;
     cudaStreamCreate(&stream);
     cublasLtCreate(&cublaslt_handle);
@@ -138,8 +144,8 @@ int bertINT8Example(size_t batch_size,
     deviceMalloc(&out_tensor, batch_size * seq_len * head_num * size_per_head, false);
     deviceMalloc(&from_tensor, batch_size * seq_len * head_num * size_per_head, false);
 
-    int* h_sequence_lengths = new int[batch_size];
-    unsigned int seed = 0;
+    int*         h_sequence_lengths = new int[batch_size];
+    unsigned int seed               = 0;
     for (uint i = 0; i < batch_size; i++) {
         h_sequence_lengths[i] = rand_r(&seed) % seq_len;
     }
@@ -168,12 +174,16 @@ int bertINT8Example(size_t batch_size,
 
     // profile time
     const int ite = 100;
+    cudaProfilerStart();
     CudaTimer cuda_timer(stream);
+    nvtx::resetScope();
+    nvtx::addScope("BertInt8");
     cuda_timer.start();
     for (int i = 0; i < ite; i++) {
         bert_int8.forward(&output_tensors, &input_tensors, &bert_layer_weights);
     }
     float total_time = cuda_timer.stop();
+    cudaProfilerStop();
 
     printf("[INFO] batch_size %ld seq_len %ld layer %ld "
            "FT-CPP-time %.2f ms (%d iterations) \n",

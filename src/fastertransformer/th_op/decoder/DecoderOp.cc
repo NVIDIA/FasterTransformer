@@ -41,11 +41,11 @@ FasterTransformerDecoder::FasterTransformerDecoder(th::Tensor self_layernorm_gam
                                                    th::Tensor inter_bias,
                                                    th::Tensor output_kernel,
                                                    th::Tensor output_bias,
-                                                   int64_t head_num,
-                                                   int64_t head_size,
-                                                   int64_t inter_size,
-                                                   int64_t layer_num,
-                                                   int64_t mem_hidden_dim):
+                                                   int64_t    head_num,
+                                                   int64_t    head_size,
+                                                   int64_t    inter_size,
+                                                   int64_t    layer_num,
+                                                   int64_t    mem_hidden_dim):
     _st(self_kernel_q.scalar_type()),
     weights{self_layernorm_gamma, self_layernorm_beta, self_kernel_q,         self_bias_q,
             self_output_kernel,   self_output_bias,    cross_layernorm_gamma, cross_layernorm_beta,
@@ -65,10 +65,16 @@ FasterTransformerDecoder::FasterTransformerDecoder(th::Tensor self_layernorm_gam
         case at::ScalarType::Half:
             ftdecoder = new FTDecoder<half>(head_num, head_size, inter_size, layer_num, mem_hidden_dim, weights);
             break;
+#ifdef ENABLE_BF16
+        case at::ScalarType::BFloat16:
+            ftdecoder =
+                new FTDecoder<__nv_bfloat16>(head_num, head_size, inter_size, layer_num, mem_hidden_dim, weights);
+            break;
+#endif
         default:
             throw std::runtime_error("Wrong Tensor type.");
     }
-    head_info = torch::empty({4}, torch::dtype(torch::kInt64));
+    head_info    = torch::empty({4}, torch::dtype(torch::kInt64));
     head_info[0] = head_num;
     head_info[1] = head_size;
     head_info[2] = layer_num;
@@ -81,7 +87,7 @@ FasterTransformerDecoder::~FasterTransformerDecoder()
     delete ftdecoder;
 }
 
-std::vector<th::Tensor> FasterTransformerDecoder::forward(int64_t step,
+std::vector<th::Tensor> FasterTransformerDecoder::forward(int64_t    step,
                                                           th::Tensor from_tensor,
                                                           th::Tensor memory_tensor,
                                                           th::Tensor memory_sequence_length,
@@ -176,10 +182,10 @@ static auto fasterTransformerDecoderTHS =
                 return self->get_pickle_info();
             },
             [](std::vector<th::Tensor> state) -> c10::intrusive_ptr<torch_ext::FasterTransformerDecoder> {
-                int64_t head_num = state[22][0].item().to<int>();
-                int64_t head_size = state[22][1].item().to<int>();
-                int64_t layer_num = state[22][2].item().to<int>();
-                int64_t inter_size = state[22][3].item().to<int>();
+                int64_t head_num       = state[22][0].item().to<int>();
+                int64_t head_size      = state[22][1].item().to<int>();
+                int64_t layer_num      = state[22][2].item().to<int>();
+                int64_t inter_size     = state[22][3].item().to<int>();
                 int64_t mem_hidden_dim = state[22][4].item().to<int>();
                 return c10::make_intrusive<torch_ext::FasterTransformerDecoder>(state[0],
                                                                                 state[1],

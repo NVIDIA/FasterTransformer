@@ -56,9 +56,9 @@ do
     tmp_log_pt=${logdir}/batchsize-${batch_size}-seq-${seq_len}-log.log
     tmp_log_pt_sp=${logdir}/batchsize-${batch_size}-seq-${seq_len}-sp-log.log
 
-    python ../examples/pytorch/bert/bert_example.py ${batch_size} ${layer_num} ${seq_len} ${head_num} ${head_size} --fp16 --time 2>&1 | tee $tmp_log_pt
+    python ../examples/pytorch/bert/bert_example.py ${batch_size} ${layer_num} ${seq_len} ${head_num} ${head_size} --data_type fp16 --time 2>&1 | tee $tmp_log_pt
     sleep 5s
-    python ../examples/pytorch/bert/bert_example.py ${batch_size} ${layer_num} ${seq_len} ${head_num} ${head_size} --fp16 --sparse --time 2>&1 | tee $tmp_log_pt_sp
+    python ../examples/pytorch/bert/bert_example.py ${batch_size} ${layer_num} ${seq_len} ${head_num} ${head_size} --data_type fp16 --sparse --time 2>&1 | tee $tmp_log_pt_sp
     sleep 5s
 
     ft_o_time=`tail -n 2 ${tmp_log_pt} | head -n 1 | awk '{print $5}'`

@@ -21,23 +21,23 @@ namespace ft = fastertransformer;
 
 int main(int argc, char* argv[])
 {
-    if (argc != 9 && argc != 10) {
+    if (argc != 9 && argc != 10 && argc != 11) {
         printf(
             "[ERROR] gpt_gemm batch_size beam_width max_input_len head_number size_per_head inter_size vocab_size data_type tensor_para_size\n");
         printf("e.g. ./bin/gpt_gemm 8 4 32 96 128 49152 51200 1 8\n");
         return 0;
     }
 
-    const int batch_size = atoi(argv[1]);
-    const int beam_width = atoi(argv[2]);
-    const int max_input_len = atoi(argv[3]);
-    const int head_num = atoi(argv[4]);
-    const int size_per_head = atoi(argv[5]);
-    const int inter_size = atoi(argv[6]);
-    const int vocab_size = atoi(argv[7]);
-    const ft::CublasDataType data_type = static_cast<ft::CublasDataType>(atoi(argv[8]));  // 0 FP32, 1 FP16, 2 BF 16
-    const int tensor_para_size = argc <= 9 ? 1 : atoi(argv[9]);
-    int is_fp16_compute_type = argc <= 10 ? 0 : atoi(argv[10]);
+    const int                batch_size    = atoi(argv[1]);
+    const int                beam_width    = atoi(argv[2]);
+    const int                max_input_len = atoi(argv[3]);
+    const int                head_num      = atoi(argv[4]);
+    const int                size_per_head = atoi(argv[5]);
+    const int                inter_size    = atoi(argv[6]);
+    const int                vocab_size    = atoi(argv[7]);
+    const ft::CublasDataType data_type     = static_cast<ft::CublasDataType>(atoi(argv[8]));  // 0 FP32, 1 FP16, 2 BF 16
+    const int                tensor_para_size     = argc < 10 ? 1 : atoi(argv[9]);
+    int                      is_fp16_compute_type = argc < 11 ? 0 : atoi(argv[10]);
     if (data_type == ft::BFLOAT16_DATATYPE && is_fp16_compute_type != 0) {
         printf("[ERROR] BFLOAT16_DATATYPE does not support is_fp16_compute_type = True\n");
         return 0;
@@ -55,7 +55,7 @@ int main(int argc, char* argv[])
     printf("  tensor_para_size: %d \n", tensor_para_size);
     std::cout << std::endl;
 
-    void* gemm_test_buf;
+    void*  gemm_test_buf;
     size_t buf_size_in_byte = ft::calGptGemmTestBufSizeInByte(batch_size,
                                                               beam_width,
                                                               max_input_len,

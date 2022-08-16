@@ -28,7 +28,7 @@ class MaxCollector():
   Args:
     axis: None or integer. axis which will have its own max for computing scaling factor.
         If None, collect per tensor min/max. Default None
-    track_minmax: A boolean. If true, track all min/max it sees in addtion to the returned calib_min/calib_max.
+    track_minmax: A boolean. If true, track all min/max it sees in addition to the returned calib_min/calib_max.
         Default False
   """
 

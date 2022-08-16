@@ -24,11 +24,34 @@
 #endif
 
 #include "longformer_kernels.h"
+#include "src/fastertransformer/kernels/bfloat16_fallback_kenrels.cuh"
 #include "src/fastertransformer/utils/cuda_utils.h"
 
 #include <stdio.h>
 
 namespace fastertransformer {
+
+// when sm < 80, cub device partition flagged bf16 not supported
+// error: more than one operator "=" matches these operands: __nv_bfloat16::operator=(float),
+// __nv_bfloat16::operator=(double)
+template<typename T>
+struct CubBF16FallBackType {
+    using Type = T;
+};
+
+#ifdef ENABLE_BF16
+
+// global attn mask can be converted to uint16_t
+template<>
+struct CubBF16FallBackType<__nv_bfloat16> {
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ < 800
+    using Type = uint16_t;
+#else
+    using Type = __nv_bfloat16;
+#endif
+};
+
+#endif  // ENABLE_BF16
 
 __global__ void initSeqIdxKernel(int* seq_idx, int seq_len)
 {
@@ -42,11 +65,13 @@ template<typename T>
 size_t getInitLongformerCubStorage(const int seq_len)
 {
     size_t tmp_storage_bytes = 0;
-    int *seq_idx = NULL, *global_idx = NULL, *global_token_nums = NULL;
-    void* global_attn_mask = NULL;
+    int *  seq_idx = NULL, *global_idx = NULL, *global_token_nums = NULL;
+    void*  global_attn_mask = NULL;
+
+    using AttenMaskFBType = typename CubBF16FallBackType<T>::Type;
 
     check_cuda_error(cub::DevicePartition::Flagged(
-        NULL, tmp_storage_bytes, seq_idx, (T*)global_attn_mask, global_idx, global_token_nums, seq_len));
+        NULL, tmp_storage_bytes, seq_idx, (AttenMaskFBType*)global_attn_mask, global_idx, global_token_nums, seq_len));
 
     return tmp_storage_bytes;
 }
@@ -54,10 +79,10 @@ size_t getInitLongformerCubStorage(const int seq_len)
 template<typename T>
 __global__ void localAttnMaskShiftKernel(T* local_attn_mask, T* out, int thread_block_repeat, int total_len)
 {
-    int i = blockIdx.x * blockDim.x * thread_block_repeat + threadIdx.x;
+    int i   = blockIdx.x * blockDim.x * thread_block_repeat + threadIdx.x;
     int end = i + thread_block_repeat * blockDim.x;
     for (; i < end && i < total_len; i += blockDim.x) {
-        out[i] = local_attn_mask[i] * (T)10000 - (T)10000;
+        out[i] = fma(local_attn_mask[i], (T)10000.f, (T)(-10000.f));
     }
 }
 
@@ -65,8 +90,8 @@ template<typename T>
 void invokeLocalAttnMaskShift(T* local_attn_mask, T* out, int batch_size, int seq_len, cudaStream_t stream)
 {
     const int thread_block_repeat = 4;
-    const int block_dim = 128;
-    int block_num = std::ceil(batch_size * seq_len / (float)block_dim / (float)thread_block_repeat);
+    const int block_dim           = 128;
+    int       block_num           = std::ceil(batch_size * seq_len / (float)block_dim / (float)thread_block_repeat);
     localAttnMaskShiftKernel<<<block_num, block_dim, 0, stream>>>(
         local_attn_mask, out, thread_block_repeat, batch_size * seq_len);
 }
@@ -77,27 +102,33 @@ invokeLocalAttnMaskShift(float* local_attn_mask, float* out, int batch_size, int
 template void
 invokeLocalAttnMaskShift(half* local_attn_mask, half* out, int batch_size, int seq_len, cudaStream_t stream);
 
+#ifdef ENABLE_BF16
+template void invokeLocalAttnMaskShift(
+    __nv_bfloat16* local_attn_mask, __nv_bfloat16* out, int batch_size, int seq_len, cudaStream_t stream);
+#endif
+
 template<typename T>
-void invokeInitLongformerIdx(T* global_attn_mask,
-                             int* seq_idx,
-                             int* global_idx,
-                             int* global_token_nums,
-                             int seq_len,
-                             int batch_size,
-                             void* cub_storage,
+void invokeInitLongformerIdx(T*           global_attn_mask,
+                             int*         seq_idx,
+                             int*         global_idx,
+                             int*         global_token_nums,
+                             int          seq_len,
+                             int          batch_size,
+                             void*        cub_storage,
                              cudaStream_t stream)
 {
     const int threads = 1024;
-    int blocks = std::ceil(seq_len / float(threads));
+    int       blocks  = std::ceil(seq_len / float(threads));
     initSeqIdxKernel<<<blocks, threads, 0, stream>>>(seq_idx, seq_len);
     sync_check_cuda_error();
 
     size_t storages_bytes = getInitLongformerCubStorage<T>(seq_len);
+    using AttenMaskFBType = typename CubBF16FallBackType<T>::Type;
     for (int i = 0; i < batch_size; ++i) {
         check_cuda_error(cub::DevicePartition::Flagged(cub_storage,
                                                        storages_bytes,
                                                        seq_idx,
-                                                       global_attn_mask + i * seq_len,
+                                                       (AttenMaskFBType*)(global_attn_mask + i * seq_len),
                                                        global_idx + i * seq_len,
                                                        global_token_nums + i,
                                                        seq_len,
@@ -105,64 +136,75 @@ void invokeInitLongformerIdx(T* global_attn_mask,
     }
 }
 
-template void invokeInitLongformerIdx(float* global_attn_mask,
-                                      int* seq_idx,
-                                      int* global_idx,
-                                      int* global_token_nums,
-                                      int seq_len,
-                                      int batch_size,
-                                      void* cub_storage,
+template void invokeInitLongformerIdx(float*       global_attn_mask,
+                                      int*         seq_idx,
+                                      int*         global_idx,
+                                      int*         global_token_nums,
+                                      int          seq_len,
+                                      int          batch_size,
+                                      void*        cub_storage,
                                       cudaStream_t stream);
 
-template void invokeInitLongformerIdx(half* global_attn_mask,
-                                      int* seq_idx,
-                                      int* global_idx,
-                                      int* global_token_nums,
-                                      int seq_len,
-                                      int batch_size,
-                                      void* cub_storage,
+template void invokeInitLongformerIdx(half*        global_attn_mask,
+                                      int*         seq_idx,
+                                      int*         global_idx,
+                                      int*         global_token_nums,
+                                      int          seq_len,
+                                      int          batch_size,
+                                      void*        cub_storage,
                                       cudaStream_t stream);
+
+#ifdef ENABLE_BF16
+template void invokeInitLongformerIdx(__nv_bfloat16* global_attn_mask,
+                                      int*           seq_idx,
+                                      int*           global_idx,
+                                      int*           global_token_nums,
+                                      int            seq_len,
+                                      int            batch_size,
+                                      void*          cub_storage,
+                                      cudaStream_t   stream);
+#endif
 
 // Apply softmax to local and global attention. Rewrite the result to the same buffer in-place
 template<typename T, int blockSize>
-__launch_bounds__(blockSize) __global__ void longformerMHASoftmaxKernel(const T* global_attn,
+__launch_bounds__(blockSize) __global__ void longformerMHASoftmaxKernel(const T*   global_attn,
                                                                         const int* global_idx,
                                                                         const int* global_token_nums,
-                                                                        void* input_ptrs,
-                                                                        const T* attn_mask,
-                                                                        float scaler,
-                                                                        int seq_len,
-                                                                        int head_num,
-                                                                        int attn_window_size)
+                                                                        void*      input_ptrs,
+                                                                        const T*   attn_mask,
+                                                                        float      scaler,
+                                                                        int        seq_len,
+                                                                        int        head_num,
+                                                                        int        attn_window_size)
 {
-    typedef cub::BlockReduce<float, blockSize> BlockReduce;
+    typedef cub::BlockReduce<float, blockSize>   BlockReduce;
     __shared__ typename BlockReduce::TempStorage breduce_temp;
 
     size_t* p_inputs = (size_t*)(input_ptrs);
     // use input buffer as output buffer
-    size_t* p_outputs = (size_t*)(input_ptrs);
-    size_t* input_sizes = (size_t*)(input_ptrs) + 5;
+    size_t* p_outputs     = (size_t*)(input_ptrs);
+    size_t* input_sizes   = (size_t*)(input_ptrs) + 5;
     size_t* input_strides = (size_t*)(input_ptrs) + 10;
 
-    int tid = threadIdx.x;
+    int       tid       = threadIdx.x;
     const int batch_idx = blockIdx.x / (seq_len * head_num);
-    const int row_idx = blockIdx.x % seq_len;
-    const int head_idx = (blockIdx.x / seq_len) % head_num;
+    const int row_idx   = blockIdx.x % seq_len;
+    const int head_idx  = (blockIdx.x / seq_len) % head_num;
 
     // adjust the pointers for the batch
-    const T* mask_blk = attn_mask + seq_len * batch_idx;
-    const int global_num = global_token_nums[batch_idx];
+    const T*   mask_blk       = attn_mask + seq_len * batch_idx;
+    const int  global_num     = global_token_nums[batch_idx];
     const int* global_idx_blk = global_idx + seq_len * batch_idx;
 
     T* inputs[5];
     T* outputs[5];
     for (int i = 0; i < 5; ++i) {
-        inputs[i] = (T*)p_inputs[i] + batch_idx * head_num * input_sizes[i];
+        inputs[i]  = (T*)p_inputs[i] + batch_idx * head_num * input_sizes[i];
         outputs[i] = (T*)p_outputs[i] + batch_idx * head_num * input_sizes[i];
     }
 
     int col_start = 0;
-    int col_end = seq_len;
+    int col_end   = seq_len;
 
     // is it local attention token
     int is_local_row = global_attn[row_idx + seq_len * batch_idx] == (T)0.f;
@@ -170,7 +212,7 @@ __launch_bounds__(blockSize) __global__ void longformerMHASoftmaxKernel(const T*
     // if local token
     if (is_local_row) {
         col_start = row_idx - attn_window_size;
-        col_end = row_idx + attn_window_size + 1;
+        col_end   = row_idx + attn_window_size + 1;
     }
 
     if (col_start < 0) {
@@ -183,27 +225,27 @@ __launch_bounds__(blockSize) __global__ void longformerMHASoftmaxKernel(const T*
     // if mask is set then set everything to zero to match Python implementation
     if (mask_blk[row_idx] != (T)0.f) {
         if (is_local_row) {
-            T* output_blk = nullptr;
-            T* output_glb = nullptr;
+            T*  output_blk   = nullptr;
+            T*  output_glb   = nullptr;
             int local_offset = row_idx % attn_window_size;
-            int local_start = 0;
-            int local_end = 3 * attn_window_size;
+            int local_start  = 0;
+            int local_end    = 3 * attn_window_size;
             if (row_idx < attn_window_size) {
                 local_start = 0;
-                local_end = 2 * attn_window_size;
-                output_blk = outputs[0] + row_idx * input_strides[0] + head_idx * input_sizes[0];
+                local_end   = 2 * attn_window_size;
+                output_blk  = outputs[0] + row_idx * input_strides[0] + head_idx * input_sizes[0];
             }
             else if (row_idx < seq_len - attn_window_size) {
                 output_blk = outputs[1] + (row_idx - attn_window_size) * input_strides[1] + head_idx * input_sizes[1];
             }
             else {
                 local_start = 0;
-                local_end = 2 * attn_window_size;
-                output_blk = outputs[2] + local_offset * input_strides[2] + head_idx * input_sizes[2];
+                local_end   = 2 * attn_window_size;
+                output_blk  = outputs[2] + local_offset * input_strides[2] + head_idx * input_sizes[2];
             }
 
             for (int i = local_start + tid; i < local_end; i += blockSize) {
-                output_blk[i] = 0;
+                output_blk[i] = (T)0.f;
             }
 
             if ((row_idx - 2 * attn_window_size) >= 0) {
@@ -212,57 +254,57 @@ __launch_bounds__(blockSize) __global__ void longformerMHASoftmaxKernel(const T*
 
             if (output_glb != nullptr) {
                 for (int i = tid; i < global_num; i += blockSize) {
-                    output_glb[i] = 0;
+                    output_glb[i] = (T)0.f;
                 }
             }
         }
         else {
             T* output_blk = outputs[4];
             for (int i = tid; i < seq_len; i += blockSize) {
-                output_blk[i] = 0;
+                output_blk[i] = (T)0.f;
             }
         }
         return;
     }
 
     __shared__ float sum_shared;
-    float sum_input = 0.;
+    float            sum_input = 0.;
     // calculate max input
-    float max_input = -FLT_MAX;
+    float            max_input = -FLT_MAX;
     __shared__ float max_shared;
 
     if (is_local_row) {
-        const T* input_blk = nullptr;
-        T* output_blk = nullptr;
-        T* output_glb = nullptr;
-        int local_offset = row_idx % attn_window_size;
-        int local_start = local_offset;
-        int local_end = local_start + 2 * attn_window_size + 1;
-        int zero_start = 0;
-        int zero_end = 3 * attn_window_size;
+        const T* input_blk    = nullptr;
+        T*       output_blk   = nullptr;
+        T*       output_glb   = nullptr;
+        int      local_offset = row_idx % attn_window_size;
+        int      local_start  = local_offset;
+        int      local_end    = local_start + 2 * attn_window_size + 1;
+        int      zero_start   = 0;
+        int      zero_end     = 3 * attn_window_size;
         if (row_idx < attn_window_size) {
             local_start = 0;
-            local_end = local_offset + attn_window_size + 1;
-            zero_end = 2 * attn_window_size;
+            local_end   = local_offset + attn_window_size + 1;
+            zero_end    = 2 * attn_window_size;
 
-            input_blk = inputs[0] + row_idx * input_strides[0] + head_idx * input_sizes[0];
+            input_blk  = inputs[0] + row_idx * input_strides[0] + head_idx * input_sizes[0];
             output_blk = outputs[0] + row_idx * input_strides[0] + head_idx * input_sizes[0];
         }
         else if (row_idx < seq_len - attn_window_size) {
-            input_blk = inputs[1] + (row_idx - attn_window_size) * input_strides[1] + head_idx * input_sizes[1];
+            input_blk  = inputs[1] + (row_idx - attn_window_size) * input_strides[1] + head_idx * input_sizes[1];
             output_blk = outputs[1] + (row_idx - attn_window_size) * input_strides[1] + head_idx * input_sizes[1];
         }
         else {
             local_start = local_offset;
-            local_end = 2 * attn_window_size;
-            zero_end = 2 * attn_window_size;
+            local_end   = 2 * attn_window_size;
+            zero_end    = 2 * attn_window_size;
 
-            input_blk = inputs[2] + local_offset * input_strides[2] + head_idx * input_sizes[2];
+            input_blk  = inputs[2] + local_offset * input_strides[2] + head_idx * input_sizes[2];
             output_blk = outputs[2] + local_offset * input_strides[2] + head_idx * input_sizes[2];
         }
 
-        const T* input_glb = nullptr;
-        int local_global = row_idx - attn_window_size;
+        const T* input_glb    = nullptr;
+        int      local_global = row_idx - attn_window_size;
         if (local_global > global_num) {
             local_global = global_num;
         }
@@ -282,7 +324,7 @@ __launch_bounds__(blockSize) __global__ void longformerMHASoftmaxKernel(const T*
 
         for (int i = local_start + tid, ii = col_start + tid; i < local_end; i += blockSize, ii += blockSize) {
             float x = (float)input_blk[i];
-            x = x * scaler + (float)mask_blk[ii];
+            x       = x * scaler + (float)mask_blk[ii];
             if (max_input < x) {
                 max_input = x;
             }
@@ -291,7 +333,7 @@ __launch_bounds__(blockSize) __global__ void longformerMHASoftmaxKernel(const T*
         if (input_glb != nullptr) {
             for (int i = tid; i < local_global; i += blockSize) {
                 float x = (float)input_glb[global_idx_blk[i]];
-                x = x * scaler + (float)mask_blk[global_idx_blk[i]];
+                x       = x * scaler + (float)mask_blk[global_idx_blk[i]];
                 if (max_input < x) {
                     max_input = x;
                 }
@@ -306,14 +348,14 @@ __launch_bounds__(blockSize) __global__ void longformerMHASoftmaxKernel(const T*
 
         for (int i = local_start + tid, ii = col_start + tid; i < local_end; i += blockSize, ii += blockSize) {
             float x = (float)input_blk[i];
-            x = expf(x * scaler + (float)mask_blk[ii] - max_shared);
+            x       = expf(x * scaler + (float)mask_blk[ii] - max_shared);
             sum_input += x;
         }
 
         if (input_glb != nullptr) {
             for (int i = tid, ii = col_start + tid; i < local_global; i += blockSize, ii += blockSize) {
                 float x = (float)input_glb[global_idx_blk[i]];
-                x = expf(x * scaler + (float)mask_blk[ii] - max_shared);
+                x       = expf(x * scaler + (float)mask_blk[ii] - max_shared);
                 sum_input += x;
             }
         }
@@ -336,27 +378,27 @@ __launch_bounds__(blockSize) __global__ void longformerMHASoftmaxKernel(const T*
         __syncthreads();
 
         for (int i = local_start + tid, ii = col_start + tid; i < local_end; i += blockSize, ii += blockSize) {
-            float x = (float)input_blk[i];
-            x = expf(x * scaler + (float)mask_blk[ii] - max_shared);
+            float x       = (float)input_blk[i];
+            x             = expf(x * scaler + (float)mask_blk[ii] - max_shared);
             output_blk[i] = (T)(recip_sum * x);
         }
 
         if (input_glb != nullptr) {
             for (int i = tid; i < local_global; i += blockSize) {
-                float x = (float)input_glb[global_idx_blk[i]];
-                x = expf(x * scaler + (float)mask_blk[global_idx_blk[i]] - max_shared);
+                float x       = (float)input_glb[global_idx_blk[i]];
+                x             = expf(x * scaler + (float)mask_blk[global_idx_blk[i]] - max_shared);
                 output_glb[i] = (T)(recip_sum * x);
             }
         }
     }
     else {
         // global tokens
-        const T* input_blk = inputs[4] + row_idx * input_strides[4] + head_idx * input_sizes[4];
-        T* output_blk = outputs[4] + row_idx * input_strides[4] + head_idx * input_sizes[4];
+        const T* input_blk  = inputs[4] + row_idx * input_strides[4] + head_idx * input_sizes[4];
+        T*       output_blk = outputs[4] + row_idx * input_strides[4] + head_idx * input_sizes[4];
 
         for (int i = tid; i < seq_len; i += blockSize) {
             float x = (float)input_blk[i];
-            x = x * scaler + (float)mask_blk[i];
+            x       = x * scaler + (float)mask_blk[i];
             if (max_input < x) {
                 max_input = x;
             }
@@ -370,7 +412,7 @@ __launch_bounds__(blockSize) __global__ void longformerMHASoftmaxKernel(const T*
 
         for (int i = tid; i < seq_len; i += blockSize) {
             float x = (float)input_blk[i];
-            x = expf(x * scaler + (float)mask_blk[i] - max_shared);
+            x       = expf(x * scaler + (float)mask_blk[i] - max_shared);
             sum_input += x;
         }
 
@@ -382,28 +424,28 @@ __launch_bounds__(blockSize) __global__ void longformerMHASoftmaxKernel(const T*
         float recip_sum = 1.f / sum_shared;
 
         for (int i = tid; i < seq_len; i += blockSize) {
-            float x = (float)input_blk[i];
-            x = expf(x * scaler + (float)mask_blk[i] - max_shared);
+            float x       = (float)input_blk[i];
+            x             = expf(x * scaler + (float)mask_blk[i] - max_shared);
             output_blk[i] = (T)(recip_sum * x);
         }
     }
 }
 
 template<typename T>
-void invokeLongformerMHASoftmax(const T* global_attn_mask,
-                                const int* global_idx,
-                                const int* global_token_nums,
-                                void* input_ptrs,
-                                const T* local_attn_mask,
-                                float scaler,
-                                int seq_len,
-                                int head_num,
-                                int batch_size,
-                                int local_attn_window_size,
+void invokeLongformerMHASoftmax(const T*     global_attn_mask,
+                                const int*   global_idx,
+                                const int*   global_token_nums,
+                                void*        input_ptrs,
+                                const T*     local_attn_mask,
+                                float        scaler,
+                                int          seq_len,
+                                int          head_num,
+                                int          batch_size,
+                                int          local_attn_window_size,
                                 cudaStream_t stream)
 {
     const int block_size = 64;
-    const int grid_size = seq_len * head_num * batch_size;
+    const int grid_size  = seq_len * head_num * batch_size;
     longformerMHASoftmaxKernel<T, block_size><<<grid_size, block_size, 0, stream>>>(global_attn_mask,
                                                                                     global_idx,
                                                                                     global_token_nums,
@@ -416,27 +458,41 @@ void invokeLongformerMHASoftmax(const T* global_attn_mask,
 }
 
 template void invokeLongformerMHASoftmax(const float* global_attn_mask,
-                                         const int* global_idx,
-                                         const int* global_token_nums,
-                                         void* input_ptrs,
+                                         const int*   global_idx,
+                                         const int*   global_token_nums,
+                                         void*        input_ptrs,
                                          const float* local_attn_mask,
-                                         float scaler,
-                                         int seq_len,
-                                         int head_num,
-                                         int batch_size,
-                                         int local_attn_window_size,
+                                         float        scaler,
+                                         int          seq_len,
+                                         int          head_num,
+                                         int          batch_size,
+                                         int          local_attn_window_size,
                                          cudaStream_t stream);
 
-template void invokeLongformerMHASoftmax(const half* global_attn_mask,
-                                         const int* global_idx,
-                                         const int* global_token_nums,
-                                         void* input_ptrs,
-                                         const half* local_attn_mask,
-                                         float scaler,
-                                         int seq_len,
-                                         int head_num,
-                                         int batch_size,
-                                         int local_attn_window_size,
+template void invokeLongformerMHASoftmax(const half*  global_attn_mask,
+                                         const int*   global_idx,
+                                         const int*   global_token_nums,
+                                         void*        input_ptrs,
+                                         const half*  local_attn_mask,
+                                         float        scaler,
+                                         int          seq_len,
+                                         int          head_num,
+                                         int          batch_size,
+                                         int          local_attn_window_size,
                                          cudaStream_t stream);
+
+#ifdef ENABLE_BF16
+template void invokeLongformerMHASoftmax(const __nv_bfloat16* global_attn_mask,
+                                         const int*           global_idx,
+                                         const int*           global_token_nums,
+                                         void*                input_ptrs,
+                                         const __nv_bfloat16* local_attn_mask,
+                                         float                scaler,
+                                         int                  seq_len,
+                                         int                  head_num,
+                                         int                  batch_size,
+                                         int                  local_attn_window_size,
+                                         cudaStream_t         stream);
+#endif
 
 }  // namespace fastertransformer

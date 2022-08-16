@@ -34,8 +34,9 @@ private:
     const size_t local_head_num_;
     const size_t local_hidden_units_;
     const size_t d_model_;
-    const float q_scaling_;
+    const float  q_scaling_;
     const size_t rotary_embedding_dim_;
+    const bool   neox_rotary_style_;
 
     const int int8_mode_ = 0;
 
@@ -50,146 +51,120 @@ private:
     using BaseAttentionLayer<T>::allocator_;
 
 protected:
-    T* qkv_buf_ = nullptr;
+    T* qkv_buf_     = nullptr;
     T* context_buf_ = nullptr;
     using BaseAttentionLayer<T>::stream_;
     using BaseAttentionLayer<T>::sparse_;
 
 public:
-    DecoderSelfAttentionLayer(size_t max_batch_size,
-                              size_t head_num,
-                              size_t size_per_head,
-                              size_t local_head_num,
-                              size_t rotary_embedding_dim,
-                              size_t d_model,
-                              const float q_scaling,
-                              cudaStream_t stream,
+    DecoderSelfAttentionLayer(size_t           max_batch_size,
+                              size_t           head_num,
+                              size_t           size_per_head,
+                              size_t           local_head_num,
+                              size_t           rotary_embedding_dim,
+                              bool             neox_rotary_style,
+                              size_t           d_model,
+                              const float      q_scaling,
+                              cudaStream_t     stream,
                               cublasMMWrapper* cublas_wrapper,
-                              IAllocator* allocator,
-                              bool is_free_buffer_after_forward,
-                              bool sparse = false,
-                              int int8_mode = 0);
+                              IAllocator*      allocator,
+                              bool             is_free_buffer_after_forward,
+                              bool             sparse    = false,
+                              int              int8_mode = 0);
 
-    DecoderSelfAttentionLayer(size_t max_batch_size,
-                              size_t head_num,
-                              size_t size_per_head,
-                              cudaStream_t stream,
+    DecoderSelfAttentionLayer(size_t           max_batch_size,
+                              size_t           head_num,
+                              size_t           size_per_head,
+                              cudaStream_t     stream,
                               cublasMMWrapper* cublas_wrapper,
-                              IAllocator* allocator,
-                              bool is_free_buffer_after_forward,
-                              bool sparse = false,
-                              int int8_mode = 0);
+                              IAllocator*      allocator,
+                              bool             is_free_buffer_after_forward,
+                              bool             sparse    = false,
+                              int              int8_mode = 0);
 
-    DecoderSelfAttentionLayer(size_t max_batch_size,
-                              size_t head_num,
-                              size_t size_per_head,
-                              const float q_scaling,
-                              cudaStream_t stream,
+    DecoderSelfAttentionLayer(size_t           max_batch_size,
+                              size_t           head_num,
+                              size_t           size_per_head,
+                              const float      q_scaling,
+                              cudaStream_t     stream,
                               cublasMMWrapper* cublas_wrapper,
-                              IAllocator* allocator,
-                              bool is_free_buffer_after_forward,
-                              bool sparse = false,
-                              int int8_mode = 0);
+                              IAllocator*      allocator,
+                              bool             is_free_buffer_after_forward,
+                              bool             sparse    = false,
+                              int              int8_mode = 0);
 
-    DecoderSelfAttentionLayer(size_t max_batch_size,
-                              size_t head_num,
-                              size_t size_per_head,
-                              size_t local_head_num,
-                              cudaStream_t stream,
+    DecoderSelfAttentionLayer(size_t           max_batch_size,
+                              size_t           head_num,
+                              size_t           size_per_head,
+                              size_t           local_head_num,
+                              cudaStream_t     stream,
                               cublasMMWrapper* cublas_wrapper,
-                              IAllocator* allocator,
-                              bool is_free_buffer_after_forward,
-                              bool sparse = false,
-                              int int8_mode = 0);
+                              IAllocator*      allocator,
+                              bool             is_free_buffer_after_forward,
+                              bool             sparse    = false,
+                              int              int8_mode = 0);
 
-    DecoderSelfAttentionLayer(size_t max_batch_size,
-                              size_t head_num,
-                              size_t size_per_head,
-                              size_t local_head_num,
-                              size_t d_model,
-                              const float q_scaling,
-                              cudaStream_t stream,
+    DecoderSelfAttentionLayer(size_t           max_batch_size,
+                              size_t           head_num,
+                              size_t           size_per_head,
+                              size_t           local_head_num,
+                              size_t           d_model,
+                              const float      q_scaling,
+                              cudaStream_t     stream,
                               cublasMMWrapper* cublas_wrapper,
-                              IAllocator* allocator,
-                              bool is_free_buffer_after_forward,
-                              bool sparse = false,
-                              int int8_mode = 0);
+                              IAllocator*      allocator,
+                              bool             is_free_buffer_after_forward,
+                              bool             sparse    = false,
+                              int              int8_mode = 0);
 
-    DecoderSelfAttentionLayer(size_t max_batch_size,
-                              size_t head_num,
-                              size_t size_per_head,
-                              size_t local_head_num,
-                              size_t rotary_embedding_dim,
-                              cudaStream_t stream,
+    DecoderSelfAttentionLayer(size_t           max_batch_size,
+                              size_t           head_num,
+                              size_t           size_per_head,
+                              size_t           local_head_num,
+                              size_t           rotary_embedding_dim,
+                              bool             neox_rotary_style,
+                              cudaStream_t     stream,
                               cublasMMWrapper* cublas_wrapper,
-                              IAllocator* allocator,
-                              bool is_free_buffer_after_forward,
-                              bool sparse = false,
-                              int int8_mode = 0);
+                              IAllocator*      allocator,
+                              bool             is_free_buffer_after_forward,
+                              bool             sparse    = false,
+                              int              int8_mode = 0);
 
     DecoderSelfAttentionLayer(DecoderSelfAttentionLayer<T> const& attention_layer);
 
     ~DecoderSelfAttentionLayer();
 
-    void forward(std::vector<fastertransformer::Tensor>* output_tensors,
+    void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                  const std::vector<fastertransformer::Tensor>* input_tensors,
-                 const AttentionWeight<T>* attention_weights) override;
+                 const AttentionWeight<T>*                     attention_weights) override;
 };
 
 template<typename T>
-void fusedQKV_masked_attention_dispatch(const T* qkv_buf,
-                                        const T* qkv_bias,
-                                        T* key_cache,
-                                        T* value_cache,
-                                        T* context_buf,
-                                        const bool* finished,
-                                        const int* sequence_lengths,
-                                        const int max_batch_size,
-                                        const int inference_batch_size,
-                                        const int head_num,
-                                        const int size_per_head,
-                                        const int rotary_embedding_dim,
-                                        const int max_seq_len,
-                                        const int max_input_len,
-                                        const int* input_lengths,
-                                        const int step,
+void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
+                                        const T*     qkv_bias,
+                                        const T*     relative_attention_bias,
+                                        T*           key_cache,
+                                        T*           value_cache,
+                                        const int*   cache_indir,
+                                        T*           context_buf,
+                                        const bool*  finished,
+                                        const int*   sequence_lengths,
+                                        const int    max_batch_size,
+                                        const int    inference_batch_size,
+                                        const int    beam_width,
+                                        const int    head_num,
+                                        const int    size_per_head,
+                                        const int    rotary_embedding_dim,
+                                        const bool   neox_rotary_style,
+                                        const int    memory_max_len,
+                                        const int*   prefix_prompt_lengths,
+                                        const int    max_prefix_prompt_length,
+                                        const int    max_input_len,
+                                        const int*   total_padding_tokens,
+                                        const int    step,
+                                        const float  q_scaling,
+                                        const int    relative_attention_bias_stride,
+                                        const bool*  masked_tokens,
                                         cudaStream_t stream);
-
-template<typename T>
-void fusedQKV_masked_attention_dispatch(const T* qkv_buf,
-                                        const T* qkv_bias,
-                                        T* key_cache,
-                                        T* value_cache,
-                                        T* context_buf,
-                                        const bool* finished,
-                                        const int* sequence_lengths,
-                                        const int max_batch_size,
-                                        const int inference_batch_size,
-                                        const int head_num,
-                                        const int size_per_head,
-                                        const int max_seq_len,
-                                        const int max_input_len,
-                                        const int* input_lengths,
-                                        const int step,
-                                        cudaStream_t stream)
-{
-    fusedQKV_masked_attention_dispatch(qkv_buf,
-                                       qkv_bias,
-                                       key_cache,
-                                       value_cache,
-                                       context_buf,
-                                       finished,
-                                       sequence_lengths,
-                                       max_batch_size,
-                                       inference_batch_size,
-                                       head_num,
-                                       size_per_head,
-                                       /*rotary_embedding_dim */ 0,
-                                       max_seq_len,
-                                       max_input_len,
-                                       input_lengths,
-                                       step,
-                                       stream);
-}
 
 }  // namespace fastertransformer

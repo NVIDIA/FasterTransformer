@@ -1,5 +1,4 @@
 # Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
-# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -101,10 +100,12 @@ if __name__ == "__main__":
                         help='end id (default: 50256)')
     parser.add_argument('-repetition_penalty', '--repetition_penalty', type=float, default=1.0, metavar='NUMBER',
                         help='repetition_penalty (default: 1.0)')
-    parser.add_argument('-len_penalty', '--len_penalty', type=float, default=1.0, metavar='NUMBER',
-                        help='len_penalty (default: 1.0)')
+    parser.add_argument('-len_penalty', '--len_penalty', type=float, default=0.0, metavar='NUMBER',
+                        help='len_penalty (default: 0.0)')
     parser.add_argument('-beam_search_diversity_rate', '--beam_search_diversity_rate', type=float, default=0.0, metavar='NUMBER',
                         help='beam_search_diversity_rate (default: 0.0)')
+    parser.add_argument('-memory_len', '--memory_len', type=int, default=None, metavar='NUMBER',
+                        help='Memory length (how many time steps to keep in memory) (default: None)')
 
     args = parser.parse_args()
     generate_gpt_config(vars(args))

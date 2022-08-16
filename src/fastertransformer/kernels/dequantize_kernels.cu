@@ -24,9 +24,9 @@ __global__ void dequantized_kernel(float4* dst, const char4* src, const int size
 {
     int tid = (blockIdx.x * blockDim.x + threadIdx.x);
     if (tid < size_div_4) {
-        const float scale = __ldg(scale_ptr);
-        char4 tmp = __ldg(src + tid);
-        int outIdx = tid;
+        const float scale  = __ldg(scale_ptr);
+        char4       tmp    = __ldg(src + tid);
+        int         outIdx = tid;
 
         float4 float4Tmp;
         float4Tmp.x = static_cast<float>(tmp.x) * scale;
@@ -41,15 +41,15 @@ __global__ void dequantized_kernel(half4* dst, const char4* src, const int size_
 {
     int tid = (blockIdx.x * blockDim.x + threadIdx.x);
     if (tid < size_div_4) {
-        const float scale = __ldg(scale_ptr);
-        char4 tmp = __ldg(src + tid);
-        int outIdx = tid;
+        const float scale  = __ldg(scale_ptr);
+        char4       tmp    = __ldg(src + tid);
+        int         outIdx = tid;
 
         half4 half4Tmp;
-        half4Tmp.x = static_cast<half>(static_cast<float>(tmp.x) * scale);
-        half4Tmp.y = static_cast<half>(static_cast<float>(tmp.y) * scale);
-        half4Tmp.z = static_cast<half>(static_cast<float>(tmp.z) * scale);
-        half4Tmp.w = static_cast<half>(static_cast<float>(tmp.w) * scale);
+        half4Tmp.x  = static_cast<half>(static_cast<float>(tmp.x) * scale);
+        half4Tmp.y  = static_cast<half>(static_cast<float>(tmp.y) * scale);
+        half4Tmp.z  = static_cast<half>(static_cast<float>(tmp.z) * scale);
+        half4Tmp.w  = static_cast<half>(static_cast<float>(tmp.w) * scale);
         dst[outIdx] = half4Tmp;
     }
 }
@@ -84,9 +84,9 @@ __global__ void dequantized_kernel_INT32(
 {
     int tid = (blockIdx.x * blockDim.x + threadIdx.x);
     if (tid < size_div_4) {
-        const float scale = (1.0f / __ldg(input_amax_ptr)) * (__ldg(weight_amax_ptr) / 127.0f);
-        int4 tmp = src[tid];
-        int outIdx = tid;
+        const float scale  = (1.0f / __ldg(input_amax_ptr)) * (__ldg(weight_amax_ptr) / 127.0f);
+        int4        tmp    = src[tid];
+        int         outIdx = tid;
 
         float4 float4Tmp;
         float4Tmp.x = static_cast<float>(tmp.x) * scale;
@@ -102,26 +102,26 @@ __global__ void dequantized_kernel_INT32(
 {
     int tid = (blockIdx.x * blockDim.x + threadIdx.x);
     if (tid < size_div_4) {
-        const float scale = (1.0f / __ldg(input_amax_ptr)) * (__ldg(weight_amax_ptr) / 127.0f);
-        int4 tmp = src[tid];
-        int outIdx = tid;
+        const float scale  = (1.0f / __ldg(input_amax_ptr)) * (__ldg(weight_amax_ptr) / 127.0f);
+        int4        tmp    = src[tid];
+        int         outIdx = tid;
 
         half4 half4Tmp;
-        half4Tmp.x = static_cast<half>(static_cast<float>(tmp.x) * scale);
-        half4Tmp.y = static_cast<half>(static_cast<float>(tmp.y) * scale);
-        half4Tmp.z = static_cast<half>(static_cast<float>(tmp.z) * scale);
-        half4Tmp.w = static_cast<half>(static_cast<float>(tmp.w) * scale);
+        half4Tmp.x  = static_cast<half>(static_cast<float>(tmp.x) * scale);
+        half4Tmp.y  = static_cast<half>(static_cast<float>(tmp.y) * scale);
+        half4Tmp.z  = static_cast<half>(static_cast<float>(tmp.z) * scale);
+        half4Tmp.w  = static_cast<half>(static_cast<float>(tmp.w) * scale);
         dst[outIdx] = half4Tmp;
     }
 }
 
 template<typename T>
-void invokeDequantization_INT32(T* dst,
+void invokeDequantization_INT32(T*             dst,
                                 const int32_t* src,
-                                const int size,
-                                cudaStream_t stream,
-                                const float* input_amax_ptr,
-                                const float* weight_amax_ptr)
+                                const int      size,
+                                cudaStream_t   stream,
+                                const float*   input_amax_ptr,
+                                const float*   weight_amax_ptr)
 {
 
     if (size % 4 != 0) {
@@ -140,18 +140,18 @@ void invokeDequantization_INT32(T* dst,
     }
 }
 
-template void invokeDequantization_INT32<float>(float* dst,
+template void invokeDequantization_INT32<float>(float*         dst,
                                                 const int32_t* src,
-                                                const int size,
-                                                cudaStream_t stream,
-                                                const float* input_amax_ptr,
-                                                const float* weight_amax_ptr);
+                                                const int      size,
+                                                cudaStream_t   stream,
+                                                const float*   input_amax_ptr,
+                                                const float*   weight_amax_ptr);
 
-template void invokeDequantization_INT32<half>(half* dst,
+template void invokeDequantization_INT32<half>(half*          dst,
                                                const int32_t* src,
-                                               const int size,
-                                               cudaStream_t stream,
-                                               const float* input_amax_ptr,
-                                               const float* weight_amax_ptr);
+                                               const int      size,
+                                               cudaStream_t   stream,
+                                               const float*   input_amax_ptr,
+                                               const float*   weight_amax_ptr);
 
 }  // namespace fastertransformer

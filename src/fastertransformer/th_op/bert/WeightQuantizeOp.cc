@@ -28,7 +28,7 @@ void compressInt8Matrix(void* output, const void* input, const int m, const int 
     cusparseLtHandle_t _cusparseLtHandle;
     CHECK_CUSPARSE(cusparseLtInit(&_cusparseLtHandle));
     cusparseLtMatDescriptor_t matA;
-    unsigned alignment = 16;
+    unsigned                  alignment = 16;
     CHECK_CUSPARSE(cusparseLtStructuredDescriptorInit(
         &_cusparseLtHandle, &matA, m, k, k, alignment, CUDA_R_8I, CUSPARSE_ORDER_ROW, CUSPARSELT_SPARSITY_50_PERCENT))
     CHECK_CUSPARSE(cusparseLtSpMMACompress2(
@@ -68,18 +68,18 @@ Tensor weight_quantize(Tensor weight, Tensor quant_max, bool sparse)
     TORCH_CHECK(quant_max.dtype() == torch::kFloat32, "quant_max dtype should be float32");
     TORCH_CHECK(quant_max.numel() == n, "quant_max wrong shape");
 
-    const float* weight_ = get_ptr<float>(weight);
+    const float* weight_    = get_ptr<float>(weight);
     const float* quant_max_ = get_ptr<float>(quant_max);
 
-    auto output = torch::empty({k * n}, torch::dtype(torch::kFloat16).device(torch::kCUDA).requires_grad(false));
+    auto    output = torch::empty({k * n}, torch::dtype(torch::kFloat16).device(torch::kCUDA).requires_grad(false));
     int8_t* transform_out = get_ptr<int8_t>(output);
 
     auto stream = at::cuda::getCurrentCUDAStream().stream();
 
 #ifdef SPARSITY_ENABLED
     if (sparse) {
-        int format = 0;
-        auto tmp = torch::empty({k * n}, torch::dtype(torch::kInt8).device(torch::kCUDA).requires_grad(false));
+        int     format  = 0;
+        auto    tmp     = torch::empty({k * n}, torch::dtype(torch::kInt8).device(torch::kCUDA).requires_grad(false));
         int8_t* tmp_out = get_ptr<int8_t>(tmp);
         fastertransformer::invokeQuantizeWeight(tmp_out, weight_, quant_max_, n, k, format, stream);
         compressInt8Matrix(transform_out, tmp_out, n, k, stream);

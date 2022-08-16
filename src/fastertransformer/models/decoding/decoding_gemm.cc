@@ -28,16 +28,16 @@ int main(int argc, char* argv[])
         return 0;
     }
 
-    const int batch_size = atoi(argv[1]);
-    const int beam_width = atoi(argv[2]);
-    const int head_num = atoi(argv[3]);
-    const int size_per_head = atoi(argv[4]);
-    const int inter_size = atoi(argv[5]);
-    const int vocab_size = atoi(argv[6]);
-    const int max_mem_seq_len = atoi(argv[7]);
-    const int memory_hidden_units = atoi(argv[8]);
+    const int                batch_size          = atoi(argv[1]);
+    const int                beam_width          = atoi(argv[2]);
+    const int                head_num            = atoi(argv[3]);
+    const int                size_per_head       = atoi(argv[4]);
+    const int                inter_size          = atoi(argv[5]);
+    const int                vocab_size          = atoi(argv[6]);
+    const int                max_mem_seq_len     = atoi(argv[7]);
+    const int                memory_hidden_units = atoi(argv[8]);
     const ft::CublasDataType data_type = static_cast<ft::CublasDataType>(atoi(argv[9]));  // 0 FP32, 1 FP16, 2 BF 16
-    const bool is_append = argc == 11 ? ((bool)atoi(argv[10])) : false;
+    const bool               is_append = argc == 11 ? ((bool)atoi(argv[10])) : false;
 
     printf("[INFO] arguments: \n");
     printf("  batch_size: %d \n", batch_size);
@@ -51,7 +51,7 @@ int main(int argc, char* argv[])
     printf("  data_type: %d \n", data_type);
     std::cout << std::endl;
 
-    void* gemm_test_buf;
+    void*  gemm_test_buf;
     size_t buf_size_in_byte = ft::calDecodingGemmTestBufSizeInByte(batch_size,
                                                                    beam_width,
                                                                    max_mem_seq_len,

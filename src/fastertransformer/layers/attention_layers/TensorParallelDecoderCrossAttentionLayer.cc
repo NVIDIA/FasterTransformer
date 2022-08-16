@@ -20,18 +20,18 @@ namespace fastertransformer {
 
 template<typename T>
 TensorParallelDecoderCrossAttentionLayer<T>::TensorParallelDecoderCrossAttentionLayer(
-    size_t max_batch_size,
-    size_t head_num,
-    size_t size_per_head,
-    size_t d_model,
-    float q_scaling,
-    NcclParam tensor_para,
-    cudaStream_t stream,
-    cublasMMWrapper* cublas_wrapper,
-    IAllocator* allocator,
-    bool is_free_buffer_after_forward,
+    size_t                              max_batch_size,
+    size_t                              head_num,
+    size_t                              size_per_head,
+    size_t                              d_model,
+    float                               q_scaling,
+    NcclParam                           tensor_para,
+    cudaStream_t                        stream,
+    cublasMMWrapper*                    cublas_wrapper,
+    IAllocator*                         allocator,
+    bool                                is_free_buffer_after_forward,
     std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
-    int enable_custom_all_reduce):
+    int                                 enable_custom_all_reduce):
     DecoderCrossAttentionLayer<T>(max_batch_size,
                                   head_num / tensor_para.world_size_,
                                   size_per_head,
@@ -50,16 +50,16 @@ TensorParallelDecoderCrossAttentionLayer<T>::TensorParallelDecoderCrossAttention
 
 template<typename T>
 TensorParallelDecoderCrossAttentionLayer<T>::TensorParallelDecoderCrossAttentionLayer(
-    size_t max_batch_size,
-    size_t head_num,
-    size_t size_per_head,
-    NcclParam tensor_para,
-    cudaStream_t stream,
-    cublasMMWrapper* cublas_wrapper,
-    IAllocator* allocator,
-    bool is_free_buffer_after_forward,
+    size_t                              max_batch_size,
+    size_t                              head_num,
+    size_t                              size_per_head,
+    NcclParam                           tensor_para,
+    cudaStream_t                        stream,
+    cublasMMWrapper*                    cublas_wrapper,
+    IAllocator*                         allocator,
+    bool                                is_free_buffer_after_forward,
     std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
-    int enable_custom_all_reduce):
+    int                                 enable_custom_all_reduce):
     TensorParallelDecoderCrossAttentionLayer(max_batch_size,
                                              head_num,
                                              size_per_head,
@@ -86,7 +86,7 @@ TensorParallelDecoderCrossAttentionLayer<T>::TensorParallelDecoderCrossAttention
 }
 
 template<typename T>
-void TensorParallelDecoderCrossAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* output_tensors,
+void TensorParallelDecoderCrossAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                                                           const std::vector<fastertransformer::Tensor>* input_tensors,
                                                           const AttentionWeight<T>* attention_weights)
 {
@@ -103,7 +103,7 @@ void TensorParallelDecoderCrossAttentionLayer<T>::forward(std::vector<fastertran
     //      key_cache [batch, head_num, size_per_head // x, max_seq_len, x]
     //      value_cache [batch, head_num, max_seq_len, size_per_head]
 
-    const size_t batch_size = output_tensors->at(0).shape[0];
+    const size_t batch_size   = output_tensors->at(0).shape[0];
     const size_t hidden_units = output_tensors->at(0).shape[1];
 
     bool use_custom_all_reduce_kernel = false;
@@ -132,5 +132,8 @@ void TensorParallelDecoderCrossAttentionLayer<T>::forward(std::vector<fastertran
 
 template class TensorParallelDecoderCrossAttentionLayer<float>;
 template class TensorParallelDecoderCrossAttentionLayer<half>;
+#ifdef ENABLE_BF16
+template class TensorParallelDecoderCrossAttentionLayer<__nv_bfloat16>;
+#endif
 
 }  // namespace fastertransformer

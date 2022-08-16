@@ -20,5 +20,5 @@ set(parallel_gpt_triton_backend_files
 )
 
 add_library(ParallelGptTritonBackend SHARED ${parallel_gpt_triton_backend_files})
-target_link_libraries(ParallelGptTritonBackend PRIVATE ParallelGpt)
+target_link_libraries(ParallelGptTritonBackend PRIVATE TransformerTritonBackend ParallelGpt)
 target_compile_features(ParallelGptTritonBackend PRIVATE cxx_std_14)

@@ -49,7 +49,7 @@ void ViTTransformer<T>::initialize()
                  int(attention_type_));
     if (img_size_ % patch_size_ != 0) {
         std::ostringstream buffer;
-        buffer << "[FT][ERROR] IMG size & PITCH size missmatch. " << img_size_ << " % " << patch_size_ << " !=0 \n";
+        buffer << "[FT][ERROR] IMG size & PITCH size mismatch. " << img_size_ << " % " << patch_size_ << " !=0 \n";
         throw std::runtime_error(buffer.str());
     }
 
@@ -68,6 +68,7 @@ void ViTTransformer<T>::initialize()
                                                       max_seq_len_,
                                                       head_num_,
                                                       head_dim_,
+                                                      head_num_ * head_dim_,
                                                       sm_,
                                                       q_scaling_,
                                                       stream_,
@@ -111,23 +112,23 @@ void ViTTransformer<T>::initialize()
 }
 
 template<typename T>
-ViTTransformer<T>::ViTTransformer(size_t max_batch_size,
-                                  size_t img_size,
-                                  size_t chn_num,
-                                  size_t patch_size,
-                                  size_t embed_dim,
-                                  size_t head_num,
-                                  size_t inter_size,
-                                  size_t num_layer,
-                                  bool with_cls_token,
-                                  int sm,
-                                  float q_scaling,
-                                  cudaStream_t stream,
-                                  cudnnHandle_t cudnn_handle,
+ViTTransformer<T>::ViTTransformer(size_t           max_batch_size,
+                                  size_t           img_size,
+                                  size_t           chn_num,
+                                  size_t           patch_size,
+                                  size_t           embed_dim,
+                                  size_t           head_num,
+                                  size_t           inter_size,
+                                  size_t           num_layer,
+                                  bool             with_cls_token,
+                                  int              sm,
+                                  float            q_scaling,
+                                  cudaStream_t     stream,
+                                  cudnnHandle_t    cudnn_handle,
                                   cublasMMWrapper* cublas_wrapper,
-                                  IAllocator* allocator,
-                                  bool is_free_buffer_after_forward,
-                                  AttentionType attention_type):
+                                  IAllocator*      allocator,
+                                  bool             is_free_buffer_after_forward,
+                                  AttentionType    attention_type):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     max_batch_size_(max_batch_size),
     img_size_(img_size),
@@ -184,15 +185,21 @@ template<typename T>
 void ViTTransformer<T>::allocateBuffer()
 {
     if (is_allocate_buffer_ == false) {
-        embed_buf_1_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * embed_dim_, false);
-        embed_buf_2_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * embed_dim_, false);
-        embed_buf_3_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * embed_dim_, false);
-        mask_buf_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * max_seq_len_, false);
-        padding_offset_ = (int*)allocator_->malloc(sizeof(int) * max_batch_size_ * max_seq_len_, false);
-        token_num_ = (size_t*)allocator_->malloc(sizeof(size_t) * 1, false);
+        embed_buf_1_ =
+            (T*)allocator_->reMalloc(embed_buf_1_, sizeof(T) * max_batch_size_ * max_seq_len_ * embed_dim_, false);
+        embed_buf_2_ =
+            (T*)allocator_->reMalloc(embed_buf_2_, sizeof(T) * max_batch_size_ * max_seq_len_ * embed_dim_, false);
+        embed_buf_3_ =
+            (T*)allocator_->reMalloc(embed_buf_3_, sizeof(T) * max_batch_size_ * max_seq_len_ * embed_dim_, false);
+        mask_buf_ =
+            (T*)allocator_->reMalloc(mask_buf_, sizeof(T) * max_batch_size_ * max_seq_len_ * max_seq_len_, false);
+        padding_offset_ =
+            (int*)allocator_->reMalloc(padding_offset_, sizeof(int) * max_batch_size_ * max_seq_len_, false);
+        token_num_ = (size_t*)allocator_->reMalloc(token_num_, sizeof(size_t) * 1, false);
 
-        trt_mha_padding_offset_ = (int*)allocator_->malloc(sizeof(int) * (2 * max_batch_size_ + 1), false);
-        seq_len_vec_ = (int*)allocator_->malloc(sizeof(int) * max_batch_size_, false);
+        trt_mha_padding_offset_ =
+            (int*)allocator_->reMalloc(trt_mha_padding_offset_, sizeof(int) * (2 * max_batch_size_ + 1), false);
+        seq_len_vec_ = (int*)allocator_->reMalloc(seq_len_vec_, sizeof(int) * max_batch_size_, false);
 
         setSeqLenVec(max_batch_size_);
         setDefaultMask(max_batch_size_);
@@ -235,22 +242,22 @@ void ViTTransformer<T>::allocateBuffer(size_t batch_size)
 template<typename T>
 void ViTTransformer<T>::freeBuffer()
 {
-    allocator_->free(embed_buf_1_);
-    allocator_->free(embed_buf_2_);
-    allocator_->free(embed_buf_3_);
-    allocator_->free(mask_buf_);
-    allocator_->free(trt_mha_padding_offset_);
-    allocator_->free(seq_len_vec_);
-    allocator_->free(padding_offset_);
-    allocator_->free(token_num_);
+    allocator_->free((void**)(&embed_buf_1_));
+    allocator_->free((void**)(&embed_buf_2_));
+    allocator_->free((void**)(&embed_buf_3_));
+    allocator_->free((void**)(&mask_buf_));
+    allocator_->free((void**)(&trt_mha_padding_offset_));
+    allocator_->free((void**)(&seq_len_vec_));
+    allocator_->free((void**)(&padding_offset_));
+    allocator_->free((void**)(&token_num_));
 
     is_allocate_buffer_ = false;
 }
 
 template<typename T>
-void ViTTransformer<T>::forward(std::vector<Tensor>* output_tensors,
+void ViTTransformer<T>::forward(std::vector<Tensor>*       output_tensors,
                                 const std::vector<Tensor>* input_tensors,
-                                const ViTWeight<T>* weights)
+                                const ViTWeight<T>*        weights)
 {
     // input_tensors:
     //      input_img, BCHW [batch, chn_num, img_size, img_size]
@@ -258,11 +265,11 @@ void ViTTransformer<T>::forward(std::vector<Tensor>* output_tensors,
     //      output feature_map [batch, seq_len, embed_dim]
 
     const size_t input_batch_size = input_tensors->at(0).shape[0];
-    const size_t input_chn_num = input_tensors->at(0).shape[1];
-    const size_t input_img_size = input_tensors->at(0).shape[2];
-    const size_t patch_resol = input_img_size / patch_size_;
-    size_t seq_len = patch_resol * patch_resol + (with_cls_token_ ? 1 : 0);
-    const bool need_padding =
+    const size_t input_chn_num    = input_tensors->at(0).shape[1];
+    const size_t input_img_size   = input_tensors->at(0).shape[2];
+    const size_t patch_resol      = input_img_size / patch_size_;
+    size_t       seq_len          = patch_resol * patch_resol + (with_cls_token_ ? 1 : 0);
+    const bool   need_padding =
         (attention_type_ == AttentionType::UNFUSED_MHA && seq_len % 8 != 0 && std::is_same<half, T>::value);
 
     FT_CHECK(input_img_size == img_size_);
@@ -273,9 +280,9 @@ void ViTTransformer<T>::forward(std::vector<Tensor>* output_tensors,
     FT_CHECK(output_tensors->at(0).shape.size() == 3);
     allocateBuffer(input_batch_size);
 
-    const T* input = (const T*)input_tensors->at(0).data;
-    T* output = (T*)output_tensors->at(0).data;
-    T* encoder_input_ptr = embed_buf_1_;
+    const T* input             = (const T*)input_tensors->at(0).data;
+    T*       output            = (T*)output_tensors->at(0).data;
+    T*       encoder_input_ptr = embed_buf_1_;
 
     // preprocess (patches embedding, concat class embed and add pos embed)
     patchEmbed(need_padding ? embed_buf_2_ : encoder_input_ptr,
@@ -304,7 +311,7 @@ void ViTTransformer<T>::forward(std::vector<Tensor>* output_tensors,
     else {
         offset_tensor_ptr = new Tensor(MEMORY_GPU, TYPE_INT32, std::vector<size_t>{0}, nullptr);
         if (need_padding) {
-            seq_len = (seq_len + 7) / 8 * 8;
+            seq_len     = (seq_len + 7) / 8 * 8;
             h_token_num = seq_len * input_batch_size;
             cudaMemsetAsync(encoder_input_ptr, 0, sizeof(T) * input_batch_size * seq_len * embed_dim_, stream_);
             invokeRebuildPadding(
@@ -312,9 +319,9 @@ void ViTTransformer<T>::forward(std::vector<Tensor>* output_tensors,
         }
     }
 
-    T* from_buf = encoder_input_ptr;
-    T* norm_out_buf = embed_buf_2_;
-    T* attn_out_buf = embed_buf_3_;
+    T* from_buf        = encoder_input_ptr;
+    T* norm_out_buf    = embed_buf_2_;
+    T* attn_out_buf    = embed_buf_3_;
     T* encoder_out_buf = from_buf;
 
     for (uint i = 0; i < num_layer_; i++) {
@@ -323,6 +330,7 @@ void ViTTransformer<T>::forward(std::vector<Tensor>* output_tensors,
                                from_buf,
                                weights->vit_layer_weights[i].attn_layernorm_weights.gamma,
                                weights->vit_layer_weights[i].attn_layernorm_weights.beta,
+                               layernorm_eps_,
                                h_token_num,
                                embed_dim_,
                                stream_);
@@ -347,6 +355,7 @@ void ViTTransformer<T>::forward(std::vector<Tensor>* output_tensors,
             weights->vit_layer_weights[i].ffn_layernorm_weights.gamma,
             weights->vit_layer_weights[i].ffn_layernorm_weights.beta,
             weights->vit_layer_weights[i].attention_weights.attention_output_weight.bias,
+            layernorm_eps_,
             h_token_num,
             embed_dim_,
             stream_);
@@ -374,6 +383,7 @@ void ViTTransformer<T>::forward(std::vector<Tensor>* output_tensors,
                            from_buf,
                            weights->post_transformer_layernorm_weights.gamma,
                            weights->post_transformer_layernorm_weights.beta,
+                           layernorm_eps_,
                            h_token_num,
                            embed_dim_,
                            stream_);
@@ -426,12 +436,12 @@ void ViTTransformer<T>::setDefaultPaddingOffset(size_t batch_size)
 }
 
 template<typename T>
-void ViTTransformer<T>::patchEmbed(T* output,
-                                   const T* input,
-                                   const T* kernel,
-                                   const T* bias,
-                                   const T* cls_embed,
-                                   const T* pos_embed,
+void ViTTransformer<T>::patchEmbed(T*        output,
+                                   const T*  input,
+                                   const T*  kernel,
+                                   const T*  bias,
+                                   const T*  cls_embed,
+                                   const T*  pos_embed,
                                    const int batch,
                                    const int img_size,
                                    const int patch_size,

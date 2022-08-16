@@ -22,10 +22,12 @@
 #include <cooperative_groups.h>
 #endif
 #include <cuda_fp16.h>
+#include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
 #include <cuda_runtime.h>
 #include <curand_kernel.h>
 #include <float.h>
 #include <type_traits>
+#include "src/fastertransformer/kernels/bfloat16_fallback_kenrels.cuh"
 
 namespace cg = cooperative_groups;
 
@@ -39,7 +41,7 @@ __inline__ __device__ T warpReduceSum(T val)
 {
 #pragma unroll
     for (int mask = 16; mask > 0; mask >>= 1)
-        val += __shfl_xor_sync(FINAL_MASK, val, mask, 32);
+        val = add(val, __shfl_xor_sync(FINAL_MASK, val, mask, 32));//__shfl_sync bf16 return float when sm < 80
     return val;
 }
 
@@ -288,15 +290,23 @@ __device__ __forceinline__ TopK_2<T> reduce_topk_op_2(const TopK_2<T>& a, const 
 }
 
 template<typename T>
-__device__ __forceinline__ T clamp_inf_for_half(const float input)
-{
-    if (std::is_same<T, half>::value == true) {
-        // clamp inf values to enable fp16 training
-        return (float)input > 0.0f ? min(input, HALF_FLT_MAX - 1000) : max(input, -HALF_FLT_MAX + 1000);
-    }
-    else {
-        return input;
-    }
+__device__ __forceinline__ T clamp_inf_for_half(const float input) {
+    return input;
 }
+
+template<>
+__device__ __forceinline__ half clamp_inf_for_half(const float input)
+{
+    // clamp inf values to enable fp16 training
+    return input > 0.0f ? (half) min(input, HALF_FLT_MAX - 1000) : (half) max(input, -HALF_FLT_MAX + 1000);
+}
+
+#ifdef ENABLE_BF16
+template<>
+__device__ __forceinline__ __nv_bfloat16 clamp_inf_for_half(const float input)
+{
+    return __float2bfloat16(input);
+}
+#endif
 
 }  // namespace fastertransformer

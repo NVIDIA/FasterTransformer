@@ -49,8 +49,7 @@ def main():
                         help='beam size')
     parser.add_argument('vocab_size', type=int,
                         help='vocab size')
-    parser.add_argument('--fp16', action='store_true',
-                        help='is fp16')
+    parser.add_argument('--data_type', type=str, choices=['fp32', 'fp16', 'bf16'], default='fp32')
     parser.add_argument('--time', action='store_true',
                         help='test the time or not.')
     parser.add_argument('--use_pretrained', action='store_true',
@@ -95,13 +94,15 @@ def main():
         print("{}: {}".format(key, vars(args)[key]))
     print("========================================")
 
-    decodingargs1 = ArgHelper('torch_decoding', 'fp16' if args.fp16 else 'fp32', os.path.abspath(args.decoder_ths_path), os.path.abspath(args.decoding_ths_path))
-    decodingargs2 = ArgHelper('torch_decoding_with_decoder_ext', 'fp16' if args.fp16 else 'fp32', os.path.abspath(args.decoder_ths_path), os.path.abspath(args.decoding_ths_path))
+    decodingargs1 = ArgHelper('torch_decoding', args.data_type, os.path.abspath(args.decoder_ths_path), os.path.abspath(args.decoding_ths_path))
+    decodingargs2 = ArgHelper('torch_decoding_with_decoder_ext', args.data_type, os.path.abspath(args.decoder_ths_path), os.path.abspath(args.decoding_ths_path))
 
     mem = torch.empty(args.batch_size, args.seq_len, args.memory_hidden_dim).cuda()
     torch.nn.init.uniform_(mem, -1, 1)
-    if args.fp16:
+    if args.data_type == "fp16":
         mem = mem.half()
+    elif args.data_type == "bf16":
+        mem = mem.bloat16()
     mem_seq_lens = torch.randint(1, args.seq_len+1, (args.batch_size,), dtype=torch.int32).cuda()
 
     if args.use_pretrained:
@@ -124,14 +125,19 @@ def main():
     torch_decoding_with_decoder_ext = TorchDecoding(layer_num, head_num, head_size, vocab_size, start_id, end_id, weights, args=decodingargs2)
     torch_decoding.cuda()
     torch_decoding_with_decoder_ext.cuda()
-    if args.fp16:
+    if args.data_type == "fp16":
         torch_decoding.half()
         torch_decoding_with_decoder_ext.half()
+    elif args.data_type == "bf16":
+        torch_decoding.bloat16()
+        torch_decoding_with_decoder_ext.bloat16()
     torch_decoding.eval()
     torch_decoding_with_decoder_ext.eval()
     ft_weights.to_cuda()
-    if args.fp16:
+    if args.data_type == "fp16":
         ft_weights.to_half()
+    elif args.data_type == "bf16":
+        ft_weights.to_bfloat16()
     custom_decoding = CustomDecoding(head_num, head_size,
                                     inter_size, args.memory_hidden_dim, layer_num, vocab_size,
                                     start_id, end_id, args.beam_search_diversity_rate,

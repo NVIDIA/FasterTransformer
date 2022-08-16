@@ -95,6 +95,8 @@ def translate(args_dict):
     max_ite = args_dict['max_iteration']
     if args_dict['data_type'] == "fp16":
         tf_datatype = tf.float16
+    elif args_dict['data_type'] == "bf16":
+        tf_datatype = tf.bfloat16
     
     print("\n=============== Argument ===============")
     for key in args_dict:
@@ -302,14 +304,18 @@ def translate(args_dict):
     # Iterates on the dataset.
     float_checkpoint_path = tf.train.latest_checkpoint(model_dir)
     half_checkpoint_path = tf.train.latest_checkpoint(model_dir + "_fp16")
+    bf16_checkpoint_path = tf.train.latest_checkpoint(model_dir + "_bf16")
 
     float_var_list = []
     half_var_list = []
+    bf16_var_list = []
     for var in tf.global_variables():
         if var.dtype.base_dtype == tf.float32:
             float_var_list.append(var)
         elif var.dtype.base_dtype == tf.float16:
             half_var_list.append(var)
+        elif var.dtype.base_dtype == tf.bfloat16:
+            bf16_var_list.append(var)
 
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
@@ -321,6 +327,9 @@ def translate(args_dict):
             if(len(half_var_list) > 0):
                 half_saver = tf.train.Saver(half_var_list)
                 half_saver.restore(sess, half_checkpoint_path)
+            if(len(bf16_var_list) > 0):
+                bf16_saver = tf.train.Saver(bf16_var_list)
+                bf16_saver.restore(sess, bf16_checkpoint_path)
 
             sess.run(tf.tables_initializer())
             sess.run(iterator.initializer)
@@ -405,7 +414,7 @@ def main():
     parser.add_argument('-topp', '--sampling_topp', type=float, default=0.0, metavar='NUMBER',
                         help='Probability (p) value of top p sampling in decoding. Default is 0.0. ')
     parser.add_argument('-d', '--data_type', type=str, default="fp32", metavar='STRING',
-                        help='data type (default: fp32)', choices=['fp32', 'fp16'])
+                        help='data type (default: fp32)', choices=['fp32', 'fp16', 'bf16'])
     parser.add_argument('-max_ite', '--max_iteration', type=int, default=100000, metavar='NUMBER',
                         help='Maximum iteraiton for translation, default is 100000 (as large as possible to run all test set).')
     args = parser.parse_args()

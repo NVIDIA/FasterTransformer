@@ -31,11 +31,11 @@ gather_tree(th::Tensor step_ids, th::Tensor parent_ids, th::Tensor max_sequence_
     CHECK_TH_CUDA(max_sequence_lengths);
     CHECK_CONTIGUOUS(max_sequence_lengths);
     TORCH_CHECK(max_sequence_lengths.dtype() == th::kInt32, "max_sequence_lengths dtype should be int32");
-    int max_step = step_ids.size(0);
-    int batch_size = step_ids.size(1);
-    int beam_width = step_ids.size(2);
-    auto beams = th::empty_like(step_ids);
-    auto stream = at::cuda::getCurrentCUDAStream().stream();
+    int  max_step   = step_ids.size(0);
+    int  batch_size = step_ids.size(1);
+    int  beam_width = step_ids.size(2);
+    auto beams      = th::empty_like(step_ids);
+    auto stream     = at::cuda::getCurrentCUDAStream().stream();
 
     fastertransformer::invokeGatherTree(torch_ext::get_ptr<int>(beams),
                                         torch_ext::get_ptr<int>(max_sequence_lengths),

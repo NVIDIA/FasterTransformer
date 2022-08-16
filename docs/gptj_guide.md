@@ -9,13 +9,13 @@
   - [Setup](#setup)
     - [Requirements](#requirements)
     - [Docker image](#docker-image)
-    - [Setup](#setup-1)
-    - [Build](#build)
+    - [Build project](#build-project)
     - [Download the model](#download-the-model)
+    - [Download tables](#download-tables)
     - [Run GPT-J](#run-gpt-j)
+    - [Run GPTJ with prompts](#run-gptj-with-prompts)
     - [Compare with reference implementation](#compare-with-reference-implementation)
     - [gpt-j with triton backend](#gpt-j-with-triton-backend)
-
 
 ## Introduction
 
@@ -23,13 +23,87 @@ This document describes the step to run the GPT-J model on FasterTransformer.
 GPT-J was developed by EleutherAI and trained on The Pile, a 825GB dataset from curated sources (e.g. Wikipedia, arXiv, GitHub, StackExchange, PubMed, ...).
 With 6 billion parameters, GPT-J is one of the largest GPT-like publicly released models as of 2021.
 
+Optimization in GPT-j are similar to optimization in GPT, describing in the [gpt_guide.md](gpt_guide.md#optimization).
+
+* Constructor of GPT-j
+
+| Classification |             Name             |     Data Type      |                                                                                                            Description                                                                                                            |
+| :------------: | :--------------------------: | :----------------: | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
+|      [0]       |        max_batch_size        |       size_t       |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [1]       |         max_seq_len          |       size_t       |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [2]       |        max_input_len         |       size_t       |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [3]       |          beam_width          |       size_t       |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [4]       |           head_num           |       size_t       |                                                                                                Head number for model configuration                                                                                                |
+|      [5]       |        size_per_head         |       size_t       |                                                                                               Size per head for model configuration                                                                                               |
+|      [6]       |          inter_size          |       size_t       |                                                                     The inter size of feed forward network. It is often set to 4 * head_num * size_per_head.                                                                      |
+|      [7]       |          num_layer           |       size_t       |                                                                                       Number of transformer layers for model configuration                                                                                        |
+|      [8]       |          vocab_size          |       size_t       |                                                                                              Vocabulary size for model configuration                                                                                              |
+|      [9]       |     rotary_embeeding_dim     |       size_t       |                                                                          Rotary embedding dimension of rotary position embedding for model configuration                                                                          |
+|      [10]      |           start_id           |        int         |                                                                                                      Start id for vocabulary                                                                                                      |
+|      [11]      |            end_id            |        int         |                                                                                                       End id for vocabulary                                                                                                       |
+|      [12]      |   prompt_learning_start_id   |        int         |                                                                                         The start id of virtual token in p/prompt-tuning                                                                                          |
+|      [13]      |     prompt_learning_type     | PromptLearningType |                                   The type of prompt learning when we load the prompt embedding in constructor. FT supports `no_prompt`, `soft_prompt`, `prefix_prompt`, `p_prompt_tuning` now                                    |
+|      [14]      |  beam_search_diversity_rate  |       float        |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [15]      |            top_k             |       size_t       |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [16]      |            top_p             |       float        |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [17]      |         random_seed          | unsigned long long |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [18]      |         temperature          |       float        |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [19]      |         len_penalty          |       float        |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [20]      |      repetition_penalty      |       float        |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [21]      |         tensor_para          |     NcclParam      |                                                                   Tensor Parallel information, which is declared in `src/fastertransformer/utils/nccl_utils.h`                                                                    |
+|      [22]      |        pipeline_para         |     NcclParam      |                                                                  Pipeline Parallel information, which is declared in `src/fastertransformer/utils/nccl_utils.h`                                                                   |
+|      [23]      |            stream            |    cudaStream_t    |                                                                                                            CUDA stream                                                                                                            |
+|      [24]      |        cublas_wrapper        |  cublasMMWrapper*  |                                                                  Pointer of cuBLAS wrapper, which is declared in `src/fastertransformer/utils/cublasMMWrapper.h`                                                                  |
+|      [25]      |          allocator           |    IAllocator*     |                                                                    Pointer of memory allocator, which is declared in `src/fastertransformer/utils/allocator.h`                                                                    |
+|      [26]      | is_free_buffer_after_forward |        bool        | If setting to be `true`, FasterTransformer will allocate buffer before forward, and free buffer after forward. When the allocator is based on memory pool, setting to `true` may help reducing the memory usage during inference. |
+|      [27]      |       cuda_device_prop       |  cudaDeviceProp*   |                                                           Pointer of CUDA device properties, which is used to get the properties of hardware like size of shared memory                                                           |
+|      [28]      |    custom_all_reduce_comm    | AbstractCustomComm |                                                Custom all reduction communication for custom all reduction in model parallelism. It is only supported in 8-way tensor parallelism                                                 |
+|      [29]      |   enable_custom_all_reduce   |        int         |                                                                                           Flag of enabling custom all reduction or not                                                                                            |
+
+* Input of GPT-j
+
+|             Name              |            Tensor/Parameter Shape             | Location |       Data Type        |                                                               Description                                                               |
+| :---------------------------: | :-------------------------------------------: | :------: | :--------------------: | :-------------------------------------------------------------------------------------------------------------------------------------: |
+|           input_ids           |        [batch_size, max_input_length]         |   GPU    |          int           |                                                         The input ids (context)                                                         |
+|         input_lengths         |                 [batch_size]                  |   GPU    |          int           |                                                        The lengths of input ids                                                         |
+| prompt_learning_task_name_ids |                 [batch_size]                  |   CPU    |          int           |                                            **Optional**. Task name ids for prompt learning.                                             |
+|        output_seq_len         |                 [batch_size]                  |   CPU    |        uint32_t        |                        The largest number of tokens you hope for results. Note that it contains the input length                        |
+|           start_id            |                 [batch_size]                  |   CPU    |          int           |                             **Optional**. If FT receives this input, FT will replace default start id by it                             |
+|            end_id             |                 [batch_size]                  |   CPU    |          int           |                              **Optional**. If FT receives this input, FT will replace default end id by it                              |
+|        stop_words_list        |      [batch_size, 2, stop_words_length]       |   GPU    |          int           |                                       **Optional**. FT would not generate the tokens in the list.                                       |
+|        bad_words_list         |       [batch_size, 2, bad_words_length]       |   GPU    |          int           | **Optional**. The words in the list will be When FT generates words in this list, it will stop the generation. An extension of stop id  |
+|         runtime_top_k         |              [1] or [batch_size]              |   CPU    |          uint          |                                              **Optional**. top_k value for top k sampling                                               |
+|         runtime_top_p         |              [1] or [batch_size]              |   CPU    |         float          |                                              **Optional**. top_p value for top p sampling                                               |
+|  beam_search_diversity_rate   |              [1] or [batch_size]              |   CPU    |         float          |                **Optional**. A hyper hyper-parameter for [simple diverse decoding](https://arxiv.org/pdf/1611.08562.pdf)                |
+|          temperature          |              [1] or [batch_size]              |   CPU    |         float          |                              **Optional**. Temperature applied to logits for both beam search and sampling                              |
+|          len_penalty          |              [1] or [batch_size]              |   CPU    |         float          |                                   **Optional**. Length penalty applied to logits for only beam search                                   |
+|      repetition_penalty       |              [1] or [batch_size]              |   CPU    |         float          |                          **Optional**. Repetition penalty applied to logits for both beam search and sampling                           |
+|          random_seed          |              [1] or [batch_size]              |   CPU    | unsigned long long int |                                  **Optional**. Random seed to initialize the random table in sampling.                                  |
+|    request_prompt_lengths     |                 [batch_size],                 |   CPU    |          int           |     **Optional**. Length of prefix soft prompt embedding. This describes how many tokens of soft prompt embedding in each sentence.     |
+|   request_prompt_embedding    | [batch_size, max_prompt_length, hidden_units] |   GPU    |         float          |                 **Optional**. Prefix soft prompt embedding. FT will concat them with results of embedding lookup kernel                 |
+|      request_prompt_type      |                 [batch_size]                  |   CPU    |          int           |                  **Optional**. Prompt type of request. This is necessary when user pass the prompt embedding by input                   |
+|          memory_len           |                      [1]                      |   CPU    |         uint32         | **Optional**. The maximum time memory used in attention modules. Reduces the memory footprint but quality of generation might degrades. |
+
+* Output of GPT-j
+
+|       Name       |              Tensor/Parameter Shape              | Location | Data Type |                                    Description                                    |
+| :--------------: | :----------------------------------------------: | :------: | :-------: | :-------------------------------------------------------------------------------: |
+|    output_ids    |   [batch_size, beam_width, max_output_seq_len]   |   GPU    |    int    |            The output ids. It contains the input_ids and generated ids            |
+| sequence_length  |             [batch_size, beam_width]             |   GPU    |    int    |                             The lengths of output ids                             |
+| output_log_probs | [batch_size, beam_width, request_output_seq_len] |   GPU    |   float   | **Optional**. It records the log probability of logits at each step for sampling. |
+|  cum_log_probs   |             [batch_size, beam_width]             |   GPU    |   float   |          **Optional**. Cumulative log probability of generated sentences          |
+
+The `beam_width` value is set by the output shape directly. When the `beam_width` of `output_ids` is larger than 1, FT will use beam search to generate tokens; otherwise, FT will use topk or topp sampling. When the inputs of beam search and sampling is invalid, like beam width 1, top k 0, top p 0.0, FT will run greedy search automatically.
+
 ### Supported features
 
 * Checkpoint converter
   * EleutherAI
+  * Huggingface
 * Data type
   * FP32
   * FP16
+  * BF16
 * Feature
   * Multi-GPU multi-node inference
   * Dynamic random seed
@@ -39,61 +113,6 @@ With 6 billion parameters, GPT-J is one of the largest GPT-like publicly release
 * Frameworks
   * Triton backend
 
-Optimization in GPT-j are similar to optimization in GPT, describing in the [gpt_guide.md](gpt_guide.md#optimization).
-
-* Arguments:
-  1. Maximum batch size (Deprecated, move to input)
-  2. Maximum sequence length (Deprecated, move to input)
-  3. Maximum input sequence length (Deprecated, move to input)
-  4. beam width for beam search. If setting b to be 1, then we don’t use beam search but use sampling. (Deprecated, move to input)
-  5. Head number
-  6. Size per head
-  7. Intermediate size. The inter size of feed forward network. It is often set to 4 * head_num * size_per_head.
-  8. Number of decoder layers.
-  9. Vocab size.
-  10. Rotary embedding for attetnion.
-  11. Start id of the vocabulary.
-  12. End id of the vocabulary.
-  13. Diversity rate of beam search. A hyper hyper-parameter for [simple diverse decoding](https://arxiv.org/pdf/1611.08562.pdf). (Deprecated, move to input)
-  14. top_k value for top k sampling. (Deprecated, move to input)
-  15. top_p value for top p sampling. (Deprecated, move to input)
-  16. Random seed for sampling. (Deprecated, move to input)
-  17. Temperature for logit. Setting to be 1.0 if you don’t want to apply the temperature. (Deprecated, move to input)
-  18. Length penalty for logit. Setting to be 1.0 if you don’t want to apply the length penalty. (Deprecated, move to input)
-  19. Repetition penalty for logit. Setting to be 1.0 if you don’t want to apply the repetition penalty. (Deprecated, move to input)
-  20. Tensor Parallel information, which is declared in `src/fastertransformer/utils/nccl_utils.h`.
-  21. Pipeline Parallel information, which is declared in `src/fastertransformer/utils/nccl_utils.h`.
-  22. CUDA stream.
-  23. Pointer of cuBLAS wrapper, which is declared in `src/fastertransformer/utils/cublasMMWrapper.h`.
-  24. Pointer of memory allocator, which is declared in `src/fastertransformer/utils/allocator.h`
-  25. “is_free_buffer_after_forward” flag. If setting to be true, FasterTransformer will allocate buffer before forward, and free buffer after forward. If the memory is controlled by memory pool and the cost of allocating/releasing memory is small, setting the flag to be true can save some memory.
-  26. Pointer of CUDA device properties, which is used to get the properties of hardware like size of shared memory.
-  27. Custom all reduction communication for custom all reduction in model parallelism. It is only supported in 8-way tensor parallelism.
-  28. Flag of enable custom all reduction or not. 
-* Input tensors:
-  1. Input ids (context). The shape is \[ request batch size * beam width, request maximum input length \].
-  2. Input lengths. The shape is \[ request batch size * beam width \].
-  3. Maximum output sequence length. An integer to describe the largest number of tokens you hope for results. Note that it includes the input ids.
-  4. Start id in runtime. The shape is \[batch_size\] on cpu, optional. If FT receives this input, FT will replace default start id by it, optional. 
-  5. End id in runtime. The shape is \[batch_size\] on cpu, optional. If FT receives this input, FT will replace default end id by it, optional. 
-  6. Stop word list. When FT generates words in this list, it will stop the generation. An extension of stop id, optional.  
-  7. Bad word list. FT won't generates words in this list, optional.  
-  8. top_k value for top k sampling. The shape is \[1\] or \[batch_size, 1\] on cpu, optional.
-  9. top_p value for top p sampling. The shape is \[1\] or \[batch_size, 1\] on cpu, optional.
-  10. Diversity rate of beam search (beam_search_diversity_rate). A hyper hyper-parameter for [simple diverse decoding](https://arxiv.org/pdf/1611.08562.pdf). [1] or \[batch_size, 1\] on cpu, optional.
-  11. Temperature for logit (temperature). The sahpe \[1\] or \[batch_size, 1\] on cpu, optional.
-  12. Length penalty for logit (len_penalty). The shape is \[1\] or \[batch_size, 1\] on cpu, optional
-  13. Repetition penalty for logit (repetition_penalty). The shape is \[1\] or \[batch_size, 1\] on cpu, optional
-  14. Random_seed \[1\] or \[batch_size, 1\] on cpu, optional
-  15. Length of prefix soft prompt embedding. This describes how many tokens of soft prompt embedding in each sentence. The shape is \[batch_size\], optional.
-  16. Prefix soft prompt embedding. FT will concat them with results of embedding lookup kernel. The shape is \[batch_size, max_prefix_soft_prompt_length, hidden_units\], optional.
-* Output tensors:
-  1. Output ids. The shape is \[batch size, beam width, maximum output sequence length \].
-  2. Sequence lengths. The shape is \[batch size * beam width\]. It records the final sequence lengths of all sentences.
-  3. Log probability for sampling. The shape is \[requested token number, batch size, beam \]. It records the log probability of logits at each step. Optional outputs in FP32.
-
-The beam_width value is set by the output shape directly. When the beam_width is larger than 1, FT will use beam search to generate tokens; otherwise, FT will use topk or topp sampling.
-
 ## Setup
 
 ### Requirements
@@ -101,10 +120,10 @@ The beam_width value is set by the output shape directly. When the beam_width is
 - CMake >= 3.13 for PyTorch
 - CUDA 11.0 or newer version
 - NCCL 2.10 or newer version
-- Python 3 is recommended because some features are not supported in python 2
+- Python: Only verify on python 3
 - PyTorch: Verify on 1.8.0, >= 1.5.0 should work.
 
-Recommend use nvcr image like `nvcr.io/nvidia/pytorch:21.11-py3`.
+Recommend use nvcr image like `nvcr.io/nvidia/pytorch:22.07-py3`.
 
 These components are readily available within the NGC Docker image below.
 
@@ -122,13 +141,13 @@ For those unable to use the NGC container, to set up the required environment or
 
 ### Docker image
 
-* The model was built and tested with the use nvcr image `nvcr.io/nvidia/pytorch:21.07-py3`. e.g.
+* The model was built and tested with the use nvcr image `nvcr.io/nvidia/pytorch:22.07-py3`. e.g.
 
     ```bash
-    nvidia-docker run -ti --rm nvcr.io/nvidia/pytorch:21.07-py3 bash
+    nvidia-docker run -ti --rm nvcr.io/nvidia/pytorch:22.07-py3 bash
     ```
 
-### Setup
+### Build project
 
 * Get the code and install all dependencies:
 
@@ -140,10 +159,19 @@ For those unable to use the NGC container, to set up the required environment or
     pip3 install fire jax jaxlib
     ```
 
-### Build
+* Note: the `xx` of `-DSM=xx` in following scripts means the compute capability of your GPU. The following table shows the compute capability of common GPUs.
 
-* Note: the `xx` of `-DSM=xx` in following scripts means the compute capability of your GPU. For example, 60 (P40) or 61 (P4) or 70 (V100) or 75(T4) or 80 (A100).  Default setting is including 70, 75, 80 and 86.
+|  GPU  | compute capacity |
+| :---: | :--------------: |
+|  P40  |        60        |
+|  P4   |        61        |
+| V100  |        70        |
+|  T4   |        75        |
+| A100  |        80        |
+|  A30  |        80        |
+|  A10  |        86        |
 
+By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-DSM`, it requires longer time to compile. So, we suggest setting the `-DSM` for the device you use only. Here, we use `xx` as an example due to convenience.
 
     ```bash
     cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_MULTI_GPU=ON ..
@@ -152,11 +180,12 @@ For those unable to use the NGC container, to set up the required environment or
 
 ### Download the model
 
-* Download the public model and convert
+* Download the mystic public model and convert
 
     ```bash
     wget https://mystic.the-eye.eu/public/AI/GPT-J-6B/step_383500_slim.tar.zstd
-    tar -axf step_383500_slim.tar.gz
+    unzstd step_383500_slim.tar.zstd
+    tar -axf step_383500_slim.tar
     python3 ../examples/pytorch/gptj/utils/gptj_ckpt_convert.py --output-dir ../models/j6b_ckpt --ckpt-dir ./step_383500/
     ```
 
@@ -165,6 +194,21 @@ The script accepts the following arguments:
 2. `--ckpt-dir` is the path to the extracted checkpoint. If `--ckpt-dir` terminates with `.pt` then the script reads the Pytorch model file instead than the public checkpoint, which is faster.
 3. `--n-inference-gpus` number of GPUs used for inference, defaults to 1. The binary model parameters are saved to `${output-dir}/${n-inference-gpus}-gpu/`
 
+* Download the huggingface gptj model and convert
+
+    ```bash
+    sudo apt-get install git-lfs
+    git lfs install
+    git clone https://huggingface.co/EleutherAI/gpt-j-6B
+    python3 ../examples/pytorch/gptj/utils/huggingface_gptj_ckpt_convert.py --ckpt-dir gpt-j-6B/ --output-dir gpt-j-6B/c-models/ --n-inference-gpus 1
+    ```
+
+The script accepts the following arguments:
+1. `--output-dir` is the path of the base directory where the weight binary files will be saved.
+2. `--ckpt-dir` is the path to the extracted checkpoint.
+3. `--n-inference-gpus` number of GPUs used for inference, defaults to 1. The binary model parameters are saved to `${output-dir}/${n-inference-gpus}-gpu/`
+
+### Download tables
 
 * The vocabolary and merge tables are the same as for GPT
 
@@ -179,7 +223,7 @@ The script accepts the following arguments:
   Data Type = 0 (FP32) or 1 (FP16) or 2 (BF16)
     ```bash
     ./bin/gpt_gemm <batch_size> <beam_width> <max_input_len> <head_number> <size_per_head> <inter_size> <vocab_size> <data_type> <tensor_para_size>
-    E.g., ./bin/gpt_gemm 8 1 32 16 128 16384 50400 1 1
+    E.g., ./bin/gpt_gemm 8 1 32 16 256 16384 50400 1 1
     ```
 
 * Run GPT on C++
@@ -190,7 +234,7 @@ The script accepts the following arguments:
     mpirun -n 1 --allow-run-as-root ./bin/gptj_example
     ```
 
-E.g. by setting the `is_half` of `gpt_config.ini` to 1, users can run gpt model under fp16.
+E.g. by setting the `data_type` of `gpt_config.ini` to `fp16` or `bf16`, users can run gpt model under fp16/bf16.
 
 * Convert the token ids to sentence.
 
@@ -208,7 +252,58 @@ E.g. by setting the `is_half` of `gpt_config.ini` to 1, users can run gpt model 
     export CUDA_VISIBLE_DEVICES=0
     mpirun -n 1 --allow-run-as-root ./bin/gptj_triton_example
     ```
+
     To run with tensor and/or pipeline parallelism, make more GPUs visible, edit the `../examples/cpp/gptj/gptj_config.ini` and generate the parameter files with  `gptj_ckpt_convert.py` accordingly.
+
+
+### Run GPTJ with prompts
+
+GPTJ now supports prefix_prompt.
+
+1.  Convert the prompt weights
+
+    You need to transpose the prefix prompt weights to the shape [num_layers, 2, num_heads, perfix_seq_len, size_per_head], and save it by numpy. The naming style is like ` model.prefix_prompt.<task_name>.weights.<tensor_para_size>.bin`.
+
+    Note that you need to specify `start_id`, `end_id` by yourself in order to make sure that it is consistent with the tokenizer.
+
+2.  Run GPT with C++ example
+
+    You need to specify the example gpt_config.ini like below to enable the p/prompt_tuning feature.
+
+    ```ini
+    [gpt_124M]
+    head_num=12
+    size_per_head=64
+    vocab_size=50257
+    decoder_layers=12
+    start_id=50256
+    end_id=50256
+    inter_size=3072
+    num_tasks=3
+    prompt_learning_type=3
+
+    [gpt_124M_task_0]
+    task_name = squad
+    prompt_length = 10
+
+    [gpt_124M_task_1]
+    task_name = sentiment
+    prompt_length = 10
+
+    [gpt_124M_task_2]
+    task_name = intent_and_slot
+    prompt_length = 10
+    ```
+
+    `task_name` and `prompt_length` are specified for loading prompt weights.
+
+    **prompt_learning_type**:
+
+    - no prompt: 0
+    - soft_prompt: 1
+    - prefix_prompt: 2
+    - p/prompt_tuning: 3
+
 
 ### Compare with reference implementation
 

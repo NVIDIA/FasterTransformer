@@ -29,7 +29,7 @@ class UnfusedAttentionLayerINT8: public BaseAttentionLayer<T> {
 private:
     // buffer handling
     size_t max_batch_size_ = 0;
-    size_t max_seq_len_ = 0;
+    size_t max_seq_len_    = 0;
 
     // metadata
     size_t head_num_;
@@ -37,8 +37,8 @@ private:
     size_t hidden_units_;
 
     float q_scaling_;
-    int int8_mode_;
-    bool sparse_;
+    int   int8_mode_;
+    bool  sparse_;
 
     void allocateBuffer() override;
     void freeBuffer() override;
@@ -52,29 +52,29 @@ private:
     using BaseAttentionLayer<T>::allocator_;
 
 protected:
-    int8_t *q_buf_, *k_buf_, *v_buf_, *qk_buf_, *dst_;
+    int8_t * q_buf_, *k_buf_, *v_buf_, *qk_buf_, *dst_;
     int32_t *Q_int_buf_, *V_int_buf_, *K_int_buf_, *qk_int_buf_, *transpose_dst_int_buf_, *sequence_id_map_;
 
 public:
-    UnfusedAttentionLayerINT8(size_t max_batch_size,
-                              size_t max_seq_len,
-                              size_t head_num,
-                              size_t size_per_head,
-                              float q_scaling,
-                              int int8_mode,
-                              cudaStream_t stream,
+    UnfusedAttentionLayerINT8(size_t           max_batch_size,
+                              size_t           max_seq_len,
+                              size_t           head_num,
+                              size_t           size_per_head,
+                              float            q_scaling,
+                              int              int8_mode,
+                              cudaStream_t     stream,
                               cublasMMWrapper* cublas_wrapper,
-                              IAllocator* allocator,
-                              bool is_free_buffer_after_forward,
-                              bool sparse = false);
+                              IAllocator*      allocator,
+                              bool             is_free_buffer_after_forward,
+                              bool             sparse = false);
 
     UnfusedAttentionLayerINT8(UnfusedAttentionLayerINT8<T> const& attention_layer);
 
     ~UnfusedAttentionLayerINT8();
 
-    void forward(std::vector<fastertransformer::Tensor>* output_tensors,
+    void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                  const std::vector<fastertransformer::Tensor>* input_tensors,
-                 const AttentionWeight<T>* attention_weights) override;
+                 const AttentionWeight<T>*                     attention_weights) override;
 };
 
 }  // namespace fastertransformer

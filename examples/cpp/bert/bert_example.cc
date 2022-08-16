@@ -25,13 +25,13 @@ int bertExample(size_t batch_size,
                 size_t seq_len,
                 size_t head_num,
                 size_t size_per_head,
-                bool is_remove_padding,
-                bool allow_gemm_test = false);
+                bool   is_remove_padding,
+                bool   allow_gemm_test = false);
 
 int main(int argc, char** argv)
 {
     if (argc != 8 && argc != 9) {
-        FT_LOG_ERROR("bert_example batch_size num_layers seq_len head_num size_per_head is_fp16 is_remove_padding");
+        FT_LOG_ERROR("bert_example batch_size num_layers seq_len head_num size_per_head data_type is_remove_padding");
         FT_LOG_ERROR("e.g., ./bin/bert_example 32 12 32 12 64 0 0");
         return 0;
     }
@@ -40,21 +40,28 @@ int main(int argc, char** argv)
         allow_gemm_test = (atoi(argv[8]) == 1) ? true : false;
     }
 
-    int batch_size = atoi(argv[1]);
-    int num_layers = atoi(argv[2]);
-    int seq_len = atoi(argv[3]);
-    int head_num = atoi(argv[4]);
-    int size_per_head = atoi(argv[5]);
-    bool is_remove_padding = static_cast<bool>(atoi(argv[7]));
+    int                  batch_size        = atoi(argv[1]);
+    int                  num_layers        = atoi(argv[2]);
+    int                  seq_len           = atoi(argv[3]);
+    int                  head_num          = atoi(argv[4]);
+    int                  size_per_head     = atoi(argv[5]);
+    bool                 is_remove_padding = static_cast<bool>(atoi(argv[7]));
+    const CublasDataType data_type         = static_cast<CublasDataType>(atoi(argv[6]));  // 0 FP32, 1 FP16, 2 BF 16
 
-    if (atoi(argv[6]) == 0) {
+    if (data_type == FLOAT_DATATYPE) {
         return bertExample<float>(
             batch_size, num_layers, seq_len, head_num, size_per_head, is_remove_padding, allow_gemm_test);
     }
-    else if (atoi(argv[6]) == 1) {
+    else if (data_type == HALF_DATATYPE) {
         return bertExample<half>(
             batch_size, num_layers, seq_len, head_num, size_per_head, is_remove_padding, allow_gemm_test);
     }
+#ifdef ENABLE_BF16
+    else if (data_type == BFLOAT16_DATATYPE) {
+        return bertExample<__nv_bfloat16>(
+            batch_size, num_layers, seq_len, head_num, size_per_head, is_remove_padding, allow_gemm_test);
+    }
+#endif
     else {
         throw std::runtime_error(std::string("[FT][ERROR] is_fp16 should be 0 (use float)"
                                              "or 1 (use half). \n "));
@@ -67,16 +74,16 @@ int bertExample(size_t batch_size,
                 size_t seq_len,
                 size_t head_num,
                 size_t size_per_head,
-                bool is_remove_padding,
-                bool allow_gemm_test)
+                bool   is_remove_padding,
+                bool   allow_gemm_test)
 {
     printf("[INFO] Device: %s \n", getDeviceName().c_str());
-
+    print_mem_usage("Before loading model");
     const size_t hidden_units = head_num * size_per_head;
-    const size_t inter_size = 4 * hidden_units;
+    const size_t inter_size   = 4 * hidden_units;
 
-    cudaStream_t stream;
-    cublasHandle_t cublas_handle;
+    cudaStream_t     stream;
+    cublasHandle_t   cublas_handle;
     cublasLtHandle_t cublaslt_handle;
     cudaStreamCreate(&stream);
     cublasCreate(&cublas_handle);
@@ -101,6 +108,11 @@ int bertExample(size_t batch_size,
     if (std::is_same<T, half>::value) {
         cublas_wrapper.setFP16GemmConfig();
     }
+#ifdef ENABLE_BF16
+    else if (std::is_same<T, __nv_bfloat16>::value) {
+        cublas_wrapper.setBF16GemmConfig();
+    }
+#endif
     else if (std::is_same<T, float>::value) {
         cublas_wrapper.setFP32GemmConfig();
     }
@@ -109,8 +121,8 @@ int bertExample(size_t batch_size,
 
     AttentionType attention_type = getAttentionType<T>(size_per_head, getSMVersion(), is_remove_padding, seq_len);
 
-    Bert<T> bert = Bert<T>(batch_size,
-                           seq_len,
+    Bert<T> bert = Bert<T>(0,  // max_batch_size_, deprecated
+                           0,  // max_seq_len_, deprecated
                            head_num,
                            size_per_head,
                            inter_size,
@@ -131,8 +143,8 @@ int bertExample(size_t batch_size,
     deviceMalloc(&out_tensor, batch_size * seq_len * head_num * size_per_head, false);
     deviceMalloc(&from_tensor, batch_size * seq_len * head_num * size_per_head, false);
 
-    int* h_sequence_lengths = new int[batch_size];
-    unsigned int seed = 0;
+    int*         h_sequence_lengths = new int[batch_size];
+    unsigned int seed               = 0;
     for (uint i = 0; i < batch_size; i++) {
         h_sequence_lengths[i] = rand_r(&seed) % seq_len;
     }
@@ -153,11 +165,13 @@ int bertExample(size_t batch_size,
                                    getTensorType<T>(),
                                    std::vector<size_t>{batch_size, seq_len, (size_t)(head_num * size_per_head)},
                                    out_tensor}};
+    print_mem_usage("After loading model");
 
     // warmup
     for (int i = 0; i < 10; i++) {
         bert.forward(&output_tensors, &input_tensors, &bert_weights);
     }
+    print_mem_usage("After inference");
 
     // profile time
     const int ite = 10;
@@ -179,6 +193,9 @@ int bertExample(size_t batch_size,
 #ifdef SPARSITY_ENABLED
     cusparseLtDestroy(&cusparselt_handle);
 #endif
+    deviceFree(d_sequence_lengths);
+    deviceFree(from_tensor);
+    deviceFree(out_tensor);
     delete cublas_algo_map;
     delete cublas_wrapper_mutex;
     return 0;

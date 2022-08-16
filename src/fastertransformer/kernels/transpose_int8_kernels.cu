@@ -23,23 +23,23 @@ namespace fastertransformer {
 // grid(seq_len, batch_size)
 // block(size_per_head/4, head_num)
 // assume size_per_head is multiples of 32
-__global__ void transpose_COL32_kernel(char4* dst,
-                                       const int4* src,
-                                       const int batch_size,
-                                       const int seq_len,
-                                       const int head_num,
-                                       const int size_per_head,
+__global__ void transpose_COL32_kernel(char4*       dst,
+                                       const int4*  src,
+                                       const int    batch_size,
+                                       const int    seq_len,
+                                       const int    head_num,
+                                       const int    size_per_head,
                                        const float* v_buf_addBias_deQFactor,
                                        const float* qk_afterSM_deQFactor,
                                        const float* out_scale_ptr,
-                                       const int batch_size_x_seq_len,
-                                       const int seq_len_x_size_per_head)
+                                       const int    batch_size_x_seq_len,
+                                       const int    seq_len_x_size_per_head)
 {
-    const float scale = __ldg(v_buf_addBias_deQFactor) * __ldg(qk_afterSM_deQFactor) * __ldg(out_scale_ptr);
-    int threadIdx4 = threadIdx.x << 2;
-    int batch_id = blockIdx.y;
-    int seq_id = blockIdx.x;
-    int head_id = threadIdx.y;
+    const float scale      = __ldg(v_buf_addBias_deQFactor) * __ldg(qk_afterSM_deQFactor) * __ldg(out_scale_ptr);
+    int         threadIdx4 = threadIdx.x << 2;
+    int         batch_id   = blockIdx.y;
+    int         seq_id     = blockIdx.x;
+    int         head_id    = threadIdx.y;
     // get the (row, col) output layout of m*k
     // m = batch_size*seq_len
     // k = head_num*size_per_head
@@ -64,19 +64,19 @@ __global__ void transpose_COL32_kernel(char4* dst,
     char4 tmp;
 
     int4 srcTmp4 = __ldg(src + inIdx);
-    tmp.x = float_to_int8_rn(srcTmp4.x * scale);
-    tmp.y = float_to_int8_rn(srcTmp4.y * scale);
-    tmp.z = float_to_int8_rn(srcTmp4.z * scale);
-    tmp.w = float_to_int8_rn(srcTmp4.w * scale);
-    dst[outIdx] = tmp;
+    tmp.x        = float_to_int8_rn(srcTmp4.x * scale);
+    tmp.y        = float_to_int8_rn(srcTmp4.y * scale);
+    tmp.z        = float_to_int8_rn(srcTmp4.z * scale);
+    tmp.w        = float_to_int8_rn(srcTmp4.w * scale);
+    dst[outIdx]  = tmp;
 }
 
-void invokeTransposeCOL32(int8_t* dst,
-                          const int* src,
-                          const int batch_size,
-                          const int seq_len,
-                          const int head_num,
-                          const int size_per_head,
+void invokeTransposeCOL32(int8_t*      dst,
+                          const int*   src,
+                          const int    batch_size,
+                          const int    seq_len,
+                          const int    head_num,
+                          const int    size_per_head,
                           const float* v_buf_addBias_deQFactor,
                           const float* qk_afterSM_deQFactor,
                           const float* out_scale_ptr,
@@ -102,21 +102,21 @@ void invokeTransposeCOL32(int8_t* dst,
 // grid(seq_len, batch_size)
 // block(size_per_head/4, head_num)
 // assume size_per_head is multiples of 32
-__global__ void transpose_COL32_kernel(int8_t* dst,
+__global__ void transpose_COL32_kernel(int8_t*       dst,
                                        const int8_t* src,
-                                       const int batch_size,
-                                       const int seq_len,
-                                       const int head_num,
-                                       const int size_per_head,
-                                       const float* bmm2_deQFactor,
-                                       const float* out_scale_ptr,
-                                       const int batch_size_x_seq_len,
-                                       const int seq_len_x_size_per_head)
+                                       const int     batch_size,
+                                       const int     seq_len,
+                                       const int     head_num,
+                                       const int     size_per_head,
+                                       const float*  bmm2_deQFactor,
+                                       const float*  out_scale_ptr,
+                                       const int     batch_size_x_seq_len,
+                                       const int     seq_len_x_size_per_head)
 {
     int threadIdx4 = threadIdx.x << 2;
-    int batch_id = blockIdx.y;
-    int seq_id = blockIdx.x;
-    int head_id = threadIdx.y;
+    int batch_id   = blockIdx.y;
+    int seq_id     = blockIdx.x;
+    int head_id    = threadIdx.y;
     // get the (row, col) output layout of m*k
     // m = batch_size*seq_len
     // k = head_num*size_per_head
@@ -125,7 +125,7 @@ __global__ void transpose_COL32_kernel(int8_t* dst,
     // get the (row, col) layout of COL32; leading dimension = 32*m = 32*batch_size*seq_len
     int COL32_row = (mk_row << 5) + (mk_col & 31);
     int COL32_col = mk_col >> 5;
-    int outIdx = ((COL32_col << 5) * batch_size_x_seq_len + COL32_row) >> 2;
+    int outIdx    = ((COL32_col << 5) * batch_size_x_seq_len + COL32_row) >> 2;
 
     // get the (row, col) input layout of m'*k'
     // m' = seq_len
@@ -139,19 +139,19 @@ __global__ void transpose_COL32_kernel(int8_t* dst,
     int inIdx =
         ((batch_id * head_num + head_id) * seq_len_x_size_per_head + (COL32_col << 5) * seq_len + COL32_row) >> 2;
     const char4* src_ptr4 = (const char4*)src;
-    char4* dst_ptr4 = (char4*)dst;
-    dst_ptr4[outIdx] = __ldg(src_ptr4 + inIdx);
+    char4*       dst_ptr4 = (char4*)dst;
+    dst_ptr4[outIdx]      = __ldg(src_ptr4 + inIdx);
 }
 
-void invokeTransposeCOL32(int8_t* dst,
+void invokeTransposeCOL32(int8_t*       dst,
                           const int8_t* src,
-                          const int batch_size,
-                          const int seq_len,
-                          const int head_num,
-                          const int size_per_head,
-                          const float* bmm2_deQFactor,
-                          const float* out_scale_ptr,
-                          cudaStream_t stream)
+                          const int     batch_size,
+                          const int     seq_len,
+                          const int     head_num,
+                          const int     size_per_head,
+                          const float*  bmm2_deQFactor,
+                          const float*  out_scale_ptr,
+                          cudaStream_t  stream)
 {
     assert(size_per_head % 32 == 0);
     transpose_COL32_kernel<<<dim3(seq_len, batch_size), dim3(size_per_head / 4, head_num), 0, stream>>>(
@@ -172,24 +172,24 @@ void invokeTransposeCOL32(int8_t* dst,
 // grid(seq_len, batch_size)
 // block(size_per_head/4, head_num)
 // assume size_per_head is multiples of 32
-__global__ void transpose_COL32_rebuild_padding_kernel(int8_t* dst,
+__global__ void transpose_COL32_rebuild_padding_kernel(int8_t*        dst,
                                                        const int32_t* src,
-                                                       const int* sequence_id_map,
-                                                       const int valid_word_num,
-                                                       const int batch_size,
-                                                       const int seq_len,
-                                                       const int head_num,
-                                                       const int size_per_head,
-                                                       const float* v_buf_addBias_deQFactor,
-                                                       const float* qk_afterSM_deQFactor,
-                                                       const float* out_scale_ptr,
-                                                       const int seq_len_x_size_per_head)
+                                                       const int*     sequence_id_map,
+                                                       const int      valid_word_num,
+                                                       const int      batch_size,
+                                                       const int      seq_len,
+                                                       const int      head_num,
+                                                       const int      size_per_head,
+                                                       const float*   v_buf_addBias_deQFactor,
+                                                       const float*   qk_afterSM_deQFactor,
+                                                       const float*   out_scale_ptr,
+                                                       const int      seq_len_x_size_per_head)
 {
-    const float scale = __ldg(v_buf_addBias_deQFactor) * __ldg(qk_afterSM_deQFactor) * __ldg(out_scale_ptr);
-    int threadIdx4 = threadIdx.x << 2;
-    int batch_id = blockIdx.y;
-    int seq_id = blockIdx.x;
-    int head_id = threadIdx.y;
+    const float scale      = __ldg(v_buf_addBias_deQFactor) * __ldg(qk_afterSM_deQFactor) * __ldg(out_scale_ptr);
+    int         threadIdx4 = threadIdx.x << 2;
+    int         batch_id   = blockIdx.y;
+    int         seq_id     = blockIdx.x;
+    int         head_id    = threadIdx.y;
     // get the (row, col) output layout of m*k
     // m = valid_word_num
     // k = head_num*size_per_head
@@ -199,7 +199,7 @@ __global__ void transpose_COL32_rebuild_padding_kernel(int8_t* dst,
         // get the (row, col) layout of COL32; leading dimension = 32*m = 32*valid_word_num
         int COL32_row = (mk_row << 5) + (mk_col & 31);
         int COL32_col = mk_col >> 5;
-        int outIdx = ((COL32_col << 5) * valid_word_num + COL32_row) >> 2;
+        int outIdx    = ((COL32_col << 5) * valid_word_num + COL32_row) >> 2;
 
         // get the (row, col) input layout of m'*k'
         // m' = seq_len
@@ -212,23 +212,23 @@ __global__ void transpose_COL32_rebuild_padding_kernel(int8_t* dst,
 
         int inIdx = (batch_id * head_num + head_id) * seq_len_x_size_per_head + (COL32_col << 5) * seq_len + COL32_row;
         char4 tmp;
-        tmp.x = float_to_int8_rn(__ldg(src + inIdx) * scale);
-        tmp.y = float_to_int8_rn(__ldg(src + inIdx + 1) * scale);
-        tmp.z = float_to_int8_rn(__ldg(src + inIdx + 2) * scale);
-        tmp.w = float_to_int8_rn(__ldg(src + inIdx + 3) * scale);
-        char4* dst_ptr4 = (char4*)dst;
+        tmp.x            = float_to_int8_rn(__ldg(src + inIdx) * scale);
+        tmp.y            = float_to_int8_rn(__ldg(src + inIdx + 1) * scale);
+        tmp.z            = float_to_int8_rn(__ldg(src + inIdx + 2) * scale);
+        tmp.w            = float_to_int8_rn(__ldg(src + inIdx + 3) * scale);
+        char4* dst_ptr4  = (char4*)dst;
         dst_ptr4[outIdx] = tmp;
     }
 }
 
-void invokeTransposeCOL32RebuildPadding(int8_t* dst,
-                                        const int* src,
-                                        const int* sequence_id_map,
-                                        const int valid_word_num,
-                                        const int batch_size,
-                                        const int seq_len,
-                                        const int head_num,
-                                        const int size_per_head,
+void invokeTransposeCOL32RebuildPadding(int8_t*      dst,
+                                        const int*   src,
+                                        const int*   sequence_id_map,
+                                        const int    valid_word_num,
+                                        const int    batch_size,
+                                        const int    seq_len,
+                                        const int    head_num,
+                                        const int    size_per_head,
                                         const float* v_buf_addBias_deQFactor,
                                         const float* qk_afterSM_deQFactor,
                                         const float* out_scale_ptr,
@@ -255,22 +255,22 @@ void invokeTransposeCOL32RebuildPadding(int8_t* dst,
 // grid(seq_len, batch_size)
 // block(size_per_head/4, head_num)
 // assume size_per_head is multiples of 32
-__global__ void transpose_COL32_rebuild_padding_kernel(int8_t* dst,
+__global__ void transpose_COL32_rebuild_padding_kernel(int8_t*       dst,
                                                        const int8_t* src,
-                                                       const int* sequence_id_map,
-                                                       const int valid_word_num,
-                                                       const int batch_size,
-                                                       const int seq_len,
-                                                       const int head_num,
-                                                       const int size_per_head,
-                                                       const float* bmm2_deQFactor,
-                                                       const float* out_scale_ptr,
-                                                       const int seq_len_x_size_per_head)
+                                                       const int*    sequence_id_map,
+                                                       const int     valid_word_num,
+                                                       const int     batch_size,
+                                                       const int     seq_len,
+                                                       const int     head_num,
+                                                       const int     size_per_head,
+                                                       const float*  bmm2_deQFactor,
+                                                       const float*  out_scale_ptr,
+                                                       const int     seq_len_x_size_per_head)
 {
     int threadIdx4 = threadIdx.x << 2;
-    int batch_id = blockIdx.y;
-    int seq_id = blockIdx.x;
-    int head_id = threadIdx.y;
+    int batch_id   = blockIdx.y;
+    int seq_id     = blockIdx.x;
+    int head_id    = threadIdx.y;
     // get the (row, col) output layout of m*k
     // m = valid_word_num
     // k = head_num*size_per_head
@@ -280,7 +280,7 @@ __global__ void transpose_COL32_rebuild_padding_kernel(int8_t* dst,
         // get the (row, col) layout of COL32; leading dimension = 32*m = 32*valid_word_num
         int COL32_row = (mk_row << 5) + (mk_col & 31);
         int COL32_col = mk_col >> 5;
-        int outIdx = ((COL32_col << 5) * valid_word_num + COL32_row) >> 2;
+        int outIdx    = ((COL32_col << 5) * valid_word_num + COL32_row) >> 2;
 
         // get the (row, col) input layout of m'*k'
         // m' = seq_len
@@ -296,22 +296,22 @@ __global__ void transpose_COL32_rebuild_padding_kernel(int8_t* dst,
 
         const char4* src_ptr4 = (const char4*)src;
 
-        char4* dst_ptr4 = (char4*)dst;
+        char4* dst_ptr4  = (char4*)dst;
         dst_ptr4[outIdx] = __ldg(src_ptr4 + inIdx);
     }
 }
 
-void invokeTransposeCOL32RebuildPadding(int8_t* dst,
+void invokeTransposeCOL32RebuildPadding(int8_t*       dst,
                                         const int8_t* src,
-                                        const int* sequence_id_map,
-                                        const int valid_word_num,
-                                        const int batch_size,
-                                        const int seq_len,
-                                        const int head_num,
-                                        const int size_per_head,
-                                        const float* bmm2_deQFactor,
-                                        const float* out_scale_ptr,
-                                        cudaStream_t stream)
+                                        const int*    sequence_id_map,
+                                        const int     valid_word_num,
+                                        const int     batch_size,
+                                        const int     seq_len,
+                                        const int     head_num,
+                                        const int     size_per_head,
+                                        const float*  bmm2_deQFactor,
+                                        const float*  out_scale_ptr,
+                                        cudaStream_t  stream)
 {
     assert(size_per_head % 32 == 0);
     transpose_COL32_rebuild_padding_kernel<<<dim3(seq_len, batch_size), dim3(size_per_head / 4, head_num), 0, stream>>>(
@@ -333,21 +333,21 @@ void invokeTransposeCOL32RebuildPadding(int8_t* dst,
 // grid(seq_len, batch_size)
 // block(size_per_head/4, head_num)
 // assume size_per_head is multiples of 32
-__global__ void transpose_COL32_ROW_kernel(int8_t* dst,
+__global__ void transpose_COL32_ROW_kernel(int8_t*       dst,
                                            const int8_t* src,
-                                           const int batch_size,
-                                           const int seq_len,
-                                           const int head_num,
-                                           const int size_per_head,
-                                           const float* bmm2_deQFactor,
-                                           const float* out_scale_ptr,
-                                           const int head_num_x_size_per_head,
-                                           const int seq_len_x_size_per_head)
+                                           const int     batch_size,
+                                           const int     seq_len,
+                                           const int     head_num,
+                                           const int     size_per_head,
+                                           const float*  bmm2_deQFactor,
+                                           const float*  out_scale_ptr,
+                                           const int     head_num_x_size_per_head,
+                                           const int     seq_len_x_size_per_head)
 {
     int threadIdx4 = threadIdx.x << 2;
-    int batch_id = blockIdx.y;
-    int seq_id = blockIdx.x;
-    int head_id = threadIdx.y;
+    int batch_id   = blockIdx.y;
+    int seq_id     = blockIdx.x;
+    int head_id    = threadIdx.y;
     // get the (row, col) output layout of m*k
     // m = batch_size*seq_len
     // k = head_num*size_per_head
@@ -367,19 +367,19 @@ __global__ void transpose_COL32_ROW_kernel(int8_t* dst,
     int inIdx =
         ((batch_id * head_num + head_id) * seq_len_x_size_per_head + (COL32_col << 5) * seq_len + COL32_row) >> 2;
     const char4* src_ptr4 = (const char4*)src;
-    char4* dst_ptr4 = (char4*)dst;
-    dst_ptr4[outIdx] = __ldg(src_ptr4 + inIdx);
+    char4*       dst_ptr4 = (char4*)dst;
+    dst_ptr4[outIdx]      = __ldg(src_ptr4 + inIdx);
 }
 
-void invokeTransposeCOL32ToRow(int8_t* dst,
+void invokeTransposeCOL32ToRow(int8_t*       dst,
                                const int8_t* src,
-                               const int batch_size,
-                               const int seq_len,
-                               const int head_num,
-                               const int size_per_head,
-                               const float* bmm2_deQFactor,
-                               const float* out_scale_ptr,
-                               cudaStream_t stream)
+                               const int     batch_size,
+                               const int     seq_len,
+                               const int     head_num,
+                               const int     size_per_head,
+                               const float*  bmm2_deQFactor,
+                               const float*  out_scale_ptr,
+                               cudaStream_t  stream)
 {
     assert(size_per_head % 32 == 0);
     transpose_COL32_ROW_kernel<<<dim3(seq_len, batch_size), dim3(size_per_head / 4, head_num), 0, stream>>>(
@@ -400,23 +400,23 @@ void invokeTransposeCOL32ToRow(int8_t* dst,
 // grid(seq_len, batch_size)
 // block(size_per_head/4, head_num)
 // assume size_per_head is multiples of 32
-__global__ void transpose_COL32_ROW_rebuild_padding_kernel(int8_t* dst,
+__global__ void transpose_COL32_ROW_rebuild_padding_kernel(int8_t*       dst,
                                                            const int8_t* src,
-                                                           const int* sequence_id_map,
-                                                           const int valid_word_num,
-                                                           const int batch_size,
-                                                           const int seq_len,
-                                                           const int head_num,
-                                                           const int size_per_head,
-                                                           const float* bmm2_deQFactor,
-                                                           const float* out_scale_ptr,
-                                                           const int seq_len_x_size_per_head,
-                                                           const int head_num_x_size_per_head)
+                                                           const int*    sequence_id_map,
+                                                           const int     valid_word_num,
+                                                           const int     batch_size,
+                                                           const int     seq_len,
+                                                           const int     head_num,
+                                                           const int     size_per_head,
+                                                           const float*  bmm2_deQFactor,
+                                                           const float*  out_scale_ptr,
+                                                           const int     seq_len_x_size_per_head,
+                                                           const int     head_num_x_size_per_head)
 {
     int threadIdx4 = threadIdx.x << 2;
-    int batch_id = blockIdx.y;
-    int seq_id = blockIdx.x;
-    int head_id = threadIdx.y;
+    int batch_id   = blockIdx.y;
+    int seq_id     = blockIdx.x;
+    int head_id    = threadIdx.y;
     // get the (row, col) output layout of m*k
     // m = valid_word_num
     // k = head_num*size_per_head
@@ -439,22 +439,22 @@ __global__ void transpose_COL32_ROW_rebuild_padding_kernel(int8_t* dst,
 
         const char4* src_ptr4 = (const char4*)src;
 
-        char4* dst_ptr4 = (char4*)dst;
+        char4* dst_ptr4  = (char4*)dst;
         dst_ptr4[outIdx] = __ldg(src_ptr4 + inIdx);
     }
 }
 
-void invokeTransposeCOL32ToRowRebuildPadding(int8_t* dst,
+void invokeTransposeCOL32ToRowRebuildPadding(int8_t*       dst,
                                              const int8_t* src,
-                                             const int* sequence_id_map,
-                                             const int valid_word_num,
-                                             const int batch_size,
-                                             const int seq_len,
-                                             const int head_num,
-                                             const int size_per_head,
-                                             const float* bmm2_deQFactor,
-                                             const float* out_scale_ptr,
-                                             cudaStream_t stream)
+                                             const int*    sequence_id_map,
+                                             const int     valid_word_num,
+                                             const int     batch_size,
+                                             const int     seq_len,
+                                             const int     head_num,
+                                             const int     size_per_head,
+                                             const float*  bmm2_deQFactor,
+                                             const float*  out_scale_ptr,
+                                             cudaStream_t  stream)
 {
     assert(size_per_head % 32 == 0);
     transpose_COL32_ROW_rebuild_padding_kernel<<<dim3(seq_len, batch_size),

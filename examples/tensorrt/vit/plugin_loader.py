@@ -22,7 +22,7 @@ from scipy import ndimage
 def load_weights(weight_path:str):
     suffix = weight_path.split('.')[-1]
     if suffix != 'npz':
-        print("Unsupport weight file: Unrecognized format %s " % suffix)
+        print("Unsupported weight file: Unrecognized format %s " % suffix)
         exit(-1)
     return np.load(weight_path)
 

@@ -27,15 +27,15 @@ namespace ft = fastertransformer;
 template<typename T>
 struct T5TritonModelInstance: AbstractTransformerModelInstance {
 
-    T5TritonModelInstance(std::unique_ptr<ft::T5Encoder<T>> t5_encoder,
-                          std::unique_ptr<ft::T5Decoding<T>> t5_decoding,
-                          std::unique_ptr<ft::T5EncoderWeight<T>> t5_encoder_weight,
-                          std::unique_ptr<ft::T5DecodingWeight<T>> t5_decoding_weight,
+    T5TritonModelInstance(std::unique_ptr<ft::T5Encoder<T>>                       t5_encoder,
+                          std::unique_ptr<ft::T5Decoding<T>>                      t5_decoding,
+                          std::shared_ptr<ft::T5EncoderWeight<T>>                 t5_encoder_weight,
+                          std::shared_ptr<ft::T5DecodingWeight<T>>                t5_decoding_weight,
                           std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator,
-                          std::unique_ptr<ft::cublasAlgoMap> cublas_algo_map,
-                          std::unique_ptr<std::mutex> cublas_wrapper_mutex,
-                          std::unique_ptr<ft::cublasMMWrapper> cublas_wrapper,
-                          std::unique_ptr<cudaDeviceProp> cuda_device_prop_ptr);
+                          std::unique_ptr<ft::cublasAlgoMap>                      cublas_algo_map,
+                          std::unique_ptr<std::mutex>                             cublas_wrapper_mutex,
+                          std::unique_ptr<ft::cublasMMWrapper>                    cublas_wrapper,
+                          std::unique_ptr<cudaDeviceProp>                         cuda_device_prop_ptr);
     ~T5TritonModelInstance();
 
     std::shared_ptr<std::vector<triton::Tensor>>
@@ -49,15 +49,15 @@ struct T5TritonModelInstance: AbstractTransformerModelInstance {
     forward(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors) override;
 
 private:
-    const std::unique_ptr<ft::T5Encoder<T>> t5_encoder_;
-    const std::unique_ptr<ft::T5EncoderWeight<T>> t5_encoder_weight_;
-    const std::unique_ptr<ft::T5Decoding<T>> t5_decoding_;
-    const std::unique_ptr<ft::T5DecodingWeight<T>> t5_decoding_weight_;
+    const std::unique_ptr<ft::T5Encoder<T>>                       t5_encoder_;
+    const std::shared_ptr<ft::T5EncoderWeight<T>>                 t5_encoder_weight_;
+    const std::unique_ptr<ft::T5Decoding<T>>                      t5_decoding_;
+    const std::shared_ptr<ft::T5DecodingWeight<T>>                t5_decoding_weight_;
     const std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator_;
-    const std::unique_ptr<ft::cublasAlgoMap> cublas_algo_map_;
-    const std::unique_ptr<std::mutex> cublas_wrapper_mutex_;
-    const std::unique_ptr<ft::cublasMMWrapper> cublas_wrapper_;
-    const std::unique_ptr<cudaDeviceProp> cuda_device_prop_ptr_;
+    const std::unique_ptr<ft::cublasAlgoMap>                      cublas_algo_map_;
+    const std::unique_ptr<std::mutex>                             cublas_wrapper_mutex_;
+    const std::unique_ptr<ft::cublasMMWrapper>                    cublas_wrapper_;
+    const std::unique_ptr<cudaDeviceProp>                         cuda_device_prop_ptr_;
 
     std::unordered_map<std::string, ft::Tensor>
     convert_inputs(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors);
@@ -71,16 +71,16 @@ private:
                         const size_t mem_max_seq_len);
     void freeBuffer();
 
-    int* d_input_ids_ = nullptr;
-    int* d_input_lengths_ = nullptr;
-    int* d_input_bad_words_ = nullptr;
+    int* d_input_ids_        = nullptr;
+    int* d_input_lengths_    = nullptr;
+    int* d_input_bad_words_  = nullptr;
     int* d_input_stop_words_ = nullptr;
 
-    T* d_encoder_outputs_ = nullptr;
-    int* d_output_ids_ = nullptr;
-    int* d_sequence_lengths_ = nullptr;
+    T*     d_encoder_outputs_  = nullptr;
+    int*   d_output_ids_       = nullptr;
+    int*   d_sequence_lengths_ = nullptr;
     float* d_output_log_probs_ = nullptr;
-    float* d_cum_log_probs_ = nullptr;
+    float* d_cum_log_probs_    = nullptr;
 
     int h_total_output_len_;
 };

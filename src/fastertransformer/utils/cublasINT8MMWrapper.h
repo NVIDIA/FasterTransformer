@@ -34,50 +34,50 @@ private:
 
 public:
     cublasINT8MMWrapper(cublasLtHandle_t cublaslt_handle_,
-                        cudaStream_t stream,
-                        cublasAlgoMap* map,
-                        std::mutex* mu,
-                        bool use_ORDER_COL32_2R_4R4);
+                        cudaStream_t     stream,
+                        cublasAlgoMap*   map,
+                        std::mutex*      mu,
+                        bool             use_ORDER_COL32_2R_4R4);
 
-    cublasINT8MMWrapper(cublasHandle_t cublas_handle,
+    cublasINT8MMWrapper(cublasHandle_t   cublas_handle,
                         cublasLtHandle_t cublaslt_handle,
-                        cudaStream_t stream,
-                        cublasAlgoMap* map,
-                        std::mutex* mu,
-                        bool use_ORDER_COL32_2R_4R4);
+                        cudaStream_t     stream,
+                        cublasAlgoMap*   map,
+                        std::mutex*      mu,
+                        bool             use_ORDER_COL32_2R_4R4);
 #ifdef SPARSITY_ENABLED
-    cublasINT8MMWrapper(cublasLtHandle_t cublaslt_handle_,
+    cublasINT8MMWrapper(cublasLtHandle_t   cublaslt_handle_,
                         cusparseLtHandle_t cusparselt_handle,
-                        cudaStream_t stream,
-                        cublasAlgoMap* map,
-                        std::mutex* mu,
-                        bool use_ORDER_COL32_2R_4R4);
+                        cudaStream_t       stream,
+                        cublasAlgoMap*     map,
+                        std::mutex*        mu,
+                        bool               use_ORDER_COL32_2R_4R4);
 #endif
 
     ~cublasINT8MMWrapper();
 
     cublasINT8MMWrapper(const cublasINT8MMWrapper& wrapper);
 
-    void Gemm(int* res,
-              int batchCount,
-              int m,
-              int n,
-              int k,
-              int64_t stridea,
-              int64_t strideb,
-              int64_t stridec,
+    void Gemm(int*          res,
+              int           batchCount,
+              int           m,
+              int           n,
+              int           k,
+              int64_t       stridea,
+              int64_t       strideb,
+              int64_t       stridec,
               const int8_t* ATransform,
               const int8_t* kernel);
 
-    void Gemm(int8_t* res,
-              int batchCount,
-              int m,
-              int n,
-              int k,
-              int64_t stridea,
-              int64_t strideb,
-              int64_t stridec,
-              const float alpha,
+    void Gemm(int8_t*       res,
+              int           batchCount,
+              int           m,
+              int           n,
+              int           k,
+              int64_t       stridea,
+              int64_t       strideb,
+              int64_t       stridec,
+              const float   alpha,
               const int8_t* ATransform,
               const int8_t* kernel);
 

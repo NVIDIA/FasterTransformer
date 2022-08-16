@@ -8,7 +8,7 @@ This directory contains examples for BERT PTQ/QAT and sparsity related training.
 
 ## Setup
 
-Please follow the original README to do some inital setup.
+Please follow the original README to do some initial setup.
 
 setup steps:
 ```bash

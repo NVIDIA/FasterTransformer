@@ -113,6 +113,10 @@ class FtDecodingWeights(object):
     def to_half(self):
         for i in range(len(self.w)):
             self.w[i] = self.w[i].half()
+
+    def to_bfloat16(self):
+        for i in range(len(self.w)):
+            self.w[i] = self.w[i].bfloat16()
             
     def _get_position_encoding(self):
         pe = torch.zeros(self.max_step_for_pe, self.hidden_dim)

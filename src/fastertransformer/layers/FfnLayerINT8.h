@@ -53,33 +53,33 @@ private:
 
 protected:
     size_t inter_size_;
-    int int8_mode_;
-    bool sparse_;
+    int    int8_mode_;
+    bool   sparse_;
 
-    int* inter_int_buf_;
-    int8_t* inter_buf_;
+    int*         inter_int_buf_;
+    int8_t*      inter_buf_;
     virtual void invokeAddBiasActivation(const int m, const T* bias, ScaleList* scale_list) = 0;
 
 public:
-    FfnLayerINT8(size_t max_batch_size,
-                 size_t max_seq_len,
-                 size_t head_num,
-                 size_t size_per_head,
-                 size_t inter_size,
-                 int int8_mode,
-                 cudaStream_t stream,
+    FfnLayerINT8(size_t           max_batch_size,
+                 size_t           max_seq_len,
+                 size_t           head_num,
+                 size_t           size_per_head,
+                 size_t           inter_size,
+                 int              int8_mode,
+                 cudaStream_t     stream,
                  cublasMMWrapper* cublas_wrapper,
-                 IAllocator* allocator,
-                 bool is_free_buffer_after_forward,
-                 bool sparse = false);
+                 IAllocator*      allocator,
+                 bool             is_free_buffer_after_forward,
+                 bool             sparse = false);
 
     FfnLayerINT8(FfnLayerINT8<T> const& ffn_layer);
 
     ~FfnLayerINT8();
 
-    void forward(std::vector<fastertransformer::Tensor>* output_tensors,
+    void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                  const std::vector<fastertransformer::Tensor>* input_tensors,
-                 const FfnWeight<T>* ffn_weights);
+                 const FfnWeight<T>*                           ffn_weights);
 
     friend GeluFfnLayerINT8<T>;
     friend ReluFfnLayerINT8<T>;
@@ -88,17 +88,17 @@ public:
 template<typename T>
 class GeluFfnLayerINT8: public FfnLayerINT8<T> {
 public:
-    GeluFfnLayerINT8(size_t max_batch_size,
-                     size_t max_seq_len,
-                     size_t head_num,
-                     size_t size_per_head,
-                     size_t inter_size,
-                     int int8_mode,
-                     cudaStream_t stream,
+    GeluFfnLayerINT8(size_t           max_batch_size,
+                     size_t           max_seq_len,
+                     size_t           head_num,
+                     size_t           size_per_head,
+                     size_t           inter_size,
+                     int              int8_mode,
+                     cudaStream_t     stream,
                      cublasMMWrapper* cublas_wrapper,
-                     IAllocator* allocator,
-                     bool is_free_buffer_after_forward,
-                     bool sparse = false);
+                     IAllocator*      allocator,
+                     bool             is_free_buffer_after_forward,
+                     bool             sparse = false);
 
     GeluFfnLayerINT8(GeluFfnLayerINT8<T> const& ffn_layer);
 
@@ -118,16 +118,16 @@ private:
 template<typename T>
 class ReluFfnLayerINT8: public FfnLayerINT8<T> {
 public:
-    ReluFfnLayerINT8(size_t max_batch_size,
-                     size_t max_seq_len,
-                     size_t head_num,
-                     size_t size_per_head,
-                     size_t inter_size,
-                     int int8_mode,
-                     cudaStream_t stream,
+    ReluFfnLayerINT8(size_t           max_batch_size,
+                     size_t           max_seq_len,
+                     size_t           head_num,
+                     size_t           size_per_head,
+                     size_t           inter_size,
+                     int              int8_mode,
+                     cudaStream_t     stream,
                      cublasMMWrapper* cublas_wrapper,
-                     IAllocator* allocator,
-                     bool is_free_buffer_after_forward);
+                     IAllocator*      allocator,
+                     bool             is_free_buffer_after_forward);
 
     ReluFfnLayerINT8(ReluFfnLayerINT8<T> const& ffn_layer);
 

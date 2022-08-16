@@ -107,7 +107,11 @@ set_property(TARGET xlnet_attention_kernels PROPERTY POSITION_INDEPENDENT_CODE  
 set_property(TARGET xlnet_attention_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
 
-add_library(decoder_masked_multihead_attention STATIC decoder_masked_multihead_attention.cu)
+set(decoder_masked_multihead_attention_files
+    decoder_masked_multihead_attention.cu
+)
+file(GLOB decoder_masked_multihead_attention_files ${decoder_masked_multihead_attention_files} ./decoder_masked_multihead_attention/*.cu)
+add_library(decoder_masked_multihead_attention STATIC ${decoder_masked_multihead_attention_files})
 set_property(TARGET decoder_masked_multihead_attention PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET decoder_masked_multihead_attention PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 

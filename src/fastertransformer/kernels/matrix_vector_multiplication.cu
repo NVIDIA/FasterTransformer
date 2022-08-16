@@ -56,14 +56,14 @@ __global__ void int8WeightPerChannelLdkMultiplication(
     const char4* weight, const float4* input, const float* scale_list, void* output, const int k_4)
 {
 
-    const int tidx = threadIdx.x;
-    const int bidx = blockIdx.x;
-    const int row_idx = bidx * nPerThread;
+    const int    tidx     = threadIdx.x;
+    const int    bidx     = blockIdx.x;
+    const int    row_idx  = bidx * nPerThread;
     const size_t b_offset = row_idx * k_4;
 
-    using array = struct ARRAY<nPerThread, float>;
+    using array       = struct ARRAY<nPerThread, float>;
     const array scale = *((const array*)scale_list + bidx);
-    array sum_list[m];
+    array       sum_list[m];
 #pragma unroll
     for (int m_i = 0; m_i < m; m_i++) {
 #pragma unroll
@@ -119,9 +119,9 @@ __global__ void int8WeightPerChannelLdkMultiplication(
     const char4* weight, const half4* input, const float* scale_list, void* output, const int k_4)
 {
 
-    const int tidx = threadIdx.x;
-    const int bidx = blockIdx.x;
-    const int row_idx = bidx * nPerThread;
+    const int    tidx     = threadIdx.x;
+    const int    bidx     = blockIdx.x;
+    const int    row_idx  = bidx * nPerThread;
     const size_t b_offset = row_idx * k_4;
 
     using array = struct ARRAY<nPerThread, float>;
@@ -140,12 +140,12 @@ __global__ void int8WeightPerChannelLdkMultiplication(
 #pragma unroll
         for (int m_i = 0; m_i < m; m_i++) {
             const half4 input_val = input[k_idx + m_i * k_4];
-            input_val_0[m_i] = {input_val.x, input_val.y};
-            input_val_1[m_i] = {input_val.z, input_val.w};
+            input_val_0[m_i]      = {input_val.x, input_val.y};
+            input_val_1[m_i]      = {input_val.z, input_val.w};
         }
 #pragma unroll
         for (int i = 0; i < nPerThread; i++) {
-            const char4 weight_val = weight[b_offset + i * k_4 + k_idx];
+            const char4 weight_val   = weight[b_offset + i * k_4 + k_idx];
             const half2 weight_val_0 = {static_cast<half>(weight_val.x), static_cast<half>(weight_val.y)};
             const half2 weight_val_1 = {static_cast<half>(weight_val.z), static_cast<half>(weight_val.w)};
 #pragma unroll
@@ -162,7 +162,7 @@ __global__ void int8WeightPerChannelLdkMultiplication(
         __syncthreads();
     }
     if (tidx == 0) {
-        using array_half = struct ARRAY<nPerThread, half>;
+        using array_half  = struct ARRAY<nPerThread, half>;
         const array scale = *((const array*)scale_list + bidx);
 #pragma unroll
         for (int m_i = 0; m_i < m; m_i++) {
@@ -182,9 +182,9 @@ __global__ void int8WeightPerChannelLdkMultiplication(
     const char4* weight, const bf164* input, const float* scale_list, void* output, const int k_4)
 {
 
-    const int tidx = threadIdx.x;
-    const int bidx = blockIdx.x;
-    const int row_idx = bidx * nPerThread;
+    const int    tidx     = threadIdx.x;
+    const int    bidx     = blockIdx.x;
+    const int    row_idx  = bidx * nPerThread;
     const size_t b_offset = row_idx * k_4;
 
     using array = struct ARRAY<nPerThread, float>;
@@ -203,8 +203,8 @@ __global__ void int8WeightPerChannelLdkMultiplication(
 #pragma unroll
         for (int m_i = 0; m_i < m; m_i++) {
             const bf164 input_val = input[k_idx + m_i * k_4];
-            input_val_0[m_i] = {input_val.x, input_val.y};
-            input_val_1[m_i] = {input_val.z, input_val.w};
+            input_val_0[m_i]      = {input_val.x, input_val.y};
+            input_val_1[m_i]      = {input_val.z, input_val.w};
         }
 #pragma unroll
         for (int i = 0; i < nPerThread; i++) {
@@ -234,7 +234,7 @@ __global__ void int8WeightPerChannelLdkMultiplication(
         __syncthreads();
     }
     if (tidx == 0) {
-        using array_half = struct ARRAY<nPerThread, __nv_bfloat16>;
+        using array_half  = struct ARRAY<nPerThread, __nv_bfloat16>;
         const array scale = *((const array*)scale_list + bidx);
 #pragma unroll
         for (int m_i = 0; m_i < m; m_i++) {
@@ -256,17 +256,17 @@ __global__ void int8WeightPerChannelLdkMultiplication(
 
 template<typename T>
 void int8WeightPerChannelLdkMultiplicationLauncher(const int8_t* weight,
-                                                   const T* input,
-                                                   const float* scale_list,
-                                                   T* output,
-                                                   const int m,
-                                                   const int n,
-                                                   const int k,
-                                                   cudaStream_t stream)
+                                                   const T*      input,
+                                                   const float*  scale_list,
+                                                   T*            output,
+                                                   const int     m,
+                                                   const int     n,
+                                                   const int     k,
+                                                   cudaStream_t  stream)
 {
     const int nPerThread = 2;
     if ((n % nPerThread != 0) || (k % 4 != 0)) {
-        printf("[ERROR][int8WeightPerChannelLdkMultiplicationLauncher] (%d % %d != 0) || (%d % 4 != 0).\n",
+        printf("[ERROR][int8WeightPerChannelLdkMultiplicationLauncher] (%d %% %d != 0) || (%d %% 4 != 0).\n",
                n,
                nPerThread,
                k);
@@ -285,10 +285,10 @@ void int8WeightPerChannelLdkMultiplicationLauncher(const int8_t* weight,
     else {
         block.x = 64;
     }
-    while (block.x * 4 > k) {
+    while (block.x * 4 > (size_t)k) {
         block.x /= 2;
     }
-    block.x = (block.x + 31) / 32 * 32;
+    block.x               = (block.x + 31) / 32 * 32;
     const size_t shm_size = block.x * nPerThread * sizeof(float);
     if (m == 1) {
         if (std::is_same<T, half>::value) {
@@ -323,32 +323,32 @@ void int8WeightPerChannelLdkMultiplicationLauncher(const int8_t* weight,
 }
 
 template void int8WeightPerChannelLdkMultiplicationLauncher(const int8_t* matrix,
-                                                            const float* vector,
-                                                            const float* scale_list,
-                                                            float* output,
-                                                            const int m,
-                                                            const int n,
-                                                            const int k,
-                                                            cudaStream_t stream);
+                                                            const float*  vector,
+                                                            const float*  scale_list,
+                                                            float*        output,
+                                                            const int     m,
+                                                            const int     n,
+                                                            const int     k,
+                                                            cudaStream_t  stream);
 
 template void int8WeightPerChannelLdkMultiplicationLauncher(const int8_t* matrix,
-                                                            const half* vector,
-                                                            const float* scale_list,
-                                                            half* output,
-                                                            const int m,
-                                                            const int n,
-                                                            const int k,
-                                                            cudaStream_t stream);
+                                                            const half*   vector,
+                                                            const float*  scale_list,
+                                                            half*         output,
+                                                            const int     m,
+                                                            const int     n,
+                                                            const int     k,
+                                                            cudaStream_t  stream);
 
 #ifdef ENABLE_BF16
-template void int8WeightPerChannelLdkMultiplicationLauncher(const int8_t* matrix,
+template void int8WeightPerChannelLdkMultiplicationLauncher(const int8_t*        matrix,
                                                             const __nv_bfloat16* vector,
-                                                            const float* scale_list,
-                                                            __nv_bfloat16* output,
-                                                            const int m,
-                                                            const int n,
-                                                            const int k,
-                                                            cudaStream_t stream);
+                                                            const float*         scale_list,
+                                                            __nv_bfloat16*       output,
+                                                            const int            m,
+                                                            const int            n,
+                                                            const int            k,
+                                                            cudaStream_t         stream);
 #endif
 /////////////////////////////////////////////////////////////////////
 

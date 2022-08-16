@@ -19,12 +19,12 @@
 
 namespace fastertransformer {
 
-int read_start_ids(int batch_size,
+int read_start_ids(int               batch_size,
                    std::vector<int>* v_start_lengths,
                    std::vector<int>* v_start_ids,
-                   int& max_input_len,
-                   const int end_id,
-                   const int beam_width,
-                   std::string file_name);
+                   int&              max_input_len,
+                   const int         end_id,
+                   const int         beam_width,
+                   std::string       file_name);
 
 }  // namespace fastertransformer

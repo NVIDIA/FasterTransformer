@@ -23,16 +23,17 @@ template<typename T>
 class SwinTransformerBasicLayer: public BaseLayer {
 
 private:
-    int max_batch_ = 1;
-    int patches_resolution_ = 64;
-    int embed_dim_ = 96;
-    int window_size_ = 7;
-    float mlp_ratio_ = 4.0f;
-    bool qkv_bias_ = true;
-    float qk_scale_ = 1.0f;
+    int   max_batch_          = 1;
+    int   patches_resolution_ = 64;
+    int   embed_dim_          = 96;
+    int   window_size_        = 7;
+    float mlp_ratio_          = 4.0f;
+    bool  qkv_bias_           = true;
+    float qk_scale_           = 1.0f;
+    float layernorm_eps_;
 
-    T* buf_ = nullptr;
-    T *block_output_ = nullptr, *merge_layernorm_buf_ = nullptr;
+    T*                       buf_          = nullptr;
+    T *                      block_output_ = nullptr, *merge_layernorm_buf_ = nullptr;
     SwinTransformerBlock<T>* block_ = nullptr;
 
 public:
@@ -43,15 +44,16 @@ public:
     }
 
     // dim & input_resolution will be used to malloc the max buf size
-    SwinTransformerBasicLayer(int max_batch,
-                              int window_size,
-                              float mlp_ratio,
-                              cudaStream_t stream,
+    SwinTransformerBasicLayer(int              max_batch,
+                              int              window_size,
+                              float            mlp_ratio,
+                              float            layernorm_eps,
+                              cudaStream_t     stream,
                               cublasMMWrapper* cublas_wrapper,
-                              IAllocator* allocator,
-                              bool is_free_buffer_after_forward,
-                              bool qkv_bias,
-                              float qk_scale);
+                              IAllocator*      allocator,
+                              bool             is_free_buffer_after_forward,
+                              bool             qkv_bias,
+                              float            qk_scale);
 
     void allocateBuffer();
 
@@ -62,18 +64,18 @@ public:
     // input is [B, H, W, C]
     // merge_layernorm_buf is [B, H/2, W/2, 4*C]
     // output is [B, H/2, W/2, 2*C]
-    void patchMerge(T* output,
-                    T* merge_layernorm_buf,
+    void patchMerge(T*       output,
+                    T*       merge_layernorm_buf,
                     const T* input,
                     const T* gamma,
                     const T* beta,
                     const T* weight,
-                    int batch,
-                    int input_resolution,
-                    int dim);
+                    int      batch,
+                    int      input_resolution,
+                    int      dim);
 
-    void forward(std::vector<Tensor>* output_tensors,
-                 std::vector<Tensor>* input_tensors,
+    void forward(std::vector<Tensor>*                output_tensors,
+                 std::vector<Tensor>*                input_tensors,
                  SwinTransformerBasicLayerWeight<T>& swin_basic_layer_weights);
 
 };  // class SwinTransformerBasicLayer

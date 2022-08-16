@@ -24,14 +24,14 @@ template<typename T>
 void invokeAddBiasSlice(T* in, T* out, const T* bias, const int m, const int n, const int s, cudaStream_t stream);
 
 template<typename T>
-void invokeAddBiasConcatClsTokenAddPosEmbed(const T* in,
-                                            T* out,
-                                            const T* bias,
-                                            const T* cls_token,
-                                            const T* pos_embed,
-                                            const int m,
-                                            const int n,
-                                            const int s,
+void invokeAddBiasConcatClsTokenAddPosEmbed(const T*     in,
+                                            T*           out,
+                                            const T*     bias,
+                                            const T*     cls_token,
+                                            const T*     pos_embed,
+                                            const int    m,
+                                            const int    n,
+                                            const int    s,
                                             cudaStream_t stream);
 
 template<typename T>

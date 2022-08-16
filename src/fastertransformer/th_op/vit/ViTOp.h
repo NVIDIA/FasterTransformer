@@ -31,30 +31,30 @@ public:
 template<typename T>
 class VisionTransformerFunc: public IViTFunc {
 public:
-    int sm_;
-    int max_batch_;
-    int img_size_;
-    int patch_size_;
-    int in_chans_;
-    int embed_dim_;
-    int num_heads_;
-    int head_dim_;
-    int inter_size_;
-    int layer_num_;
-    bool sparse_;
+    int   sm_;
+    int   max_batch_;
+    int   img_size_;
+    int   patch_size_;
+    int   in_chans_;
+    int   embed_dim_;
+    int   num_heads_;
+    int   head_dim_;
+    int   inter_size_;
+    int   layer_num_;
+    bool  sparse_;
     float q_scaling_;
-    bool with_cls_token_;
+    bool  with_cls_token_;
 
-    VisionTransformerFunc(const int max_batch,
-                          const int img_size,
-                          const int patch_size,
-                          const int in_chans,
-                          const int embed_dim,
-                          const int num_heads,
-                          const int inter_size,
-                          const int layer_num,
-                          const float q_scaling,
-                          const bool with_cls_token,
+    VisionTransformerFunc(const int                      max_batch,
+                          const int                      img_size,
+                          const int                      patch_size,
+                          const int                      in_chans,
+                          const int                      embed_dim,
+                          const int                      num_heads,
+                          const int                      inter_size,
+                          const int                      layer_num,
+                          const float                    q_scaling,
+                          const bool                     with_cls_token,
                           const std::vector<th::Tensor>& w):
         weights_(w),
         max_batch_(max_batch),
@@ -90,40 +90,40 @@ public:
         checkCUDNN(cudnnCreate(&cudnn_handle_));
         sm_ = ft::getSMVersion();
 
-        cublas_algo_map_ = new ft::cublasAlgoMap("gemm_config.in", std::string(""));
+        cublas_algo_map_      = new ft::cublasAlgoMap("gemm_config.in", std::string(""));
         cublas_wrapper_mutex_ = new std::mutex();
         // params_.vit_layer_weights.clear();
         // params_.vit_layer_weights.resize(layer_num_);
 
-        int idx_w = 0;
+        int idx_w                               = 0;
         params_.pre_encoder_conv_weights.kernel = get_ptr<T>(weights_[idx_w++]);
-        params_.pre_encoder_conv_weights.bias = get_ptr<T>(weights_[idx_w++]);
+        params_.pre_encoder_conv_weights.bias   = get_ptr<T>(weights_[idx_w++]);
         if (with_cls_token) {
             params_.pre_transform_embeds.class_embed = get_ptr<T>(weights_[idx_w++]);
-            params_.with_cls_token_ = true;
+            params_.with_cls_token_                  = true;
         }
         params_.pre_transform_embeds.position_embed = get_ptr<T>(weights_[idx_w++]);
         for (int i = 0; i < layer_num_; i++) {
-            auto& layer_weight = params_.vit_layer_weights[i];
-            layer_weight.attn_layernorm_weights.gamma = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.attn_layernorm_weights.beta = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.attention_weights.query_weight.kernel = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.attention_weights.query_weight.bias = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.attention_weights.key_weight.kernel = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.attention_weights.key_weight.bias = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.attention_weights.value_weight.kernel = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.attention_weights.value_weight.bias = get_ptr<T>(weights_[idx_w++]);
+            auto& layer_weight                                            = params_.vit_layer_weights[i];
+            layer_weight.attn_layernorm_weights.gamma                     = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.attn_layernorm_weights.beta                      = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.attention_weights.query_weight.kernel            = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.attention_weights.query_weight.bias              = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.attention_weights.key_weight.kernel              = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.attention_weights.key_weight.bias                = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.attention_weights.value_weight.kernel            = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.attention_weights.value_weight.bias              = get_ptr<T>(weights_[idx_w++]);
             layer_weight.attention_weights.attention_output_weight.kernel = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.attention_weights.attention_output_weight.bias = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.ffn_layernorm_weights.gamma = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.ffn_layernorm_weights.beta = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.ffn_weights.intermediate_weight.kernel = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.ffn_weights.intermediate_weight.bias = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.ffn_weights.output_weight.kernel = get_ptr<T>(weights_[idx_w++]);
-            layer_weight.ffn_weights.output_weight.bias = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.attention_weights.attention_output_weight.bias   = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.ffn_layernorm_weights.gamma                      = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.ffn_layernorm_weights.beta                       = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.ffn_weights.intermediate_weight.kernel           = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.ffn_weights.intermediate_weight.bias             = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.ffn_weights.output_weight.kernel                 = get_ptr<T>(weights_[idx_w++]);
+            layer_weight.ffn_weights.output_weight.bias                   = get_ptr<T>(weights_[idx_w++]);
         }
         params_.post_transformer_layernorm_weights.gamma = get_ptr<T>(weights_[idx_w++]);
-        params_.post_transformer_layernorm_weights.beta = get_ptr<T>(weights_[idx_w++]);
+        params_.post_transformer_layernorm_weights.beta  = get_ptr<T>(weights_[idx_w++]);
     }
 
     ~VisionTransformerFunc() override
@@ -136,7 +136,7 @@ public:
 
     void forward(int batch_size, th::Tensor& input, th::Tensor& output) override
     {
-        auto stream = at::cuda::getCurrentCUDAStream().stream();
+        auto stream        = at::cuda::getCurrentCUDAStream().stream();
         auto cublas_handle = at::cuda::getCurrentCUDABlasHandle();
         cublasSetStream(cublas_handle, stream);
 
@@ -151,7 +151,7 @@ public:
         else if (std::is_same<T, float>::value) {
             cublas_wrapper->setFP32GemmConfig();
         }
-        int seq_len = (img_size_ / patch_size_) * (img_size_ / patch_size_) + (with_cls_token_ ? 1 : 0);
+        int               seq_len = (img_size_ / patch_size_) * (img_size_ / patch_size_) + (with_cls_token_ ? 1 : 0);
         ft::AttentionType attention_type = ft::getAttentionType<T>(head_dim_, sm_, true, seq_len);
 
         auto vit = new ft::ViTTransformer<T>(max_batch_,
@@ -172,8 +172,8 @@ public:
                                              true,
                                              attention_type);
 
-        ft::DataType data_type = ft::getTensorType<T>();
-        int sm_ptr[1] = {sm_};
+        ft::DataType            data_type     = ft::getTensorType<T>();
+        int                     sm_ptr[1]     = {sm_};
         std::vector<ft::Tensor> input_tensors = std::vector<ft::Tensor>{
             ft::Tensor{ft::MEMORY_GPU,
                        data_type,
@@ -195,25 +195,25 @@ public:
 
 private:
     std::vector<th::Tensor> weights_;
-    cublasLtHandle_t cublaslt_handle_ = nullptr;
-    cudnnHandle_t cudnn_handle_ = nullptr;
-    ft::ViTWeight<T> params_;
-    std::mutex* cublas_wrapper_mutex_;
-    ft::cublasAlgoMap* cublas_algo_map_;
+    cublasLtHandle_t        cublaslt_handle_ = nullptr;
+    cudnnHandle_t           cudnn_handle_    = nullptr;
+    ft::ViTWeight<T>        params_;
+    std::mutex*             cublas_wrapper_mutex_;
+    ft::cublasAlgoMap*      cublas_algo_map_;
 };
 
 class VisionTransformerClass: public torch::jit::CustomClassHolder {
 public:
     VisionTransformerClass(std::vector<th::Tensor> w,
-                           int64_t max_batch,
-                           int64_t img_size,
-                           int64_t patch_size,
-                           int64_t in_chans,
-                           int64_t embed_dim,
-                           int64_t num_heads,
-                           int64_t inter_size,
-                           int64_t layer_num,
-                           int64_t with_cls_token);
+                           int64_t                 max_batch,
+                           int64_t                 img_size,
+                           int64_t                 patch_size,
+                           int64_t                 in_chans,
+                           int64_t                 embed_dim,
+                           int64_t                 num_heads,
+                           int64_t                 inter_size,
+                           int64_t                 layer_num,
+                           int64_t                 with_cls_token);
 
     ~VisionTransformerClass();
 
@@ -222,12 +222,12 @@ public:
     std::vector<th::Tensor> get_pickle_info() const;
 
 private:
-    const at::ScalarType st_;
-    IViTFunc* vit_func_;
+    const at::ScalarType    st_;
+    IViTFunc*               vit_func_;
     std::vector<th::Tensor> weights_;
-    th::Tensor info_int_;
-    int output_seq_len_;
-    int output_emb_dim_;
+    th::Tensor              info_int_;
+    int                     output_seq_len_;
+    int                     output_emb_dim_;
 };
 
 }  // namespace torch_ext

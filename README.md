@@ -33,7 +33,8 @@ FasterTransformer is built on top of CUDA, cuBLAS, cuBLASLt and C++. We provide 
 | Models           | Framework      | FP16 | INT8 (after Turing) | Sparsity (after Ampere) | Tensor parallel | Pipeline parallel |
 | ---------------- | -------------- | ---- | ------------------- | ----------------------- | --------------- | ----------------- |
 | BERT             | TensorFlow     | Yes  | Yes                 | -                       | -               | -                 |
-| BERT             | PyTorch        | Yes  | Yes                 | Yes                     | -               | -                 |
+| BERT             | PyTorch        | Yes  | Yes                 | Yes                     | Yes             | Yes               |
+| BERT             | Triton backend | Yes  | -                   | -                       | Yes             | Yes               |
 | XLNet            | C++            | Yes  | -                   | -                       | -               | -                 |
 | Encoder          | TensorFlow     | Yes  | Yes                 | -                       | -               | -                 |
 | Encoder          | PyTorch        | Yes  | Yes                 | Yes                     | -               | -                 |
@@ -52,7 +53,8 @@ FasterTransformer is built on top of CUDA, cuBLAS, cuBLASLt and C++. We provide 
 | Swin Transformer | PyTorch        | Yes  | Yes                 | -                       | -               | -                 |
 | Swin Transformer | TensorRT       | Yes  | Yes                 | -                       | -               | -                 |
 | ViT              | PyTorch        | Yes  | Yes                 | -                       | -               | -                 |
-| ViT              | TensorRT       | Yes  | -                   | -                       | -               | -                 |
+| ViT              | TensorRT       | Yes  | Yes                 | -                       | -               | -                 |
+| GPT-NeoX         | Triton backend | Yes  | -                   | -                       | Yes             | Yes               |
 
 * Note that the FasterTransformer supports the models above on C++ because all source codes are built on C++.
 
@@ -65,7 +67,7 @@ The following code lists the directory structure of FasterTransformer:
 ```bash
 /src/fastertransformer: source code of FasterTransformer
     |--/models: Implementation of different models, like BERT, GPT.
-    |--/layers: Implementation of layer modeuls, like attention layer, ffn layer.
+    |--/layers: Implementation of layer modules, like attention layer, ffn layer.
     |--/kernels: CUDA kernels for different models/layers and operations, like addBiasResiual.
     |--/tensorrt_plugin: encapluate FasterTransformer into TensorRT plugin.
     |--/tf_op: custom Tensorflow OP implementation
@@ -181,7 +183,7 @@ In the experiments of decoding, we updated the following parameters:
 * top_p = 0.9
 * tensor parallel size = 8
 * input sequence length = 512
-* ouptut sequence length = 32
+* output sequence length = 32
 
 <div align=center><img  width=80% src ="docs/images/FT_GPT_A100.png"/></div>
 
@@ -189,17 +191,45 @@ In the experiments of decoding, we updated the following parameters:
 
 ### Changelog
 
+Aug 2022
+- **Release the FasterTransformer 5.1**
+- Support for interactive generation
+- Support for attention time-limited memory
+- Support mt5 and t5-v1.1
+
+July 2022
+- Support UL2 huggingface ckpt. ([link](https://huggingface.co/google/ul2))
+  - Fix bug of T5 under bfloat16.
+- Add ViT INT8 TensorRT Plugin
+- Support batch sampling
+- Support shared context optimization in GPT model
+
+June 2022
+- Support streaming generation for triton backend.
+- Support OPT.
+- Support multi-node multi-GPU BERT under FP32, FP16 and BF16.
+
+May 2022
+- Support bfloat16 on most models.
+- Support [prefix-prompt](https://arxiv.org/pdf/2101.00190.pdf) for GPT-J.
+- Support GPT-NeoX.
+  - epsilon value used in layernorm is now a parameter
+  - rotary embedding GPT-NeoX style (only GPT-J was implemented)
+  - load per-GPU layernorm and bias parameters
+  - weight conversion from EleutherAI checkpoint
+
 April 2022
-- Change the default accumulation type of all gemm to FP32. 
-- Support bfloat16 inference in GPT model.
-- Support Nemo Megatron T5 and Megatron-LM T5 model.
-- Support ViT. 
+- **Release the FasterTransformer 5.0**
+  - Change the default accumulation type of all gemm to FP32.
+  - Support bfloat16 inference in GPT model.
+  - Support Nemo Megatron T5 and Megatron-LM T5 model.
+  - Support ViT.
 
 March 2022
 - Support `stop_ids` and `ban_bad_ids` in GPT-J.
 - Support dynamice `start_id` and `end_id` in GPT-J, GPT, T5 and Decoding.
 
-Febuary 2022
+February 2022
 - Support Swin Transformer.
 - Optimize the k/v cache update of beam search by in-direction buffer.
 - Support runtime input for GPT-J, T5 and GPT.
@@ -317,7 +347,7 @@ March 2020
     - Add a layer normalization layer after decoder.
     - Add a normalization for inputs of decoder
 
-Febuary 2020
+February 2020
 - **Release the FasterTransformer 2.0**
   - Provide a highly optimized OpenNMT-tf based decoder and decoding, including C++ API and TensorFlow op.
   - Refine the sample codes of encoder.

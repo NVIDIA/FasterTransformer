@@ -52,7 +52,7 @@ class ASP:
         Arguments:
           model                    The model
           mask_calculator          Either callable that computes mask given a tensor OR pattern string for sparse mask lib.
-          verbosity                Integer controling verbosity level.
+          verbosity                Integer controlling verbosity level.
                                    0 -> Only errors.
                                    1 -> Errors and warnings.
                                    2 -> Errors, warnings and info.
@@ -62,7 +62,7 @@ class ASP:
           disallowed_layer_names   If not [], only layer names that do not appear in this list are considered for sparsity.
           allow_recompute_mask     If True, stores pruned values so that dense weights can be restored.
                                    Pruned weights are stored in CPU memory, hence this option does not increase GPU memory usage.
-          custom_layer_dict        Dictionary of additional layer paremeters to sparsify. e.g. {CustomLinear: ['weight']}
+          custom_layer_dict        Dictionary of additional layer parameters to sparsify. e.g. {CustomLinear: ['weight']}
           
           [Future] Support for allow_recompute_mask can be removed, it is not part of sparse inference recipe -- AKM. 
         """

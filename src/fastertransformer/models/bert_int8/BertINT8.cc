@@ -19,21 +19,21 @@
 namespace fastertransformer {
 
 template<typename T>
-BertINT8<T>::BertINT8(size_t max_batch_size,
-                      size_t max_seq_len,
-                      size_t head_num,
-                      size_t size_per_head,
-                      size_t inter_size,
-                      size_t num_layer,
-                      int sm,
-                      float q_scaling,
-                      int int8_mode,
-                      cudaStream_t stream,
+BertINT8<T>::BertINT8(size_t           max_batch_size,
+                      size_t           max_seq_len,
+                      size_t           head_num,
+                      size_t           size_per_head,
+                      size_t           inter_size,
+                      size_t           num_layer,
+                      int              sm,
+                      float            q_scaling,
+                      int              int8_mode,
+                      cudaStream_t     stream,
                       cublasMMWrapper* cublas_wrapper,
-                      IAllocator* allocator,
-                      bool is_free_buffer_after_forward,
-                      AttentionType attention_type,
-                      bool sparse):
+                      IAllocator*      allocator,
+                      bool             is_free_buffer_after_forward,
+                      AttentionType    attention_type,
+                      bool             sparse):
     max_batch_size_(max_batch_size),
     max_seq_len_(max_seq_len),
     head_num_(head_num),
@@ -124,16 +124,19 @@ template<typename T>
 void BertINT8<T>::allocateBuffer()
 {
     if (is_allocate_buffer_ == false) {
-        token_num_ = (size_t*)allocator_->malloc(sizeof(size_t) * 1, false);
-        padding_offset_ = (int*)allocator_->malloc(sizeof(int) * max_batch_size_ * max_seq_len_, false);
-        trt_mha_padding_offset_ = (int*)allocator_->malloc(sizeof(int) * (2 * max_batch_size_ + 1), false);
+        token_num_ = (size_t*)allocator_->reMalloc(token_num_, sizeof(size_t) * 1, false);
+        padding_offset_ =
+            (int*)allocator_->reMalloc(padding_offset_, sizeof(int) * max_batch_size_ * max_seq_len_, false);
+        trt_mha_padding_offset_ =
+            (int*)allocator_->reMalloc(trt_mha_padding_offset_, sizeof(int) * (2 * max_batch_size_ + 1), false);
 
-        attention_mask_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * max_seq_len_, false);
+        attention_mask_ =
+            (T*)allocator_->reMalloc(attention_mask_, sizeof(T) * max_batch_size_ * max_seq_len_ * max_seq_len_, false);
 
-        bert_in_buffer_ =
-            (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * head_num_ * size_per_head_, false);
-        bert_out_buffer_ =
-            (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * head_num_ * size_per_head_, false);
+        bert_in_buffer_ = (T*)allocator_->reMalloc(
+            bert_in_buffer_, sizeof(T) * max_batch_size_ * max_seq_len_ * head_num_ * size_per_head_, false);
+        bert_out_buffer_ = (T*)allocator_->reMalloc(
+            bert_out_buffer_, sizeof(T) * max_batch_size_ * max_seq_len_ * head_num_ * size_per_head_, false);
         is_allocate_buffer_ = true;
     }
 }
@@ -142,26 +145,26 @@ template<typename T>
 void BertINT8<T>::freeBuffer()
 {
     if (is_allocate_buffer_ == true) {
-        allocator_->free(token_num_);
-        allocator_->free(padding_offset_);
-        allocator_->free(trt_mha_padding_offset_);
+        allocator_->free((void**)(&token_num_));
+        allocator_->free((void**)(&padding_offset_));
+        allocator_->free((void**)(&trt_mha_padding_offset_));
 
-        allocator_->free(attention_mask_);
-        allocator_->free(bert_in_buffer_);
-        allocator_->free(bert_out_buffer_);
+        allocator_->free((void**)(&attention_mask_));
+        allocator_->free((void**)(&bert_in_buffer_));
+        allocator_->free((void**)(&bert_out_buffer_));
         is_allocate_buffer_ = false;
     }
 }
 
 template<typename T>
-void BertINT8<T>::forward(std::vector<Tensor>* output_tensors,
-                          const std::vector<Tensor>* input_tensors,
+void BertINT8<T>::forward(std::vector<Tensor>*                       output_tensors,
+                          const std::vector<Tensor>*                 input_tensors,
                           const std::vector<BertLayerINT8Weight<T>>* bert_layer_weights)
 {
     // input_tensors: [input_query (batch, seqlen, hidden), sequence_length (batch)]
     // output_tensors: [output (batch, seqlen, size_per_head*head_num)]
     const size_t request_batch_size = input_tensors->at(0).shape[0];
-    const size_t request_seq_len = input_tensors->at(0).shape[1];
+    const size_t request_seq_len    = input_tensors->at(0).shape[1];
     FT_CHECK(input_tensors->size() == 2);
     FT_CHECK(isValidBatchSize(request_batch_size));
     FT_CHECK(isValidSeqLen(request_seq_len));
@@ -173,8 +176,8 @@ void BertINT8<T>::forward(std::vector<Tensor>* output_tensors,
     const int* sequence_lengths = reinterpret_cast<const int*>(input_tensors->at(1).data);
 
     size_t h_token_num;
-    T* bert_input_ptr;
-    T* bert_output_ptr;
+    T*     bert_input_ptr;
+    T*     bert_output_ptr;
 
     Tensor* padding_offset_tensor_ptr;
     switch (attention_type_) {
@@ -197,7 +200,7 @@ void BertINT8<T>::forward(std::vector<Tensor>* output_tensors,
                                 head_num_ * size_per_head_,
                                 stream_);
             sync_check_cuda_error();
-            bert_input_ptr = bert_in_buffer_;
+            bert_input_ptr  = bert_in_buffer_;
             bert_output_ptr = bert_out_buffer_;
 
             padding_offset_tensor_ptr =
@@ -208,9 +211,9 @@ void BertINT8<T>::forward(std::vector<Tensor>* output_tensors,
             invokeBuildEncoderAttentionMask(
                 attention_mask_, sequence_lengths, request_batch_size, request_seq_len, stream_);
             sync_check_cuda_error();
-            h_token_num = request_batch_size * request_seq_len;
-            bert_input_ptr = (T*)input_tensors->at(0).data;
-            bert_output_ptr = (T*)output_tensors->at(0).data;
+            h_token_num               = request_batch_size * request_seq_len;
+            bert_input_ptr            = (T*)input_tensors->at(0).data;
+            bert_output_ptr           = (T*)output_tensors->at(0).data;
             padding_offset_tensor_ptr = new Tensor(MEMORY_GPU, TYPE_INT32, std::vector<size_t>{0}, nullptr);
             break;
         }
@@ -230,7 +233,7 @@ void BertINT8<T>::forward(std::vector<Tensor>* output_tensors,
                                 head_num_ * size_per_head_,
                                 stream_);
             sync_check_cuda_error();
-            bert_input_ptr = bert_in_buffer_;
+            bert_input_ptr  = bert_in_buffer_;
             bert_output_ptr = bert_out_buffer_;
 
             invokeGetTrtPaddingOffset(trt_mha_padding_offset_, sequence_lengths, request_batch_size, stream_);
@@ -245,7 +248,7 @@ void BertINT8<T>::forward(std::vector<Tensor>* output_tensors,
                 trt_mha_padding_offset_, sequence_lengths, request_batch_size, request_seq_len, stream_);
             padding_offset_tensor_ptr = new Tensor(
                 MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size * 2 + 1}, trt_mha_padding_offset_);
-            bert_input_ptr = (T*)input_tensors->at(0).data;
+            bert_input_ptr  = (T*)input_tensors->at(0).data;
             bert_output_ptr = (T*)output_tensors->at(0).data;
             break;
         }
@@ -254,7 +257,7 @@ void BertINT8<T>::forward(std::vector<Tensor>* output_tensors,
         }
     }
 
-    DataType data_type = getTensorType<T>();
+    DataType            data_type          = getTensorType<T>();
     std::vector<Tensor> tmp_output_tensors = {
         Tensor{MEMORY_GPU, data_type, std::vector<size_t>{h_token_num, hidden_units_}, bert_output_ptr},
     };

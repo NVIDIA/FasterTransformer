@@ -43,7 +43,7 @@ do
     ../build/bin/bert_gemm ${batch_size} ${seq_len} 12 64 1 ${int8_mode}
     
     tmp_log_ths=${logdir}/batchsize-${batch_size}-seq-${seq_len}-fp16-ths-log.log
-    python ../examples/pytorch/bert/bert_example.py ${batch_size} 12 ${seq_len} 12 64 --fp16 --time --int8_mode ${int8_mode} 2>&1 | tee $tmp_log_ths
+    python ../examples/pytorch/bert/bert_example.py ${batch_size} 12 ${seq_len} 12 64 --data_type fp16 --time --int8_mode ${int8_mode} 2>&1 | tee $tmp_log_ths
 
     ths_time=`tail -n 3 ${tmp_log_ths} | head -n 1 | awk '{print $5}'`
     ft_time=`tail -n 2 ${tmp_log_ths} | head -n 1 | awk '{print $5}'`

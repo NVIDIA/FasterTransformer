@@ -256,9 +256,7 @@ def build_engine(config, args, weights_dict):
         sw_output.precision = trt.float16
         sw_output.set_output_type(0, trt.float16)
 
-        output_size = weights_dict["head.bias"].shape[0]
-        output = network.add_fully_connected(sw_output.get_output(0), output_size, trt.Weights(weights_dict["head.weight"].cpu().numpy().astype(np.float16).flatten()), trt.Weights(weights_dict["head.bias"].cpu().numpy().astype(np.float16).flatten()))
-        network.mark_output(output.get_output(0))
+        network.mark_output(sw_output.get_output(0))
         print("Before build_engine")
         engine = builder.build_engine(network, builder_config)
         print("After build_engine")

@@ -17,6 +17,7 @@ import configparser
 import os
 import sys
 import math
+import logging
 from datetime import datetime
 import numpy as np
 import torch
@@ -33,14 +34,18 @@ from examples.pytorch.t5.utils.ft_encoder import FTT5EncoderWeight, FTT5Encoder
 from examples.pytorch.t5.utils.ft_decoding import FTT5DecodingWeight, FTT5Decoding, FTT5
 from examples.pytorch.decoding.utils.recover_bpe import recover_bpe
 
+LOGGER = logging.getLogger(__name__)
+
+gemm_data_type_mapping = {"fp32":0, "fp16":1, "bf16":2}
+
 def bleu_score(pred, ref):
     from sacrebleu import corpus_bleu
     bleu = corpus_bleu(pred, [ref], force=True)
-    print("       bleu score: {:6.2f}".format(bleu.score))
-    print("       bleu counts: {}".format(bleu.counts))
-    print("       bleu totals: {}".format(bleu.totals))
-    print("       bleu precisions: {}".format(bleu.precisions))
-    print("       bleu sys_len: {}; ref_len: {}".format(bleu.sys_len, bleu.ref_len))
+    LOGGER.info("       bleu score: {:6.2f}".format(bleu.score))
+    LOGGER.info("       bleu counts: {}".format(bleu.counts))
+    LOGGER.info("       bleu totals: {}".format(bleu.totals))
+    LOGGER.info("       bleu precisions: {}".format(bleu.precisions))
+    LOGGER.info("       bleu sys_len: {}; ref_len: {}".format(bleu.sys_len, bleu.ref_len))
     return bleu
 
 class TranslationResult(object):
@@ -74,31 +79,37 @@ def translate(args_dict):
     max_ite = args_dict['max_iteration']
     ## huggingface without bias and use relative position embedding
     ## relative position embedding -> 0, absolute position embedding -> 1
-    t5_with_bias = 0
+    t5_with_bias = False
+    use_gated_activation = False
     position_embedding_type = 0
+    weight_data_type = np.float32
     ## only huggingface model path supported
     model_path = args_dict['model_path'] if args_dict['model_path'] != None else args_dict['model']
     ckpt_path = args_dict['ckpt_path']
     model_type = args_dict['model_type']
     ## read checkpoint config if exists
     ckpt_config = configparser.ConfigParser()
+    activation_type = "relu"
     if (model_type == "Megatron"):
         ckpt_config_path = os.path.join(ckpt_path, 'config.ini')
         if os.path.isfile(ckpt_config_path):
             ckpt_config.read(ckpt_config_path)
             ## update structure config
-            t5_with_bias = ckpt_config.getint('structure', 't5_with_bias')
-            position_embedding_type = ckpt_config.getint('structure', 'position_embedding_type')
+            t5_with_bias = ckpt_config.getboolean('structure', 't5_with_bias')
+            position_embedding_type = 0 if ckpt_config.get('structure', 'position_embedding_type') == 'relative' else 1
+            use_gated_activation = ckpt_config.getboolean('structure', 'use_gated_activation')
+            weight_data_type = {"fp16": np.float16, "fp32": np.float32}[ckpt_config.get("encoder", "weight_data_type")]
+            activation_type = "gated-gelu" if use_gated_activation else "gelu" # change to gelu, which is default setting of Megatron T5
         else:
             raise Exception("config file does exist with the ckpt !")
 
     if model_type == "Megatron" and args_dict['ckpt_path'] == None:
         raise Exception("Megatron T5 model needs to specify checkpoint path !")
 
-    print("\n=============== Argument ===============")
+    LOGGER.info("\n=============== Argument ===============")
     for key in args_dict:
-        print("{}: {}".format(key, args_dict[key]))
-    print("========================================")
+        LOGGER.info("{}: {}".format(key, args_dict[key]))
+    LOGGER.info("========================================")
 
     lib_path = args_dict['lib_path']
 
@@ -117,13 +128,24 @@ def translate(args_dict):
         t5_model = t5_model.to(rank)
         if args_dict['data_type'] == 'fp16':
             t5_model = t5_model.half()
+        elif args_dict['data_type'] == 'bf16':
+            t5_model = t5_model ## bfloat inference not supported yet
     ## TODO: modidy Megatron T5 Converter
     ## TODO: add megatron t5 tokenizer
     tokenizer = T5Tokenizer.from_pretrained(model_path)
-    fast_tokenizer = PreTrainedTokenizerFast.from_pretrained(model_path)
+    try:
+        fast_tokenizer = PreTrainedTokenizerFast.from_pretrained(model_path)
+    except:
+        fast_tokenizer = T5Tokenizer.from_pretrained(model_path)
 
     encoder_config = t5_model.encoder.config
     decoder_config = t5_model.decoder.config
+    if model_type != "Megatron":
+        activation_type = encoder_config.feed_forward_proj
+    # https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py#L1660
+    # if tie_word_embeddings == True, scale the decoder output by sequence_output = sequence_output * (self.model_dim**-0.5)
+    tie_word_embeddings = decoder_config.tie_word_embeddings
+
     q_scaling = 1.0 / (math.sqrt(encoder_config.d_kv))
     if (model_type == "Megatron"):
         ## update configs when using Megatron model structure
@@ -149,12 +171,12 @@ def translate(args_dict):
         decoder_config.decoder_start_token_id = 30522 # Only for megatron t5 model
         decoder_config.eos_token_id = 30523 # Only for megatron t5 model
 
-    print(f"{model_type} encoder_config: {encoder_config}")
-    print(f"{model_type} decoder_config: {decoder_config}")
+    LOGGER.debug(f"{model_type} encoder_config: {encoder_config}")
+    LOGGER.debug(f"{model_type} decoder_config: {decoder_config}")
 
     if os.path.isfile("gemm_config.in") and rank == 0:
         cmd = f"rm gemm_config.in"
-        print(f"Run {cmd}")
+        LOGGER.info(f"Run {cmd}")
         os.system(cmd)
     translation_result_list = []
     if time_args.find("0") != -1:
@@ -164,13 +186,14 @@ def translate(args_dict):
         translation_result_list.append(TranslationResult("ft-beamsearch-warmup", "FT"))
         translation_result_list.append(TranslationResult("ft-beamsearch", "FT"))
         if rank == 0:
-            is_fp16 = 1 if args_dict['data_type'] == 'fp16' else 0
-            cmd = f"./bin/t5_gemm {batch_size // pipeline_para_size} {beam_size} {128} " \
+            data_type = gemm_data_type_mapping[args_dict['data_type']]
+            cmd = f"./bin/t5_gemm {math.ceil(batch_size / pipeline_para_size)} {beam_size} {128} " \
                 f"{encoder_config.d_model} {encoder_config.num_heads} {encoder_config.d_kv} {encoder_config.d_ff} " \
                 f"{decoder_config.d_model} {decoder_config.num_heads} {decoder_config.d_kv} {decoder_config.d_ff} " \
-                f"{decoder_config.vocab_size} {is_fp16} {tensor_para_size} 1 > .tmp_gemm.log"
-            print(f"Run gemm test: {cmd}")
+                f"{decoder_config.vocab_size} {data_type} {tensor_para_size} 0 0 > .tmp_gemm.log"
+            LOGGER.info(f"Run gemm test: {cmd}")
             os.system(cmd)
+
     if time_args.find("2") != -1:
         translation_result_list.append(TranslationResult("hf-sampling-warmup", "HF"))
         translation_result_list.append(TranslationResult("hf-sampling", "HF"))
@@ -178,17 +201,33 @@ def translate(args_dict):
         translation_result_list.append(TranslationResult("ft-sampling-warmup", "FT"))
         translation_result_list.append(TranslationResult("ft-sampling", "FT"))
         if rank == 0:
-            is_fp16 = 1 if args_dict['data_type'] == 'fp16' else 0
-            cmd = f"./bin/t5_gemm {batch_size // pipeline_para_size} {1} {128} " \
+            data_type = gemm_data_type_mapping[args_dict['data_type']]
+            cmd = f"./bin/t5_gemm {math.ceil(batch_size / pipeline_para_size)} {1} {128} " \
                 f"{encoder_config.d_model} {encoder_config.num_heads} {encoder_config.d_kv} {encoder_config.d_ff} " \
                 f"{decoder_config.d_model} {decoder_config.num_heads} {decoder_config.d_kv} {decoder_config.d_ff} " \
-                f"{decoder_config.vocab_size} {is_fp16} {tensor_para_size} 1 1 > .tmp_gemm.log"
-            print(f"Run gemm test: {cmd}")
+                f"{decoder_config.vocab_size} {data_type} {tensor_para_size} 0 1 > .tmp_gemm.log"
+            LOGGER.info(f"Run gemm test: {cmd}")
             os.system(cmd)
 
     if time_args.find("1") != -1 or time_args.find("3") != -1:
-        ft_encoder_weight = FTT5EncoderWeight(encoder_config, tensor_para_size, pipeline_para_size, t5_with_bias, position_embedding_type)
-        ft_decoding_weight = FTT5DecodingWeight(decoder_config, tensor_para_size, pipeline_para_size, t5_with_bias, position_embedding_type)
+        ft_encoder_weight = FTT5EncoderWeight(
+            encoder_config,
+            tensor_para_size,
+            pipeline_para_size,
+            t5_with_bias=t5_with_bias,
+            use_gated_activation=use_gated_activation,
+            position_embedding_type=position_embedding_type,
+            weight_data_type=weight_data_type,
+        )
+        ft_decoding_weight = FTT5DecodingWeight(
+            decoder_config,
+            tensor_para_size,
+            pipeline_para_size,
+            t5_with_bias=t5_with_bias,
+            use_gated_activation=use_gated_activation,
+            position_embedding_type=position_embedding_type,
+            weight_data_type=weight_data_type,
+        )
 
         if args_dict["ckpt_path"] is not None:
             ft_encoder_weight.load_from_bin(args_dict["ckpt_path"])
@@ -201,13 +240,19 @@ def translate(args_dict):
             t5_model = t5_model.half()
             ft_encoder_weight.to_half()
             ft_decoding_weight.to_half()
+        elif args_dict['data_type'] == 'bf16':
+            t5_model = t5_model ## bfloat inference not supported yet
+            ft_encoder_weight.to_bfloat16()
+            ft_decoding_weight.to_bfloat16()
 
         remove_padding = True if batch_size > 32 else False
         ft_encoder = FTT5Encoder(ft_encoder_weight.w, lib_path, encoder_config.num_heads,
                                 encoder_config.d_kv, encoder_config.d_ff,
                                 encoder_config.d_model, remove_padding, encoder_config.num_layers,
                                 encoder_config.relative_attention_num_buckets,
-                                128, False, q_scaling, tensor_para_size, pipeline_para_size, t5_with_bias, position_embedding_type)
+                                128, False, q_scaling, tensor_para_size, pipeline_para_size, t5_with_bias,
+                                position_embedding_type,
+                                activation_type=activation_type,)
         ft_decoding = FTT5Decoding(ft_decoding_weight.w, lib_path,
                                 decoder_config.num_heads, decoder_config.d_kv,
                                 decoder_config.d_ff, encoder_config.d_model,
@@ -217,7 +262,9 @@ def translate(args_dict):
                                 q_scaling,
                                 decoder_config.relative_attention_num_buckets, max_distance=128,
                                 tensor_para_size=tensor_para_size, pipeline_para_size=pipeline_para_size,
-                                t5_with_bias=t5_with_bias, position_embedding_type = position_embedding_type)
+                                t5_with_bias=t5_with_bias,
+                                position_embedding_type=position_embedding_type,
+                                activation_type=activation_type, tie_word_embeddings=tie_word_embeddings,)
 
         ft_t5 = FTT5(ft_encoder, ft_decoding)
 
@@ -257,6 +304,7 @@ def translate(args_dict):
                 if translation_result_list[i].name.find("sampling") != -1:
                     tmp_beam_size = 1
                 ft_decoding_outputs, ft_decoding_seq_lens = ft_t5(input_token,
+                                                                  None,
                                                                   tmp_beam_size,
                                                                   max_seq_len,
                                                                   topk,
@@ -299,9 +347,17 @@ def translate(args_dict):
         for t in translation_result_list:
             if t.name.find("warmup") != -1: 
                 continue
-            print(f"[INFO] {t.name} translates {t.batch_num} batches taking {t.execution_time:.2f} sec to translate "
+            LOGGER.info(f"{t.name} translates {t.batch_num} batches taking {t.execution_time:.2f} sec to translate "
                 f"{t.token_num} tokens, BLEU score: {t.bleu_score.score:.2f}, {(t.token_num / t.execution_time):.0f} tokens/sec."
                 f" ({t.bleu_score.sys_len} words, {(t.bleu_score.sys_len / t.execution_time):.0f} words/sec)")
+            
+            if t.name == "ft-beamsearch" and args_dict["ft_beamsearch_BLEU_threshold"] != None:
+                assert t.bleu_score.score >= args_dict["ft_beamsearch_BLEU_threshold"], f"[ERROR] {t.name} test fail !"
+                LOGGER.info(f"{t.name} PASS !")
+
+            if t.name == "ft-sampling" and args_dict["ft_sampling_BLEU_threshold"] != None:
+                assert t.bleu_score.score >= args_dict["ft_sampling_BLEU_threshold"], f"[ERROR] {t.name} test fail !"
+                LOGGER.info(f"{t.name} PASS !")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -332,13 +388,13 @@ if __name__ == "__main__":
     parser.add_argument('-topp', '--sampling_topp', type=float, default=0.0, metavar='NUMBER',
                         help='Probability (p) value of top p sampling in decoding. Default is 0.0. ')
     parser.add_argument('-d', '--data_type', type=str, default="fp32", metavar='STRING',
-                        help='data type (default: fp32)', choices=['fp32', 'fp16'])
+                        help='data type (default: fp32)', choices=['fp32', 'fp16', 'bf16'])
     parser.add_argument('-lib_path', '--lib_path', type=str, default="lib/libth_t5.so", metavar='STRING',
                         help='the path of FasterTransformer pytorch t5 op library.')
     parser.add_argument('-model_path', '--model_path', type=str, default=None, metavar='STRING',
                         help='T5 model path.')
     parser.add_argument('-model', '--model', type=str, default="t5-small", metavar='STRING',
-                        help='T5 model size. Only used when --model_path=None', choices=["t5-small", "t5-base", "t5-large", "t5-3b", "t5-11b"])
+                        help='T5 model size. Only used when --model_path=None')
     parser.add_argument('-tensor_para_size', '--tensor_para_size', type=int, default=1, metavar='NUMBER',
                         help='size of tensor parallelism (default: 1)')
     parser.add_argument('-pipeline_para_size', '--pipeline_para_size', type=int, default=1, metavar='NUMBER',
@@ -354,6 +410,12 @@ if __name__ == "__main__":
                         help='Return the log probability of generated tokens.')
     parser.add_argument('--return_cum_log_probs', action='store_true',
                         help='Return the cumulative log probability of generated tokens.')
+    parser.add_argument('--ft_beamsearch_BLEU_threshold', type=float,
+                        help='Threshold of FT beam search BLEU score')
+    parser.add_argument('--ft_sampling_BLEU_threshold', type=float,
+                        help='Threshold of FT beam search BLEU score')
+    parser.add_argument("--verbose", action="store_true", help="Provide verbose messages")
     args = parser.parse_args()
-
+    log_format = "%(asctime)s %(name)s [%(levelname)s] %(message)s"
+    logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format=log_format)
     translate(vars(args))

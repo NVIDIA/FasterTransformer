@@ -32,45 +32,57 @@ protected:
     size_t vocab_size_;
     size_t vocab_size_padded_;
 
-    size_t sampling_workspace_size_;
-    void* sampling_workspace_ = nullptr;
-    curandState_t* curandstate_buf_ = nullptr;
+    size_t              sampling_workspace_size_;
+    void*               sampling_workspace_ = nullptr;
+    curandState_t*      curandstate_buf_    = nullptr;
+    unsigned long long* random_seeds_buf_   = nullptr;
 
-    virtual void runSampling(std::vector<fastertransformer::Tensor>* output_tensors,
-                             const std::vector<fastertransformer::Tensor>* input_tensors) = 0;
-    virtual void runSampling(std::unordered_map<std::string, Tensor>* output_tensors,
+    float* temperature_buf_        = nullptr;
+    float* repetition_penalty_buf_ = nullptr;
+    bool*  skip_decode_buf_        = nullptr;
+    T*     runtime_logits_buf_     = nullptr;
+
+    float* temperature_        = nullptr;
+    float* repetition_penalty_ = nullptr;
+    bool*  skip_decode_        = nullptr;
+    bool   skip_any_           = false;
+
+    virtual void runSampling(std::vector<fastertransformer::Tensor>*       output_tensors,
+                             const std::vector<fastertransformer::Tensor>* input_tensors)  = 0;
+    virtual void runSampling(std::unordered_map<std::string, Tensor>*       output_tensors,
                              const std::unordered_map<std::string, Tensor>* input_tensors) = 0;
 
-    virtual void freeBuffer() = 0;
+    virtual void freeBuffer();
     virtual void allocateBuffer() = 0;
-    virtual void allocateBuffer(size_t batch_size, size_t top_k, float top_p) = 0;
-    virtual void
-    invokeInitialize(size_t batch_size, unsigned long long random_seed, curandState_t* curandstate_buf) = 0;
+    virtual void allocateBuffer(size_t batch_size, Tensor top_k, Tensor top_p);
 
 public:
-    BaseSamplingLayer(size_t max_batch_size,
-                      size_t vocab_size,
-                      size_t vocab_size_padded,
-                      int end_id,
-                      size_t top_k,
-                      float top_p,
+    BaseSamplingLayer(size_t             max_batch_size,
+                      size_t             vocab_size,
+                      size_t             vocab_size_padded,
+                      int                end_id,
+                      size_t             top_k,
+                      float              top_p,
                       unsigned long long random_seed,  // TODO(bhsueh) delete
-                      float temperature,
-                      float len_penalty,
-                      float repetition_penalty,
-                      cudaStream_t stream,
-                      cublasMMWrapper* cublas_wrapper,
-                      IAllocator* allocator,
-                      bool is_free_buffer_after_forward,
-                      cudaDeviceProp* cuda_device_prop);
+                      float              temperature,
+                      float              len_penalty,
+                      float              repetition_penalty,
+                      cudaStream_t       stream,
+                      cublasMMWrapper*   cublas_wrapper,
+                      IAllocator*        allocator,
+                      bool               is_free_buffer_after_forward,
+                      cudaDeviceProp*    cuda_device_prop);
 
     BaseSamplingLayer(BaseSamplingLayer const& sampling_layer);
 
     ~BaseSamplingLayer();
 
-    void forward(std::vector<fastertransformer::Tensor>* output_tensors,
+    void setup(const size_t                                   batch_size,
+               const size_t                                   beam_width,
+               const std::unordered_map<std::string, Tensor>* runtime_args) override;
+    void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                  const std::vector<fastertransformer::Tensor>* input_tensors) override;
-    void forward(std::unordered_map<std::string, Tensor>* output_tensors,
+    void forward(std::unordered_map<std::string, Tensor>*       output_tensors,
                  const std::unordered_map<std::string, Tensor>* input_tensors) override;
 };
 

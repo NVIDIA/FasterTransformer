@@ -18,3 +18,9 @@ target_link_libraries(bert_example PUBLIC -lcublas -lcublasLt -lcudart -lcuspars
 else()
 target_link_libraries(bert_example PUBLIC -lcublas -lcublasLt -lcudart Bert)
 endif()
+
+if(BUILD_MULTI_GPU)
+add_executable(bert_triton_example bert_triton_example.cc)
+target_link_libraries(bert_triton_example PUBLIC -lcublas -lcublasLt -lcudart -lpthread
+                      BertTritonBackend TransformerTritonBackend mpi_utils nccl_utils)
+endif()

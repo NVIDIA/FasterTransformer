@@ -34,7 +34,7 @@ void ViTTransformerINT8<T>::initialize()
 {
     if (img_size_ % patch_size_ != 0) {
         std::ostringstream buffer;
-        buffer << "[FT][ERROR] IMG size & PITCH size missmatch. " << img_size_ << " % " << patch_size_ << " !=0 \n";
+        buffer << "[FT][ERROR] IMG size & PITCH size mismatch. " << img_size_ << " % " << patch_size_ << " !=0 \n";
         throw std::runtime_error(buffer.str());
     }
 
@@ -98,24 +98,24 @@ void ViTTransformerINT8<T>::initialize()
 }
 
 template<typename T>
-ViTTransformerINT8<T>::ViTTransformerINT8(size_t max_batch_size,
-                                          size_t img_size,
-                                          size_t chn_num,
-                                          size_t patch_size,
-                                          size_t embed_dim,
-                                          size_t head_num,
-                                          size_t inter_size,
-                                          size_t num_layer,
-                                          bool with_cls_token,
-                                          int sm,
-                                          float q_scaling,
-                                          int int8_mode,
-                                          cudaStream_t stream,
-                                          cudnnHandle_t cudnn_handle,
+ViTTransformerINT8<T>::ViTTransformerINT8(size_t           max_batch_size,
+                                          size_t           img_size,
+                                          size_t           chn_num,
+                                          size_t           patch_size,
+                                          size_t           embed_dim,
+                                          size_t           head_num,
+                                          size_t           inter_size,
+                                          size_t           num_layer,
+                                          bool             with_cls_token,
+                                          int              sm,
+                                          float            q_scaling,
+                                          int              int8_mode,
+                                          cudaStream_t     stream,
+                                          cudnnHandle_t    cudnn_handle,
                                           cublasMMWrapper* cublas_wrapper,
-                                          IAllocator* allocator,
-                                          bool is_free_buffer_after_forward,
-                                          AttentionType attention_type):
+                                          IAllocator*      allocator,
+                                          bool             is_free_buffer_after_forward,
+                                          AttentionType    attention_type):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     max_batch_size_(max_batch_size),
     img_size_(img_size),
@@ -174,16 +174,23 @@ template<typename T>
 void ViTTransformerINT8<T>::allocateBuffer()
 {
     if (is_allocate_buffer_ == false) {
-        embed_buf_1_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * embed_dim_, false);
-        embed_buf_2_ = (T*)allocator_->malloc(sizeof(int32_t) * max_batch_size_ * max_seq_len_ * embed_dim_, false);
-        embed_buf_3_ = (T*)allocator_->malloc(sizeof(int32_t) * max_batch_size_ * max_seq_len_ * embed_dim_, false);
-        embed_buf_4_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * embed_dim_, false);
-        mask_buf_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * max_seq_len_, false);
-        padding_offset_ = (int*)allocator_->malloc(sizeof(int) * max_batch_size_ * max_seq_len_, false);
-        token_num_ = (size_t*)allocator_->malloc(sizeof(size_t) * 1, false);
+        embed_buf_1_ =
+            (T*)allocator_->reMalloc(embed_buf_1_, sizeof(T) * max_batch_size_ * max_seq_len_ * embed_dim_, false);
+        embed_buf_2_ = (T*)allocator_->reMalloc(
+            embed_buf_2_, sizeof(int32_t) * max_batch_size_ * max_seq_len_ * embed_dim_, false);
+        embed_buf_3_ = (T*)allocator_->reMalloc(
+            embed_buf_3_, sizeof(int32_t) * max_batch_size_ * max_seq_len_ * embed_dim_, false);
+        embed_buf_4_ =
+            (T*)allocator_->reMalloc(embed_buf_4_, sizeof(T) * max_batch_size_ * max_seq_len_ * embed_dim_, false);
+        mask_buf_ =
+            (T*)allocator_->reMalloc(mask_buf_, sizeof(T) * max_batch_size_ * max_seq_len_ * max_seq_len_, false);
+        padding_offset_ =
+            (int*)allocator_->reMalloc(padding_offset_, sizeof(int) * max_batch_size_ * max_seq_len_, false);
+        token_num_ = (size_t*)allocator_->reMalloc(token_num_, sizeof(size_t) * 1, false);
 
-        trt_mha_padding_offset_ = (int*)allocator_->malloc(sizeof(int) * (2 * max_batch_size_ + 1), false);
-        seq_len_vec_ = (int*)allocator_->malloc(sizeof(int) * max_batch_size_, false);
+        trt_mha_padding_offset_ =
+            (int*)allocator_->reMalloc(trt_mha_padding_offset_, sizeof(int) * (2 * max_batch_size_ + 1), false);
+        seq_len_vec_ = (int*)allocator_->reMalloc(seq_len_vec_, sizeof(int) * max_batch_size_, false);
 
         setSeqLenVec(max_batch_size_);
         setDefaultMask(max_batch_size_);
@@ -206,14 +213,14 @@ void ViTTransformerINT8<T>::allocateBuffer(size_t batch_size)
         return;
     }
 
-    batch_size = batch_size > max_batch_size_ ? batch_size : max_batch_size_;
+    batch_size   = batch_size > max_batch_size_ ? batch_size : max_batch_size_;
     embed_buf_1_ = (T*)allocator_->reMalloc(embed_buf_1_, sizeof(T) * batch_size * max_seq_len_ * embed_dim_, false);
     embed_buf_2_ =
         (T*)allocator_->reMalloc(embed_buf_2_, sizeof(int32_t) * batch_size * max_seq_len_ * embed_dim_, false);
     embed_buf_3_ =
         (T*)allocator_->reMalloc(embed_buf_3_, sizeof(int32_t) * batch_size * max_seq_len_ * embed_dim_, false);
     embed_buf_4_ = (T*)allocator_->reMalloc(embed_buf_4_, sizeof(T) * batch_size * max_seq_len_ * embed_dim_, false);
-    mask_buf_ = (T*)allocator_->reMalloc(mask_buf_, sizeof(T) * batch_size * max_seq_len_ * max_seq_len_, false);
+    mask_buf_    = (T*)allocator_->reMalloc(mask_buf_, sizeof(T) * batch_size * max_seq_len_ * max_seq_len_, false);
     REMALLOC(padding_offset_, sizeof(int) * batch_size * max_seq_len_);
     REMALLOC(token_num_, sizeof(size_t) * 1);
     trt_mha_padding_offset_ =
@@ -231,23 +238,23 @@ void ViTTransformerINT8<T>::allocateBuffer(size_t batch_size)
 template<typename T>
 void ViTTransformerINT8<T>::freeBuffer()
 {
-    allocator_->free(embed_buf_1_);
-    allocator_->free(embed_buf_2_);
-    allocator_->free(embed_buf_3_);
-    allocator_->free(embed_buf_4_);
-    allocator_->free(mask_buf_);
-    allocator_->free(trt_mha_padding_offset_);
-    allocator_->free(seq_len_vec_);
-    allocator_->free(padding_offset_);
-    allocator_->free(token_num_);
+    allocator_->free((void**)(&embed_buf_1_));
+    allocator_->free((void**)(&embed_buf_2_));
+    allocator_->free((void**)(&embed_buf_3_));
+    allocator_->free((void**)(&embed_buf_4_));
+    allocator_->free((void**)(&mask_buf_));
+    allocator_->free((void**)(&trt_mha_padding_offset_));
+    allocator_->free((void**)(&seq_len_vec_));
+    allocator_->free((void**)(&padding_offset_));
+    allocator_->free((void**)(&token_num_));
 
     is_allocate_buffer_ = false;
 }
 
 template<typename T>
-void ViTTransformerINT8<T>::forward(std::vector<Tensor>* output_tensors,
+void ViTTransformerINT8<T>::forward(std::vector<Tensor>*       output_tensors,
                                     const std::vector<Tensor>* input_tensors,
-                                    const ViTINT8Weight<T>* weights)
+                                    const ViTINT8Weight<T>*    weights)
 {
     // input_tensors:
     //      input_img, BCHW [batch, chn_num, img_size, img_size]
@@ -255,11 +262,11 @@ void ViTTransformerINT8<T>::forward(std::vector<Tensor>* output_tensors,
     //      output classification [batch, seq_len, embed_dim]
 
     const size_t input_batch_size = input_tensors->at(0).shape[0];
-    const size_t input_chn_num = input_tensors->at(0).shape[1];
-    const size_t input_img_size = input_tensors->at(0).shape[2];
-    const size_t patch_resol = input_img_size / patch_size_;
-    size_t seq_len = patch_resol * patch_resol + (with_cls_token_ ? 1 : 0);
-    const bool need_padding =
+    const size_t input_chn_num    = input_tensors->at(0).shape[1];
+    const size_t input_img_size   = input_tensors->at(0).shape[2];
+    const size_t patch_resol      = input_img_size / patch_size_;
+    size_t       seq_len          = patch_resol * patch_resol + (with_cls_token_ ? 1 : 0);
+    const bool   need_padding =
         (attention_type_ == AttentionType::UNFUSED_MHA && seq_len % 32 != 0 && std::is_same<half, T>::value);
 
     FT_CHECK(input_img_size == img_size_);
@@ -270,9 +277,9 @@ void ViTTransformerINT8<T>::forward(std::vector<Tensor>* output_tensors,
     FT_CHECK(output_tensors->at(0).shape.size() == 3);
     allocateBuffer(input_batch_size);
 
-    const T* input = (const T*)input_tensors->at(0).data;
-    T* output = (T*)output_tensors->at(0).data;
-    T* encoder_input_ptr = embed_buf_1_;
+    const T* input             = (const T*)input_tensors->at(0).data;
+    T*       output            = (T*)output_tensors->at(0).data;
+    T*       encoder_input_ptr = embed_buf_1_;
 
     // preprocess (patches embedding, concat class embed and add pos embed)
     patchEmbed(need_padding ? embed_buf_2_ : encoder_input_ptr,
@@ -288,11 +295,11 @@ void ViTTransformerINT8<T>::forward(std::vector<Tensor>* output_tensors,
                input_chn_num,
                embed_dim_);
 
-    DataType data_type = getTensorType<T>();
-    size_t h_token_num = input_batch_size * seq_len;
-    T* norm_out_buf = embed_buf_2_;
-    T* attn_out_buf = embed_buf_3_;
-    T* encoder_out_buf = embed_buf_1_;
+    DataType data_type       = getTensorType<T>();
+    size_t   h_token_num     = input_batch_size * seq_len;
+    T*       norm_out_buf    = embed_buf_2_;
+    T*       attn_out_buf    = embed_buf_3_;
+    T*       encoder_out_buf = embed_buf_1_;
 
     // get offsets
     Tensor* offset_tensor_ptr;
@@ -304,7 +311,7 @@ void ViTTransformerINT8<T>::forward(std::vector<Tensor>* output_tensors,
     else {
         offset_tensor_ptr = new Tensor(MEMORY_GPU, TYPE_INT32, std::vector<size_t>{0}, nullptr);
         if (need_padding) {
-            seq_len = (seq_len + 31) / 32 * 32;
+            seq_len     = (seq_len + 31) / 32 * 32;
             h_token_num = seq_len * input_batch_size;
             cudaMemsetAsync(encoder_input_ptr, 0, sizeof(T) * input_batch_size * seq_len * embed_dim_, stream_);
             invokeRebuildPadding(
@@ -411,6 +418,7 @@ void ViTTransformerINT8<T>::forward(std::vector<Tensor>* output_tensors,
                            attn_out_buf,
                            weights->post_transformer_layernorm_weights.gamma,
                            weights->post_transformer_layernorm_weights.beta,
+                           layernorm_eps_,
                            h_token_num,
                            embed_dim_,
                            stream_);
@@ -473,12 +481,12 @@ void ViTTransformerINT8<T>::setDefaultPaddingOffset(size_t batch_size)
 }
 
 template<typename T>
-void ViTTransformerINT8<T>::patchEmbed(T* output,
-                                       const T* input,
-                                       const T* kernel,
-                                       const T* bias,
-                                       const T* cls_embed,
-                                       const T* pos_embed,
+void ViTTransformerINT8<T>::patchEmbed(T*        output,
+                                       const T*  input,
+                                       const T*  kernel,
+                                       const T*  bias,
+                                       const T*  cls_embed,
+                                       const T*  pos_embed,
                                        const int batch,
                                        const int img_size,
                                        const int patch_size,

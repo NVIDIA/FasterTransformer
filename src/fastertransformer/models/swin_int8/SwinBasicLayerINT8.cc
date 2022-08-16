@@ -22,11 +22,13 @@ template<typename T>
 void SwinTransformerINT8BasicLayer<T>::allocateBuffer()
 {
     if (is_allocate_buffer_ == false) {
-        block_output_ = (T*)allocator_->malloc(
-            2 * max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_ * sizeof(T), false);
+        block_output_ = (T*)allocator_->reMalloc(
+            block_output_, 2 * max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_ * sizeof(T), false);
 
-        gemm_out_buf_ = (int8_t*)allocator_->malloc(
-            max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_ / 2 * sizeof(int32_t), false);
+        gemm_out_buf_ = (int8_t*)allocator_->reMalloc(gemm_out_buf_,
+                                                      max_batch_ * patches_resolution_ * patches_resolution_
+                                                          * embed_dim_ / 2 * sizeof(int32_t),
+                                                      false);
 
         is_allocate_buffer_ = true;
     }
@@ -36,8 +38,8 @@ template<typename T>
 void SwinTransformerINT8BasicLayer<T>::freeBuffer()
 {
     if (is_allocate_buffer_ == true) {
-        allocator_->free(block_output_);
-        allocator_->free(gemm_out_buf_);
+        allocator_->free((void**)(&block_output_));
+        allocator_->free((void**)(&gemm_out_buf_));
         is_allocate_buffer_ = false;
     }
 }
@@ -46,18 +48,18 @@ void SwinTransformerINT8BasicLayer<T>::freeBuffer()
 // merge_layernorm_buf is [B, H/2, W/2, 4*C]
 // output is [B, H/2, W/2, 2*C]
 template<typename T>
-void SwinTransformerINT8BasicLayer<T>::patchMerge(T* output,
-                                                  int8_t* gemm_out_buf,
-                                                  int8_t* merge_layernorm_buf,
-                                                  const T* input,
-                                                  const T* gamma,
-                                                  const T* beta,
-                                                  const int8_t* weight,
-                                                  int batch,
+void SwinTransformerINT8BasicLayer<T>::patchMerge(T*               output,
+                                                  int8_t*          gemm_out_buf,
+                                                  int8_t*          merge_layernorm_buf,
+                                                  const T*         input,
+                                                  const T*         gamma,
+                                                  const T*         beta,
+                                                  const int8_t*    weight,
+                                                  int              batch,
                                                   const ScaleList* scalePtr,
-                                                  int input_resolution,
-                                                  int dim,
-                                                  int sm)
+                                                  int              input_resolution,
+                                                  int              dim,
+                                                  int              sm)
 {
     cublasINT8MMWrapper* cublas_wrapper = (cublasINT8MMWrapper*)cublas_wrapper_;
     invokeMergeLayerNormCol32(merge_layernorm_buf,
@@ -112,18 +114,19 @@ void SwinTransformerINT8BasicLayer<T>::patchMerge(T* output,
 }
 
 template<typename T>
-SwinTransformerINT8BasicLayer<T>::SwinTransformerINT8BasicLayer(int int8_mode,
-                                                                int max_batch,
-                                                                int window_size,
-                                                                int patches_resolution,
-                                                                int embed_dim,
-                                                                float mlp_ratio,
-                                                                bool qkv_bias,
-                                                                float qk_scale,
-                                                                cudaStream_t stream,
+SwinTransformerINT8BasicLayer<T>::SwinTransformerINT8BasicLayer(int              int8_mode,
+                                                                int              max_batch,
+                                                                int              window_size,
+                                                                int              patches_resolution,
+                                                                int              embed_dim,
+                                                                float            mlp_ratio,
+                                                                float            layernorm_eps,
+                                                                bool             qkv_bias,
+                                                                float            qk_scale,
+                                                                cudaStream_t     stream,
                                                                 cublasMMWrapper* cublas_wrapper,
-                                                                IAllocator* allocator,
-                                                                bool is_free_buffer_after_forward):
+                                                                IAllocator*      allocator,
+                                                                bool             is_free_buffer_after_forward):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     int8_mode(int8_mode),
     max_batch_(max_batch),
@@ -131,6 +134,7 @@ SwinTransformerINT8BasicLayer<T>::SwinTransformerINT8BasicLayer(int int8_mode,
     embed_dim_(embed_dim),
     window_size_(window_size),
     mlp_ratio_(mlp_ratio),
+    layernorm_eps_(layernorm_eps),
     qkv_bias_(qkv_bias),
     qk_scale_(qk_scale)
 {
@@ -140,6 +144,7 @@ SwinTransformerINT8BasicLayer<T>::SwinTransformerINT8BasicLayer(int int8_mode,
                                              patches_resolution_,
                                              embed_dim_,
                                              mlp_ratio_,
+                                             layernorm_eps_,
                                              qkv_bias_,
                                              stream,
                                              cublas_wrapper,
@@ -158,8 +163,8 @@ SwinTransformerINT8BasicLayer<T>::~SwinTransformerINT8BasicLayer()
 }
 
 template<typename T>
-void SwinTransformerINT8BasicLayer<T>::forward(std::vector<Tensor>* output_tensors,
-                                               std::vector<Tensor>* input_tensors,
+void SwinTransformerINT8BasicLayer<T>::forward(std::vector<Tensor>*                    output_tensors,
+                                               std::vector<Tensor>*                    input_tensors,
                                                SwinTransformerINT8BasicLayerWeight<T>& swin_basic_layer_weights)
 {
     // input_tensors:
@@ -168,26 +173,26 @@ void SwinTransformerINT8BasicLayer<T>::forward(std::vector<Tensor>* output_tenso
     // output_tensors:
     //      output [batch, output_resolution, output_resolution, output_dim]
 
-    T* from_tensor = (T*)input_tensors->at(0).data;
-    T* out_tensor = (T*)(output_tensors->at(0).data);
-    size_t batch = input_tensors->at(0).shape[0];
+    T*     from_tensor      = (T*)input_tensors->at(0).data;
+    T*     out_tensor       = (T*)(output_tensors->at(0).data);
+    size_t batch            = input_tensors->at(0).shape[0];
     size_t input_resolution = input_tensors->at(0).shape[1];
     assert(input_resolution == input_tensors->at(0).shape[2]);
-    size_t dim = input_tensors->at(0).shape[3];
-    int* input_paramters = (int*)input_tensors->at(1).data;
-    const int depth = input_paramters[0];
-    const int num_head = input_paramters[1];
-    bool do_patch_merge = (input_paramters[2] == 1) ? true : false;
-    const int sm = input_paramters[3];
+    size_t    dim             = input_tensors->at(0).shape[3];
+    int*      input_paramters = (int*)input_tensors->at(1).data;
+    const int depth           = input_paramters[0];
+    const int num_head        = input_paramters[1];
+    bool      do_patch_merge  = (input_paramters[2] == 1) ? true : false;
+    const int sm              = input_paramters[3];
     allocateBuffer();
 
-    int block_output_size = batch * input_resolution * input_resolution * dim;
-    size_t m = batch * input_resolution * input_resolution;
-    size_t n = dim;
-    size_t window_num = (input_resolution / window_size_) * (input_resolution / window_size_);
-    size_t window_len = window_size_ * window_size_;
-    int shift_size = 0;
-    DataType data_type = getTensorType<T>();
+    int      block_output_size = batch * input_resolution * input_resolution * dim;
+    size_t   m                 = batch * input_resolution * input_resolution;
+    size_t   n                 = dim;
+    size_t   window_num        = (input_resolution / window_size_) * (input_resolution / window_size_);
+    size_t   window_len        = window_size_ * window_size_;
+    int      shift_size        = 0;
+    DataType data_type         = getTensorType<T>();
 
     if (do_patch_merge) {
         for (int i = 0; i < depth; i++) {
@@ -196,8 +201,8 @@ void SwinTransformerINT8BasicLayer<T>::forward(std::vector<Tensor>* output_tenso
                        data_type,
                        std::vector<size_t>{batch, input_resolution, input_resolution, dim},
                        block_output_ + (i % 2) * block_output_size}};
-            shift_size = (i % 2 == 0) ? 0 : (window_size_ / 2);
-            int additional_parameters[3] = {num_head, shift_size, sm};
+            shift_size                                   = (i % 2 == 0) ? 0 : (window_size_ / 2);
+            int                 additional_parameters[3] = {num_head, shift_size, sm};
             std::vector<Tensor> tmp_input_tensors{
                 Tensor{MEMORY_GPU,
                        data_type,
@@ -233,8 +238,8 @@ void SwinTransformerINT8BasicLayer<T>::forward(std::vector<Tensor>* output_tenso
                        data_type,
                        std::vector<size_t>{batch, input_resolution, input_resolution, dim},
                        i == depth - 1 ? out_tensor : block_output_ + (i % 2) * block_output_size}};
-            shift_size = (i % 2 == 0) ? 0 : (window_size_ / 2);
-            int additional_parameters[3] = {num_head, shift_size, sm};
+            shift_size                                   = (i % 2 == 0) ? 0 : (window_size_ / 2);
+            int                 additional_parameters[3] = {num_head, shift_size, sm};
             std::vector<Tensor> tmp_input_tensors{
                 Tensor{MEMORY_GPU,
                        data_type,

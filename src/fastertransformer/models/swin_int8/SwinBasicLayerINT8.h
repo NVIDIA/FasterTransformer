@@ -22,20 +22,21 @@ namespace fastertransformer {
 template<typename T>
 class SwinTransformerINT8BasicLayer: public BaseLayer {
 private:
-    int int8_mode = 0;
-    int max_batch_ = 1;
-    int patches_resolution_ = 64;
-    int embed_dim_ = 96;
-    int window_size_ = 7;
-    float mlp_ratio_ = 4.0f;
-    bool qkv_bias_ = true;
-    float qk_scale_ = 1.0f;
+    int          int8_mode           = 0;
+    int          max_batch_          = 1;
+    int          patches_resolution_ = 64;
+    int          embed_dim_          = 96;
+    int          window_size_        = 7;
+    float        mlp_ratio_          = 4.0f;
+    bool         qkv_bias_           = true;
+    float        qk_scale_           = 1.0f;
+    float        layernorm_eps_;
     const size_t max_buf_size_ = 0;
 
     // T* buf_ = nullptr;
-    T* block_output_ = nullptr;
-    int8_t* gemm_out_buf_ = nullptr;
-    SwinTransformerINT8Block<T>* block_ = nullptr;
+    T*                           block_output_ = nullptr;
+    int8_t*                      gemm_out_buf_ = nullptr;
+    SwinTransformerINT8Block<T>* block_        = nullptr;
 
     void allocateBuffer();
 
@@ -44,38 +45,39 @@ private:
     // input is [B, H, W, C]
     // merge_layernorm_buf is [B, H/2, W/2, 4*C]
     // output is [B, H/2, W/2, 2*C]
-    void patchMerge(T* output,
-                    int8_t* gemm_out_buf,
-                    int8_t* merge_layernorm_buf,
-                    const T* input,
-                    const T* gamma,
-                    const T* beta,
-                    const int8_t* weight,
-                    int batch,
+    void patchMerge(T*               output,
+                    int8_t*          gemm_out_buf,
+                    int8_t*          merge_layernorm_buf,
+                    const T*         input,
+                    const T*         gamma,
+                    const T*         beta,
+                    const int8_t*    weight,
+                    int              batch,
                     const ScaleList* scalePtr,
-                    int input_resolution,
-                    int dim,
-                    int sm);
+                    int              input_resolution,
+                    int              dim,
+                    int              sm);
 
 public:
     // dim & input_resolution will be used to malloc the max buf size
-    SwinTransformerINT8BasicLayer(int int8_mode,
-                                  int max_batch,
-                                  int window_size,
-                                  int patches_resolution,
-                                  int embed_dim,
-                                  float mlp_ratio,
-                                  bool qkv_bias,
-                                  float qk_scale,
-                                  cudaStream_t stream,
+    SwinTransformerINT8BasicLayer(int              int8_mode,
+                                  int              max_batch,
+                                  int              window_size,
+                                  int              patches_resolution,
+                                  int              embed_dim,
+                                  float            mlp_ratio,
+                                  float            layernorm_eps,
+                                  bool             qkv_bias,
+                                  float            qk_scale,
+                                  cudaStream_t     stream,
                                   cublasMMWrapper* cublas_wrapper,
-                                  IAllocator* allocator,
-                                  bool is_free_buffer_after_forward);
+                                  IAllocator*      allocator,
+                                  bool             is_free_buffer_after_forward);
 
     ~SwinTransformerINT8BasicLayer();
 
-    void forward(std::vector<Tensor>* output_tensors,
-                 std::vector<Tensor>* input_tensors,
+    void forward(std::vector<Tensor>*                    output_tensors,
+                 std::vector<Tensor>*                    input_tensors,
                  SwinTransformerINT8BasicLayerWeight<T>& swin_basic_layer_weights);
 
 };  // class SwinTransformerINT8BasicLayer

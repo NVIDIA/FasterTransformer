@@ -16,18 +16,45 @@ from __future__ import print_function
 
 import sys
 import torch
+import torch.distributed as dist
 
 from transformers import BertConfig
 from transformers.modeling_bert import BertEncoder
 from .checkpoint_quantization import checkpoint_quantization
 
 class EncoderWeights(object):
-    def __init__(self, layer_num, hidden_dim, weights=None, sparse=False):
+    def __init__(self, layer_num, hidden_dim, weights=None, sparse=False, tensor_para_size=1, pipeline_para_size=1):
         """weights need be a state_dict of bert model"""
         self.layer_num = layer_num
         self.int8 = False
         self.hidden_dim = hidden_dim
         self.weights = {}
+        self.tensor_para_size = tensor_para_size
+        self.pipeline_para_size = pipeline_para_size
+
+        self.use_mpi = dist.is_mpi_available()
+
+        if self.use_mpi:
+            try:
+                dist.init_process_group(backend='mpi')
+            except:
+                print("[INFO] WARNING: Exception occurred in dist.init_process_group(backend='mpi'). Maybe the process group has been initialized somewhere else.")
+        else:
+            print("[INFO] MPI is not available in this PyTorch build.")
+            assert tensor_para_size == 1, "[FATAL] MPI is required for tensor_para_size > 1."
+            assert pipeline_para_size == 1, "[FATAL] MPI is required for pipeline_para_size > 1."
+
+        self.rank = dist.get_rank() if self.use_mpi else 0
+        self.device_count = torch.cuda.device_count()
+        self.device = self.rank % self.device_count
+        torch.cuda.set_device(self.device)
+
+        world_size = dist.get_world_size() if self.use_mpi else 1
+        self.tensor_para_rank = self.rank % self.tensor_para_size
+        self.pipeline_para_rank = self.rank // self.tensor_para_size
+        start_layer = self.pipeline_para_rank * self.layer_num // self.pipeline_para_size
+        end_layer = (self.pipeline_para_rank + 1) * self.layer_num // self.pipeline_para_size
+
         if weights is None:
             self._generated_weights = True
             for i in range(layer_num):
@@ -72,42 +99,98 @@ class EncoderWeights(object):
 
     def listed_weights(self):
         ret = []
+        start_layer = self.pipeline_para_rank * self.layer_num // self.pipeline_para_size
+        end_layer = (self.pipeline_para_rank + 1) * self.layer_num // self.pipeline_para_size
         if not self.int8:
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.self.query.weight'].transpose(-1, -2) for layer_idx in range(self.layer_num)], 0).contiguous())       # 0
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.self.query.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.self.key.weight'].transpose(-1, -2) for layer_idx in range(self.layer_num)], 0).contiguous())         # 2
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.self.key.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.self.value.weight'].transpose(-1, -2) for layer_idx in range(self.layer_num)], 0).contiguous())       # 4
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.self.value.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.output.dense.weight'].transpose(-1, -2) for layer_idx in range(self.layer_num)], 0).contiguous())     # 6
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.output.dense.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.output.LayerNorm.weight'] for layer_idx in range(self.layer_num)], 0).contiguous())
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.output.LayerNorm.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'intermediate.dense.weight'].transpose(-1, -2) for layer_idx in range(self.layer_num)], 0).contiguous())         # 10
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'intermediate.dense.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'output.dense.weight'].transpose(-1, -2) for layer_idx in range(self.layer_num)], 0).contiguous())               # 12
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'output.dense.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'output.LayerNorm.weight'] for layer_idx in range(self.layer_num)], 0).contiguous())
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'output.LayerNorm.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.self.query.weight'].transpose(-1, -2)
+                       for layer_idx in range(start_layer, end_layer)], 0).contiguous())       # 0
+            ret[-1] = ret[-1].split(ret[-1].shape[-1] // self.tensor_para_size,
+                                    dim=-1)[self.tensor_para_rank].contiguous()
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'attention.self.query.bias'] for layer_idx in range(start_layer, end_layer)], 0).contiguous())
+            ret[-1] = ret[-1].split(ret[-1].shape[-1] // self.tensor_para_size,
+                                    dim=-1)[self.tensor_para_rank].contiguous()
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.self.key.weight'].transpose(-1, -2)
+                       for layer_idx in range(start_layer, end_layer)], 0).contiguous())         # 2
+            ret[-1] = ret[-1].split(ret[-1].shape[-1] // self.tensor_para_size,
+                                    dim=-1)[self.tensor_para_rank].contiguous()
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'attention.self.key.bias'] for layer_idx in range(start_layer, end_layer)], 0).contiguous())
+            ret[-1] = ret[-1].split(ret[-1].shape[-1] // self.tensor_para_size,
+                                    dim=-1)[self.tensor_para_rank].contiguous()
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.self.value.weight'].transpose(-1, -2)
+                       for layer_idx in range(start_layer, end_layer)], 0).contiguous())       # 4
+            ret[-1] = ret[-1].split(ret[-1].shape[-1] // self.tensor_para_size,
+                                    dim=-1)[self.tensor_para_rank].contiguous()
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'attention.self.value.bias'] for layer_idx in range(start_layer, end_layer)], 0).contiguous())
+            ret[-1] = ret[-1].split(ret[-1].shape[-1] // self.tensor_para_size,
+                                    dim=-1)[self.tensor_para_rank].contiguous()
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.output.dense.weight'].transpose(-1, -2)
+                       for layer_idx in range(start_layer, end_layer)], 0).contiguous())     # 6
+            ret[-1] = ret[-1].split(ret[-1].shape[1] // self.tensor_para_size,
+                                    dim=1)[self.tensor_para_rank].contiguous()
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'attention.output.dense.bias'] for layer_idx in range(start_layer, end_layer)], 0).contiguous())
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'attention.output.LayerNorm.weight'] for layer_idx in range(start_layer, end_layer)], 0).contiguous())
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'attention.output.LayerNorm.bias'] for layer_idx in range(start_layer, end_layer)], 0).contiguous())
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'intermediate.dense.weight'].transpose(-1, -2)
+                       for layer_idx in range(start_layer, end_layer)], 0).contiguous())         # 10
+            ret[-1] = ret[-1].split(ret[-1].shape[-1] // self.tensor_para_size,
+                                    dim=-1)[self.tensor_para_rank].contiguous()
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'intermediate.dense.bias'] for layer_idx in range(start_layer, end_layer)], 0).contiguous())
+            ret[-1] = ret[-1].split(ret[-1].shape[-1] // self.tensor_para_size,
+                                    dim=-1)[self.tensor_para_rank].contiguous()
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'output.dense.weight'].transpose(-1, -2)
+                       for layer_idx in range(start_layer, end_layer)], 0).contiguous())               # 12
+            ret[-1] = ret[-1].split(ret[-1].shape[1] // self.tensor_para_size,
+                                    dim=1)[self.tensor_para_rank].contiguous()
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'output.dense.bias'] for layer_idx in range(start_layer, end_layer)], 0).contiguous())
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'output.LayerNorm.weight'] for layer_idx in range(start_layer, end_layer)], 0).contiguous())
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'output.LayerNorm.bias'] for layer_idx in range(start_layer, end_layer)], 0).contiguous())
         else:
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.self.query.weight'] for layer_idx in range(self.layer_num)], 0).contiguous())       # 0
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.self.query.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.self.key.weight'] for layer_idx in range(self.layer_num)], 0).contiguous())         # 2
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.self.key.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.self.value.weight'] for layer_idx in range(self.layer_num)], 0).contiguous())       # 4
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.self.value.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.output.dense.weight'] for layer_idx in range(self.layer_num)], 0).contiguous())     # 6
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.output.dense.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.output.LayerNorm.weight'] for layer_idx in range(self.layer_num)], 0).contiguous())
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.output.LayerNorm.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'intermediate.dense.weight'] for layer_idx in range(self.layer_num)], 0).contiguous())         # 10
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'intermediate.dense.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'output.dense.weight'] for layer_idx in range(self.layer_num)], 0).contiguous())               # 12
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'output.dense.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'output.LayerNorm.weight'] for layer_idx in range(self.layer_num)], 0).contiguous())
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'output.LayerNorm.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'amaxList'] for layer_idx in range(self.layer_num)], 0).contiguous())
-            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'h_amaxList'] for layer_idx in range(self.layer_num)], 0).contiguous())
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'attention.self.query.weight'] for layer_idx in range(self.layer_num)], 0).contiguous())       # 0
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'attention.self.query.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'attention.self.key.weight']
+                       for layer_idx in range(self.layer_num)], 0).contiguous())         # 2
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'attention.self.key.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'attention.self.value.weight'] for layer_idx in range(self.layer_num)], 0).contiguous())       # 4
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'attention.self.value.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'attention.output.dense.weight'] for layer_idx in range(self.layer_num)], 0).contiguous())     # 6
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'attention.output.dense.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'attention.output.LayerNorm.weight'] for layer_idx in range(self.layer_num)], 0).contiguous())
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'attention.output.LayerNorm.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'intermediate.dense.weight']
+                       for layer_idx in range(self.layer_num)], 0).contiguous())         # 10
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'intermediate.dense.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'output.dense.weight']
+                       for layer_idx in range(self.layer_num)], 0).contiguous())               # 12
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'output.dense.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'output.LayerNorm.weight'] for layer_idx in range(self.layer_num)], 0).contiguous())
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'output.LayerNorm.bias'] for layer_idx in range(self.layer_num)], 0).contiguous())
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' + 'amaxList']
+                       for layer_idx in range(self.layer_num)], 0).contiguous())
+            ret.append(torch.stack([self.weights['bert.encoder.layer.' + str(layer_idx) + '.' +
+                       'h_amaxList'] for layer_idx in range(self.layer_num)], 0).contiguous())
         return ret
 
     def to_cuda(self):
@@ -120,7 +203,7 @@ class EncoderWeights(object):
                 if "amaxList" in k:
                     k_h = k.replace("amaxList", "h_amaxList")
                     h_scale_list[k_h] = v
-                self.weights[k] = v.cuda() 
+                self.weights[k] = v.cuda()
             for k, v in h_scale_list.items():
                 self.weights[k] = v
 
@@ -129,6 +212,12 @@ class EncoderWeights(object):
             raise RuntimeError("Cannot cast to half if the weights have been casted to int8.")
         for k, v in self.weights.items():
             self.weights[k] = v.half()
+
+    def to_bfloat16(self):
+        if self.int8:
+            raise RuntimeError("Cannot cast to bfloat16 if the weights have been casted to int8.")
+        for k, v in self.weights.items():
+            self.weights[k] = v.bfloat16()
 
     def to_int8(self, sparse=False, ths_path='./lib/libth_bert.so'):
         if self._generated_weights:
@@ -180,8 +269,9 @@ class EncoderWeights(object):
 
 class CustomEncoder(torch.nn.Module):
     def __init__(self, layer_num, head_num, head_size, weights,
-                 int8_mode=0, remove_padding=False,sparse=False,
-                 path='./lib/libth_bert.so'):
+                 int8_mode=0, remove_padding=False, sparse=False,
+                 path='./lib/libth_bert.so', tensor_para_size=1,
+                 pipeline_para_size=1):
         super().__init__()
         self.layer_num = layer_num
         self.remove_padding = remove_padding
@@ -189,28 +279,45 @@ class CustomEncoder(torch.nn.Module):
         torch.classes.load_library(path)
 
         weights_ = weights.listed_weights()
+
+        self.use_mpi = dist.is_mpi_available()
+
+        if self.use_mpi:
+            try:
+                dist.init_process_group(backend='mpi')
+            except:
+                print("[INFO] WARNING: Exception occurred in dist.init_process_group(backend='mpi'). Maybe the process group has been initialized somewhere else.")
+        else:
+            print("[INFO] MPI is not available in this PyTorch build.")
+            assert tensor_para_size == 1, "[FATAL] MPI is required for tensor_para_size > 1."
+            assert pipeline_para_size == 1, "[FATAL] MPI is required for pipeline_para_size > 1."
+
         if int8_mode == 0:
             assert len(weights_) == 16
             try:
                 self.encoders = torch.classes.FasterTransformer.Bert(
-                        *weights_,
-                        head_num, head_size, 4 * head_num * head_size, remove_padding, layer_num, sparse, 1.0)
+                    *weights_,
+                    head_num, head_size, 4 * head_num * head_size, remove_padding, layer_num, sparse, 1.0,
+                    tensor_para_size, pipeline_para_size)
             except:
                 # legacy ths for 20.03 image
                 self.encoders = torch.classes.FasterTransformerBert(
-                        *weights_,
-                        head_num, head_size, 4 * head_num * head_size, remove_padding, layer_num, sparse, 1.0)
+                    *weights_,
+                    head_num, head_size, 4 * head_num * head_size, remove_padding, layer_num, sparse, 1.0,
+                    tensor_para_size, pipeline_para_size)
         else:
             assert len(weights_) == 18
+            assert tensor_para_size == 1, "INT8 BERT still only support tensor_para_size = 1"
+            assert pipeline_para_size == 1, "INT8 BERT still only support pipeline_para_size = 1"
             try:
                 self.encoders = torch.classes.FasterTransformer.INT8Bert(
-                        *weights_,
-                        head_num, head_size, remove_padding, layer_num, int8_mode, sparse, 1.0)
+                    *weights_,
+                    head_num, head_size, remove_padding, layer_num, int8_mode, sparse, 1.0)
             except:
                 # legacy ths for 20.03 image
                 self.encoders = torch.classes.FasterTransformerINT8Bert(
-                        *weights_,
-                        head_num, head_size, remove_padding, layer_num, int8_mode, sparse, 1.0)
+                    *weights_,
+                    head_num, head_size, remove_padding, layer_num, int8_mode, sparse, 1.0)
 
     def forward(self, hidden_states, attention_mask, sequence_lengths):
         hidden_states = self.encoders.forward(hidden_states, sequence_lengths)
@@ -223,7 +330,8 @@ class HuggingFaceEncoder(torch.nn.Module):
         hidden_dim = head_num * head_size
         # TODO(bhsueh) The implementation of hidden_act='gelu' is different to FT's (and google BERT) implementation
         # FT's implementation is equivalent to hidden_act='gelu_new', but there are some issues for int8 sparse under gelu_new
-        conf = BertConfig(hidden_size=hidden_dim, intermediate_size=4*hidden_dim, num_attention_heads=head_num, num_hidden_layers=layer_num, hidden_act='gelu')
+        conf = BertConfig(hidden_size=hidden_dim, intermediate_size=4 * hidden_dim,
+                          num_attention_heads=head_num, num_hidden_layers=layer_num, hidden_act='gelu')
         self.encoder = BertEncoder(conf)
         w = {}
         for k, v in weights.weights.items():

@@ -25,33 +25,37 @@ template<typename T>
 struct T5EncoderWeight {
 
     T5EncoderWeight() = default;
-    T5EncoderWeight(const size_t head_num,
-                    const size_t size_per_head,
-                    const size_t d_model,
-                    const size_t inter_size,
-                    const size_t vocab_size,
-                    const size_t num_layer,
-                    const size_t num_bucket_or_max_seq_len,
-                    const size_t tensor_para_size,
-                    const size_t tensor_para_rank,
-                    const size_t pipeline_para_size,
-                    const size_t pipeline_para_rank,
-                    const bool t5_with_bias_para = false,
-                    const PositionEmbeddingType pe_type = PositionEmbeddingType::relative);
+    T5EncoderWeight(const size_t                head_num,
+                    const size_t                size_per_head,
+                    const size_t                d_model,
+                    const size_t                inter_size,
+                    const size_t                vocab_size,
+                    const size_t                num_layer,
+                    const size_t                num_bucket_or_max_seq_len,
+                    const size_t                tensor_para_size,
+                    const size_t                tensor_para_rank,
+                    const size_t                pipeline_para_size,
+                    const size_t                pipeline_para_rank,
+                    const bool                  t5_with_bias_para         = false,
+                    const bool                  use_gated_activation_para = false,
+                    const PositionEmbeddingType pe_type                   = PositionEmbeddingType::relative);
     ~T5EncoderWeight();
     T5EncoderWeight(const T5EncoderWeight& other);
     T5EncoderWeight& operator=(const T5EncoderWeight& other);
 
     std::vector<T5EncoderLayerWeight<T>*> t5_encoder_layer_weights;
-    LayerNormWeight<T> post_transformer_layernorm_weights;
-    T* absolute_or_relative_position_embedding = nullptr;
-    T* embedding_table = nullptr;
-    bool t5_with_bias = false;
-    PositionEmbeddingType position_embedding_type = PositionEmbeddingType::relative;
+    LayerNormWeight<T>                    post_transformer_layernorm_weights;
+    T*                                    absolute_or_relative_position_embedding = nullptr;
+    T*                                    embedding_table                         = nullptr;
+    bool                                  t5_with_bias                            = false;
+    bool                                  use_gated_activation                    = false;
+    PositionEmbeddingType                 position_embedding_type                 = PositionEmbeddingType::relative;
 
     void loadModel(std::string dir_path);
     void resizeLayer(const int num_layer);
-    void setT5StructureDiff(bool t5_with_bias_para, PositionEmbeddingType position_embedding_type_para);
+    void setT5StructureDiff(bool                  t5_with_bias_para,
+                            bool                  use_gated_activation_para,
+                            PositionEmbeddingType position_embedding_type_para);
 
 private:
     void setWeightPtr();
@@ -66,7 +70,7 @@ private:
     size_t vocab_size_;
     size_t num_layer_;
     // refer to num_buckt if using relative position embedding
-    // refer to max_seq_len if using absoulte position embedding
+    // refer to max_seq_len if using absolute position embedding
     size_t num_bucket_or_max_seq_len_;
     size_t tensor_para_size_;
     size_t tensor_para_rank_;
@@ -78,8 +82,8 @@ private:
     int real_weights_num_;
 
     const static int weights_num_ = 4;
-    T* weights_ptr[weights_num_];
-    size_t weights_size[weights_num_];
+    T*               weights_ptr[weights_num_];
+    size_t           weights_size[weights_num_];
 };
 
 }  // namespace fastertransformer

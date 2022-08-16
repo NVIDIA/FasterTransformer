@@ -277,7 +277,7 @@ def set_quantizers(name, mod, which='both', **kwargs):
             set_quantizer(name, mod, '_input_quantizer', k, v)
         if which in ['weight', 'both']:
             set_quantizer(name, mod, '_weight_quantizer', k, v)
-    # logger.info(s)
+    logger.info(s)
 
 
 def set_quantizer_by_name(model, names, **kwargs):
@@ -295,4 +295,4 @@ def set_quantizer_by_name(model, names, **kwargs):
                     for k, v in kwargs.items():
                         s += (f' {k}={v}')
                         setattr(mod, k, v)
-                    # logger.info(s)
+                    logger.info(s)

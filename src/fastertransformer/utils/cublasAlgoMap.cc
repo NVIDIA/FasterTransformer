@@ -47,11 +47,11 @@ void cublasAlgoMap::loadGemmConfig()
         return;
     }
 
-    int batchCount2, m2, n2, k2, algoId, customOption, tile, splitK_val;
-    int batch_size, seq_len, head_num, size_per_head, dataType;
-    int swizzle, reductionScheme, workspaceSize, stages;
+    int   batchCount2, m2, n2, k2, algoId, customOption, tile, splitK_val;
+    int   batch_size, seq_len, head_num, size_per_head, dataType;
+    int   swizzle, reductionScheme, workspaceSize, stages;
     float exec_time;
-    char tmp[1024];
+    char  tmp[1024];
     if (!fgets(tmp, 1024, fd)) {
         printf("[ERROR] fgets fail at %s:%d \n", __FILE__, __LINE__);
         exit(-1);
@@ -87,15 +87,15 @@ void cublasAlgoMap::loadGemmConfig()
         std::string markStr(mark);
         // workspaceSize should be zero
         if (algo_map_.find(markStr) == algo_map_.end()) {
-            algo_map_[markStr].algoId = algoId;
-            algo_map_[markStr].customOption = customOption;
-            algo_map_[markStr].tile = tile;
-            algo_map_[markStr].splitK_val = splitK_val;
-            algo_map_[markStr].swizzle = swizzle;
+            algo_map_[markStr].algoId          = algoId;
+            algo_map_[markStr].customOption    = customOption;
+            algo_map_[markStr].tile            = tile;
+            algo_map_[markStr].splitK_val      = splitK_val;
+            algo_map_[markStr].swizzle         = swizzle;
             algo_map_[markStr].reductionScheme = reductionScheme;
-            algo_map_[markStr].workspaceSize = workspaceSize;
-            algo_map_[markStr].stages = stages;
-            algo_map_[markStr].exec_time = exec_time;
+            algo_map_[markStr].workspaceSize   = workspaceSize;
+            algo_map_[markStr].stages          = stages;
+            algo_map_[markStr].exec_time       = exec_time;
         }
     }
     fclose(fd);
@@ -121,14 +121,14 @@ cublasAlgoMap::getAlgo(const int batch_count, const int m, const int n, const in
         cublasLtMatmulAlgo_info tmp_algo;
         tmp_algo.algoId =
             static_cast<int>(data_type == FLOAT_DATATYPE ? CUBLAS_GEMM_DEFAULT : CUBLAS_GEMM_DEFAULT_TENSOR_OP);
-        tmp_algo.customOption = -1;
-        tmp_algo.tile = -1;
-        tmp_algo.splitK_val = -1;
-        tmp_algo.swizzle = -1;
+        tmp_algo.customOption    = -1;
+        tmp_algo.tile            = -1;
+        tmp_algo.splitK_val      = -1;
+        tmp_algo.swizzle         = -1;
         tmp_algo.reductionScheme = -1;
-        tmp_algo.workspaceSize = -1;
-        tmp_algo.stages = -1;
-        tmp_algo.exec_time = -1.0f;
+        tmp_algo.workspaceSize   = -1;
+        tmp_algo.stages          = -1;
+        tmp_algo.exec_time       = -1.0f;
         return tmp_algo;
     }
 }
@@ -144,10 +144,10 @@ void cublasAlgoMap::loadSpGemmConfig()
         return;
     }
     sp_algo_map_.clear();
-    int batch_size, seq_len, head_num, size_per_head, data_type;
-    int batchCount, m, n, k, algoId;
+    int   batch_size, seq_len, head_num, size_per_head, data_type;
+    int   batchCount, m, n, k, algoId;
     float exec_time;
-    char tmp[1024];
+    char  tmp[1024];
     if (!fgets(tmp, 1024, fd)) {
         printf("[ERROR] fgets fail at %s:%d \n", __FILE__, __LINE__);
         exit(-1);

@@ -4,12 +4,12 @@ import torch
 from transformers.models.longformer.modeling_longformer import LongformerBaseModelOutput
 
 
-def from_hf_longformer_weight_to_ft(weights_file, layer_num, fp16):
+def from_hf_longformer_weight_to_ft(weights_file, layer_num, data_type):
     weights = torch.load(weights_file)
     all_weights = []
     for i in range(0, layer_num):
         # Need to transpose the kernel for torch.nn.Linear
-        # q k v kg vg weights and bias should be continous, required by the ft longformer encoder.
+        # q k v kg vg weights and bias should be continuous, required by the ft longformer encoder.
         all_weights.append(weights["longformer.encoder.layer.{}.attention.self.query.weight".format(i)].transpose(0, 1))
         all_weights.append(weights["longformer.encoder.layer.{}.attention.self.key.weight".format(i)].transpose(0, 1))
         all_weights.append(weights["longformer.encoder.layer.{}.attention.self.value.weight".format(i)].transpose(0, 1))
@@ -48,7 +48,12 @@ def from_hf_longformer_weight_to_ft(weights_file, layer_num, fp16):
     for i in range(0, len(all_weights)):
         all_weights[i] = all_weights[i].flatten()
 
-    all_weights = torch.cat(all_weights).type(torch.float16) if fp16 else torch.cat(all_weights)
+    if data_type == "fp16":
+        all_weights = torch.cat(all_weights).type(torch.float16)
+    elif data_type == "bf16":
+        all_weights = torch.cat(all_weights).type(torch.bfloat16)
+    elif data_type == "fp32":
+        all_weights = torch.cat(all_weights).type(torch.float32)
     return all_weights.contiguous()
 
 
@@ -56,14 +61,14 @@ class FTLongformerEncoder(torch.nn.Module):
     def __init__(self, weights_file, layer_num, head_num, size_per_head,
                  intermediate_size, local_attn_window_size,
                  max_global_token_num, batch_size, seq_len,
-                 attn_scaler, ft_longformer_lib, fp16=False, hf_plugin_mode=False):
+                 attn_scaler, ft_longformer_lib, data_type='fp32', hf_plugin_mode=False):
         super().__init__()
-        self.fp16 = fp16
+        self.data_type = data_type
         assert seq_len % local_attn_window_size == 0 and seq_len / \
             local_attn_window_size >= 2, "seq_len need to be multiple of local_attn_window_size and at least 2 times big."
 
         self.hf_plugin_mode = hf_plugin_mode
-        all_weight = from_hf_longformer_weight_to_ft(weights_file, layer_num, self.fp16)
+        all_weight = from_hf_longformer_weight_to_ft(weights_file, layer_num, data_type)
         self.all_weight = all_weight.cuda()
         torch.classes.load_library(ft_longformer_lib)
         self.ft_encoder = torch.classes.FasterTransformer.LongformerEncoder(layer_num, head_num * size_per_head,

@@ -31,50 +31,53 @@ protected:
     size_t vocab_size_padded_;
 
     size_t topk_softmax_workspace_size_;
-    void* topk_softmax_workspace_ = nullptr;
+    void*  topk_softmax_workspace_ = nullptr;
 
-    virtual void allocateBuffer() = 0;
-    virtual void allocateBuffer(size_t batch_size, size_t beam_width) = 0;
-    virtual void invokeSoftMax(std::vector<fastertransformer::Tensor>* output_tensors,
-                               const std::vector<fastertransformer::Tensor>* input_tensors) = 0;
-    virtual void invokeSoftMax(std::unordered_map<std::string, Tensor>* output_tensors,
+    virtual void allocateBuffer()                                                            = 0;
+    virtual void allocateBuffer(size_t batch_size, size_t beam_width)                        = 0;
+    virtual void invokeSoftMax(std::vector<fastertransformer::Tensor>*       output_tensors,
+                               const std::vector<fastertransformer::Tensor>* input_tensors)  = 0;
+    virtual void invokeSoftMax(std::unordered_map<std::string, Tensor>*       output_tensors,
                                const std::unordered_map<std::string, Tensor>* input_tensors) = 0;
 
 public:
-    BaseBeamSearchLayer(size_t max_batch_size,
-                        size_t head_num,
-                        size_t size_per_head,
-                        size_t beam_width,
-                        size_t vocab_size,
-                        size_t vocab_size_padded,
-                        int end_id,
-                        float diversity_rate,
-                        float temperature,
-                        float len_penalty,
-                        float repetition_penalty,
-                        cudaStream_t stream,
+    BaseBeamSearchLayer(size_t           max_batch_size,
+                        size_t           head_num,
+                        size_t           size_per_head,
+                        size_t           beam_width,
+                        size_t           vocab_size,
+                        size_t           vocab_size_padded,
+                        int              end_id,
+                        float            diversity_rate,
+                        float            temperature,
+                        float            len_penalty,
+                        float            repetition_penalty,
+                        cudaStream_t     stream,
                         cublasMMWrapper* cublas_wrapper,
-                        IAllocator* allocator,
-                        bool is_free_buffer_after_forward);
+                        IAllocator*      allocator,
+                        bool             is_free_buffer_after_forward);
 
     BaseBeamSearchLayer(BaseBeamSearchLayer<T> const& beam_search_layer);
 
     ~BaseBeamSearchLayer();
 
-    void forward(std::vector<fastertransformer::Tensor>* output_tensors,
+    void setup(const size_t                                   batch_size,
+               const size_t                                   beam_width,
+               const std::unordered_map<std::string, Tensor>* runtime_args) override;
+    void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                  const std::vector<fastertransformer::Tensor>* input_tensors) override;
-    void forward(std::unordered_map<std::string, Tensor>* output_tensors,
+    void forward(std::unordered_map<std::string, Tensor>*       output_tensors,
                  const std::unordered_map<std::string, Tensor>* input_tensors) override;
 };
 
-void update_indir_cache_kernelLauncher(int* tgt_indir_cache,
-                                       const int* src_indir_cache,
-                                       const int* beam_ids,
-                                       const bool* finished,
-                                       int batch_dim,
-                                       int beam_width,
-                                       int max_seq_len,
-                                       int ite,
+void update_indir_cache_kernelLauncher(int*         tgt_indir_cache,
+                                       const int*   src_indir_cache,
+                                       const int*   beam_ids,
+                                       const bool*  finished,
+                                       int          batch_dim,
+                                       int          beam_width,
+                                       int          max_seq_len,
+                                       int          ite,
                                        cudaStream_t stream);
 
 }  // namespace fastertransformer

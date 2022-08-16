@@ -1,5 +1,5 @@
 import torch
-from transformers import GPTNeoForCausalLM, AutoConfig
+from transformers import GPTNeoForCausalLM, AutoConfig, GPT2Tokenizer
 from pathlib import Path
 
 # GPT-J 6B config
@@ -49,6 +49,8 @@ model = GPTNeoForCausalLM.from_pretrained(
         state_dict=Checkpoint("j6b_ckpt.pt")
 )
 
+tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+
 input_ids = torch.as_tensor([
 [ 818,   198,   464,  464,  818,   464,  198,  464],
 [ 262,   464,   968,  968,  257,   968,  198,  717],
@@ -59,5 +61,9 @@ input_ids = torch.as_tensor([
 [  11, 15198,   649,  663,  787, 41683,  628, 3807],
 [ 257,   318,  1182, 5079,  340,   423,  198,   11],
 ]).T.cuda()
-o = model(input_ids)
+output = model.generate(input_ids, max_length=40, k=1)
 
+# print(f"output ids: \n{output}")
+
+for i in range(8):
+    print(f"[INFO] batch {i}: {tokenizer.decode(output[i][:])}")

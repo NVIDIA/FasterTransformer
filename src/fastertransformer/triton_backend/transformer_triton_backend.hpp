@@ -23,6 +23,7 @@
 
 #include "src/fastertransformer/utils/Tensor.h"
 #include "src/fastertransformer/utils/custom_ar_comm.h"
+#include "src/fastertransformer/utils/mpi_utils.h"
 #include "src/fastertransformer/utils/nccl_utils.h"
 
 namespace ft = fastertransformer;
@@ -32,59 +33,59 @@ namespace triton {
 
 #include "triton/core/tritonbackend.h"
 #include "triton/core/tritonserver.h"
-typedef TRITONSERVER_DataType DataType;
+typedef TRITONSERVER_DataType   DataType;
 typedef TRITONSERVER_MemoryType MemoryType;
 
 constexpr TRITONSERVER_DataType TYPE_INVALID = TRITONSERVER_TYPE_INVALID;
-constexpr TRITONSERVER_DataType TYPE_BOOL = TRITONSERVER_TYPE_BOOL;
-constexpr TRITONSERVER_DataType TYPE_UINT8 = TRITONSERVER_TYPE_UINT8;
-constexpr TRITONSERVER_DataType TYPE_UINT16 = TRITONSERVER_TYPE_UINT16;
-constexpr TRITONSERVER_DataType TYPE_UINT32 = TRITONSERVER_TYPE_UINT32;
-constexpr TRITONSERVER_DataType TYPE_UINT64 = TRITONSERVER_TYPE_UINT64;
-constexpr TRITONSERVER_DataType TYPE_INT8 = TRITONSERVER_TYPE_INT8;
-constexpr TRITONSERVER_DataType TYPE_INT16 = TRITONSERVER_TYPE_INT16;
-constexpr TRITONSERVER_DataType TYPE_INT32 = TRITONSERVER_TYPE_INT32;
-constexpr TRITONSERVER_DataType TYPE_INT64 = TRITONSERVER_TYPE_INT64;
-constexpr TRITONSERVER_DataType TYPE_FP16 = TRITONSERVER_TYPE_FP16;
-constexpr TRITONSERVER_DataType TYPE_FP32 = TRITONSERVER_TYPE_FP32;
-constexpr TRITONSERVER_DataType TYPE_FP64 = TRITONSERVER_TYPE_FP64;
-constexpr TRITONSERVER_DataType TYPE_BYTES = TRITONSERVER_TYPE_BYTES;
+constexpr TRITONSERVER_DataType TYPE_BOOL    = TRITONSERVER_TYPE_BOOL;
+constexpr TRITONSERVER_DataType TYPE_UINT8   = TRITONSERVER_TYPE_UINT8;
+constexpr TRITONSERVER_DataType TYPE_UINT16  = TRITONSERVER_TYPE_UINT16;
+constexpr TRITONSERVER_DataType TYPE_UINT32  = TRITONSERVER_TYPE_UINT32;
+constexpr TRITONSERVER_DataType TYPE_UINT64  = TRITONSERVER_TYPE_UINT64;
+constexpr TRITONSERVER_DataType TYPE_INT8    = TRITONSERVER_TYPE_INT8;
+constexpr TRITONSERVER_DataType TYPE_INT16   = TRITONSERVER_TYPE_INT16;
+constexpr TRITONSERVER_DataType TYPE_INT32   = TRITONSERVER_TYPE_INT32;
+constexpr TRITONSERVER_DataType TYPE_INT64   = TRITONSERVER_TYPE_INT64;
+constexpr TRITONSERVER_DataType TYPE_FP16    = TRITONSERVER_TYPE_FP16;
+constexpr TRITONSERVER_DataType TYPE_FP32    = TRITONSERVER_TYPE_FP32;
+constexpr TRITONSERVER_DataType TYPE_FP64    = TRITONSERVER_TYPE_FP64;
+constexpr TRITONSERVER_DataType TYPE_BYTES   = TRITONSERVER_TYPE_BYTES;
 // constexpr TRITONSERVER_DataType TYPE_BF16 = TRITONSERVER_TYPE_BF16; // BF16 is not supported in Triton
-constexpr TRITONSERVER_MemoryType MEMORY_CPU = TRITONSERVER_MEMORY_CPU;
+constexpr TRITONSERVER_MemoryType MEMORY_CPU        = TRITONSERVER_MEMORY_CPU;
 constexpr TRITONSERVER_MemoryType MEMORY_CPU_PINNED = TRITONSERVER_MEMORY_CPU_PINNED;
-constexpr TRITONSERVER_MemoryType MEMORY_GPU = TRITONSERVER_MEMORY_GPU;
+constexpr TRITONSERVER_MemoryType MEMORY_GPU        = TRITONSERVER_MEMORY_GPU;
 
 #else
 
-typedef ft::DataType DataType;
+typedef ft::DataType   DataType;
 typedef ft::MemoryType MemoryType;
 
 constexpr DataType TYPE_INVALID = ft::TYPE_INVALID;
-constexpr DataType TYPE_BOOL = ft::TYPE_BOOL;
-constexpr DataType TYPE_UINT8 = ft::TYPE_UINT8;
-constexpr DataType TYPE_UINT16 = ft::TYPE_UINT16;
-constexpr DataType TYPE_UINT32 = ft::TYPE_UINT32;
-constexpr DataType TYPE_UINT64 = ft::TYPE_UINT64;
-constexpr DataType TYPE_INT8 = ft::TYPE_INT8;
-constexpr DataType TYPE_INT16 = ft::TYPE_INT16;
-constexpr DataType TYPE_INT32 = ft::TYPE_INT32;
-constexpr DataType TYPE_INT64 = ft::TYPE_INT64;
-constexpr DataType TYPE_FP16 = ft::TYPE_FP16;
-constexpr DataType TYPE_FP32 = ft::TYPE_FP32;
-constexpr DataType TYPE_FP64 = ft::TYPE_FP64;
-constexpr DataType TYPE_BYTES = ft::TYPE_BYTES;
+constexpr DataType TYPE_BOOL    = ft::TYPE_BOOL;
+constexpr DataType TYPE_UINT8   = ft::TYPE_UINT8;
+constexpr DataType TYPE_UINT16  = ft::TYPE_UINT16;
+constexpr DataType TYPE_UINT32  = ft::TYPE_UINT32;
+constexpr DataType TYPE_UINT64  = ft::TYPE_UINT64;
+constexpr DataType TYPE_INT8    = ft::TYPE_INT8;
+constexpr DataType TYPE_INT16   = ft::TYPE_INT16;
+constexpr DataType TYPE_INT32   = ft::TYPE_INT32;
+constexpr DataType TYPE_INT64   = ft::TYPE_INT64;
+constexpr DataType TYPE_FP16    = ft::TYPE_FP16;
+constexpr DataType TYPE_FP32    = ft::TYPE_FP32;
+constexpr DataType TYPE_FP64    = ft::TYPE_FP64;
+constexpr DataType TYPE_BYTES   = ft::TYPE_BYTES;
 // constexpr DataType TYPE_BF16 = ft::TYPE_BF16;
-constexpr MemoryType MEMORY_CPU = ft::MEMORY_CPU;
+constexpr MemoryType MEMORY_CPU        = ft::MEMORY_CPU;
 constexpr MemoryType MEMORY_CPU_PINNED = ft::MEMORY_CPU_PINNED;
-constexpr MemoryType MEMORY_GPU = ft::MEMORY_GPU;
+constexpr MemoryType MEMORY_GPU        = ft::MEMORY_GPU;
 
 #endif
 
 struct Tensor {
-    const MemoryType where;
-    const DataType type;
+    const MemoryType          where;
+    const DataType            type;
     const std::vector<size_t> shape;
-    const void* data;
+    const void*               data;
 
     Tensor(const MemoryType _where, const DataType _type, const std::vector<size_t> _shape, const void* _data):
         where(_where), type(_type), shape(_shape), data(_data)
@@ -146,7 +147,7 @@ struct Tensor {
 
     ft::Tensor convertTritonTensorToFt()
     {
-        ft::DataType ft_data_type = convertTritonTypeToFt(type);
+        ft::DataType   ft_data_type = convertTritonTypeToFt(type);
         ft::MemoryType ft_memory_type;
         switch (where) {
             case MEMORY_CPU:
@@ -230,6 +231,8 @@ struct Tensor {
 
 }  // namespace triton
 
+using triton_stream_cb_t = void(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>, void*);
+
 struct AbstractTransformerModel;
 struct AbstractTransformerModelInstance;
 
@@ -239,28 +242,45 @@ struct AbstractTransformerModelInstance {
 
     virtual std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>
     forward(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors) = 0;
+
+    void registerCallback(triton_stream_cb_t* cb, void* ctx)
+    {
+        stream_cb_  = cb;
+        stream_ctx_ = ctx;
+    }
+
+    void unRegisterCallback()
+    {
+        stream_cb_  = nullptr;
+        stream_ctx_ = nullptr;
+    }
+
+    triton_stream_cb_t* stream_cb_  = nullptr;
+    void*               stream_ctx_ = nullptr;
 };
 
 struct AbstractTransformerModel {
     static std::shared_ptr<AbstractTransformerModel> createGptModel(std::string inifile);
     static std::shared_ptr<AbstractTransformerModel> createGptJModel(std::string inifile);
+    static std::shared_ptr<AbstractTransformerModel> createGptNeoXModel(std::string inifile);
     static std::shared_ptr<AbstractTransformerModel> createT5Model(std::string model_dir);
 
-    virtual std::vector<ncclUniqueId> createNcclIds(const uint32_t world_size, bool multi_instances = false) = 0;
-    virtual std::pair<std::vector<ncclComm_t>, std::vector<ncclComm_t>> createNcclComms(
-        std::vector<ncclUniqueId> nccl_ids, const int node_id, bool multi_instances = false, int instance_id = 0) = 0;
+    std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>>
+    createNcclParams(const int node_id, const int device_id_start = 0, const bool multi_node = false);
 
     virtual void createCustomComms(std::vector<std::shared_ptr<ft::AbstractCustomComm>>* custom_all_reduce_comms,
-                                   int world_size) = 0;
+                                   int                                                   world_size) = 0;
 
     virtual std::unique_ptr<AbstractTransformerModelInstance>
-    createModelInstance(int deviceId,
-                        int rank,
-                        cudaStream_t stream,
-                        std::pair<std::vector<ncclComm_t>, std::vector<ncclComm_t>> nccl_comms,
+    createModelInstance(int                                                               deviceId,
+                        int                                                               rank,
+                        cudaStream_t                                                      stream,
+                        std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
                         std::shared_ptr<ft::AbstractCustomComm> custom_all_reduce_comm = nullptr) = 0;
 
-    virtual std::string toString() = 0;
-    virtual int getTensorParaSize() = 0;
-    virtual int getPipelineParaSize() = 0;
+    virtual void createSharedWeights(int deviceId, int rank) = 0;
+
+    virtual std::string toString()            = 0;
+    virtual int         getTensorParaSize()   = 0;
+    virtual int         getPipelineParaSize() = 0;
 };

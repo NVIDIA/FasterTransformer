@@ -34,25 +34,25 @@
 namespace fastertransformer {
 
 template<typename T>
-void generate_decoding_gemm_config(int batch_size,
-                                   int beam_width,
-                                   int seq_len,
-                                   int head_num,
-                                   int size_per_head,
-                                   int inter_size,
-                                   int vocab_size,
-                                   int mem_hidden_units,
+void generate_decoding_gemm_config(int   batch_size,
+                                   int   beam_width,
+                                   int   seq_len,
+                                   int   head_num,
+                                   int   size_per_head,
+                                   int   inter_size,
+                                   int   vocab_size,
+                                   int   mem_hidden_units,
                                    void* buffer_in,
-                                   bool isAppend);
+                                   bool  isAppend);
 
-size_t calDecodingGemmTestBufSizeInByte(int batch_size,
-                                        int beam_width,
-                                        int max_mem_seq_len,
-                                        int head_num,
-                                        int size_per_head,
-                                        int inter_size,
-                                        int memory_hidden_units,
-                                        int vocab_size,
+size_t calDecodingGemmTestBufSizeInByte(int            batch_size,
+                                        int            beam_width,
+                                        int            max_mem_seq_len,
+                                        int            head_num,
+                                        int            size_per_head,
+                                        int            inter_size,
+                                        int            memory_hidden_units,
+                                        int            vocab_size,
                                         CublasDataType data_type);
 
 }  // namespace fastertransformer
