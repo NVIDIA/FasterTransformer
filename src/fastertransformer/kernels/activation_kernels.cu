@@ -17,6 +17,11 @@
 #include "src/fastertransformer/kernels/activation_kernels.h"
 #include "src/fastertransformer/kernels/bfloat16_fallback_kenrels.cuh"
 #include "src/fastertransformer/utils/cuda_utils.h"
+
+#ifndef CUDART_VERSION
+#error CUDART_VERSION Undefined!
+#endif
+
 namespace fastertransformer {
 
 __forceinline__ __device__ float copysignf_pos(float a, float b)
@@ -28,7 +33,7 @@ __forceinline__ __device__ float copysignf_pos(float a, float b)
 
 __inline__ __device__ float tanh_opt(float x)
 {
-#if (__CUDA_ARCH__ >= 750)
+#if (__CUDA_ARCH__ >= 750 && CUDART_VERSION >= 11000)
     float r;
     asm("tanh.approx.f32 %0,%1; \n\t" : "=f"(r) : "f"(x));
     return r;
