@@ -22,27 +22,27 @@
 
 namespace fastertransformer {
 
-void invokeGetPaddingOffset(size_t* h_token_num,
-                            size_t* d_token_num,
-                            int* tmp_mask_offset,
-                            const int* sequence_length,
-                            const int batch_size,
-                            const int max_seq_len,
+void invokeGetPaddingOffset(size_t*      h_token_num,
+                            size_t*      d_token_num,
+                            int*         tmp_mask_offset,
+                            const int*   sequence_length,
+                            const int    batch_size,
+                            const int    max_seq_len,
                             cudaStream_t stream);
 
 template<typename T>
 void invokeBuildEncoderAttentionMask(
     T* attention_mask, const int* sequence_lengths, const int batch_size, const int max_seq_len, cudaStream_t stream);
 
-void invokeGetTrtPaddingOffset(int* trt_mha_padding_offset,
-                               const int* sequence_length,
-                               const int request_batch_size,
+void invokeGetTrtPaddingOffset(int*         trt_mha_padding_offset,
+                               const int*   sequence_length,
+                               const int    request_batch_size,
                                cudaStream_t stream);
 
-void invokeGetTrtPaddingOffset(int* trt_mha_padding_offset,
-                               const int* sequence_length,
-                               const int request_batch_size,
-                               const int request_seq_len,
+void invokeGetTrtPaddingOffset(int*         trt_mha_padding_offset,
+                               const int*   sequence_length,
+                               const int    request_batch_size,
+                               const int    request_seq_len,
                                cudaStream_t stream);
 
 template<typename T>
@@ -54,14 +54,14 @@ void invokeRemovePadding(
     T* dst, const T* src, const int* padding_offset, const int token_num, const int hidden_dim, cudaStream_t stream);
 
 template<typename T>
-void invokeBuildRelativeAttentionBias(T* relative_attention_bias,
-                                      const T* relative_attention_bias_table,
-                                      const int head_num,
-                                      const int seq_len,
-                                      const int num_bucket,
-                                      const bool is_bidirectional,
-                                      const int max_distance,
+void invokeBuildRelativeAttentionBias(T*                          relative_attention_bias,
+                                      const T*                    relative_attention_bias_table,
+                                      const int                   head_num,
+                                      const int                   seq_len,
+                                      const int                   num_bucket,
+                                      const bool                  is_bidirectional,
+                                      const int                   max_distance,
                                       const PositionEmbeddingType position_embedding_type,
-                                      cudaStream_t stream);
+                                      cudaStream_t                stream);
 
 }  // namespace fastertransformer

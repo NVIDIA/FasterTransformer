@@ -30,10 +30,10 @@ namespace fastertransformer {
 
 class AbstractCustomComm {
 public:
-    AbstractCustomComm() = default;
-    virtual ~AbstractCustomComm() = default;
-    virtual void customAllReduce(size_t elts, cudaStream_t stream) = 0;
-    virtual void enableP2P(int ngpus) = 0;
+    AbstractCustomComm()                                                             = default;
+    virtual ~AbstractCustomComm()                                                    = default;
+    virtual void customAllReduce(size_t elts, cudaStream_t stream)                   = 0;
+    virtual void enableP2P(int ngpus)                                                = 0;
     virtual bool swapInternalBuffer(std::vector<Tensor>* tensor_buffer, size_t elts) = 0;
     virtual void
     allocateAndExchangePeerAccessPointer(std::vector<std::shared_ptr<AbstractCustomComm>>* custom_all_reduce_comms) = 0;
@@ -55,17 +55,17 @@ public:
     void enableP2P(int ngpus) override;
 
 private:
-    AllReduceParams<T> param_;
+    AllReduceParams<T>   param_;
     std::vector<Tensor>* output_tensor_;
-    T* tmp_tensor_data_;
-    size_t rank_size_;
-    size_t rank_;
+    T*                   tmp_tensor_data_;
+    size_t               rank_size_;
+    size_t               rank_;
 };
 
 template<typename T>
 void initCustomAllReduceComm(std::vector<std::shared_ptr<AbstractCustomComm>>* custom_all_reduce_comms,
-                             int enable_custom_all_reduce,
-                             size_t rank_size);
+                             int                                               enable_custom_all_reduce,
+                             size_t                                            rank_size);
 
 template<typename T>
 struct CustomARCommTypeConverter {

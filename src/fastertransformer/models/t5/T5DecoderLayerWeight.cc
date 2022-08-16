@@ -29,7 +29,8 @@ T5DecoderLayerWeight<T>::T5DecoderLayerWeight(const size_t head_num,
                                               const size_t mem_d_model,
                                               const size_t tensor_para_size,
                                               const size_t tensor_para_rank,
-                                              const bool t5_with_bias):
+                                              const bool   t5_with_bias,
+                                              const bool   use_gated_activation):
     head_num_(head_num),
     size_per_head_(size_per_head),
     d_model_(d_model),
@@ -38,8 +39,10 @@ T5DecoderLayerWeight<T>::T5DecoderLayerWeight(const size_t head_num,
     tensor_para_size_(tensor_para_size),
     tensor_para_rank_(tensor_para_rank),
     t5_with_bias_(t5_with_bias),
-    real_weights_num_(t5_with_bias ? 22 : 11)
+    use_gated_activation_(use_gated_activation)
 {
+    real_weights_num_ = (11 + (use_gated_activation ? 1 : 0)) * (t5_with_bias ? 2 : 1);
+
     FT_LOG_DEBUG("T5DecoderLayerWeight " + std::string(__func__) + " start");
 
     initialize();
@@ -63,21 +66,44 @@ void T5DecoderLayerWeight<T>::initialize()
     weights_size[6] = mem_d_model_ * (head_num_ / tensor_para_size_) * size_per_head_;
     weights_size[7] = (head_num_ / tensor_para_size_) * size_per_head_ * d_model_;
     weights_size[8] = d_model_;
-    weights_size[9] = d_model_ * (inter_size_ / tensor_para_size_);
-    weights_size[10] = (inter_size_ / tensor_para_size_) * d_model_;
+    if (use_gated_activation_) {
+        weights_size[9]  = d_model_ * (inter_size_ / tensor_para_size_);
+        weights_size[10] = d_model_ * (inter_size_ / tensor_para_size_);  // for gated activation
+        weights_size[11] = (inter_size_ / tensor_para_size_) * d_model_;
+    }
+    else {
+        weights_size[9]  = d_model_ * (inter_size_ / tensor_para_size_);
+        weights_size[10] = (inter_size_ / tensor_para_size_) * d_model_;
+    }
 
     if (t5_with_bias_) {
-        weights_size[11] = d_model_;
-        weights_size[12] = 3 * (head_num_ / tensor_para_size_) * size_per_head_;
-        weights_size[13] = d_model_;
-        weights_size[14] = d_model_;
-        weights_size[15] = (head_num_ / tensor_para_size_) * size_per_head_;
-        weights_size[16] = (head_num_ / tensor_para_size_) * size_per_head_;
-        weights_size[17] = (head_num_ / tensor_para_size_) * size_per_head_;
-        weights_size[18] = d_model_;
-        weights_size[19] = d_model_;
-        weights_size[20] = (inter_size_ / tensor_para_size_);
-        weights_size[21] = d_model_;
+        if (use_gated_activation_) {
+            weights_size[12] = d_model_;
+            weights_size[13] = 3 * (head_num_ / tensor_para_size_) * size_per_head_;
+            weights_size[14] = d_model_;
+            weights_size[15] = d_model_;
+            weights_size[16] = (head_num_ / tensor_para_size_) * size_per_head_;
+            weights_size[17] = (head_num_ / tensor_para_size_) * size_per_head_;
+            weights_size[18] = (head_num_ / tensor_para_size_) * size_per_head_;
+            weights_size[19] = d_model_;
+            weights_size[20] = d_model_;
+            weights_size[21] = (inter_size_ / tensor_para_size_);
+            weights_size[22] = (inter_size_ / tensor_para_size_);  // for gated activation
+            weights_size[23] = d_model_;
+        }
+        else {
+            weights_size[11] = d_model_;
+            weights_size[12] = 3 * (head_num_ / tensor_para_size_) * size_per_head_;
+            weights_size[13] = d_model_;
+            weights_size[14] = d_model_;
+            weights_size[15] = (head_num_ / tensor_para_size_) * size_per_head_;
+            weights_size[16] = (head_num_ / tensor_para_size_) * size_per_head_;
+            weights_size[17] = (head_num_ / tensor_para_size_) * size_per_head_;
+            weights_size[18] = d_model_;
+            weights_size[19] = d_model_;
+            weights_size[20] = (inter_size_ / tensor_para_size_);
+            weights_size[21] = d_model_;
+        }
     }
 
     FT_LOG_DEBUG("T5DecoderLayerWeight " + std::string(__func__) + " end");
@@ -93,36 +119,36 @@ T5DecoderLayerWeight<T>::~T5DecoderLayerWeight()
             deviceFree(weights_ptr[i]);
         }
 
-        pre_layernorm_weights.gamma = nullptr;
-        self_attention_weights.query_weight.kernel = nullptr;
+        pre_layernorm_weights.gamma                           = nullptr;
+        self_attention_weights.query_weight.kernel            = nullptr;
         self_attention_weights.attention_output_weight.kernel = nullptr;
-        self_attn_layernorm_weights.gamma = nullptr;
+        self_attn_layernorm_weights.gamma                     = nullptr;
 
-        cross_attention_weights.query_weight.kernel = nullptr;
-        cross_attention_weights.key_weight.kernel = nullptr;
-        cross_attention_weights.value_weight.kernel = nullptr;
+        cross_attention_weights.query_weight.kernel            = nullptr;
+        cross_attention_weights.key_weight.kernel              = nullptr;
+        cross_attention_weights.value_weight.kernel            = nullptr;
         cross_attention_weights.attention_output_weight.kernel = nullptr;
-        cross_attn_layernorm_weights.gamma = nullptr;
+        cross_attn_layernorm_weights.gamma                     = nullptr;
 
-        ffn_weights.intermediate_weight.kernel = nullptr;
-        ffn_weights.output_weight.kernel = nullptr;
+        ffn_weights.intermediate_weight.kernel  = nullptr;
+        ffn_weights.intermediate_weight2.kernel = nullptr;
+        ffn_weights.output_weight.kernel        = nullptr;
 
-        if (t5_with_bias_) {
-            pre_layernorm_weights.beta = nullptr;
-            self_attention_weights.query_weight.bias = nullptr;
-            self_attention_weights.attention_output_weight.bias = nullptr;
-            self_attn_layernorm_weights.beta = nullptr;
+        pre_layernorm_weights.beta                          = nullptr;
+        self_attention_weights.query_weight.bias            = nullptr;
+        self_attention_weights.attention_output_weight.bias = nullptr;
+        self_attn_layernorm_weights.beta                    = nullptr;
 
-            cross_attention_weights.query_weight.bias = nullptr;
-            cross_attention_weights.key_weight.bias = nullptr;
-            cross_attention_weights.value_weight.bias = nullptr;
-            cross_attention_weights.attention_output_weight.bias = nullptr;
-            cross_attn_layernorm_weights.beta = nullptr;
+        cross_attention_weights.query_weight.bias            = nullptr;
+        cross_attention_weights.key_weight.bias              = nullptr;
+        cross_attention_weights.value_weight.bias            = nullptr;
+        cross_attention_weights.attention_output_weight.bias = nullptr;
+        cross_attn_layernorm_weights.beta                    = nullptr;
 
-            ffn_weights.intermediate_weight.bias = nullptr;
-            ffn_weights.output_weight.bias = nullptr;
-        }
-        is_maintain_buffer = false;
+        ffn_weights.intermediate_weight.bias  = nullptr;
+        ffn_weights.intermediate_weight2.bias = nullptr;
+        ffn_weights.output_weight.bias        = nullptr;
+        is_maintain_buffer                    = false;
     }
 
     FT_LOG_DEBUG("T5DecoderLayerWeight " + std::string(__func__) + " end");
@@ -138,6 +164,7 @@ T5DecoderLayerWeight<T>::T5DecoderLayerWeight(const T5DecoderLayerWeight& other)
     tensor_para_size_(other.tensor_para_size_),
     tensor_para_rank_(other.tensor_para_rank_),
     t5_with_bias_(other.t5_with_bias_),
+    use_gated_activation_(other.use_gated_activation_),
     real_weights_num_(other.real_weights_num_)
 {
 
@@ -152,15 +179,16 @@ T5DecoderLayerWeight<T>::T5DecoderLayerWeight(const T5DecoderLayerWeight& other)
 template<typename T>
 T5DecoderLayerWeight<T>& T5DecoderLayerWeight<T>::operator=(const T5DecoderLayerWeight& other)
 {
-    head_num_ = other.head_num_;
-    size_per_head_ = other.size_per_head_;
-    d_model_ = other.d_model_;
-    inter_size_ = other.inter_size_;
-    mem_d_model_ = other.mem_d_model_;
-    tensor_para_size_ = other.tensor_para_size_;
-    tensor_para_rank_ = other.tensor_para_rank_;
-    t5_with_bias_ = other.t5_with_bias_;
-    real_weights_num_ = other.real_weights_num_;
+    head_num_             = other.head_num_;
+    size_per_head_        = other.size_per_head_;
+    d_model_              = other.d_model_;
+    inter_size_           = other.inter_size_;
+    mem_d_model_          = other.mem_d_model_;
+    tensor_para_size_     = other.tensor_para_size_;
+    tensor_para_rank_     = other.tensor_para_rank_;
+    t5_with_bias_         = other.t5_with_bias_;
+    use_gated_activation_ = other.use_gated_activation_;
+    real_weights_num_     = other.real_weights_num_;
 
     initialize();
     mallocWeights();
@@ -175,34 +203,58 @@ T5DecoderLayerWeight<T>& T5DecoderLayerWeight<T>::operator=(const T5DecoderLayer
 template<typename T>
 void T5DecoderLayerWeight<T>::setWeightPtr()
 {
-    pre_layernorm_weights.gamma = weights_ptr[0];
-    self_attention_weights.query_weight.kernel = weights_ptr[1];
+    pre_layernorm_weights.gamma                           = weights_ptr[0];
+    self_attention_weights.query_weight.kernel            = weights_ptr[1];
     self_attention_weights.attention_output_weight.kernel = weights_ptr[2];
-    self_attn_layernorm_weights.gamma = weights_ptr[3];
+    self_attn_layernorm_weights.gamma                     = weights_ptr[3];
 
-    cross_attention_weights.query_weight.kernel = weights_ptr[4];
-    cross_attention_weights.key_weight.kernel = weights_ptr[5];
-    cross_attention_weights.value_weight.kernel = weights_ptr[6];
+    cross_attention_weights.query_weight.kernel            = weights_ptr[4];
+    cross_attention_weights.key_weight.kernel              = weights_ptr[5];
+    cross_attention_weights.value_weight.kernel            = weights_ptr[6];
     cross_attention_weights.attention_output_weight.kernel = weights_ptr[7];
-    cross_attn_layernorm_weights.gamma = weights_ptr[8];
+    cross_attn_layernorm_weights.gamma                     = weights_ptr[8];
 
-    ffn_weights.intermediate_weight.kernel = weights_ptr[9];
-    ffn_weights.output_weight.kernel = weights_ptr[10];
-
+    if (use_gated_activation_) {
+        ffn_weights.intermediate_weight.kernel  = weights_ptr[9];
+        ffn_weights.intermediate_weight2.kernel = weights_ptr[10];
+        ffn_weights.output_weight.kernel        = weights_ptr[11];
+    }
+    else {
+        ffn_weights.intermediate_weight.kernel = weights_ptr[9];
+        ffn_weights.output_weight.kernel       = weights_ptr[10];
+    }
     if (t5_with_bias_) {
-        pre_layernorm_weights.beta = weights_ptr[11];
-        self_attention_weights.query_weight.bias = weights_ptr[12];
-        self_attention_weights.attention_output_weight.bias = weights_ptr[13];
-        self_attn_layernorm_weights.beta = weights_ptr[14];
+        if (use_gated_activation_) {
+            pre_layernorm_weights.beta                          = weights_ptr[12];
+            self_attention_weights.query_weight.bias            = weights_ptr[13];
+            self_attention_weights.attention_output_weight.bias = weights_ptr[14];
+            self_attn_layernorm_weights.beta                    = weights_ptr[15];
 
-        cross_attention_weights.query_weight.bias = weights_ptr[15];
-        cross_attention_weights.key_weight.bias = weights_ptr[16];
-        cross_attention_weights.value_weight.bias = weights_ptr[17];
-        cross_attention_weights.attention_output_weight.bias = weights_ptr[18];
-        cross_attn_layernorm_weights.beta = weights_ptr[19];
+            cross_attention_weights.query_weight.bias            = weights_ptr[16];
+            cross_attention_weights.key_weight.bias              = weights_ptr[17];
+            cross_attention_weights.value_weight.bias            = weights_ptr[18];
+            cross_attention_weights.attention_output_weight.bias = weights_ptr[19];
+            cross_attn_layernorm_weights.beta                    = weights_ptr[20];
 
-        ffn_weights.intermediate_weight.bias = weights_ptr[20];
-        ffn_weights.output_weight.bias = weights_ptr[21];
+            ffn_weights.intermediate_weight.bias  = weights_ptr[21];
+            ffn_weights.intermediate_weight2.bias = weights_ptr[22];
+            ffn_weights.output_weight.bias        = weights_ptr[23];
+        }
+        else {
+            pre_layernorm_weights.beta                          = weights_ptr[11];
+            self_attention_weights.query_weight.bias            = weights_ptr[12];
+            self_attention_weights.attention_output_weight.bias = weights_ptr[13];
+            self_attn_layernorm_weights.beta                    = weights_ptr[14];
+
+            cross_attention_weights.query_weight.bias            = weights_ptr[15];
+            cross_attention_weights.key_weight.bias              = weights_ptr[16];
+            cross_attention_weights.value_weight.bias            = weights_ptr[17];
+            cross_attention_weights.attention_output_weight.bias = weights_ptr[18];
+            cross_attn_layernorm_weights.beta                    = weights_ptr[19];
+
+            ffn_weights.intermediate_weight.bias = weights_ptr[20];
+            ffn_weights.output_weight.bias       = weights_ptr[21];
+        }
     }
 }
 
@@ -222,89 +274,123 @@ void T5DecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType mod
 
     FT_CHECK(is_maintain_buffer == true);
     loadWeightFromBin<T>(
-        weights_ptr[0], {(int)weights_size[0]}, dir_path + "layer.0.layer_norm.weight.bin", model_file_type);
+        weights_ptr[0], {weights_size[0]}, dir_path + "layer.0.layer_norm.weight.bin", model_file_type);
     loadWeightFromBin<T>(weights_ptr[1],
-                         {(int)weights_size[1]},
+                         {weights_size[1]},
                          dir_path + "layer.0.SelfAttention.qkv.weight." + std::to_string(tensor_para_rank_) + ".bin",
                          model_file_type);
     loadWeightFromBin<T>(weights_ptr[2],
-                         {(int)weights_size[2]},
+                         {weights_size[2]},
                          dir_path + "layer.0.SelfAttention.o.weight." + std::to_string(tensor_para_rank_) + ".bin",
                          model_file_type);
     loadWeightFromBin<T>(
-        weights_ptr[3], {(int)weights_size[3]}, dir_path + "layer.1.layer_norm.weight.bin", model_file_type);
+        weights_ptr[3], {weights_size[3]}, dir_path + "layer.1.layer_norm.weight.bin", model_file_type);
     loadWeightFromBin<T>(weights_ptr[4],
-                         {(int)weights_size[4]},
+                         {weights_size[4]},
                          dir_path + "layer.1.EncDecAttention.q.weight." + std::to_string(tensor_para_rank_) + ".bin",
                          model_file_type);
     loadWeightFromBin<T>(weights_ptr[5],
-                         {(int)weights_size[5]},
+                         {weights_size[5]},
                          dir_path + "layer.1.EncDecAttention.k.weight." + std::to_string(tensor_para_rank_) + ".bin",
                          model_file_type);
     loadWeightFromBin<T>(weights_ptr[6],
-                         {(int)weights_size[6]},
+                         {weights_size[6]},
                          dir_path + "layer.1.EncDecAttention.v.weight." + std::to_string(tensor_para_rank_) + ".bin",
                          model_file_type);
     loadWeightFromBin<T>(weights_ptr[7],
-                         {(int)weights_size[7]},
+                         {weights_size[7]},
                          dir_path + "layer.1.EncDecAttention.o.weight." + std::to_string(tensor_para_rank_) + ".bin",
                          model_file_type);
     loadWeightFromBin<T>(
-        weights_ptr[8], {(int)weights_size[8]}, dir_path + "layer.2.layer_norm.weight.bin", model_file_type);
+        weights_ptr[8], {weights_size[8]}, dir_path + "layer.2.layer_norm.weight.bin", model_file_type);
     loadWeightFromBin<T>(weights_ptr[9],
-                         {(int)weights_size[9]},
+                         {weights_size[9]},
                          dir_path + "layer.2.DenseReluDense.wi.weight." + std::to_string(tensor_para_rank_) + ".bin",
                          model_file_type);
-    loadWeightFromBin<T>(weights_ptr[10],
-                         {(int)weights_size[10]},
+
+    const int gated_activation_weight_offset = use_gated_activation_ ? 1 : 0;
+    if (use_gated_activation_) {
+        loadWeightFromBin<T>(weights_ptr[10],
+                             {weights_size[10]},
+                             dir_path + "layer.2.DenseReluDense.wi2.weight." + std::to_string(tensor_para_rank_)
+                                 + ".bin",
+                             model_file_type);
+    }
+    loadWeightFromBin<T>(weights_ptr[10 + gated_activation_weight_offset],
+                         {weights_size[10 + gated_activation_weight_offset]},
                          dir_path + "layer.2.DenseReluDense.wo.weight." + std::to_string(tensor_para_rank_) + ".bin",
                          model_file_type);
 
     if (t5_with_bias_) {
-        loadWeightFromBin<T>(
-            weights_ptr[11], {(int)weights_size[11]}, dir_path + "layer.0.layer_norm.bias.bin", model_file_type);
-        loadWeightFromBin<T>(weights_ptr[12],
-                             {(int)weights_size[12]},
+        loadWeightFromBin<T>(weights_ptr[11 + gated_activation_weight_offset],
+                             {weights_size[11 + gated_activation_weight_offset]},
+                             dir_path + "layer.0.layer_norm.bias.bin",
+                             model_file_type);
+        loadWeightFromBin<T>(weights_ptr[12 + gated_activation_weight_offset],
+                             {weights_size[12 + gated_activation_weight_offset]},
                              dir_path + "layer.0.SelfAttention.qkv.bias." + std::to_string(tensor_para_rank_) + ".bin",
                              model_file_type);
-        loadWeightFromBin<T>(
-            weights_ptr[13], {(int)weights_size[13]}, dir_path + "layer.0.SelfAttention.o.bias.bin", model_file_type);
-        loadWeightFromBin<T>(
-            weights_ptr[14], {(int)weights_size[14]}, dir_path + "layer.1.layer_norm.bias.bin", model_file_type);
-        loadWeightFromBin<T>(weights_ptr[15],
-                             {(int)weights_size[15]},
+        loadWeightFromBin<T>(weights_ptr[13 + gated_activation_weight_offset],
+                             {weights_size[13 + gated_activation_weight_offset]},
+                             dir_path + "layer.0.SelfAttention.o.bias.bin",
+                             model_file_type);
+        loadWeightFromBin<T>(weights_ptr[14 + gated_activation_weight_offset],
+                             {weights_size[14 + gated_activation_weight_offset]},
+                             dir_path + "layer.1.layer_norm.bias.bin",
+                             model_file_type);
+        loadWeightFromBin<T>(weights_ptr[15 + gated_activation_weight_offset],
+                             {weights_size[15 + gated_activation_weight_offset]},
                              dir_path + "layer.1.EncDecAttention.q.bias." + std::to_string(tensor_para_rank_) + ".bin",
                              model_file_type);
-        loadWeightFromBin<T>(weights_ptr[16],
-                             {(int)weights_size[16]},
+        loadWeightFromBin<T>(weights_ptr[16 + gated_activation_weight_offset],
+                             {weights_size[16 + gated_activation_weight_offset]},
                              dir_path + "layer.1.EncDecAttention.k.bias." + std::to_string(tensor_para_rank_) + ".bin",
                              model_file_type);
-        loadWeightFromBin<T>(weights_ptr[17],
-                             {(int)weights_size[17]},
+        loadWeightFromBin<T>(weights_ptr[17 + gated_activation_weight_offset],
+                             {weights_size[17 + gated_activation_weight_offset]},
                              dir_path + "layer.1.EncDecAttention.v.bias." + std::to_string(tensor_para_rank_) + ".bin",
                              model_file_type);
-        loadWeightFromBin<T>(
-            weights_ptr[18], {(int)weights_size[18]}, dir_path + "layer.1.EncDecAttention.o.bias.bin", model_file_type);
-        loadWeightFromBin<T>(
-            weights_ptr[19], {(int)weights_size[19]}, dir_path + "layer.2.layer_norm.bias.bin", model_file_type);
-        loadWeightFromBin<T>(weights_ptr[20],
-                             {(int)weights_size[20]},
+        loadWeightFromBin<T>(weights_ptr[18 + gated_activation_weight_offset],
+                             {weights_size[18 + gated_activation_weight_offset]},
+                             dir_path + "layer.1.EncDecAttention.o.bias.bin",
+                             model_file_type);
+        loadWeightFromBin<T>(weights_ptr[19 + gated_activation_weight_offset],
+                             {weights_size[19 + gated_activation_weight_offset]},
+                             dir_path + "layer.2.layer_norm.bias.bin",
+                             model_file_type);
+        loadWeightFromBin<T>(weights_ptr[20 + gated_activation_weight_offset],
+                             {weights_size[20 + gated_activation_weight_offset]},
                              dir_path + "layer.2.DenseReluDense.wi.bias." + std::to_string(tensor_para_rank_) + ".bin",
                              model_file_type);
-        loadWeightFromBin<T>(
-            weights_ptr[21], {(int)weights_size[21]}, dir_path + "layer.2.DenseReluDense.wo.bias.bin", model_file_type);
+        if (use_gated_activation_) {
+            loadWeightFromBin<T>(weights_ptr[22],
+                                 {weights_size[22]},
+                                 dir_path + "layer.2.DenseReluDense.wi2.bias." + std::to_string(tensor_para_rank_)
+                                     + ".bin",
+                                 model_file_type);
+            loadWeightFromBin<T>(
+                weights_ptr[23], {weights_size[23]}, dir_path + "layer.2.DenseReluDense.wo.bias.bin", model_file_type);
+        }
+        else {
+            loadWeightFromBin<T>(
+                weights_ptr[21], {weights_size[21]}, dir_path + "layer.2.DenseReluDense.wo.bias.bin", model_file_type);
+        }
     }
 
     FT_LOG_DEBUG("T5DecoderLayerWeight " + std::string(__func__) + " end");
 }
 
 template<typename T>
-void T5DecoderLayerWeight<T>::setT5WithBias(bool t5_with_bias_para)
+void T5DecoderLayerWeight<T>::setT5WithBias(bool t5_with_bias_para, bool use_gated_activation_para)
 {
-    t5_with_bias_ = t5_with_bias_para;
+    t5_with_bias_         = t5_with_bias_para;
+    use_gated_activation_ = use_gated_activation_para;
 }
 
 template struct T5DecoderLayerWeight<float>;
 template struct T5DecoderLayerWeight<half>;
+#ifdef ENABLE_BF16
+template struct T5DecoderLayerWeight<__nv_bfloat16>;
+#endif
 
 }  // namespace fastertransformer

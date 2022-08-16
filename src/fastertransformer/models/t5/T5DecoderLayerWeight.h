@@ -35,7 +35,8 @@ struct T5DecoderLayerWeight {
                          const size_t mem_d_model,
                          const size_t tensor_para_size,
                          const size_t tensor_para_rank,
-                         const bool t5_with_bias);
+                         const bool   t5_with_bias,
+                         const bool   use_gated_activation);
     ~T5DecoderLayerWeight();
     T5DecoderLayerWeight(const T5DecoderLayerWeight& other);
     T5DecoderLayerWeight& operator=(const T5DecoderLayerWeight& other);
@@ -45,12 +46,13 @@ struct T5DecoderLayerWeight {
     LayerNormWeight<T> self_attn_layernorm_weights;
     AttentionWeight<T> cross_attention_weights;
     LayerNormWeight<T> cross_attn_layernorm_weights;
-    FfnWeight<T> ffn_weights;
-    bool t5_with_bias_;
+    FfnWeight<T>       ffn_weights;
+    bool               t5_with_bias_;
+    bool               use_gated_activation_;
 
     void loadModel(std::string dir_path, FtCudaDataType model_file_type);
 
-    void setT5WithBias(bool t5_with_bias_para);
+    void setT5WithBias(bool t5_with_bias_para, bool use_gated_activation_para);
 
 private:
     void setWeightPtr();
@@ -64,13 +66,13 @@ private:
     size_t mem_d_model_;
     size_t tensor_para_size_;
     size_t tensor_para_rank_;
-    bool is_maintain_buffer = false;
+    bool   is_maintain_buffer = false;
 
     int real_weights_num_;
 
-    const static int weights_num_ = 22;
-    T* weights_ptr[weights_num_];
-    size_t weights_size[weights_num_];
+    const static int weights_num_ = 24;
+    T*               weights_ptr[weights_num_];
+    size_t           weights_size[weights_num_];
 };
 
 }  // namespace fastertransformer

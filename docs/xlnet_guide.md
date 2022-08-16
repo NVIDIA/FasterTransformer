@@ -33,11 +33,10 @@ In this demo, you can run the XLNet as a C++ program.
 
 - CMake >= 3.8
 - CUDA 11.0 or newer version
-- NCCL 2.10 or newer version
 - Python 3 is recommended because some features are not supported in python 2
 - Tensorflow: Verify on 1.15, 1.13 and 1.14 should work.
 
-Recommand to use image `nvcr.io/nvidia/tensorflow:20.12-tf1-py3`.  
+Recommend to use image `nvcr.io/nvidia/tensorflow:20.12-tf1-py3`.  
 
 ```bash
 docker run -ti --gpus all --rm nvcr.io/nvidia/tensorflow:20.12-tf1-py3 bash
@@ -76,7 +75,7 @@ cd /workspace/FasterTransformer/build
 
 
 ```bash
-./bin/xlnet_gemm <batch_size> <sequence_length> <head_number> <size_per_head> <is_use_fp16>
+./bin/xlnet_gemm <batch_size> <sequence_length> <head_number> <size_per_head> <data_type>
 ./bin/xlnet_example <batch_size> <num_layers> <sequence_length> <head_number> <size_per_head> <data_type>
 ```
 Data Type = 0 (FP32) or 1 (FP16) or 2 (BF16)
@@ -92,7 +91,7 @@ Data Type = 0 (FP32) or 1 (FP16) or 2 (BF16)
 ./bin/xlnet_example 8 12 128 12 64 1 
 ```
 
-- Run XLNet under FP16 on C++
+- Run XLNet under BF16 on C++
 ```bash
 ./bin/xlnet_gemm 8 128 12 64 2
 ./bin/xlnet_example 8 12 128 12 64 2
@@ -101,7 +100,7 @@ Data Type = 0 (FP32) or 1 (FP16) or 2 (BF16)
 #### Verify the correctness  
 ```bash
 cd  examples/tensorflow/xlnet
-bash downloadModel.sh #Dowload the input and model data
+bash downloadModel.sh #Download the input and model data
 bash verifyCorrectness.sh # For FP32 model
 bash verifyCorrectness.sh -f 1 #For FP16 model
 ```

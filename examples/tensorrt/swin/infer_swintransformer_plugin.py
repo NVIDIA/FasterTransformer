@@ -23,13 +23,10 @@ import torch.backends.cudnn as cudnn
 
 import ctypes
 import tensorrt as trt
-import pycuda.driver as cuda
-import pycuda.autoinit
 
 import sys
 sys.path.insert(0, "../../pytorch/swin/Swin-Transformer-Quantization")
 from SwinTransformer.config import get_config
-
 from SwinTransformer.models import build_model
 
 test_time = 100
@@ -61,7 +58,7 @@ def parse_option():
     parser.add_argument('--accumulation-steps', type=int, help="gradient accumulation steps")
     parser.add_argument('--use-checkpoint', action='store_true',
                         help="whether to use gradient checkpointing to save memory")
-    parser.add_argument('--amp-opt-level', type=str, default='O1', choices=['O0', 'O1', 'O2'],
+    parser.add_argument('--amp-opt-level', type=str, default='O0', choices=['O0', 'O1', 'O2'],
                         help='mixed precision opt level, if O0, no amp is used')
     parser.add_argument('--output', default='output', type=str, metavar='PATH',
                         help='root of output folder, the full path is <output>/<model_name>/<tag> (default: output)')
@@ -88,7 +85,7 @@ def main(config, args):
     validate_with_random_data(config, args, model)
 
 @torch.no_grad()
-def run_swintransformer_plugin(args, config, model, image):
+def run_swintransformer_plugin(args, config, model, images):
     TRT_LOGGER = trt.Logger(trt.Logger.INFO)
     # Import necessary plugins for BERT TensorRT
     ctypes.CDLL("../../../build/lib/libswinTransformer_plugin.so", mode=ctypes.RTLD_GLOBAL)
@@ -100,65 +97,46 @@ def run_swintransformer_plugin(args, config, model, image):
     in_chans = config.MODEL.SWIN.IN_CHANS
     embed_dim = config.MODEL.SWIN.EMBED_DIM
 
-    output_size = model.head.bias.shape[0]
-    print("output_size ", output_size)
-
     with open(args.engine, 'rb') as f, trt.Runtime(TRT_LOGGER) as runtime, \
             runtime.deserialize_cuda_engine(f.read()) as engine, \
             engine.create_execution_context() as context:
 
         context.active_optimization_profile = 0
 
-        if args.use_fp16:
-            input_nbytes0 = max_batch * in_chans * img_size * img_size * trt.float16.itemsize
-        else:
-            input_nbytes0 = max_batch * in_chans * img_size * img_size * trt.float32.itemsize
-        stream = cuda.Stream()
-
-        d_inputs = [cuda.mem_alloc(input_nbytes0)]
-        output_shape = (max_batch * output_size)
-        h_output = cuda.pagelocked_empty(output_shape, dtype=np.float32)
-        d_output = cuda.mem_alloc(h_output.nbytes)
-
-        #import pdb;pdb.set_trace()
         context.set_binding_shape(0, (max_batch, in_chans, img_size, img_size))
+        output_shape = tuple(context.get_binding_shape(1))
+        print('output_shape binding:', output_shape)
 
-        if args.use_fp16:
-            image = image.astype(np.float16)
-        else:
-            image = image.astype(np.float32)
+        d_inputs = [images]
+        d_output = torch.empty(output_shape, dtype=torch.float32).cuda()
 
-        h_input_embeds = cuda.register_host_memory(np.ascontiguousarray(image.ravel()))
-        cuda.memcpy_htod_async(d_inputs[0], h_input_embeds, stream)
+        stream = torch.cuda.Stream()
 
         # warm up
         for i in range(warmup_time):
-            context.execute_async_v2(bindings=[int(d_inp) for d_inp in d_inputs] + [int(d_output)], stream_handle=stream.handle)
+            context.execute_async_v2(bindings=[d_inp.data_ptr() for d_inp in d_inputs] + [d_output.data_ptr()], stream_handle=stream.cuda_stream)
 
         #ignore the last fc layer
         op_end = time.time()
         for i in range(test_time):
-            context.execute_async_v2(bindings=[int(d_inp) for d_inp in d_inputs] + [int(d_output)], stream_handle=stream.handle)
+            context.execute_async_v2(bindings=[d_inp.data_ptr() for d_inp in d_inputs] + [d_output.data_ptr()], stream_handle=stream.cuda_stream)
         stream.synchronize()
 
         print("plugin time : ", (time.time() - op_end)/test_time*1000.0, "ms")
 
-        cuda.memcpy_dtoh_async(h_output, d_output, stream)
-        stream.synchronize()
-
-        return h_output
+        return d_output.cpu().numpy()
 
 @torch.no_grad()
 def run_torch(model, images, mark):
     # warm up
     for i in range(warmup_time):
-        output = model(images)
+        output = model.forward_features(images)
 
     torch.cuda.synchronize()
     torch_start = time.time()
     #_nvtx.rangePushA("torch")
     for i in range(test_time):
-        torch_output = model(images)
+        torch_output = model.forward_features(images)
     #_nvtx.rangePop()
     torch.cuda.synchronize()
     torch_end = time.time()
@@ -172,10 +150,8 @@ def validate_with_random_data(config, args, model):
     max_batch = config.DATA.BATCH_SIZE
     img_size = config.DATA.IMG_SIZE
     in_chans = config.MODEL.SWIN.IN_CHANS
-    images = np.random.rand(max_batch, in_chans, img_size, img_size)
-    
-    ## run pytorch plugin
-    plugin_output = run_swintransformer_plugin(args, config, model, images)
+    image = np.random.rand(1, in_chans, img_size, img_size)
+    images = np.repeat(image, max_batch, axis=0)
     
     if args.use_fp16:
         images = torch.tensor(images, dtype=torch.half)
@@ -183,12 +159,15 @@ def validate_with_random_data(config, args, model):
     else:
         images = torch.tensor(images, dtype=torch.float)
     images = images.cuda(non_blocking=True)
-    traced_module = torch.jit.trace(model, images)
-    torch_traced_output = run_torch(traced_module, images, "torch trace")
+    ## run pytorch plugin
+    plugin_output = run_swintransformer_plugin(args, config, model, images)
     torch_output = run_torch(model, images, "torch")
 
     diff = abs(torch_output - plugin_output.reshape(max_batch, -1))
+    print('plugin_output', plugin_output.mean((1, 2, 3)), 'torch_output',torch_output.mean((1)))
     print("torch_output vs plugin_output , avg diff : ", diff.mean((1)), "max diff : ", diff.max((1)))
+    assert diff.mean() < 0.001, "[ERROR] SWIN PLUGIN TEST FAIL !"
+    print("[INFO] SWIN TRT PLUGIN TEST PASS !")
 
 if __name__ == '__main__':
     args, config = parse_option()

@@ -20,51 +20,57 @@
 
 namespace fastertransformer {
 
-__global__ void update_indir_cache_kernel(int* tgt_indir_cache,
-                                          const int* src_indir_cache,
-                                          const int* beam_ids,
+__global__ void update_indir_cache_kernel(int*        tgt_indir_cache,
+                                          const int*  src_indir_cache,
+                                          const int*  beam_ids,
                                           const bool* finished,
-                                          int batch_dim,
-                                          int local_batch_size,
-                                          int beam_width,
-                                          int max_seq_len,
-                                          int step)
+                                          int         start_step,
+                                          int         batch_dim,
+                                          int         local_batch_size,
+                                          int         beam_width,
+                                          int         max_seq_len,
+                                          int         step)
 {
-    int time_step = threadIdx.x + blockIdx.x * blockDim.x;
-    int bb_id = threadIdx.y + blockIdx.y * blockDim.y;
-    const int batch_id = bb_id / beam_width;
-    const int beam_id = bb_id % beam_width;
+    int       time_step = threadIdx.x + blockIdx.x * blockDim.x;
+    int       bb_id     = threadIdx.y + blockIdx.y * blockDim.y;
+    const int batch_id  = bb_id / beam_width;
+    const int beam_id   = bb_id % beam_width;
 
     if (bb_id >= beam_width * local_batch_size || time_step >= min(step + 1, max_seq_len) || finished[bb_id]) {
         return;
     }
+    time_step += start_step;
+    const int time_step_circ = time_step % max_seq_len;
 
     const int src_beam = beam_ids[batch_id * beam_width + beam_id];
 
-    const uint tgt_offset = batch_id * beam_width * max_seq_len + beam_id * max_seq_len + time_step;
-    const uint src_offset = batch_id * beam_width * max_seq_len + src_beam * max_seq_len + time_step;
+    const uint tgt_offset = batch_id * beam_width * max_seq_len + beam_id * max_seq_len + time_step_circ;
+    const uint src_offset = batch_id * beam_width * max_seq_len + src_beam * max_seq_len + time_step_circ;
 
     tgt_indir_cache[tgt_offset] = (time_step == step) ? beam_id : src_indir_cache[src_offset];
 }
 
-void update_indir_cache_kernelLauncher(int* tgt_indir_cache,
-                                       const int* src_indir_cache,
-                                       const int* beam_ids,
-                                       const bool* finished,
-                                       int batch_dim,
-                                       int local_batch_size,
-                                       int beam_width,
-                                       int max_seq_len,
-                                       int step,
+void update_indir_cache_kernelLauncher(int*         tgt_indir_cache,
+                                       const int*   src_indir_cache,
+                                       const int*   beam_ids,
+                                       const bool*  finished,
+                                       int          batch_dim,
+                                       int          local_batch_size,
+                                       int          beam_width,
+                                       int          max_seq_len,
+                                       int          step,
                                        cudaStream_t stream)
 {
     const dim3 block(32);
-    // Update indirections steps [0, step], included
-    const dim3 grid((step + 1 + block.x - 1) / block.x, local_batch_size * beam_width);
+    const int  start_step = max(0, step + 1 - max_seq_len);
+    const int  num_steps  = min(step + 1, max_seq_len);
+    // Update indirections steps [start_step, step], included
+    const dim3 grid((num_steps + block.x - 1) / block.x, local_batch_size * beam_width);
     update_indir_cache_kernel<<<grid, block, 0, stream>>>(tgt_indir_cache,
                                                           src_indir_cache,
                                                           beam_ids,
                                                           finished,
+                                                          start_step,
                                                           batch_dim,
                                                           local_batch_size,
                                                           beam_width,
@@ -73,21 +79,21 @@ void update_indir_cache_kernelLauncher(int* tgt_indir_cache,
 }
 
 template<typename T>
-BaseBeamSearchLayer<T>::BaseBeamSearchLayer(size_t max_batch_size,
-                                            size_t head_num,
-                                            size_t size_per_head,
-                                            size_t beam_width,
-                                            size_t vocab_size,
-                                            size_t vocab_size_padded,
-                                            int end_id,
-                                            float diversity_rate,
-                                            float temperature,
-                                            float len_penalty,
-                                            float repetition_penalty,
-                                            cudaStream_t stream,
+BaseBeamSearchLayer<T>::BaseBeamSearchLayer(size_t           max_batch_size,
+                                            size_t           head_num,
+                                            size_t           size_per_head,
+                                            size_t           beam_width,
+                                            size_t           vocab_size,
+                                            size_t           vocab_size_padded,
+                                            int              end_id,
+                                            float            diversity_rate,
+                                            float            temperature,
+                                            float            len_penalty,
+                                            float            repetition_penalty,
+                                            cudaStream_t     stream,
                                             cublasMMWrapper* cublas_wrapper,
-                                            IAllocator* allocator,
-                                            bool is_free_buffer_after_forward):
+                                            IAllocator*      allocator,
+                                            bool             is_free_buffer_after_forward):
     DynamicDecodeBaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, nullptr),
     vocab_size_(vocab_size),
     vocab_size_padded_(vocab_size_padded)
@@ -106,6 +112,7 @@ BaseBeamSearchLayer<T>::BaseBeamSearchLayer(BaseBeamSearchLayer<T> const& beam_s
 template<typename T>
 BaseBeamSearchLayer<T>::~BaseBeamSearchLayer()
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     freeBuffer();
 }
 
@@ -113,9 +120,17 @@ template<typename T>
 void BaseBeamSearchLayer<T>::freeBuffer()
 {
     if (is_allocate_buffer_) {
-        allocator_->free(topk_softmax_workspace_);
+        allocator_->free((void**)(&topk_softmax_workspace_));
         is_allocate_buffer_ = false;
     }
+}
+
+template<typename T>
+void BaseBeamSearchLayer<T>::setup(const size_t                                   batch_size,
+                                   const size_t                                   beam_width,
+                                   const std::unordered_map<std::string, Tensor>* runtime_args)
+{
+    // do nothing.
 }
 
 template<typename T>
@@ -156,7 +171,7 @@ void BaseBeamSearchLayer<T>::forward(std::vector<Tensor>* output_tensors, const 
 }
 
 template<typename T>
-void BaseBeamSearchLayer<T>::forward(std::unordered_map<std::string, Tensor>* output_tensors,
+void BaseBeamSearchLayer<T>::forward(std::unordered_map<std::string, Tensor>*       output_tensors,
                                      const std::unordered_map<std::string, Tensor>* input_tensors)
 {
     // input_tensors:
@@ -188,16 +203,12 @@ void BaseBeamSearchLayer<T>::forward(std::unordered_map<std::string, Tensor>* ou
     const int beam_width = output_tensors->at("output_ids").shape[2];
     allocateBuffer(batch_size, beam_width);
 
-    const int step = *((int*)input_tensors->at("step").data);
-    const int ite = *((int*)input_tensors->at("ite").data);
+    const int step             = *((int*)input_tensors->at("step").data);
+    const int ite              = *((int*)input_tensors->at("ite").data);
     const int local_batch_size = input_tensors->at("logits").shape[0];
-    const int head_num = input_tensors->at("src_value_cache").shape[2];
-    const int size_per_head = input_tensors->at("src_value_cache").shape[4];
 
     const float temperature =
         input_tensors->count("temperature") ? input_tensors->at("temperature").getVal<float>() : 1.0f;
-    const float len_penalty =
-        input_tensors->count("len_penalty") ? input_tensors->at("len_penalty").getVal<float>() : 1.0f;
     const float repetition_penalty =
         input_tensors->count("repetition_penalty") ? input_tensors->at("repetition_penalty").getVal<float>() : 1.0f;
 
@@ -218,7 +229,6 @@ void BaseBeamSearchLayer<T>::forward(std::unordered_map<std::string, Tensor>* ou
                                 vocab_size_padded_,
                                 (const int*)input_tensors->at("end_id").data,
                                 temperature,
-                                len_penalty,
                                 repetition_penalty,
                                 stream_);
     sync_check_cuda_error();

@@ -32,32 +32,33 @@ int decodingExample(const size_t batch_size,
                     const size_t max_seq_len,
                     const size_t memory_max_seq_len,
                     const size_t memory_hidden_units,
-                    const int top_k,
-                    const float top_p);
+                    const int    top_k,
+                    const float  top_p);
 
 int main(int argc, char** argv)
 {
     if (argc != 14) {
         printf("[ERROR] decoding_example batch_size beam_width head_num size_per_head inter_size vocab_size"
-               " num_layers max_seq_len memory_max_seq_len memory_hidden_units top_k top_p is_fp16\n");
+               " num_layers max_seq_len memory_max_seq_len memory_hidden_units top_k top_p data_type\n");
         printf("e.g., ./bin/decoding_example 4 1 8 64 2048 30000 6 32 32 512 0 0.6 1\n");
         return 0;
     }
 
-    int batch_size = atoi(argv[1]);
-    int beam_width = atoi(argv[2]);
-    int head_num = atoi(argv[3]);
-    int size_per_head = atoi(argv[4]);
-    int inter_size = atoi(argv[5]);
-    int vocab_size = atoi(argv[6]);
-    int num_layers = atoi(argv[7]);
-    int max_seq_len = atoi(argv[8]);
-    int memory_max_seq_len = atoi(argv[9]);
-    int memory_hidden_units = atoi(argv[10]);
-    int top_k = atoi(argv[11]);
-    float top_p = atof(argv[12]);
+    int                  batch_size          = atoi(argv[1]);
+    int                  beam_width          = atoi(argv[2]);
+    int                  head_num            = atoi(argv[3]);
+    int                  size_per_head       = atoi(argv[4]);
+    int                  inter_size          = atoi(argv[5]);
+    int                  vocab_size          = atoi(argv[6]);
+    int                  num_layers          = atoi(argv[7]);
+    int                  max_seq_len         = atoi(argv[8]);
+    int                  memory_max_seq_len  = atoi(argv[9]);
+    int                  memory_hidden_units = atoi(argv[10]);
+    int                  top_k               = atoi(argv[11]);
+    float                top_p               = atof(argv[12]);
+    const CublasDataType data_type           = static_cast<CublasDataType>(atoi(argv[13]));  // 0 FP32, 1 FP16, 2 BF 16
 
-    if (atoi(argv[13]) == 0) {
+    if (data_type == FLOAT_DATATYPE) {
         return decodingExample<float>(batch_size,
                                       beam_width,
                                       head_num,
@@ -71,7 +72,7 @@ int main(int argc, char** argv)
                                       top_k,
                                       top_p);
     }
-    else if (atoi(argv[13]) == 1) {
+    else if (data_type == HALF_DATATYPE) {
         return decodingExample<half>(batch_size,
                                      beam_width,
                                      head_num,
@@ -85,6 +86,22 @@ int main(int argc, char** argv)
                                      top_k,
                                      top_p);
     }
+#ifdef ENABLE_BF16
+    else if (data_type == BFLOAT16_DATATYPE) {
+        return decodingExample<__nv_bfloat16>(batch_size,
+                                              beam_width,
+                                              head_num,
+                                              size_per_head,
+                                              inter_size,
+                                              vocab_size,
+                                              num_layers,
+                                              max_seq_len,
+                                              memory_max_seq_len,
+                                              memory_hidden_units,
+                                              top_k,
+                                              top_p);
+    }
+#endif
     else {
         throw std::runtime_error(std::string("[FT][ERROR] is_fp16 should be 0 (use float)"
                                              "or 1 (use half). \n "));
@@ -102,15 +119,15 @@ int decodingExample(const size_t batch_size,
                     const size_t max_seq_len,
                     const size_t memory_max_seq_len,
                     const size_t memory_hidden_units,
-                    const int top_k,
-                    const float top_p)
+                    const int    top_k,
+                    const float  top_p)
 {
     const size_t hidden_units = head_num * size_per_head;
-    const int start_id = 50256;
-    const int end_id = 50256;
+    const int    start_id     = 0;
+    const int    end_id       = 1;
 
-    cudaStream_t stream;
-    cublasHandle_t cublas_handle;
+    cudaStream_t     stream;
+    cublasHandle_t   cublas_handle;
     cublasLtHandle_t cublaslt_handle;
     cudaStreamCreate(&stream);
     cublasCreate(&cublas_handle);
@@ -120,12 +137,17 @@ int decodingExample(const size_t batch_size,
 
     Allocator<AllocatorType::CUDA> allocator(getDevice());
 
-    std::mutex* cublas_wrapper_mutex = new std::mutex();
+    std::mutex*     cublas_wrapper_mutex = new std::mutex();
     cublasMMWrapper cublas_wrapper =
         cublasMMWrapper(cublas_handle, cublaslt_handle, stream, cublas_algo_map, cublas_wrapper_mutex, &allocator);
     if (std::is_same<T, half>::value) {
         cublas_wrapper.setFP16GemmConfig();
     }
+#ifdef ENABLE_BF16
+    else if (std::is_same<T, __nv_bfloat16>::value) {
+        cublas_wrapper.setBF16GemmConfig();
+    }
+#endif
     else if (std::is_same<T, float>::value) {
         cublas_wrapper.setFP32GemmConfig();
     }
@@ -157,7 +179,7 @@ int decodingExample(const size_t batch_size,
                                        false,
                                        &prop);
 
-    T* d_memory_tensor;
+    T*   d_memory_tensor;
     int* d_memory_sequence_lengths;
     deviceMalloc(&d_memory_tensor, memory_hidden_units * memory_max_seq_len * batch_size * beam_width);
     deviceMalloc(&d_memory_sequence_lengths, batch_size * beam_width);

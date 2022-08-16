@@ -14,167 +14,231 @@
  * limitations under the License.
  */
 
+#include <assert.h>
+
 #include "src/fastertransformer/kernels/beam_search_penalty_kernels.h"
 #include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
 
 namespace fastertransformer {
 
 template<typename T>
-__global__ void add_bias_apply_logit_penalties_kernel(int step,
-                                                      int vocab_size,
-                                                      const int vocab_size_padded,
-                                                      int beam_width,
-                                                      T* logits,
-                                                      const int* current_ids,
-                                                      const int* previous_ids,
-                                                      const int* parent_ids,
-                                                      const int* input_lengths,
-                                                      const T* bias,
-                                                      const int ite,
-                                                      const int max_input_length,
-                                                      const int batch_size,
-                                                      const int* end_ids,
-                                                      float inv_temp,
-                                                      float len_penalty,
-                                                      float repeat_penalty)
+__global__ void add_bias_temperature(T*          logits,
+                                     const T*    bias,
+                                     const int   batch_size,
+                                     const int   beam_width,
+                                     const int   vocab_size,
+                                     const int   vocab_size_padded,
+                                     const float temperature)
 {
-    // TODO(bhsueh) Seems there are some problem for len_penalty implementation
-    int tid = threadIdx.x;
-    int bid = blockIdx.x;
+    int tid  = threadIdx.x;
+    int bid  = blockIdx.x;
     int bbid = blockIdx.y;
-    int bbsize = batch_size * beam_width;
-    int batch_id = blockIdx.y / beam_width;
 
-    const int vocab_size_padded_offset = bbid * vocab_size_padded;
+    logits += bbid * vocab_size_padded;
 
-    const bool IS_FP16 = std::is_same<T, half>::value;
-    const T MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
-
+    const T MASK_VAL = (std::is_same<T, half>::value) ? -HALF_FLT_MAX : -FLT_MAX;
+    const T inv_temp = static_cast<T>(1.0f / temperature);
     for (int i = tid + bid * blockDim.x; i < vocab_size_padded; i += blockDim.x * gridDim.x) {
         if (i < vocab_size) {
             T bias_val = bias == nullptr ? (T)(0.0f) : bias[i];
-            logits[i + vocab_size_padded_offset] = (logits[i + vocab_size_padded_offset] + bias_val) * (T)(inv_temp);
+            logits[i]  = (logits[i] + bias_val) * inv_temp;
         }
         else {
-            logits[i + vocab_size_padded_offset] = -MAX_T_VAL;
+            logits[i] = MASK_VAL;
         }
     }
-    if (tid == 0 && bid == 0) {
-        // TODO(bhsueh) apply repetition penalty (this can apply the penalty multiple times to a repeated word).
-        int prev_id = current_ids[bbid];
-        const int end_id = end_ids[batch_id];
-        if (logits[prev_id + vocab_size_padded_offset] > T(0)) {
-            logits[prev_id + vocab_size_padded_offset] =
-                float(logits[prev_id + vocab_size_padded_offset]) / repeat_penalty;
-            logits[end_id + vocab_size_padded_offset] = float(logits[end_id + vocab_size_padded_offset]) / len_penalty;
-        }
-        else {
-            logits[prev_id + vocab_size_padded_offset] =
-                float(logits[prev_id + vocab_size_padded_offset]) * repeat_penalty;
-            logits[end_id + vocab_size_padded_offset] = float(logits[end_id + vocab_size_padded_offset]) * len_penalty;
-        }
-        if (step > 1) {
-            int parent_beamid = parent_ids[bbsize * (step - 2) + ite * gridDim.y + blockIdx.y];
-            for (int i = step - 2; i > 0; --i) {
-                bool is_mask = input_lengths != nullptr && i >= input_lengths[bbid] && step < max_input_length;
-                if (is_mask == false) {
-                    prev_id = previous_ids[bbsize * i + ite * gridDim.y + batch_id * beam_width + parent_beamid];
-                    if (logits[prev_id + vocab_size_padded_offset] > T(0)) {
-                        logits[prev_id + vocab_size_padded_offset] =
-                            float(logits[prev_id + vocab_size_padded_offset]) / repeat_penalty;
-                    }
-                    else {
-                        logits[prev_id + vocab_size_padded_offset] =
-                            float(logits[prev_id + vocab_size_padded_offset]) * repeat_penalty;
-                    }
-                }
-                parent_beamid = parent_ids[bbsize * (i - 1) + ite * gridDim.y + batch_id * beam_width + parent_beamid];
+}
+
+template<>
+__global__ void add_bias_temperature(half2*       logits,
+                                     const half2* bias,
+                                     const int    batch_size,
+                                     const int    beam_width,
+                                     const int    vocab_size,
+                                     const int    vocab_size_padded,
+                                     const float  temperature)
+{
+    assert(vocab_size % 2 == 0);
+    assert(vocab_size_padded % 2 == 0);
+
+    const int tid  = threadIdx.x;
+    const int bid  = blockIdx.x;
+    const int bbid = blockIdx.y;
+
+    const half2 mask_val = __float2half2_rn(-HALF_FLT_MAX);
+    const half2 inv_temp = __float2half2_rn(1.0f / temperature);
+
+    const int half_vocab_size        = vocab_size / 2;
+    const int half_vocab_size_padded = vocab_size_padded / 2;
+
+    logits += bbid * half_vocab_size_padded;
+    for (int index = tid + bid * blockDim.x; index < half_vocab_size_padded; index += blockDim.x * gridDim.x) {
+        int   vocab_idx = index % half_vocab_size_padded;
+        half2 logit     = vocab_idx < half_vocab_size ? __ldg(&logits[index]) : mask_val;
+        if (vocab_idx < half_vocab_size) {
+            if (bias != nullptr) {
+                logit = __hadd2(logit, bias[vocab_idx]);
             }
+            logit = __hmul2(logit, inv_temp);
         }
+        logits[index] = logit;
     }
 }
 
 template<typename T>
-void invokeAddBiasApplyPenalties(int step,
-                                 T* logits,
-                                 const int* current_ids,
-                                 const int* previous_ids,
-                                 const int* parent_ids,
-                                 const int* input_lengths,
-                                 const T* bias,
-                                 const int ite,
-                                 const int max_input_length,
-                                 const int local_batch_size,
-                                 const int batch_size,
-                                 const int beam_width,
-                                 const int vocab_size,
-                                 const int vocab_size_padded,
-                                 const int* end_ids,
-                                 const float temperature,
-                                 const float len_penalty,
-                                 const float repeat_penalty,
-                                 cudaStream_t stream)
+__global__ void apply_repetition_penalty(T*          logits,
+                                         const int   batch_size,
+                                         const int   beam_width,
+                                         const int   vocab_size,
+                                         const int   vocab_size_padded,
+                                         const int   step,
+                                         const int*  current_ids,
+                                         const int*  previous_ids,
+                                         const int*  parent_ids,
+                                         const int*  input_lengths,
+                                         const int   max_input_length,
+                                         const float repetition_penalty)
 {
-    dim3 block(256);
-    dim3 grid((vocab_size_padded + block.x - 1) / block.x, beam_width * local_batch_size);
-    add_bias_apply_logit_penalties_kernel<T><<<grid, block, 0, stream>>>(step,
-                                                                         vocab_size,
-                                                                         vocab_size_padded,
-                                                                         beam_width,
-                                                                         logits,
-                                                                         current_ids,
-                                                                         previous_ids,
-                                                                         parent_ids,
-                                                                         input_lengths,
-                                                                         bias,
-                                                                         ite,
-                                                                         max_input_length,
-                                                                         batch_size,
-                                                                         end_ids,
-                                                                         1.f / temperature,
-                                                                         len_penalty,
-                                                                         repeat_penalty);
-    sync_check_cuda_error();
+    assert(step > 0);
+
+    const int tid      = threadIdx.x;
+    const int bbid     = blockIdx.x;
+    const int batch_id = bbid / beam_width;
+    const int bbsize   = batch_size * beam_width;
+
+    logits += bbid * vocab_size_padded;
+    extern __shared__ char sbuf[];
+    T*                     penalty_logits  = reinterpret_cast<T*>(sbuf);
+    int*                   penalty_indices = reinterpret_cast<int*>(penalty_logits + step);
+    const int              input_length    = (input_lengths != nullptr) ? input_lengths[bbid] : max_input_length;
+    if (tid == 0) {
+        T   repet_penalty         = static_cast<T>(repetition_penalty);
+        int prev_id               = current_ids[bbid];
+        T   prev_logit            = logits[prev_id];
+        penalty_indices[step - 1] = prev_id;
+        penalty_logits[step - 1]  = prev_logit > T(0) ? prev_logit / repet_penalty : prev_logit * repet_penalty;
+        if (step > 1) {
+            int parent_beam = bbid % beam_width;
+            for (int i = step - 2; i >= 0; --i) {
+                // Skip the padded tokens.
+                if (i >= input_length && i < max_input_length) {
+                    continue;
+                }
+                parent_beam        = parent_ids[i * bbsize + batch_id * beam_width + parent_beam];
+                prev_id            = previous_ids[i * bbsize + batch_id * beam_width + parent_beam];
+                prev_logit         = logits[prev_id];
+                penalty_indices[i] = prev_id;
+                penalty_logits[i]  = prev_logit > T(0) ? prev_logit / repet_penalty : prev_logit * repet_penalty;
+            }
+        }
+    }
+    __syncthreads();
+    for (int i = tid; i < step; i += blockDim.x) {
+        if (i >= input_length && i < max_input_length) {
+            continue;
+        }
+        logits[penalty_indices[i]] = penalty_logits[i];
+    }
 }
 
-template void invokeAddBiasApplyPenalties(int step,
-                                          float* logits,
-                                          const int* current_ids,
-                                          const int* previous_ids,
-                                          const int* parent_ids,
-                                          const int* input_lengths,
+template<typename T>
+void invokeAddBiasApplyPenalties(int          step,
+                                 T*           logits,
+                                 const int*   current_ids,
+                                 const int*   previous_ids,
+                                 const int*   parent_ids,
+                                 const int*   input_lengths,
+                                 const T*     bias,
+                                 const int    ite,
+                                 const int    max_input_length,
+                                 const int    local_batch_size,
+                                 const int    batch_size,
+                                 const int    beam_width,
+                                 const int    vocab_size,
+                                 const int    vocab_size_padded,
+                                 const int*   end_ids,
+                                 const float  temperature,
+                                 const float  repetition_penalty,
+                                 cudaStream_t stream)
+{
+    if (bias != nullptr || temperature != 1.0f) {
+        dim3 block(512);
+        if (std::is_same<T, half>::value && vocab_size % 2 == 0 && vocab_size_padded % 2 == 0) {
+            dim3 grid((vocab_size_padded / 2 + block.x - 1) / block.x, beam_width * local_batch_size);
+            add_bias_temperature<<<grid, block, 0, stream>>>(reinterpret_cast<half2*>(logits),
+                                                             reinterpret_cast<const half2*>(bias),
+                                                             batch_size,
+                                                             beam_width,
+                                                             vocab_size,
+                                                             vocab_size_padded,
+                                                             temperature);
+        }
+        else {
+            dim3 grid((vocab_size_padded + block.x - 1) / block.x, beam_width * local_batch_size);
+            add_bias_temperature<<<grid, block, 0, stream>>>(
+                logits, bias, batch_size, beam_width, vocab_size, vocab_size_padded, temperature);
+        }
+    }
+
+    if (repetition_penalty != 1.0f) {
+        size_t smem_size = (sizeof(T) + sizeof(int)) * step;
+        dim3   block(256);
+        dim3   grid(beam_width * local_batch_size);
+        apply_repetition_penalty<<<grid, block, smem_size, stream>>>(
+            logits,
+            batch_size,
+            beam_width,
+            vocab_size,
+            vocab_size_padded,
+            step,
+            current_ids,
+            previous_ids,
+            // TODO(jaedeokk):
+            //   Remove (+ite ...) by getting parent_ids with offset
+            //   and then remove 'ite' argument from the function.
+            parent_ids + ite * beam_width * local_batch_size,
+            input_lengths,
+            max_input_length,
+            repetition_penalty);
+    }
+}
+
+template void invokeAddBiasApplyPenalties(int          step,
+                                          float*       logits,
+                                          const int*   current_ids,
+                                          const int*   previous_ids,
+                                          const int*   parent_ids,
+                                          const int*   input_lengths,
                                           const float* bias,
-                                          const int ite,
-                                          const int max_input_length,
-                                          const int local_batch_size,
-                                          const int batch_size,
-                                          const int beam_width,
-                                          const int vocab_size,
-                                          const int vocab_size_padded,
-                                          const int* end_ids,
-                                          const float temerature,
-                                          const float len_penalty,
-                                          const float repeat_penalty,
+                                          const int    ite,
+                                          const int    max_input_length,
+                                          const int    local_batch_size,
+                                          const int    batch_size,
+                                          const int    beam_width,
+                                          const int    vocab_size,
+                                          const int    vocab_size_padded,
+                                          const int*   end_ids,
+                                          const float  temperature,
+                                          const float  repetition_penalty,
                                           cudaStream_t stream);
 
-template void invokeAddBiasApplyPenalties(int step,
-                                          half* logits,
-                                          const int* current_ids,
-                                          const int* previous_ids,
-                                          const int* parent_ids,
-                                          const int* input_lengths,
-                                          const half* bias,
-                                          const int ite,
-                                          const int max_input_length,
-                                          const int local_batch_size,
-                                          const int batch_size,
-                                          const int beam_width,
-                                          const int vocab_size,
-                                          const int vocab_size_padded,
-                                          const int* end_ids,
-                                          const float temerature,
-                                          const float len_penalty,
-                                          const float repeat_penalty,
+template void invokeAddBiasApplyPenalties(int          step,
+                                          half*        logits,
+                                          const int*   current_ids,
+                                          const int*   previous_ids,
+                                          const int*   parent_ids,
+                                          const int*   input_lengths,
+                                          const half*  bias,
+                                          const int    ite,
+                                          const int    max_input_length,
+                                          const int    local_batch_size,
+                                          const int    batch_size,
+                                          const int    beam_width,
+                                          const int    vocab_size,
+                                          const int    vocab_size_padded,
+                                          const int*   end_ids,
+                                          const float  temperature,
+                                          const float  repetition_penalty,
                                           cudaStream_t stream);
 
 }  // namespace fastertransformer

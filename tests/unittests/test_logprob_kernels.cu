@@ -12,32 +12,9 @@
 #include "src/fastertransformer/utils/logger.h"
 #include "src/fastertransformer/utils/memory_utils.h"
 
+#include "tests/unittests/unittest_utils.h"
+
 using namespace fastertransformer;
-
-#define PRINT_LIMIT 16
-#define EPSILON (1e-20)
-
-// Can be replaced by the function provided by a test framework
-
-class TestFailureError : public std::exception {
-private:
-    std::string msg_;
-public:
-    explicit TestFailureError() = default;
-    explicit TestFailureError(std::string name, std::string msg = "") {
-        msg_ = fmtstr("TEST FAIL [%s] %s", name.c_str(), msg.c_str());
-    }
-	const char* what () const throw () {
-    	return msg_.c_str();
-    }
-};
-
-#define EXPECT_TRUE(cond)                           \
-    do { if(!(cond)) {                              \
-        FT_LOG_ERROR("TEST FAIL [%s] at %s:%d",     \
-                     __func__, __FILE__, __LINE__); \
-        throw TestFailureError(__func__);           \
-    } } while(false)
 
 #define EXPECT_ALMOST_EQUAL(name, dtype, ctype, out, ref)       \
     do {                                                        \
@@ -83,9 +60,15 @@ void computeCumLogProbs(float* cum_log_probs,
                         const size_t vocab_size_padded)
 {
     for (size_t step = 0; step < max_input_length; ++step) {
-        size_t step_offset = step * batch_size * vocab_size_padded;
         for (size_t i = 0; i < batch_size; ++i) {
-            if ((int)step < input_lengths[i]) {
+            if ((int)step == 0) {
+                if (log_probs != nullptr) {
+                    log_probs[i] = 0.0f;
+                }
+                cum_log_probs[i] = 0.0f;
+            }
+            else if ((int)step < input_lengths[i]) {
+                size_t step_offset = (step - 1) * batch_size * vocab_size_padded;
                 const T* vec = logits + step_offset + i * vocab_size_padded;
                 float max_logits = -FLT_MAX;
                 for (size_t v = 0; v < vocab_size; ++v) {
@@ -123,8 +106,14 @@ void computeCumLogProbsBatchFirst(float* cum_log_probs,
     for (size_t i = 0; i < batch_size; ++i) {
         size_t batch_offset = i * max_input_length * vocab_size_padded;
         for (size_t step = 0; step < max_input_length; ++step) {
-            if ((int)step < input_lengths[i]) {
-                const T* vec = logits + batch_offset + step * vocab_size_padded;
+            if ((int)step == 0) {
+                if (log_probs != nullptr) {
+                    log_probs[i * max_input_length] = 0.0f;
+                }
+                cum_log_probs[i] = 0.0f;
+            }
+            else if ((int)step < input_lengths[i]) {
+                const T* vec = logits + batch_offset + (step - 1) * vocab_size_padded;
                 float max_logits = -FLT_MAX;
                 for (size_t v = 0; v < vocab_size; ++v) {
                     float val = static_cast<float>(vec[v]);
@@ -147,129 +136,6 @@ void computeCumLogProbsBatchFirst(float* cum_log_probs,
     }
 }
 
-bool almostEqual(float a, float b, float atol = 1e-5, float rtol = 1e-8)
-{
-    // Params: a = value to compare and b = reference
-    // This function follows implementation of numpy.isclose(), which checks
-    //   abs(a - b) <= (atol + rtol * abs(b)).
-    // Note that the inequality above is asymmetric where b is considered as
-    // a reference value. To account into both absolute/relative errors, it
-    // uses absolute tolerance and relative tolerance at the same time. The
-    // default values of atol and rtol borrowed from numpy.isclose(). For the
-    // case of nan value, the result will be true.
-    if (isnan(a) && isnan(b)) {
-        return true;
-    }
-    return fabs(a - b) <= (atol + rtol * fabs(b));
-}
-
-template<typename T>
-bool checkResult(std::string name, T* out, T*ref, size_t size, float atol, float rtol) {
-    size_t failures = 0;
-    float relative_gap = 0.0f;
-
-    T* h_out = reinterpret_cast<T*>(malloc(sizeof(T) * size));
-    check_cuda_error(cudaMemcpy(h_out, out, sizeof(T) * size, cudaMemcpyDeviceToHost));
-
-    for (size_t i = 0; i < size; ++i) {
-        // The values for the output and the reference.
-        float a = (float)h_out[i];
-        float b = (float)ref[i];
-
-        bool ok = almostEqual(a, b, atol, rtol);
-        // Print the error.
-        if (!ok && failures < 4) {
-            FT_LOG_ERROR(">> invalid result for i=%lu:", i);
-            FT_LOG_ERROR(">>    found......: %10.6f", a);
-            FT_LOG_ERROR(">>    expected...: %10.6f", b);
-            FT_LOG_ERROR(">>    error......: %.6f", fabsf(a - b));
-            FT_LOG_ERROR(">>    tol........: %.6f", atol + rtol * fabs(b));
-        }
-        // Update the number of failures.
-        failures += ok ? 0 : 1;
-        // Update the relative gap.
-        relative_gap += fabsf(a - b) / (fabsf(b) + EPSILON);
-    }
-
-    relative_gap /= size;
-
-    // Allow not matched up to 1% elements.
-    size_t tol_failures = (size_t)(0.01 * size);
-    FT_LOG_INFO("check.......%-30s : %s (failures: %.2f%% atol: %.2e rtol: %.2e rel_gap: %.2e%%)",
-                name.c_str(), failures <= tol_failures ? "OK" : "FAILED",
-                100. * failures / size, atol, rtol, 100. * relative_gap);
-    return failures <= tol_failures;
-}
-
-template<typename T>
-bool checkResult(std::string name, T* out, T* ref, size_t size) {
-    bool is_fp32 = sizeof(T) == 4;
-    float atol = is_fp32 ? 1e-6f : 1e-3f;
-    float rtol = is_fp32 ? 1e-4f : 1e-1f;
-    bool is_ok = checkResult(name, out, ref, size, atol, rtol);
-    return is_ok;
-}
-
-template<typename T>
-void initRandom(T* ptr, size_t size, float minval, float maxval) {
-    for (size_t i = 0; i < size; ++i) {
-        float val = static_cast<float>(rand()) / static_cast<float>(RAND_MAX);
-        val *= (maxval - minval);
-        ptr[i] = static_cast<T>(minval + val);
-    }
-}
-
-void initRandomInt(int* ptr, size_t size, int minval, int maxval) {
-    assert(minval < maxval);
-    int mod = maxval - minval;
-    for (size_t i = 0; i < size; ++i) {
-        ptr[i] = minval + rand() % mod;
-    }
-}
-
-template<typename T>
-static inline void printMatrixScientificFormat(T* ptr, int m, int k, int stride, bool is_device_ptr)
-{
-    T* tmp;
-    if (is_device_ptr) {
-        // k < stride ; stride = col-dimension.
-        tmp = reinterpret_cast<T*>(malloc(m * stride * sizeof(T)));
-        check_cuda_error(cudaMemcpy(tmp, ptr, sizeof(T) * m * stride, cudaMemcpyDeviceToHost));
-        cudaDeviceSynchronize();
-    }
-    else {
-        tmp = ptr;
-    }
-
-    for (int ii = -1; ii < m; ++ii) {
-        if (ii >= 0) {
-            printf("%02d ", ii);
-        }
-        else {
-            printf("   ");
-        }
-
-        for (int jj = 0; jj < k; jj += 1) {
-            if (ii >= 0) {
-                printf("%11.4e ", (float)tmp[ii * stride + jj]);
-            }
-            else {
-                printf("%11d ", jj);
-            }
-        }
-        printf("\n");
-    }
-    if (is_device_ptr) {
-        free(tmp);
-    }
-}
-
-template<typename T>
-static inline void printMatrixWithLimit(T* ptr, int m, int k, int stride, bool is_device_ptr) {
-    printMatrixScientificFormat(ptr, std::min(PRINT_LIMIT, m), std::min(PRINT_LIMIT, k), stride, is_device_ptr);
-}
-
-
 /////////////////////////////////// Unittests //////////////////////////////////////////
 
 template<typename T>
@@ -277,7 +143,7 @@ void testCumLogProbCorrectness(TestCase tc) {
     size_t max_input_length = tc.max_input_length;
     size_t batchxbeam = tc.batch_size * tc.beam_width;
     size_t vocab_size = tc.vocab_size;
-    // Make mulitple of 8 as GPT does.
+    // Make multiple of 8 as GPT does.
     size_t vocab_size_padded = static_cast<size_t>(ceil(vocab_size / 8.f) * 8);
 
     cudaStream_t stream;
@@ -285,12 +151,12 @@ void testCumLogProbCorrectness(TestCase tc) {
     Allocator<AllocatorType::CUDA> allocator(getDevice());
 
     // input values
-    T* h_logits = reinterpret_cast<T*>(malloc(sizeof(T) * max_input_length * batchxbeam * vocab_size));
-    int* h_input_ids = reinterpret_cast<int*>(malloc(sizeof(int) * max_input_length * batchxbeam));
-    int* h_input_lengths = reinterpret_cast<int*>(malloc(sizeof(int) * batchxbeam));
+    T* h_logits = new T[max_input_length * batchxbeam * vocab_size];
+    int* h_input_ids = new int[max_input_length * batchxbeam];
+    int* h_input_lengths = new int[batchxbeam];
 
     // outupt buffers
-    float* expected_cum_log_probs = reinterpret_cast<float*>(malloc(sizeof(float) * batchxbeam));
+    float* expected_cum_log_probs = new float[batchxbeam];
 
     // initialize host buffers
     initRandom(h_logits, max_input_length * batchxbeam * vocab_size, -10.0f / vocab_size, -1.0f);
@@ -333,19 +199,21 @@ void testCumLogProbCorrectness(TestCase tc) {
                        batchxbeam,
                        vocab_size,
                        vocab_size_padded);
-    checkResult(tc.toString().c_str(), d_cum_log_probs, expected_cum_log_probs, batchxbeam);
+    std::string tag = tc.toString() + (std::is_same<T, float>::value ? " (fp32)" : " (fp16)");
+    bool passed = checkResult(tag.c_str(), d_cum_log_probs, expected_cum_log_probs, batchxbeam);
+    EXPECT_TRUE(passed);
 
     FT_LOG_DEBUG("free host buffers");
-    free(expected_cum_log_probs);
-    free(h_input_lengths);
-    free(h_input_ids);
-    free(h_logits);
+    delete[] expected_cum_log_probs;
+    delete[] h_input_lengths;
+    delete[] h_input_ids;
+    delete[] h_logits;
 
     FT_LOG_DEBUG("free device buffers");
-    allocator.free(d_cum_log_probs);
-    allocator.free(d_input_lengths);
-    allocator.free(d_input_ids);
-    allocator.free(d_logits);
+    allocator.free((void**)(&d_cum_log_probs));
+    allocator.free((void**)(&d_input_lengths));
+    allocator.free((void**)(&d_input_ids));
+    allocator.free((void**)(&d_logits));
     check_cuda_error(cudaStreamDestroy(stream));
 }
 
@@ -354,7 +222,7 @@ void testBatchFirstCumLogProbCorrectness(TestCase tc) {
     size_t max_input_length = tc.max_input_length;
     size_t batchxbeam = tc.batch_size * tc.beam_width;
     size_t vocab_size = tc.vocab_size;
-    // Make mulitple of 8 as GPT does.
+    // Make multiple of 8 as GPT does.
     size_t vocab_size_padded = static_cast<size_t>(ceil(vocab_size / 8.f) * 8);
 
     cudaStream_t stream;
@@ -362,12 +230,12 @@ void testBatchFirstCumLogProbCorrectness(TestCase tc) {
     Allocator<AllocatorType::CUDA> allocator(getDevice());
 
     // input values
-    T* h_logits = reinterpret_cast<T*>(malloc(sizeof(T) * max_input_length * batchxbeam * vocab_size_padded));
-    int* h_input_ids = reinterpret_cast<int*>(malloc(sizeof(int) * max_input_length * batchxbeam));
-    int* h_input_lengths = reinterpret_cast<int*>(malloc(sizeof(int) * batchxbeam));
+    T* h_logits = new T[max_input_length * batchxbeam * vocab_size_padded];
+    int* h_input_ids = new int[max_input_length * batchxbeam];
+    int* h_input_lengths = new int[batchxbeam];
 
     // outupt buffers
-    float* expected_cum_log_probs = reinterpret_cast<float*>(malloc(sizeof(float) * batchxbeam));
+    float* expected_cum_log_probs = new float[batchxbeam];
 
     // initialize host buffers
     initRandom(h_logits, max_input_length * batchxbeam * vocab_size_padded, -10.0f / vocab_size, -1.0f);
@@ -411,19 +279,21 @@ void testBatchFirstCumLogProbCorrectness(TestCase tc) {
                                  batchxbeam,
                                  vocab_size,
                                  vocab_size_padded);
-    checkResult(tc.toString().c_str(), d_cum_log_probs, expected_cum_log_probs, batchxbeam);
+    std::string tag = tc.toString() + (std::is_same<T, float>::value ? " (fp32)" : " (fp16)");
+    bool passed = checkResult(tag.c_str(), d_cum_log_probs, expected_cum_log_probs, batchxbeam);
+    EXPECT_TRUE(passed);
 
     FT_LOG_DEBUG("free host buffers");
-    free(expected_cum_log_probs);
-    free(h_input_lengths);
-    free(h_input_ids);
-    free(h_logits);
+    delete[] expected_cum_log_probs;
+    delete[] h_input_lengths;
+    delete[] h_input_ids;
+    delete[] h_logits;
 
     FT_LOG_DEBUG("free device buffers");
-    allocator.free(d_cum_log_probs);
-    allocator.free(d_input_lengths);
-    allocator.free(d_input_ids);
-    allocator.free(d_logits);
+    allocator.free((void**)(&d_cum_log_probs));
+    allocator.free((void**)(&d_input_lengths));
+    allocator.free((void**)(&d_input_ids));
+    allocator.free((void**)(&d_logits));
     check_cuda_error(cudaStreamDestroy(stream));
 }
 

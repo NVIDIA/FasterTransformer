@@ -210,7 +210,7 @@ def tf_beamsearch_decoding(memory_tensor,
                        The results of encoder transformer layer. The rank must be 3. 
                        Note that it must be extended by beam_width times.
         memory_sequence_length: A tf.Tensor with shape [batch_size * beam_width], type tf.int. 
-                                The lenght of each sentence of results of encoder. 
+                                The length of each sentence of results of encoder. 
                                 Note that it must be extended by beam_width times.
         embedding_table: A tf.Tensor with shape [vocab_size, hidden_dimension]. 
                          The embedding table of embedding lookup for each step.
@@ -350,7 +350,7 @@ def tf_sampling_decoding(memory_tensor,
         memory_tensor: A tf.tensor with shape [batch_size, max(memory_sequence_length), encoder_hidden_dimension]. 
                        The results of encoder transformer layer. The rank must be 3. 
         memory_sequence_length: A tf.Tensor with shape [batch_size], type tf.int. 
-                                The lenght of each sentence of results of encoder. 
+                                The length of each sentence of results of encoder. 
         embedding_table: A tf.Tensor with shape [vocab_size, hidden_dimension]. 
                          The embedding table of embedding lookup for each step.
         decoder_args: The arguments for decoding. The details are in the class "DecodingSamplingArgument" of common.py

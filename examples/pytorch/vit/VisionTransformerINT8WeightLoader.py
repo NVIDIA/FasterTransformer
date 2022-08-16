@@ -58,7 +58,7 @@ class ViTINT8WeightLoader(object):
 
         for name in pre_layer_weight_names:
             if name not in weight_dict.keys():
-                print("Unsupport weight file: Missing weights %s" % name)
+                print("Unsupported weight file: Missing weights %s" % name)
 
             th_weight = weight_dict[name]
             if name.split('.')[-1] == "pos_embedding":
@@ -90,7 +90,7 @@ class ViTINT8WeightLoader(object):
     # def load_weights(self, weight_path:str):
     #     suffix = weight_path.split('.')[-1]
     #     if suffix != 'pth':
-    #         print("Unsupport weight file: Unrecognized format %s " % suffix)
+    #         print("Unsupported weight file: Unrecognized format %s " % suffix)
     #         exit(-1)
     #     return th.load(weight_path)
 
@@ -119,21 +119,34 @@ class ViTINT8WeightLoader(object):
                 continue
             if k.split('.')[0] == 'head':
                 continue
-            # print(k, v.type())
             ret.append(v)
         
         for i in range(self.layer_num):
             name = 'transformer.encoder.layer.{}.amaxList'.format(i)
             ret.append(self.weights[name])
-            # print(name, self.weights[name].type())
             name = 'transformer.encoder.layer.{}.h_amaxList'.format(i)
             ret.append(self.weights[name])
-            # print(name, self.weights[name].type())
+        
+        return ret
+
+    def listed_weight_to_dict(self):
+        ret = {}
+        for k, v in self.weights.items():
+            if k.split('.')[-1] == '_amax' or k.endswith('amaxList'):
+                continue
+            if k.split('.')[0] == 'head':
+                continue
+            ret[k] = v
+        
+        for i in range(self.layer_num):
+            name = 'transformer.encoder.layer.{}.amaxList'.format(i)
+            ret[name] = self.weights[name]
+            name = 'transformer.encoder.layer.{}.h_amaxList'.format(i)
+            ret[name] = self.weights[name]
         
         return ret
 
     def to_int8(self, ths_path='../../../lib/libpyt_vit.so'):
-        # print(self.weights.keys())
         if 'transformer.encoder.layer.0.attn.query._input_quantizer._amax' not in self.weights:
             raise RuntimeError("There is no quantization node in the checkpoint, cannot be quantized to int8.")
         if self.int8:
@@ -147,4 +160,3 @@ class ViTINT8WeightLoader(object):
             else:
                 self.weights[k] = v.float().cpu()
         self.weights = checkpoint_quantization(self.weights, ths_path, verbose=False)
-        # print(self.weights.keys())

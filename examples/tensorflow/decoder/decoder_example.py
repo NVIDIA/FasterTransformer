@@ -72,7 +72,7 @@ if __name__ == "__main__":
     parser.add_argument('-v', '--vocab_size', type=int, default=30000, metavar='BOOL',
                         help='vocabulary size. (default: 30000).')
     parser.add_argument('-d', '--data_type', type=str, default="fp32", metavar='STRING',
-                        help='data type (default: fp32)', choices=['fp32', 'fp16'])
+                        help='data type (default: fp32)', choices=['fp32', 'fp16', 'bf16'])
     parser.add_argument('-time', '--test_time', type=int, default=0, metavar='BOOL',
                         help='test the time or not. (default: False (0)), True is 1.', 
                         choices=[0, 1])
@@ -115,6 +115,8 @@ if __name__ == "__main__":
     if args.data_type == "fp16":
         tf_datatype = tf.float16
         np_datatype = np.float16
+    elif args.data_type == "bf16":
+        tf_datatype = tf.bfloat16 ## numpy doesn't support bfloat16, fallback to float32
 
     decoder_args = TransformerArgument(beam_width=beam_width,
                                         head_num=head_num,
@@ -135,7 +137,7 @@ if __name__ == "__main__":
                                                 0.0)
     
     embedding_table = np.random.randn(vocab_size, hidden_dim).astype(np_datatype) * 0.01  # a [vocab_size, hidden_dim] table
-    embedding_table = tf.convert_to_tensor(embedding_table)
+    embedding_table = tf.convert_to_tensor(embedding_table, dtype = tf_datatype)
     memory, memory_sequence_length = generate_encoder_result(
         batch_size, max_seq_len, memory_hidden_dim, tf_datatype)
     

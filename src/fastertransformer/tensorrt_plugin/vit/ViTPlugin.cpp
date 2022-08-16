@@ -31,39 +31,39 @@ using namespace std;
 namespace fastertransformer {
 
 // Static class fields initialization
-PluginFieldCollection VisionTransformerPluginCreator::mFC{};
+PluginFieldCollection    VisionTransformerPluginCreator::mFC{};
 std::vector<PluginField> VisionTransformerPluginCreator::mPluginAttributes;
 
 REGISTER_TENSORRT_PLUGIN(VisionTransformerPluginCreator);
 
 template<typename T>
-VisionTransformerPlugin<T>::VisionTransformerPlugin(const std::string& name,
-                                                    const int max_batch,
-                                                    const int img_size,
-                                                    const int patch_size,
-                                                    const int in_chans,
-                                                    const int embed_dim,
-                                                    const int num_heads,
-                                                    const int inter_size,
-                                                    const int layer_num,
-                                                    const float q_scaling,
-                                                    const bool with_cls_token,
+VisionTransformerPlugin<T>::VisionTransformerPlugin(const std::string&           name,
+                                                    const int                    max_batch,
+                                                    const int                    img_size,
+                                                    const int                    patch_size,
+                                                    const int                    in_chans,
+                                                    const int                    embed_dim,
+                                                    const int                    num_heads,
+                                                    const int                    inter_size,
+                                                    const int                    layer_num,
+                                                    const float                  q_scaling,
+                                                    const bool                   with_cls_token,
                                                     const std::vector<const T*>& w):
     layer_name_(name)
 {
 
     settings_.max_batch_size = max_batch;
-    settings_.img_size = img_size;
-    settings_.chn_num = in_chans;
-    settings_.patch_size = patch_size;
-    settings_.embed_dim = embed_dim;
-    settings_.head_num = num_heads;
-    settings_.inter_size = inter_size;
-    settings_.num_layer = layer_num;
+    settings_.img_size       = img_size;
+    settings_.chn_num        = in_chans;
+    settings_.patch_size     = patch_size;
+    settings_.embed_dim      = embed_dim;
+    settings_.head_num       = num_heads;
+    settings_.inter_size     = inter_size;
+    settings_.num_layer      = layer_num;
     settings_.with_cls_token = with_cls_token;
-    settings_.sm = getSMVersion();
-    settings_.q_scaling = q_scaling;
-    settings_.seq_len = (img_size / patch_size) * (img_size / patch_size) + (with_cls_token ? 1 : 0);
+    settings_.sm             = getSMVersion();
+    settings_.q_scaling      = q_scaling;
+    settings_.seq_len        = (img_size / patch_size) * (img_size / patch_size) + (with_cls_token ? 1 : 0);
     settings_.attention_type = getAttentionType<T>(embed_dim / num_heads, settings_.sm, true, settings_.seq_len);
 
     Init(w);
@@ -119,9 +119,9 @@ void VisionTransformerPlugin<T>::Init(const std::vector<const T*>& w)
     check_cuda_error(cublasLtCreate(&cublaslt_handle_));
     checkCUDNN(cudnnCreate(&cudnn_handle_));
 
-    cublasAlgoMap_ = new cublasAlgoMap("igemm.config", "");
+    cublasAlgoMap_      = new cublasAlgoMap("igemm.config", "");
     cublasWrapperMutex_ = new std::mutex();
-    allocator_ = new Allocator<AllocatorType::CUDA>(getDevice());
+    allocator_          = new Allocator<AllocatorType::CUDA>(getDevice());
 
     cublas_wrapper_ =
         new cublasMMWrapper(cublas_handle_, cublaslt_handle_, nullptr, cublasAlgoMap_, cublasWrapperMutex_, allocator_);
@@ -174,26 +174,26 @@ nvinfer1::IPluginV2DynamicExt* VisionTransformerPlugin<T>::clone() const noexcep
 }
 
 template<typename T>
-DimsExprs VisionTransformerPlugin<T>::getOutputDimensions(int outputIndex,
+DimsExprs VisionTransformerPlugin<T>::getOutputDimensions(int              outputIndex,
                                                           const DimsExprs* inputs,
-                                                          int nbInputs,
-                                                          IExprBuilder& exprBuilder) noexcept
+                                                          int              nbInputs,
+                                                          IExprBuilder&    exprBuilder) noexcept
 {
     // Input is B*in_chans*H*W, output should be B*seq_len*embed_dim*1
     assert(outputIndex == 0);
     DimsExprs output;
     output.nbDims = 3;
-    output.d[0] = inputs[0].d[0];
-    output.d[1] = exprBuilder.constant(settings_.seq_len);
-    output.d[2] = exprBuilder.constant(settings_.embed_dim);
+    output.d[0]   = inputs[0].d[0];
+    output.d[1]   = exprBuilder.constant(settings_.seq_len);
+    output.d[2]   = exprBuilder.constant(settings_.embed_dim);
     return output;
 }
 
 template<typename T>
-bool VisionTransformerPlugin<T>::supportsFormatCombination(int pos,
+bool VisionTransformerPlugin<T>::supportsFormatCombination(int                     pos,
                                                            const PluginTensorDesc* inOut,
-                                                           int nbInputs,
-                                                           int nbOutputs) noexcept
+                                                           int                     nbInputs,
+                                                           int                     nbOutputs) noexcept
 {
     bool res = false;
     assert(pos >= 0 && pos < 2);
@@ -214,9 +214,9 @@ bool VisionTransformerPlugin<T>::supportsFormatCombination(int pos,
 
 template<typename T>
 void VisionTransformerPlugin<T>::configurePlugin(const DynamicPluginTensorDesc* in,
-                                                 int nbInputs,
+                                                 int                            nbInputs,
                                                  const DynamicPluginTensorDesc* out,
-                                                 int nbOutputs) noexcept
+                                                 int                            nbOutputs) noexcept
 {
     assert(nbInputs == 1);
     assert(nbOutputs == 1);
@@ -224,18 +224,18 @@ void VisionTransformerPlugin<T>::configurePlugin(const DynamicPluginTensorDesc* 
 
 template<typename T>
 size_t VisionTransformerPlugin<T>::getWorkspaceSize(const PluginTensorDesc* inputs,
-                                                    int nbInputs,
+                                                    int                     nbInputs,
                                                     const PluginTensorDesc* outputs,
-                                                    int nbOutputs) const noexcept
+                                                    int                     nbOutputs) const noexcept
 {
     return 0;
 }
 
 // IPluginV2Ext Methods
 template<typename T>
-nvinfer1::DataType VisionTransformerPlugin<T>::getOutputDataType(int index,
+nvinfer1::DataType VisionTransformerPlugin<T>::getOutputDataType(int                       index,
                                                                  const nvinfer1::DataType* inputTypes,
-                                                                 int nbInputs) const noexcept
+                                                                 int                       nbInputs) const noexcept
 {
     assert(index == 0);
     assert(inputTypes[0] == nvinfer1::DataType::kFLOAT || inputTypes[0] == nvinfer1::DataType::kHALF);
@@ -318,10 +318,10 @@ const char* VisionTransformerPlugin<T>::getPluginNamespace() const noexcept
 template<typename T>
 int VisionTransformerPlugin<T>::enqueue(const PluginTensorDesc* inputDesc,
                                         const PluginTensorDesc* outputDesc,
-                                        const void* const* inputs,
-                                        void* const* outputs,
-                                        void* workspace,
-                                        cudaStream_t stream) noexcept
+                                        const void* const*      inputs,
+                                        void* const*            outputs,
+                                        void*                   workspace,
+                                        cudaStream_t            stream) noexcept
 {
     int batch_size = inputDesc->dims.d[0];
     assert(batch_size <= settings_.max_batch_size);
@@ -329,7 +329,7 @@ int VisionTransformerPlugin<T>::enqueue(const PluginTensorDesc* inputDesc,
     assert(settings_.img_size == inputDesc->dims.d[2]);
     assert(settings_.img_size == inputDesc->dims.d[3]);
 
-    int sm_ptr[1] = {sm_};
+    int                 sm_ptr[1]     = {sm_};
     std::vector<Tensor> input_tensors = std::vector<Tensor>{Tensor{
         MEMORY_GPU,
         getTensorType<T>(),
@@ -350,7 +350,7 @@ int VisionTransformerPlugin<T>::enqueue(const PluginTensorDesc* inputDesc,
 VisionTransformerPluginCreator::VisionTransformerPluginCreator()
 {
     mFC.nbFields = mPluginAttributes.size();
-    mFC.fields = mPluginAttributes.data();
+    mFC.fields   = mPluginAttributes.data();
 }
 
 const char* VisionTransformerPluginCreator::getPluginName() const noexcept
@@ -413,10 +413,10 @@ nvinfer1::PluginFieldType getFieldCollectionType(std::string name, const nvinfer
 }
 
 template<typename T>
-void loadWeightsPtr(std::vector<const T*>& w,
+void loadWeightsPtr(std::vector<const T*>&                 w,
                     const nvinfer1::PluginFieldCollection* fc,
-                    int layer_num,
-                    bool with_cls_token = true)
+                    int                                    layer_num,
+                    bool                                   with_cls_token = true)
 {
     int idx = 0;
     for (auto& name : pre_layer_weight_names) {
@@ -431,7 +431,7 @@ void loadWeightsPtr(std::vector<const T*>& w,
         }
     }
 
-    for (int i = 0; i < layer_num; i++){
+    for (int i = 0; i < layer_num; i++) {
         for (auto& name : layer_weight_names) {
             char str_buf[1024];
             sprintf(str_buf, name, i);
@@ -493,9 +493,9 @@ IPluginV2* VisionTransformerPluginCreator::createPlugin(const char* name, const 
 
     auto weights_type = getFieldCollectionType(pre_layer_weight_names[0], fc);
 
-    std::vector<const half*> w_fp16;
+    std::vector<const half*>  w_fp16;
     std::vector<const float*> w_fp32;
-    IPluginV2* p;
+    IPluginV2*                p;
     switch (weights_type) {
         case nvinfer1::PluginFieldType::kFLOAT16:
             w_fp16.resize(weights_num);
@@ -531,7 +531,7 @@ IPluginV2* VisionTransformerPluginCreator::createPlugin(const char* name, const 
                                                    w_fp32);
             break;
         default:
-            printf("[ERROR][VisionTransformerPluginCreator::createPlugin] unsupport datatype.\n");
+            printf("[ERROR][VisionTransformerPluginCreator::createPlugin] unsupported datatype.\n");
             exit(-1);
     }
 
@@ -540,7 +540,7 @@ IPluginV2* VisionTransformerPluginCreator::createPlugin(const char* name, const 
 
 IPluginV2* VisionTransformerPluginCreator::deserializePlugin(const char* name,
                                                              const void* serialData,
-                                                             size_t serialLength) noexcept
+                                                             size_t      serialLength) noexcept
 {
     int type_id;
     ::memcpy(&type_id, serialData, sizeof(int));
@@ -553,7 +553,7 @@ IPluginV2* VisionTransformerPluginCreator::deserializePlugin(const char* name,
     else if (type_id == 1)
         return new VisionTransformerPlugin<half>(name, modelData, serialLength);
     else {
-        printf("[ERROR][VisionTransformerPluginCreator::deserializePlugin] unsupport data type %d\n", type_id);
+        printf("[ERROR][VisionTransformerPluginCreator::deserializePlugin] unsupported data type %d\n", type_id);
         exit(-1);
     }
 }

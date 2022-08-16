@@ -32,29 +32,29 @@ using namespace std;
 namespace fastertransformer {
 
 // Static class fields initialization
-PluginFieldCollection SwinTransformerINT8PluginCreator::mFC{};
+PluginFieldCollection    SwinTransformerINT8PluginCreator::mFC{};
 std::vector<PluginField> SwinTransformerINT8PluginCreator::mPluginAttributes;
 
 REGISTER_TENSORRT_PLUGIN(SwinTransformerINT8PluginCreator);
 
 template<typename T>
-SwinTransformerINT8Plugin<T>::SwinTransformerINT8Plugin(const std::string& name,
-                                                        const int int8_mode,
-                                                        const int max_batch_size,
-                                                        const int img_size,
-                                                        const int patch_size,
-                                                        const int in_chans,
-                                                        const int embed_dim,
-                                                        const int window_size,
-                                                        int* depths,
-                                                        int* num_heads,
-                                                        const bool ape,
-                                                        const bool patch_norm,
-                                                        const int layer_num,
-                                                        const float mlp_ratio,
-                                                        const bool qkv_bias,
-                                                        const float qk_scale,
-                                                        const std::vector<T*>& w,
+SwinTransformerINT8Plugin<T>::SwinTransformerINT8Plugin(const std::string&         name,
+                                                        const int                  int8_mode,
+                                                        const int                  max_batch_size,
+                                                        const int                  img_size,
+                                                        const int                  patch_size,
+                                                        const int                  in_chans,
+                                                        const int                  embed_dim,
+                                                        const int                  window_size,
+                                                        int*                       depths,
+                                                        int*                       num_heads,
+                                                        const bool                 ape,
+                                                        const bool                 patch_norm,
+                                                        const int                  layer_num,
+                                                        const float                mlp_ratio,
+                                                        const bool                 qkv_bias,
+                                                        const float                qk_scale,
+                                                        const std::vector<T*>&     w,
                                                         const std::vector<float*>& d_amax,
                                                         const std::vector<float*>& h_amax):
     int8_mode_(int8_mode),
@@ -75,7 +75,7 @@ SwinTransformerINT8Plugin<T>::SwinTransformerINT8Plugin(const std::string& name,
     check_cuda_error(cublasCreate(&cublas_handle_));
     check_cuda_error(cublasLtCreate(&cublaslt_handle_));
     checkCUDNN(cudnnCreate(&cudnn_handle_));
-    sm_ = getSMVersion();
+    sm_                          = getSMVersion();
     bool _use_ORDER_COL32_2R_4R4 = false;
 #if (CUDART_VERSION >= 11000)
     if (sm_ >= 80) {
@@ -91,7 +91,7 @@ SwinTransformerINT8Plugin<T>::SwinTransformerINT8Plugin(const std::string& name,
         exit(-1);
     }
 
-    depths_ = (int*)malloc(layer_num * sizeof(int));
+    depths_    = (int*)malloc(layer_num * sizeof(int));
     num_heads_ = (int*)malloc(layer_num * sizeof(int));
     memcpy(depths_, depths, layer_num * sizeof(int));
     memcpy(num_heads_, num_heads, layer_num * sizeof(int));
@@ -103,7 +103,7 @@ SwinTransformerINT8Plugin<T>::SwinTransformerINT8Plugin(const std::string& name,
         weight_size_, layer_num, embed_dim, mlp_ratio, window_size, img_size, patch_size, in_chans, depths, num_heads);
 
     int weight_idx = 0;
-    int amax_idx = 0;
+    int amax_idx   = 0;
     int hidden_dim = embed_dim;
     for (int l = 0; l < layer_num; l++) {
         SwinTransformerINT8BasicLayerWeight<T> bl;
@@ -139,10 +139,10 @@ SwinTransformerINT8Plugin<T>::SwinTransformerINT8Plugin(const std::string& name,
             weight_idx++;
             p.ffn_layernorm_weights.beta = cudaMallocAndCopy(weights_, w[weight_idx], weight_size_, weight_idx);
             weight_idx++;
-            p.scalelist.size_ = ACTIVATION_AMAX_NUM + 5 + INT8O_GEMM_NUM + TRT_AMAX_NUM;
-            p.scalelist.p2_offset_ = ACTIVATION_AMAX_NUM;
-            p.scalelist.p3_offset_ = ACTIVATION_AMAX_NUM + 5;
-            p.scalelist.p4_offset_ = ACTIVATION_AMAX_NUM + 5 + INT8O_GEMM_NUM;
+            p.scalelist.size_         = ACTIVATION_AMAX_NUM + 5 + INT8O_GEMM_NUM + TRT_AMAX_NUM;
+            p.scalelist.p2_offset_    = ACTIVATION_AMAX_NUM;
+            p.scalelist.p3_offset_    = ACTIVATION_AMAX_NUM + 5;
+            p.scalelist.p4_offset_    = ACTIVATION_AMAX_NUM + 5 + INT8O_GEMM_NUM;
             p.scalelist.d_scale_list_ = d_amaxCopy(d_amaxlist_, d_amax[amax_idx], 96, amax_idx);
             p.scalelist.h_scale_list_ = h_amaxCopy(h_amaxlist_, h_amax[amax_idx], 96, amax_idx);
             amax_idx++;
@@ -177,9 +177,9 @@ SwinTransformerINT8Plugin<T>::SwinTransformerINT8Plugin(const std::string& name,
     params_.norm_weights.beta = cudaMallocAndCopy(weights_, w[weight_idx], weight_size_, weight_idx);
     weight_idx++;
 
-    cublasAlgoMap_ = new cublasAlgoMap("igemm.config", "");
+    cublasAlgoMap_      = new cublasAlgoMap("igemm.config", "");
     cublasWrapperMutex_ = new std::mutex();
-    allocator_ = new Allocator<AllocatorType::CUDA>(getDevice());
+    allocator_          = new Allocator<AllocatorType::CUDA>(getDevice());
 
     cublasINT8MMWrapper* cublas_wrapper = new cublasINT8MMWrapper(
         cublas_handle_, cublaslt_handle_, nullptr, cublasAlgoMap_, cublasWrapperMutex_, _use_ORDER_COL32_2R_4R4);
@@ -213,22 +213,22 @@ SwinTransformerINT8Plugin<T>::SwinTransformerINT8Plugin(const std::string& name,
 }
 
 template<typename T>
-SwinTransformerINT8Plugin<T>::SwinTransformerINT8Plugin(const std::string& name,
-                                                        const int int8_mode,
-                                                        const int max_batch_size,
-                                                        const int img_size,
-                                                        const int patch_size,
-                                                        const int in_chans,
-                                                        const int embed_dim,
-                                                        const int window_size,
-                                                        int* depths,
-                                                        int* num_heads,
-                                                        const bool ape,
-                                                        const bool patch_norm,
-                                                        const int layer_num,
-                                                        const float mlp_ratio,
-                                                        const bool qkv_bias,
-                                                        const float qk_scale,
+SwinTransformerINT8Plugin<T>::SwinTransformerINT8Plugin(const std::string&          name,
+                                                        const int                   int8_mode,
+                                                        const int                   max_batch_size,
+                                                        const int                   img_size,
+                                                        const int                   patch_size,
+                                                        const int                   in_chans,
+                                                        const int                   embed_dim,
+                                                        const int                   window_size,
+                                                        int*                        depths,
+                                                        int*                        num_heads,
+                                                        const bool                  ape,
+                                                        const bool                  patch_norm,
+                                                        const int                   layer_num,
+                                                        const float                 mlp_ratio,
+                                                        const bool                  qkv_bias,
+                                                        const float                 qk_scale,
                                                         const std::vector<Weights>& w,
                                                         const std::vector<Weights>& d_amax,
                                                         const std::vector<Weights>& h_amax):
@@ -252,7 +252,7 @@ SwinTransformerINT8Plugin<T>::SwinTransformerINT8Plugin(const std::string& name,
     check_cuda_error(cublasLtCreate(&cublaslt_handle_));
     checkCUDNN(cudnnCreate(&cudnn_handle_));
 
-    sm_ = getSMVersion();
+    sm_                          = getSMVersion();
     bool _use_ORDER_COL32_2R_4R4 = false;
 #if (CUDART_VERSION >= 11000)
     if (sm_ >= 80) {
@@ -268,7 +268,7 @@ SwinTransformerINT8Plugin<T>::SwinTransformerINT8Plugin(const std::string& name,
         exit(-1);
     }
 
-    depths_ = (int*)malloc(layer_num * sizeof(int));
+    depths_    = (int*)malloc(layer_num * sizeof(int));
     num_heads_ = (int*)malloc(layer_num * sizeof(int));
     memcpy(depths_, depths, layer_num * sizeof(int));
     memcpy(num_heads_, num_heads, layer_num * sizeof(int));
@@ -276,27 +276,27 @@ SwinTransformerINT8Plugin<T>::SwinTransformerINT8Plugin(const std::string& name,
     output_dim_ = int(pow(2, layer_num - 1)) * embed_dim;
 
     int weight_idx = 0;
-    int amax_idx = 0;
+    int amax_idx   = 0;
     for (int l = 0; l < layer_num; l++) {
         SwinTransformerINT8BasicLayerWeight<T> bl;
         for (int di = 0; di < depths[l]; di++) {
             SwinTransformerINT8BlockWeight<T> p;
-            p.attention_weights.query_weight.kernel = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.attention_weights.query_weight.bias = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.attention_weights.query_weight.kernel            = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.attention_weights.query_weight.bias              = cudaMallocAndCopy(weights_, w[weight_idx++]);
             p.attention_weights.attention_output_weight.kernel = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.attention_weights.attention_output_weight.bias = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.ffn_weights.intermediate_weight.kernel = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.ffn_weights.intermediate_weight.bias = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.ffn_weights.output_weight.kernel = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.ffn_weights.output_weight.bias = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.attn_layernorm_weights.gamma = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.attn_layernorm_weights.beta = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.ffn_layernorm_weights.gamma = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.ffn_layernorm_weights.beta = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.scalelist.size_ = ACTIVATION_AMAX_NUM + 5 + INT8O_GEMM_NUM + TRT_AMAX_NUM;
-            p.scalelist.p2_offset_ = ACTIVATION_AMAX_NUM;
-            p.scalelist.p3_offset_ = ACTIVATION_AMAX_NUM + 5;
-            p.scalelist.p4_offset_ = ACTIVATION_AMAX_NUM + 5 + INT8O_GEMM_NUM;
+            p.attention_weights.attention_output_weight.bias   = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.ffn_weights.intermediate_weight.kernel           = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.ffn_weights.intermediate_weight.bias             = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.ffn_weights.output_weight.kernel                 = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.ffn_weights.output_weight.bias                   = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.attn_layernorm_weights.gamma                     = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.attn_layernorm_weights.beta                      = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.ffn_layernorm_weights.gamma                      = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.ffn_layernorm_weights.beta                       = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.scalelist.size_         = ACTIVATION_AMAX_NUM + 5 + INT8O_GEMM_NUM + TRT_AMAX_NUM;
+            p.scalelist.p2_offset_    = ACTIVATION_AMAX_NUM;
+            p.scalelist.p3_offset_    = ACTIVATION_AMAX_NUM + 5;
+            p.scalelist.p4_offset_    = ACTIVATION_AMAX_NUM + 5 + INT8O_GEMM_NUM;
             p.scalelist.d_scale_list_ = d_amaxCopy(d_amaxlist_, d_amax[amax_idx]);
             p.scalelist.h_scale_list_ = h_amaxCopy(h_amaxlist_, h_amax[amax_idx]);
             amax_idx++;
@@ -304,21 +304,21 @@ SwinTransformerINT8Plugin<T>::SwinTransformerINT8Plugin(const std::string& name,
             bl.block_weight_list.push_back(p);
         }
         bl.merge_layernorm_weights.gamma = cudaMallocAndCopy(weights_, w[weight_idx++]);
-        bl.merge_layernorm_weights.beta = cudaMallocAndCopy(weights_, w[weight_idx++]);
-        bl.merge_linear_weights.kernel = cudaMallocAndCopy(weights_, w[weight_idx++]);
-        bl.attn_mask = cudaMallocAndCopy(weights_, w[weight_idx++]);
+        bl.merge_layernorm_weights.beta  = cudaMallocAndCopy(weights_, w[weight_idx++]);
+        bl.merge_linear_weights.kernel   = cudaMallocAndCopy(weights_, w[weight_idx++]);
+        bl.attn_mask                     = cudaMallocAndCopy(weights_, w[weight_idx++]);
         params_.basic_layer_weight_list.push_back(bl);
     }
     params_.patchEmbed_linear_weights.kernel = cudaMallocAndCopy(weights_, w[weight_idx++]);
-    params_.patchEmbed_linear_weights.bias = cudaMallocAndCopy(weights_, w[weight_idx++]);
-    params_.patchEmbed_norm_weights.gamma = cudaMallocAndCopy(weights_, w[weight_idx++]);
-    params_.patchEmbed_norm_weights.beta = cudaMallocAndCopy(weights_, w[weight_idx++]);
-    params_.norm_weights.gamma = cudaMallocAndCopy(weights_, w[weight_idx++]);
-    params_.norm_weights.beta = cudaMallocAndCopy(weights_, w[weight_idx++]);
+    params_.patchEmbed_linear_weights.bias   = cudaMallocAndCopy(weights_, w[weight_idx++]);
+    params_.patchEmbed_norm_weights.gamma    = cudaMallocAndCopy(weights_, w[weight_idx++]);
+    params_.patchEmbed_norm_weights.beta     = cudaMallocAndCopy(weights_, w[weight_idx++]);
+    params_.norm_weights.gamma               = cudaMallocAndCopy(weights_, w[weight_idx++]);
+    params_.norm_weights.beta                = cudaMallocAndCopy(weights_, w[weight_idx++]);
 
-    cublasAlgoMap_ = new cublasAlgoMap("igemm.config", "");
+    cublasAlgoMap_      = new cublasAlgoMap("igemm.config", "");
     cublasWrapperMutex_ = new std::mutex();
-    allocator_ = new Allocator<AllocatorType::CUDA>(getDevice());
+    allocator_          = new Allocator<AllocatorType::CUDA>(getDevice());
 
     cublasINT8MMWrapper* cublas_wrapper = new cublasINT8MMWrapper(
         cublas_handle_, cublaslt_handle_, nullptr, cublasAlgoMap_, cublasWrapperMutex_, _use_ORDER_COL32_2R_4R4);
@@ -359,7 +359,7 @@ SwinTransformerINT8Plugin<T>::SwinTransformerINT8Plugin(const std::string& name,
     check_cuda_error(cublasLtCreate(&cublaslt_handle_));
     checkCUDNN(cudnnCreate(&cudnn_handle_));
 
-    sm_ = getSMVersion();
+    sm_                          = getSMVersion();
     bool _use_ORDER_COL32_2R_4R4 = false;
 #if (CUDART_VERSION >= 11000)
     if (sm_ >= 80) {
@@ -388,8 +388,8 @@ SwinTransformerINT8Plugin<T>::SwinTransformerINT8Plugin(const std::string& name,
         weight_size_.push_back(tmp);
     }
 
-    depths_ = (int*)malloc(layer_num_ * sizeof(int));
-    num_heads_ = (int*)malloc(layer_num_ * sizeof(int));
+    depths_       = (int*)malloc(layer_num_ * sizeof(int));
+    num_heads_    = (int*)malloc(layer_num_ * sizeof(int));
     const char* d = static_cast<const char*>(data);
     memcpy(depths_, d, layer_num_ * sizeof(int));
     d = d + layer_num_ * sizeof(int);
@@ -428,27 +428,27 @@ SwinTransformerINT8Plugin<T>::SwinTransformerINT8Plugin(const std::string& name,
     }
 
     int weight_idx = 0;
-    int amax_idx = 0;
+    int amax_idx   = 0;
     for (int l = 0; l < layer_num_; l++) {
         SwinTransformerINT8BasicLayerWeight<T> bl;
         for (int di = 0; di < depths_[l]; di++) {
             SwinTransformerINT8BlockWeight<T> p;
-            p.attention_weights.query_weight.kernel = weights_[weight_idx++];
-            p.attention_weights.query_weight.bias = weights_[weight_idx++];
+            p.attention_weights.query_weight.kernel            = weights_[weight_idx++];
+            p.attention_weights.query_weight.bias              = weights_[weight_idx++];
             p.attention_weights.attention_output_weight.kernel = weights_[weight_idx++];
-            p.attention_weights.attention_output_weight.bias = weights_[weight_idx++];
-            p.ffn_weights.intermediate_weight.kernel = weights_[weight_idx++];
-            p.ffn_weights.intermediate_weight.bias = weights_[weight_idx++];
-            p.ffn_weights.output_weight.kernel = weights_[weight_idx++];
-            p.ffn_weights.output_weight.bias = weights_[weight_idx++];
-            p.attn_layernorm_weights.gamma = weights_[weight_idx++];
-            p.attn_layernorm_weights.beta = weights_[weight_idx++];
-            p.ffn_layernorm_weights.gamma = weights_[weight_idx++];
-            p.ffn_layernorm_weights.beta = weights_[weight_idx++];
-            p.scalelist.size_ = ACTIVATION_AMAX_NUM + 5 + INT8O_GEMM_NUM + TRT_AMAX_NUM;
-            p.scalelist.p2_offset_ = ACTIVATION_AMAX_NUM;
-            p.scalelist.p3_offset_ = ACTIVATION_AMAX_NUM + 5;
-            p.scalelist.p4_offset_ = ACTIVATION_AMAX_NUM + 5 + INT8O_GEMM_NUM;
+            p.attention_weights.attention_output_weight.bias   = weights_[weight_idx++];
+            p.ffn_weights.intermediate_weight.kernel           = weights_[weight_idx++];
+            p.ffn_weights.intermediate_weight.bias             = weights_[weight_idx++];
+            p.ffn_weights.output_weight.kernel                 = weights_[weight_idx++];
+            p.ffn_weights.output_weight.bias                   = weights_[weight_idx++];
+            p.attn_layernorm_weights.gamma                     = weights_[weight_idx++];
+            p.attn_layernorm_weights.beta                      = weights_[weight_idx++];
+            p.ffn_layernorm_weights.gamma                      = weights_[weight_idx++];
+            p.ffn_layernorm_weights.beta                       = weights_[weight_idx++];
+            p.scalelist.size_         = ACTIVATION_AMAX_NUM + 5 + INT8O_GEMM_NUM + TRT_AMAX_NUM;
+            p.scalelist.p2_offset_    = ACTIVATION_AMAX_NUM;
+            p.scalelist.p3_offset_    = ACTIVATION_AMAX_NUM + 5;
+            p.scalelist.p4_offset_    = ACTIVATION_AMAX_NUM + 5 + INT8O_GEMM_NUM;
             p.scalelist.d_scale_list_ = d_amaxlist_[amax_idx];
             p.scalelist.h_scale_list_ = h_amaxlist_[amax_idx];
             amax_idx++;
@@ -456,21 +456,21 @@ SwinTransformerINT8Plugin<T>::SwinTransformerINT8Plugin(const std::string& name,
             bl.block_weight_list.push_back(p);
         }
         bl.merge_layernorm_weights.gamma = weights_[weight_idx++];
-        bl.merge_layernorm_weights.beta = weights_[weight_idx++];
-        bl.merge_linear_weights.kernel = weights_[weight_idx++];
-        bl.attn_mask = weights_[weight_idx++];
+        bl.merge_layernorm_weights.beta  = weights_[weight_idx++];
+        bl.merge_linear_weights.kernel   = weights_[weight_idx++];
+        bl.attn_mask                     = weights_[weight_idx++];
         params_.basic_layer_weight_list.push_back(bl);
     }
     params_.patchEmbed_linear_weights.kernel = weights_[weight_idx++];
-    params_.patchEmbed_linear_weights.bias = weights_[weight_idx++];
-    params_.patchEmbed_norm_weights.gamma = weights_[weight_idx++];
-    params_.patchEmbed_norm_weights.beta = weights_[weight_idx++];
-    params_.norm_weights.gamma = weights_[weight_idx++];
-    params_.norm_weights.beta = weights_[weight_idx++];
+    params_.patchEmbed_linear_weights.bias   = weights_[weight_idx++];
+    params_.patchEmbed_norm_weights.gamma    = weights_[weight_idx++];
+    params_.patchEmbed_norm_weights.beta     = weights_[weight_idx++];
+    params_.norm_weights.gamma               = weights_[weight_idx++];
+    params_.norm_weights.beta                = weights_[weight_idx++];
 
-    cublasAlgoMap_ = new cublasAlgoMap(IGEMM_CONFIG, "");
+    cublasAlgoMap_      = new cublasAlgoMap(IGEMM_CONFIG, "");
     cublasWrapperMutex_ = new std::mutex();
-    allocator_ = new Allocator<AllocatorType::CUDA>(getDevice());
+    allocator_          = new Allocator<AllocatorType::CUDA>(getDevice());
 
     cublasINT8MMWrapper* cublas_wrapper = new cublasINT8MMWrapper(
         cublas_handle_, cublaslt_handle_, nullptr, cublasAlgoMap_, cublasWrapperMutex_, _use_ORDER_COL32_2R_4R4);
@@ -516,6 +516,7 @@ SwinTransformerINT8Plugin<T>::~SwinTransformerINT8Plugin()
         delete h_amaxlist_[i];
     }
     check_cuda_error(cublasDestroy(cublas_handle_));
+    check_cuda_error(cublasLtDestroy(cublaslt_handle_));
     checkCUDNN(cudnnDestroy(cudnn_handle_));
     delete cublasWrapperMutex_;
     delete cublasAlgoMap_;
@@ -555,41 +556,51 @@ nvinfer1::IPluginV2DynamicExt* SwinTransformerINT8Plugin<T>::clone() const noexc
 }
 
 template<typename T>
-DimsExprs SwinTransformerINT8Plugin<T>::getOutputDimensions(int outputIndex,
+DimsExprs SwinTransformerINT8Plugin<T>::getOutputDimensions(int              outputIndex,
                                                             const DimsExprs* inputs,
-                                                            int nbInputs,
-                                                            IExprBuilder& exprBuilder) noexcept
+                                                            int              nbInputs,
+                                                            IExprBuilder&    exprBuilder) noexcept
 {
     // Input is B*in_chans*H*W, output should be B*dim*1*1 for fc layer
     assert(outputIndex == 0);
     // Copy over everything
     DimsExprs output;
     output.nbDims = 4;
-    output.d[0] = inputs[0].d[0];
-    output.d[1] = exprBuilder.constant(output_dim_);
-    output.d[2] = exprBuilder.constant(1);
-    output.d[3] = exprBuilder.constant(1);
+    output.d[0]   = inputs[0].d[0];
+    output.d[1]   = exprBuilder.constant(output_dim_);
+    output.d[2]   = exprBuilder.constant(1);
+    output.d[3]   = exprBuilder.constant(1);
     return output;
 }
 
 template<typename T>
-bool SwinTransformerINT8Plugin<T>::supportsFormatCombination(int pos,
+bool SwinTransformerINT8Plugin<T>::supportsFormatCombination(int                     pos,
                                                              const PluginTensorDesc* inOut,
-                                                             int nbInputs,
-                                                             int nbOutputs) noexcept
+                                                             int                     nbInputs,
+                                                             int                     nbOutputs) noexcept
 {
-    assert(pos >= 0);
-    assert(pos < 2);
+    bool res = false;
+    assert(pos >= 0 && pos < 2);
     assert(nbInputs == 1);
+    switch (pos) {
+        case 0:  // input
+        case 1:  // output
+            res = (inOut[pos].type
+                   == (std::is_same<T, half>::value ? nvinfer1::DataType::kHALF : nvinfer1::DataType::kFLOAT))
+                  && (inOut[pos].format == nvinfer1::TensorFormat::kLINEAR);
+            break;
+        default:
+            break;
+    }
 
-    return true;
+    return res;
 }
 
 template<typename T>
 void SwinTransformerINT8Plugin<T>::configurePlugin(const DynamicPluginTensorDesc* in,
-                                                   int nbInputs,
+                                                   int                            nbInputs,
                                                    const DynamicPluginTensorDesc* out,
-                                                   int nbOutputs) noexcept
+                                                   int                            nbOutputs) noexcept
 {
     assert(nbInputs == 1);
     assert(nbOutputs == 1);
@@ -597,18 +608,18 @@ void SwinTransformerINT8Plugin<T>::configurePlugin(const DynamicPluginTensorDesc
 
 template<typename T>
 size_t SwinTransformerINT8Plugin<T>::getWorkspaceSize(const PluginTensorDesc* inputs,
-                                                      int nbInputs,
+                                                      int                     nbInputs,
                                                       const PluginTensorDesc* outputs,
-                                                      int nbOutputs) const noexcept
+                                                      int                     nbOutputs) const noexcept
 {
     return 0;
 }
 
 // IPluginV2Ext Methods
 template<typename T>
-nvinfer1::DataType SwinTransformerINT8Plugin<T>::getOutputDataType(int index,
+nvinfer1::DataType SwinTransformerINT8Plugin<T>::getOutputDataType(int                       index,
                                                                    const nvinfer1::DataType* inputTypes,
-                                                                   int nbInputs) const noexcept
+                                                                   int                       nbInputs) const noexcept
 {
     assert(index == 0);
     assert(inputTypes[0] == nvinfer1::DataType::kFLOAT || inputTypes[0] == nvinfer1::DataType::kHALF);
@@ -702,23 +713,11 @@ void SwinTransformerINT8Plugin<T>::serialize(void* buffer) const noexcept
         d += weight_size_[i] * sizeof(T);
     }
     for (int i = 0; i < d_amaxlist_.size(); i++) {
-        // float* ptr = (float*)d;
-        // printf("[[%d]]: ", i);
-        // for(int j = 0; j < 96; j ++){
-        //   printf("%.6f ", ptr[j]);
-        // }
-        // printf("\n");
         check_cuda_error(cudaMemcpy(d, d_amaxlist_[i], 96 * sizeof(float), cudaMemcpyDeviceToHost));
         d += 96 * sizeof(float);
     }
 
     for (int i = 0; i < h_amaxlist_.size(); i++) {
-        // float* ptr = h_amaxlist_[i];
-        // printf("[[%d]]: ", i);
-        // for(int j = 0; j < 96; j ++){
-        //   printf("%.6f ", ptr[j]);
-        // }
-        // printf("\n");
         check_cuda_error(cudaMemcpy(d, h_amaxlist_[i], 96 * sizeof(float), cudaMemcpyHostToHost));
         d += 96 * sizeof(float);
     }
@@ -745,10 +744,10 @@ const char* SwinTransformerINT8Plugin<T>::getPluginNamespace() const noexcept
 template<typename T>
 int SwinTransformerINT8Plugin<T>::enqueue(const PluginTensorDesc* inputDesc,
                                           const PluginTensorDesc* outputDesc,
-                                          const void* const* inputs,
-                                          void* const* outputs,
-                                          void* workspace,
-                                          cudaStream_t stream) noexcept
+                                          const void* const*      inputs,
+                                          void* const*            outputs,
+                                          void*                   workspace,
+                                          cudaStream_t            stream) noexcept
 {
     int batch_size = inputDesc->dims.d[0];
     assert(batch_size <= max_batch_size_);
@@ -756,7 +755,7 @@ int SwinTransformerINT8Plugin<T>::enqueue(const PluginTensorDesc* inputDesc,
     assert(img_size_ == inputDesc->dims.d[2]);
     assert(img_size_ == inputDesc->dims.d[3]);
 
-    int sm_ptr[1] = {sm_};
+    int                 sm_ptr[1]     = {sm_};
     std::vector<Tensor> input_tensors = std::vector<Tensor>{
         Tensor{MEMORY_GPU,
                getTensorType<T>(),
@@ -777,7 +776,7 @@ int SwinTransformerINT8Plugin<T>::enqueue(const PluginTensorDesc* inputDesc,
 SwinTransformerINT8PluginCreator::SwinTransformerINT8PluginCreator()
 {
     mFC.nbFields = mPluginAttributes.size();
-    mFC.fields = mPluginAttributes.data();
+    mFC.fields   = mPluginAttributes.data();
 }
 
 const char* SwinTransformerINT8PluginCreator::getPluginName() const noexcept
@@ -797,21 +796,21 @@ const PluginFieldCollection* SwinTransformerINT8PluginCreator::getFieldNames() n
 
 IPluginV2* SwinTransformerINT8PluginCreator::createPlugin(const char* name, const PluginFieldCollection* fc) noexcept
 {
-    int int8_mode;
-    int max_batch_size;
-    int img_size;
-    int patch_size;
-    int in_chans;
-    int embed_dim;
-    int window_size;
-    int* depths = nullptr;
-    int* num_heads = nullptr;
-    bool ape;
-    bool patch_norm;
-    int layer_num;
-    float mlp_ratio;
-    bool qkv_bias;
-    float qk_scale;
+    int                  int8_mode;
+    int                  max_batch_size;
+    int                  img_size;
+    int                  patch_size;
+    int                  in_chans;
+    int                  embed_dim;
+    int                  window_size;
+    int*                 depths    = nullptr;
+    int*                 num_heads = nullptr;
+    bool                 ape;
+    bool                 patch_norm;
+    int                  layer_num;
+    float                mlp_ratio;
+    bool                 qkv_bias;
+    float                qk_scale;
     std::vector<Weights> w;
     std::vector<Weights> d_amax;
     std::vector<Weights> h_amax;
@@ -995,16 +994,16 @@ IPluginV2* SwinTransformerINT8PluginCreator::createPlugin(const char* name, cons
         return p;
     }
     else {
-        printf("[ERROR][SwinTransformerINT8PluginCreator::createPlugin] unsupport datatype.\n");
+        printf("[ERROR][SwinTransformerINT8PluginCreator::createPlugin] unsupported datatype.\n");
         exit(-1);
     }
 }
 
 IPluginV2* SwinTransformerINT8PluginCreator::deserializePlugin(const char* name,
                                                                const void* serialData,
-                                                               size_t serialLength) noexcept
+                                                               size_t      serialLength) noexcept
 {
-    int type_id;
+    int    type_id;
     size_t int_length = sizeof(int);
     deserialize_value(&serialData, &int_length, &type_id);
     // This object will be deleted when the network is destroyed, which will
@@ -1014,7 +1013,7 @@ IPluginV2* SwinTransformerINT8PluginCreator::deserializePlugin(const char* name,
     else if (type_id == 1)
         return new SwinTransformerINT8Plugin<half>(name, serialData, serialLength);
     else {
-        printf("[ERROR][SwinTransformerINT8PluginCreator::deserializePlugin] unsupport data type %d\n", type_id);
+        printf("[ERROR][SwinTransformerINT8PluginCreator::deserializePlugin] unsupported data type %d\n", type_id);
         exit(-1);
     }
 }

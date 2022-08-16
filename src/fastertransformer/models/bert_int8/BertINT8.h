@@ -28,22 +28,22 @@ class BertINT8 {
 private:
     // buffer handling
     size_t max_batch_size_ = 0;
-    size_t max_seq_len_ = 0;
+    size_t max_seq_len_    = 0;
     // meta data
-    size_t head_num_;
-    size_t size_per_head_;
-    size_t inter_size_;
-    size_t hidden_units_;
-    size_t num_layer_;
-    int sm_;
-    float q_scaling_;
-    int int8_mode_;
-    cudaStream_t stream_;
+    size_t           head_num_;
+    size_t           size_per_head_;
+    size_t           inter_size_;
+    size_t           hidden_units_;
+    size_t           num_layer_;
+    int              sm_;
+    float            q_scaling_;
+    int              int8_mode_;
+    cudaStream_t     stream_;
     cublasMMWrapper* cublas_wrapper_;
-    IAllocator* allocator_;
-    bool is_free_buffer_after_forward_;
-    AttentionType attention_type_;
-    bool sparse_;
+    IAllocator*      allocator_;
+    bool             is_free_buffer_after_forward_;
+    AttentionType    attention_type_;
+    bool             sparse_;
 
     bool is_allocate_buffer_ = false;
 
@@ -56,35 +56,35 @@ private:
 
 protected:
     size_t* token_num_;
-    int* padding_offset_;
-    int* trt_mha_padding_offset_;
-    T* attention_mask_;
-    T* bert_in_buffer_;
-    T* bert_out_buffer_;
+    int*    padding_offset_;
+    int*    trt_mha_padding_offset_;
+    T*      attention_mask_;
+    T*      bert_in_buffer_;
+    T*      bert_out_buffer_;
 
 public:
-    BertINT8(size_t max_batch_size,
-             size_t max_seq_len,
-             size_t head_num,
-             size_t size_per_head,
-             size_t inter_size,
-             size_t num_layer,
-             int sm,
-             float q_scaling,
-             int int8_mode,
-             cudaStream_t stream,
+    BertINT8(size_t           max_batch_size,
+             size_t           max_seq_len,
+             size_t           head_num,
+             size_t           size_per_head,
+             size_t           inter_size,
+             size_t           num_layer,
+             int              sm,
+             float            q_scaling,
+             int              int8_mode,
+             cudaStream_t     stream,
              cublasMMWrapper* cublas_wrapper,
-             IAllocator* allocator,
-             bool is_free_buffer_after_forward,
-             AttentionType attention_type,
-             bool sparse = false);
+             IAllocator*      allocator,
+             bool             is_free_buffer_after_forward,
+             AttentionType    attention_type,
+             bool             sparse = false);
 
     BertINT8(BertINT8<T> const& bert_layer);
 
     ~BertINT8();
 
-    void forward(std::vector<Tensor>* output_tensors,
-                 const std::vector<Tensor>* input_tensors,
+    void forward(std::vector<Tensor>*                       output_tensors,
+                 const std::vector<Tensor>*                 input_tensors,
                  const std::vector<BertLayerINT8Weight<T>>* bert_layer_weights);
     // friend class BertDebug<T>;
 };

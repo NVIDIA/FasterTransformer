@@ -15,6 +15,7 @@ cmake_minimum_required(VERSION 3.8)
 
 set(vit_trt_files
   ViTPlugin.cpp
+  ViTINT8Plugin.cpp
 )
 
 
@@ -23,5 +24,5 @@ if(BUILD_TRT)
   add_library(${LIB_NAME} SHARED ${vit_trt_files})
   set_target_properties(${LIB_NAME} PROPERTIES
                         CUDA_RESOLVE_DEVICE_SYMBOLS ON)
-  target_link_libraries(${LIB_NAME} trt_fused_multi_head_attention ViT -lcudnn -lcublas -lcudart -lnvinfer)
+  target_link_libraries(${LIB_NAME} trt_fused_multi_head_attention ViT ViTINT8 -lcudnn -lcublas -lcudart -lnvinfer)
 endif()

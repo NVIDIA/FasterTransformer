@@ -26,34 +26,39 @@
 namespace fastertransformer {
 
 template<typename T>
-void conv2d(T* output,
-            const T* input,
-            const T* kernel,
-            const int batch,
-            const int h,
-            const int w,
-            const int in_channels,
-            const int out_channels,
-            const int kernel_size,
-            const int stride,
+void conv2d(T*             output,
+            const T*       input,
+            const T*       kernel,
+            const int      batch,
+            const int      h,
+            const int      w,
+            const int      in_channels,
+            const int      out_channels,
+            const int      kernel_size,
+            const int      stride,
             cudnnHandle_t& cudnn_handle)
 {
     cudnnDataType_t dataType;
     cudnnDataType_t computeType = CUDNN_DATA_FLOAT;
-    float alpha = 1.0f;
-    float beta = 0.0f;
+    float           alpha       = 1.0f;
+    float           beta        = 0.0f;
     if (std::is_same<T, half>::value) {
         dataType = CUDNN_DATA_HALF;
     }
+#ifdef ENABLE_BF16
+    else if (std::is_same<T, __nv_bfloat16>::value) {
+        dataType = CUDNN_DATA_BFLOAT16;
+    }
+#endif
     else {
         dataType = CUDNN_DATA_FLOAT;
     }
 
-    cudnnTensorDescriptor_t input_descriptor_;
-    cudnnTensorDescriptor_t output_descriptor_;
-    cudnnFilterDescriptor_t kernel_descriptor_;
+    cudnnTensorDescriptor_t      input_descriptor_;
+    cudnnTensorDescriptor_t      output_descriptor_;
+    cudnnFilterDescriptor_t      kernel_descriptor_;
     cudnnConvolutionDescriptor_t convolution_descriptor_;
-    cudnnConvolutionFwdAlgo_t convolution_algorithm_ = CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_GEMM;
+    cudnnConvolutionFwdAlgo_t    convolution_algorithm_ = CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_GEMM;
     // cudnnConvolutionFwdAlgo_t convolution_algorithm_ = CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM;
     // cudnnConvolutionFwdAlgo_t convolution_algorithm_ = CUDNN_CONVOLUTION_FWD_ALGO_GEMM;
     // cudnnConvolutionFwdAlgo_t convolution_algorithm_ = CUDNN_CONVOLUTION_FWD_ALGO_DIRECT;

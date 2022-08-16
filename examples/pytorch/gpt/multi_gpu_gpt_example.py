@@ -32,6 +32,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--layer_num', type=int, default=24,
                         help='number of layers')
+    parser.add_argument('--input_len', type=int, default=1,
+                        help='input sequence length to generate.')
     parser.add_argument('--output_len', type=int, default=32,
                         help='output sequence length to generate.')
     parser.add_argument('--head_num', type=int, default=16,
@@ -48,7 +50,7 @@ def main():
                         help='top p probability threshold')
     parser.add_argument('--temperature', type=float, default=1.,
                         help='temperature')
-    parser.add_argument('--len_penalty', type=float, default=1.,
+    parser.add_argument('--len_penalty', type=float, default=0.,
                         help='len_penalty')
     parser.add_argument('--beam_search_diversity_rate', type=float, default=0.,
                         help='beam_search_diversity_rate')
@@ -81,16 +83,27 @@ def main():
                         help='path to sample input file. If not set, it runs with no context inputs.')
     parser.add_argument('--sample_output_file', type=str, default=None,
                         help='path to sample output file.')
-    parser.add_argument('--is_fix_random_seed', type=bool, default=True,
-                        help='is fixing the random seed.')
+    parser.add_argument('--enable_random_seed', action='store_true',
+                        help='is use the random seed for sentences in a batch.')
     parser.add_argument('--int8_mode', type=int, default=0,
                         help='int8 mode.')
+    parser.add_argument(
+        '--weights_data_type',
+        type=str,
+        default="fp32",
+        choices=["fp32", "fp16"],
+        help='Data type of FT checkpoint weights',
+    )
     parser.add_argument('--return_cum_log_probs', type=int, default=0, choices=[0, 1, 2],
                         help='Whether to compute the cumulative log probsbility of sentences.'
                              ' 0: do not return the cumulative log probs '
                              ' 1: return the cumulative log probs of generated sequences'
                              ' 2: return the cumulative log probs of sequences')
 
+    parser.add_argument('--shared_contexts_ratio', type=float, default=1.0,
+                        help='Triggers the shared context optimization when'
+                             'compact_size <= shared_contexts_ratio * batch_size'
+                             'A value of 0.0 deactivate the optimization')
 
     args = parser.parse_args()
 
@@ -113,8 +126,10 @@ def main():
     max_seq_len = args.max_seq_len
     repetition_penalty = args.repetition_penalty
     int8_mode = args.int8_mode
+    weights_data_type = args.weights_data_type
     return_cum_log_probs = args.return_cum_log_probs
     return_output_length = return_cum_log_probs > 0
+    shared_contexts_ratio = args.shared_contexts_ratio
 
     print("\n=============== Arguments ===============")
     for arg in vars(args):
@@ -122,6 +137,7 @@ def main():
     print("=========================================\n")
 
     enc = encoder.get_encoder(args.vocab_file, args.merges_file)
+    torch.manual_seed(0)
 
     # Inputs
     contexts = []
@@ -134,7 +150,7 @@ def main():
     else:  # unconditional case
         batch_size = max_batch_size
         contexts = ['<|endoftext|>'] * batch_size
-        start_ids = [torch.IntTensor([end_id])] * batch_size
+        start_ids = [torch.IntTensor([end_id for _ in range(args.input_len)])] * batch_size
 
     start_lengths = [len(ids) for ids in start_ids]
     input_len = max(start_lengths)
@@ -142,15 +158,16 @@ def main():
     start_ids = pad_sequence(start_ids, batch_first=True, padding_value=end_id)
     start_lengths = torch.IntTensor(start_lengths)
 
-    if args.is_fix_random_seed == True:
-        random_seed = 0
+    if args.enable_random_seed == True:
+        random_seed_tensor = torch.randint(0, 10000, size=[max_batch_size], dtype=torch.int64)
     else:
-        random_seed = random.randint(0, 100000)
+        random_seed_tensor = torch.zeros([max_batch_size], dtype=torch.int64)
 
     # Prepare model.
     gpt = ParallelGPT(head_num, size_per_head, vocab_size, start_id, end_id,
                       layer_num, max_seq_len, tensor_para_size, pipeline_para_size,
-                      lib_path=args.lib_path, int8_mode=args.int8_mode)
+                      lib_path=args.lib_path, int8_mode=args.int8_mode, weights_data_type=weights_data_type,
+                      shared_contexts_ratio=shared_contexts_ratio)
     if not gpt.load(ckpt_path=args.ckpt_path):
         print("[WARNING] Checkpoint file not found. Model loading is skipped.")
     if args.data_type == 'fp16':
@@ -164,13 +181,13 @@ def main():
                            start_lengths,
                            output_len,
                            beam_width,
-                           top_k,
-                           top_p,
-                           beam_search_diversity_rate,
-                           temperature,
-                           len_penalty,
-                           repetition_penalty,
-                           random_seed,
+                           top_k * torch.ones(size=[max_batch_size], dtype=torch.int32),
+                           top_p * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                           beam_search_diversity_rate * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                           temperature * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                           len_penalty * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                           repetition_penalty * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                           random_seed_tensor,
                            return_output_length,
                            return_cum_log_probs)
         # only a thread (rank 0) gets the output, while the others are supposed to return None.
@@ -200,13 +217,13 @@ def main():
                                    start_lengths,
                                    output_len,
                                    beam_width,
-                                   top_k,
-                                   top_p,
-                                   beam_search_diversity_rate,
-                                   temperature,
-                                   len_penalty,
-                                   repetition_penalty,
-                                   random_seed,
+                                   top_k * torch.ones(size=[max_batch_size], dtype=torch.int32),
+                                   top_p * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                                   beam_search_diversity_rate * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                                   temperature * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                                   len_penalty * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                                   repetition_penalty * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                                   random_seed_tensor,
                                    return_output_length,
                                    return_cum_log_probs)
 
@@ -216,13 +233,13 @@ def main():
                                    start_lengths,
                                    output_len,
                                    beam_width,
-                                   top_k,
-                                   top_p,
-                                   beam_search_diversity_rate,
-                                   temperature,
-                                   len_penalty,
-                                   repetition_penalty,
-                                   random_seed,
+                                   top_k * torch.ones(size=[max_batch_size], dtype=torch.int32),
+                                   top_p * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                                   beam_search_diversity_rate * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                                   temperature * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                                   len_penalty * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                                   repetition_penalty * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                                   random_seed_tensor,
                                    return_output_length,
                                    return_cum_log_probs)
             time_elapsed = timeit.default_timer() - time

@@ -27,20 +27,20 @@
 namespace fastertransformer {
 
 template<typename T>
-LongformerEncoder<T>::LongformerEncoder(size_t layers_num,
-                                        size_t in_dim,
-                                        size_t head_num,
-                                        size_t size_per_head,
-                                        size_t intermediate_size,
-                                        size_t local_attn_window_size,
-                                        size_t max_global_token_num,
-                                        size_t max_batch_size,
-                                        size_t max_seq_len,
-                                        float attn_scaler,
-                                        cudaStream_t stream,
+LongformerEncoder<T>::LongformerEncoder(size_t           layers_num,
+                                        size_t           in_dim,
+                                        size_t           head_num,
+                                        size_t           size_per_head,
+                                        size_t           intermediate_size,
+                                        size_t           local_attn_window_size,
+                                        size_t           max_global_token_num,
+                                        size_t           max_batch_size,
+                                        size_t           max_seq_len,
+                                        float            attn_scaler,
+                                        cudaStream_t     stream,
                                         cublasMMWrapper* cublas_wrapper,
-                                        IAllocator* allocator,
-                                        bool is_free_buffer_after_forward):
+                                        IAllocator*      allocator,
+                                        bool             is_free_buffer_after_forward):
     layers_num_(layers_num),
     in_dim_(in_dim),
     head_num_(head_num),
@@ -67,7 +67,7 @@ LongformerEncoder<T>::LongformerEncoder(size_t layers_num,
                                                              cublas_wrapper,
                                                              allocator,
                                                              is_free_buffer_after_forward);
-    inter_gelu_out_ffn_ = new GeluFfnLayer<T>(max_batch_size,
+    inter_gelu_out_ffn_    = new GeluFfnLayer<T>(max_batch_size,
                                               max_seq_len,
                                               head_num,
                                               size_per_head,
@@ -91,21 +91,22 @@ template<typename T>
 void LongformerEncoder<T>::allocateBuffer()
 {
     if (!is_allocate_buffer_) {
-        cub_storage_ = (void*)allocator_->malloc(getInitLongformerCubStorage<T>(max_seq_len_), false);
-        global_idx_ = (int*)allocator_->malloc(sizeof(int) * max_seq_len_ * max_batch_size_, false);
-        global_token_nums_ = (int*)allocator_->malloc(sizeof(int) * max_batch_size_, false);
-        seq_idx_ = (int*)allocator_->malloc(sizeof(int) * max_seq_len_, false);
+        cub_storage_ = (void*)allocator_->reMalloc(cub_storage_, getInitLongformerCubStorage<T>(max_seq_len_), false);
+        global_idx_  = (int*)allocator_->reMalloc(global_idx_, sizeof(int) * max_seq_len_ * max_batch_size_, false);
+        global_token_nums_ = (int*)allocator_->reMalloc(global_token_nums_, sizeof(int) * max_batch_size_, false);
+        seq_idx_           = (int*)allocator_->reMalloc(seq_idx_, sizeof(int) * max_seq_len_, false);
 
-        local_attn_mask_shifted_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_, false);
+        local_attn_mask_shifted_ =
+            (T*)allocator_->reMalloc(local_attn_mask_shifted_, sizeof(T) * max_batch_size_ * max_seq_len_, false);
         size_t qkv_buffer_size = sizeof(T) * max_batch_size_ * hidden_units_ * 6 * max_seq_len_;
 
         size_t input_output_buffer_size = sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_;
 
-        qkv_buffer_ = (T*)allocator_->malloc(qkv_buffer_size, false);
-        mha_qkv_buffer_ = (T*)allocator_->malloc(qkv_buffer_size, false);
-        mha_out_buffer_ = (T*)allocator_->malloc(input_output_buffer_size, false);
-        attn_out_buffer_ = (T*)allocator_->malloc(input_output_buffer_size, false);
-        attn_output_buffer_ = (T*)allocator_->malloc(input_output_buffer_size, false);
+        qkv_buffer_         = (T*)allocator_->reMalloc(qkv_buffer_, qkv_buffer_size, false);
+        mha_qkv_buffer_     = (T*)allocator_->reMalloc(mha_qkv_buffer_, qkv_buffer_size, false);
+        mha_out_buffer_     = (T*)allocator_->reMalloc(mha_out_buffer_, input_output_buffer_size, false);
+        attn_out_buffer_    = (T*)allocator_->reMalloc(attn_out_buffer_, input_output_buffer_size, false);
+        attn_output_buffer_ = (T*)allocator_->reMalloc(attn_output_buffer_, input_output_buffer_size, false);
         is_allocate_buffer_ = true;
     }
 }
@@ -114,16 +115,16 @@ template<typename T>
 void LongformerEncoder<T>::freeBuffer()
 {
     if (is_allocate_buffer_) {
-        allocator_->free(cub_storage_);
-        allocator_->free(global_idx_);
-        allocator_->free(global_token_nums_);
-        allocator_->free(seq_idx_);
-        allocator_->free(local_attn_mask_shifted_);
-        allocator_->free(qkv_buffer_);
-        allocator_->free(mha_qkv_buffer_);
-        allocator_->free(mha_out_buffer_);
-        allocator_->free(attn_out_buffer_);
-        allocator_->free(attn_output_buffer_);
+        allocator_->free((void**)(&cub_storage_));
+        allocator_->free((void**)(&global_idx_));
+        allocator_->free((void**)(&global_token_nums_));
+        allocator_->free((void**)(&seq_idx_));
+        allocator_->free((void**)(&local_attn_mask_shifted_));
+        allocator_->free((void**)(&qkv_buffer_));
+        allocator_->free((void**)(&mha_qkv_buffer_));
+        allocator_->free((void**)(&mha_out_buffer_));
+        allocator_->free((void**)(&attn_out_buffer_));
+        allocator_->free((void**)(&attn_output_buffer_));
         is_allocate_buffer_ = false;
     }
 }
@@ -147,7 +148,7 @@ void LongformerEncoder<T>::forward(std::vector<Tensor>* output_tensors, std::vec
 
     allocateBuffer();
     const size_t batch_size = input_tensors->at(0).shape[0];
-    const size_t seq_len = input_tensors->at(0).shape[1];
+    const size_t seq_len    = input_tensors->at(0).shape[1];
 
     invokeInitLongformerIdx((T*)input_tensors->at(2).data,
                             seq_idx_,
@@ -179,20 +180,20 @@ void LongformerEncoder<T>::forward(std::vector<Tensor>* output_tensors, std::vec
 }
 
 template<typename T>
-void LongformerEncoder<T>::forwardLayer(T* input,
-                                        T* output,
-                                        const T* local_attn_mask,
-                                        const T* global_attn_mask,
-                                        const int* global_idx,
-                                        const int* global_token_nums,
+void LongformerEncoder<T>::forwardLayer(T*                              input,
+                                        T*                              output,
+                                        const T*                        local_attn_mask,
+                                        const T*                        global_attn_mask,
+                                        const int*                      global_idx,
+                                        const int*                      global_token_nums,
                                         const LongformerLayerWeight<T>* weight,
-                                        const size_t batch_size,
-                                        const size_t seq_len,
-                                        const size_t in_dim_)
+                                        const size_t                    batch_size,
+                                        const size_t                    seq_len,
+                                        const size_t                    in_dim_)
 {
-    T* const q = qkv_buffer_;
-    T* const k = qkv_buffer_ + batch_size * hidden_units_ * seq_len;
-    T* const v = qkv_buffer_ + batch_size * hidden_units_ * 2 * seq_len;
+    T* const q  = qkv_buffer_;
+    T* const k  = qkv_buffer_ + batch_size * hidden_units_ * seq_len;
+    T* const v  = qkv_buffer_ + batch_size * hidden_units_ * 2 * seq_len;
     T* const kg = qkv_buffer_ + batch_size * hidden_units_ * 3 * seq_len;
     T* const vg = qkv_buffer_ + batch_size * hidden_units_ * 4 * seq_len;
     T* const qg = qkv_buffer_ + batch_size * hidden_units_ * 5 * seq_len;
@@ -276,9 +277,9 @@ void LongformerEncoder<T>::forwardLayer(T* input,
                                         max_global_token_num_ * hidden_units_,
                                         batch_size);
     // reset all qkv pointer to transposed
-    T* const q_mha = mha_qkv_buffer_;
-    T* const k_mha = mha_qkv_buffer_ + batch_size * head_num_ * size_per_head_ * seq_len;
-    T* const v_mha = mha_qkv_buffer_ + batch_size * head_num_ * size_per_head_ * 2 * seq_len;
+    T* const q_mha  = mha_qkv_buffer_;
+    T* const k_mha  = mha_qkv_buffer_ + batch_size * head_num_ * size_per_head_ * seq_len;
+    T* const v_mha  = mha_qkv_buffer_ + batch_size * head_num_ * size_per_head_ * 2 * seq_len;
     T* const kg_mha = mha_qkv_buffer_ + batch_size * head_num_ * size_per_head_ * 3 * seq_len;
     T* const vg_mha = mha_qkv_buffer_ + batch_size * head_num_ * size_per_head_ * 4 * seq_len;
     T* const qg_mha = mha_qkv_buffer_ + batch_size * head_num_ * size_per_head_ * 5 * seq_len;
@@ -289,13 +290,13 @@ void LongformerEncoder<T>::forwardLayer(T* input,
         qkv_buffer_, qkv_5_bias, mha_qkv_buffer_, batch_size, head_num_, size_per_head_, seq_len, 5, stream_);
     sync_check_cuda_error();
 
-    // calculate qg seperately cause the dimension is not the same with others.
+    // calculate qg separately cause the dimension is not the same with others.
     const T* qg_bias = weight->global_query_weights.bias;
     invokeAddBiasTransposeToMultiHead(
         qg, qg_bias, qg_mha, batch_size, head_num_, size_per_head_, max_global_token_num_, 1, stream_);
     sync_check_cuda_error();
 
-    DataType data_type = getTensorType<T>();
+    DataType            data_type = getTensorType<T>();
     std::vector<Tensor> attn_inputs{
         Tensor{MEMORY_GPU, data_type, std::vector<size_t>{batch_size, head_num_, seq_len, size_per_head_}, q_mha},
         Tensor{MEMORY_GPU, data_type, std::vector<size_t>{batch_size, head_num_, seq_len, size_per_head_}, k_mha},
@@ -337,6 +338,7 @@ void LongformerEncoder<T>::forwardLayer(T* input,
                                    weight->attention_output_weights.bias,
                                    weight->attention_output_layernorm_weights.gamma,
                                    weight->attention_output_layernorm_weights.beta,
+                                   layernorm_eps_,
                                    batch_size * seq_len,
                                    hidden_units_,
                                    stream_);
@@ -357,6 +359,7 @@ void LongformerEncoder<T>::forwardLayer(T* input,
                                    weight->ffn_weights.output_weight.bias,
                                    weight->output_layernorm_weights.gamma,
                                    weight->output_layernorm_weights.beta,
+                                   layernorm_eps_,
                                    batch_size * seq_len,
                                    hidden_units_,
                                    stream_);
@@ -365,5 +368,8 @@ void LongformerEncoder<T>::forwardLayer(T* input,
 
 template class LongformerEncoder<float>;
 template class LongformerEncoder<half>;
+#ifdef ENABLE_BF16
+template class LongformerEncoder<__nv_bfloat16>;
+#endif
 
 }  // namespace fastertransformer

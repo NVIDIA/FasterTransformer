@@ -1,8 +1,7 @@
 # T5Plugin in FasterTransformer
-+ Original Faster Transformer: [link](https://github.com/NVIDIA/FasterTransformer)
-+ This project aims to wapper the encoder and decoding parts of the faster transformer as TensoRT plugins respectively. The most of teh code file are from orignial Faster TRansformer project.
++ This project aims to wapper the encoder and decoding parts of the faster transformer as TensoRT plugins respectively. The most of the code file are from original Faster TRansformer project.
   
-## Envionment
+## Environment
 + **nvcr.io/nvidia/pytorch:21.02-py3** (including CUDA 11.2.0, cudnn 8.1.0.77, 1.8.0a0+52ea372, TensorRTTensorRT 7.2.2.3+cuda11.1.0.024)
 + Now the code in the repository are compatible for TensorRT7, maybe need several edition before using in TensorRT8.
 

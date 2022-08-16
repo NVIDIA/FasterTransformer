@@ -19,18 +19,18 @@
 namespace fastertransformer {
 
 template<typename T>
-void generate_xlnet_gemm_config(int batch_size,
-                                int seq_len,
-                                int head_num,
-                                int size_per_head,
-                                int hidden_units_,
-                                int inter_size_,
+void generate_xlnet_gemm_config(int   batch_size,
+                                int   seq_len,
+                                int   head_num,
+                                int   size_per_head,
+                                int   hidden_units_,
+                                int   inter_size_,
                                 void* buffer_in,
-                                bool isAppend)
+                                bool  isAppend)
 {
     void* cublas_workspace;
     void* buffer;
-    int workSpaceSize;
+    int   workSpaceSize;
 
 #ifdef ENABLE_BF16
     if (std::is_same<T, half>::value || std::is_same<T, __nv_bfloat16>::value) {
@@ -40,13 +40,13 @@ void generate_xlnet_gemm_config(int batch_size,
         // cublas_workspace_ should be the start pointer of cudaMalloc()
         // to ensure 16B alignemnet
         cublas_workspace = buffer_in;
-        buffer = (void*)((char*)cublas_workspace + CUBLAS_WORKSPACE_SIZE);
-        workSpaceSize = CUBLAS_WORKSPACE_SIZE;
+        buffer           = (void*)((char*)cublas_workspace + CUBLAS_WORKSPACE_SIZE);
+        workSpaceSize    = CUBLAS_WORKSPACE_SIZE;
     }
     else {
         cublas_workspace = nullptr;
-        buffer = buffer_in;
-        workSpaceSize = 0;
+        buffer           = buffer_in;
+        workSpaceSize    = 0;
     }
 
     struct cudaDeviceProp prop;
@@ -55,14 +55,14 @@ void generate_xlnet_gemm_config(int batch_size,
 
     // check config
     FILE* fd;
-    int line_count = 0;
+    int   line_count = 0;
     if (!isAppend) {
         fd = fopen(GEMM_CONFIG, "w+");
     }
     else {
         fd = fopen(GEMM_CONFIG, "a+");
         std::vector<std::string> config;
-        char line[1024];
+        char                     line[1024];
         while (fgets(line, 1024, fd) != NULL) {
             config.push_back(std::string(line));
         }
@@ -80,136 +80,136 @@ void generate_xlnet_gemm_config(int batch_size,
         }
     }
 
-    const int gemm_num = 10;
-    int M[gemm_num];
-    int N[gemm_num];
-    int K[gemm_num];
-    int lda[gemm_num];
-    int strideA[gemm_num];
-    int ldb[gemm_num];
-    int strideB[gemm_num];
-    int ldc[gemm_num];
-    int strideC[gemm_num];
-    cublasOperation_t transa[gemm_num] = {CUBLAS_OP_N,
-                                          CUBLAS_OP_N,
-                                          CUBLAS_OP_T,
-                                          CUBLAS_OP_T,
-                                          CUBLAS_OP_T,
-                                          CUBLAS_OP_T,
-                                          CUBLAS_OP_N,
-                                          CUBLAS_OP_T,
-                                          CUBLAS_OP_N,
-                                          CUBLAS_OP_N};
-    cublasOperation_t transb[gemm_num] = {CUBLAS_OP_N};
-    int batchCount[gemm_num] = {1};
-    char mess[gemm_num][256];
+    const int         gemm_num = 10;
+    int               M[gemm_num];
+    int               N[gemm_num];
+    int               K[gemm_num];
+    int               lda[gemm_num];
+    int               strideA[gemm_num];
+    int               ldb[gemm_num];
+    int               strideB[gemm_num];
+    int               ldc[gemm_num];
+    int               strideC[gemm_num];
+    cublasOperation_t transa[gemm_num]     = {CUBLAS_OP_N,
+                                              CUBLAS_OP_N,
+                                              CUBLAS_OP_T,
+                                              CUBLAS_OP_T,
+                                              CUBLAS_OP_T,
+                                              CUBLAS_OP_T,
+                                              CUBLAS_OP_N,
+                                              CUBLAS_OP_T,
+                                              CUBLAS_OP_N,
+                                              CUBLAS_OP_N};
+    cublasOperation_t transb[gemm_num]     = {CUBLAS_OP_N};
+    int               batchCount[gemm_num] = {1};
+    char              mess[gemm_num][256];
 
     // gemm1
-    M[0] = hidden_units_;
-    N[0] = seq_len * batch_size;
-    K[0] = hidden_units_;
-    lda[0] = hidden_units_;
-    strideA[0] = hidden_units_ * hidden_units_;
-    ldb[0] = hidden_units_;
-    strideB[0] = 0;
-    ldc[0] = hidden_units_;
-    strideC[0] = seq_len * batch_size * hidden_units_;
+    M[0]          = hidden_units_;
+    N[0]          = seq_len * batch_size;
+    K[0]          = hidden_units_;
+    lda[0]        = hidden_units_;
+    strideA[0]    = hidden_units_ * hidden_units_;
+    ldb[0]        = hidden_units_;
+    strideB[0]    = 0;
+    ldc[0]        = hidden_units_;
+    strideC[0]    = seq_len * batch_size * hidden_units_;
     batchCount[0] = 3;
     strcpy(mess[0], "from_tensor * weightQ/K/V");
 
     // gemm2
-    M[1] = hidden_units_;
-    N[1] = seq_len * 2;
-    K[1] = hidden_units_;
+    M[1]          = hidden_units_;
+    N[1]          = seq_len * 2;
+    K[1]          = hidden_units_;
     batchCount[1] = 1;
     strcpy(mess[1], " k_head_r_");
 
     // gemm3
-    M[2] = seq_len;
-    N[2] = seq_len;
-    K[2] = size_per_head;
-    lda[2] = size_per_head;
-    strideA[2] = seq_len * size_per_head;
-    ldb[2] = size_per_head;
-    strideB[2] = seq_len * size_per_head;
-    ldc[2] = seq_len;
-    strideC[2] = seq_len * seq_len;
+    M[2]          = seq_len;
+    N[2]          = seq_len;
+    K[2]          = size_per_head;
+    lda[2]        = size_per_head;
+    strideA[2]    = seq_len * size_per_head;
+    ldb[2]        = size_per_head;
+    strideB[2]    = seq_len * size_per_head;
+    ldc[2]        = seq_len;
+    strideC[2]    = seq_len * seq_len;
     batchCount[2] = batch_size * head_num;
     strcpy(mess[2], "ac");
 
     // gemm4
-    M[3] = seq_len * 2;
-    N[3] = seq_len;
-    K[3] = size_per_head;
-    lda[3] = size_per_head;
+    M[3]       = seq_len * 2;
+    N[3]       = seq_len;
+    K[3]       = size_per_head;
+    lda[3]     = size_per_head;
     strideA[3] = seq_len * 2 * size_per_head;
-    ldb[3] = size_per_head;
+    ldb[3]     = size_per_head;
     strideB[3] = seq_len * size_per_head;
-    ldc[3] = seq_len * 2;
+    ldc[3]     = seq_len * 2;
     strideC[3] = seq_len * seq_len * 2;
 
     batchCount[3] = batch_size * head_num;
     strcpy(mess[3], "bd");
 
     // gemm5
-    M[4] = 2;
-    N[4] = seq_len;
-    K[4] = size_per_head;
-    lda[4] = size_per_head;
-    strideA[4] = 2 * size_per_head;
-    ldb[4] = size_per_head;
-    strideB[4] = seq_len * size_per_head;
-    ldc[4] = 2;
-    strideC[4] = seq_len * 2;
+    M[4]          = 2;
+    N[4]          = seq_len;
+    K[4]          = size_per_head;
+    lda[4]        = size_per_head;
+    strideA[4]    = 2 * size_per_head;
+    ldb[4]        = size_per_head;
+    strideB[4]    = seq_len * size_per_head;
+    ldc[4]        = 2;
+    strideC[4]    = seq_len * 2;
     batchCount[4] = batch_size * head_num;
     strcpy(mess[4], "ef");
 
     // gemm6
-    M[5] = head_num;
-    N[5] = seq_len;
-    K[5] = 2;
-    lda[5] = 2;
+    M[5]       = head_num;
+    N[5]       = seq_len;
+    K[5]       = 2;
+    lda[5]     = 2;
     strideA[5] = 2 * head_num;
-    ldb[5] = 2;
+    ldb[5]     = 2;
     strideB[5] = seq_len * 2;
-    ldc[5] = head_num;
+    ldc[5]     = head_num;
     strideC[5] = seq_len * head_num;
 
     batchCount[5] = batch_size * seq_len;
     strcpy(mess[5], "seg_mat");
     // gemm7
-    M[6] = size_per_head;
-    N[6] = seq_len;
-    K[6] = seq_len;
-    lda[6] = size_per_head;
+    M[6]       = size_per_head;
+    N[6]       = seq_len;
+    K[6]       = seq_len;
+    lda[6]     = size_per_head;
     strideA[6] = seq_len * size_per_head;
-    ldb[6] = seq_len;
+    ldb[6]     = seq_len;
     strideB[6] = seq_len * seq_len;
-    ldc[6] = size_per_head;
+    ldc[6]     = size_per_head;
     strideC[6] = seq_len * size_per_head;
 
     batchCount[6] = batch_size * head_num;
     strcpy(mess[6], "attn_vec");
 
     // gemm8
-    M[7] = hidden_units_;
-    N[7] = seq_len * batch_size;
-    K[7] = hidden_units_;
-    lda[7] = hidden_units_;
+    M[7]          = hidden_units_;
+    N[7]          = seq_len * batch_size;
+    K[7]          = hidden_units_;
+    lda[7]        = hidden_units_;
     batchCount[7] = 1;
     strcpy(mess[7], "attn_out");
 
     // gemm9
-    M[8] = inter_size_;
-    N[8] = seq_len * batch_size;
-    K[8] = hidden_units_;
+    M[8]          = inter_size_;
+    N[8]          = seq_len * batch_size;
+    K[8]          = hidden_units_;
     batchCount[8] = 1;
     strcpy(mess[8], "output_fc1_");
 
     // gemm10
-    M[9] = hidden_units_;
-    N[9] = seq_len * batch_size;
-    K[9] = inter_size_;
+    M[9]          = hidden_units_;
+    N[9]          = seq_len * batch_size;
+    K[9]          = inter_size_;
     batchCount[9] = 1;
 
     strcpy(mess[9], "output_fc2_");
@@ -223,45 +223,45 @@ void generate_xlnet_gemm_config(int batch_size,
     cudaDataType_t BType;
     cudaDataType_t CType;
     cudaDataType_t computeType;
-    int startAlgo, endAlgo;
-    const int ites = 100;
+    int            startAlgo, endAlgo;
+    const int      ites = 100;
     struct timeval start, end;
 
     CublasDataType data_type;
     if (std::is_same<T, float>::value) {
-        data_type = FLOAT_DATATYPE;
-        AType = CUDA_R_32F;
-        BType = CUDA_R_32F;
-        CType = CUDA_R_32F;
+        data_type   = FLOAT_DATATYPE;
+        AType       = CUDA_R_32F;
+        BType       = CUDA_R_32F;
+        CType       = CUDA_R_32F;
         computeType = CUDA_R_32F;
-        startAlgo = (int)CUBLAS_GEMM_DEFAULT;
-        endAlgo = (int)CUBLAS_GEMM_ALGO23;
+        startAlgo   = (int)CUBLAS_GEMM_DEFAULT;
+        endAlgo     = (int)CUBLAS_GEMM_ALGO23;
     }
     else if (std::is_same<T, half>::value) {
-        data_type = HALF_DATATYPE;
-        AType = CUDA_R_16F;
-        BType = CUDA_R_16F;
-        CType = CUDA_R_16F;
+        data_type   = HALF_DATATYPE;
+        AType       = CUDA_R_16F;
+        BType       = CUDA_R_16F;
+        CType       = CUDA_R_16F;
         computeType = CUDA_R_32F;
-        startAlgo = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
-        endAlgo = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
+        startAlgo   = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+        endAlgo     = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
     }
 #ifdef ENABLE_BF16
     else if (std::is_same<T, __nv_bfloat16>::value) {
-        data_type = BFLOAT16_DATATYPE;
-        AType = CUDA_R_16BF;
-        BType = CUDA_R_16BF;
-        CType = CUDA_R_16BF;
+        data_type   = BFLOAT16_DATATYPE;
+        AType       = CUDA_R_16BF;
+        BType       = CUDA_R_16BF;
+        CType       = CUDA_R_16BF;
         computeType = CUDA_R_32F;
-        startAlgo = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
-        endAlgo = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
+        startAlgo   = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+        endAlgo     = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
     }
 #endif
 
     using scaleT = typename ScaleTypeConverter<T, false>::Type;
 
     scaleT alpha = (scaleT)1.0f;
-    scaleT beta = (scaleT)0.0f;
+    scaleT beta  = (scaleT)0.0f;
 
     printf("***Xlnet Gemm Testing Begin***\n");
     printf("***Cublas Gemm Testing Begin***\n");
@@ -281,7 +281,7 @@ void generate_xlnet_gemm_config(int batch_size,
         T* d_C = d_B + k * n * batchCount[i];
 
         float exec_time = 99999.0f;
-        int fast_algo = 0;
+        int   fast_algo = 0;
         for (int algo = startAlgo; algo <= endAlgo; algo++) {
             cublasStatus_t status;
             cudaDeviceSynchronize();
@@ -353,7 +353,7 @@ void generate_xlnet_gemm_config(int batch_size,
         if ((i == 1 || i == 7 || i == 8 || i == 9) && data_type != FLOAT_DATATYPE) {
             printf("***cublasLt Gemm Testing Beign***\n");
             // Let try a fixed number of combinations
-            int ALGO_COMBINATIONS = 5000;
+            int                ALGO_COMBINATIONS = 5000;
             customMatmulPerf_t perfResults[ALGO_COMBINATIONS];
 
             LtHgemmCustomFind<T, scaleT>(ltHandle,
@@ -419,31 +419,31 @@ void generate_xlnet_gemm_config(int batch_size,
     return;
 }
 
-template void generate_xlnet_gemm_config<float>(int batch_size,
-                                                int seq_len,
-                                                int head_num,
-                                                int size_per_head,
-                                                int hidden_units_,
-                                                int inter_size_,
+template void generate_xlnet_gemm_config<float>(int   batch_size,
+                                                int   seq_len,
+                                                int   head_num,
+                                                int   size_per_head,
+                                                int   hidden_units_,
+                                                int   inter_size_,
                                                 void* buffer_in,
-                                                bool isAppend);
-template void generate_xlnet_gemm_config<half>(int batch_size,
-                                               int seq_len,
-                                               int head_num,
-                                               int size_per_head,
-                                               int hidden_units_,
-                                               int inter_size_,
+                                                bool  isAppend);
+template void generate_xlnet_gemm_config<half>(int   batch_size,
+                                               int   seq_len,
+                                               int   head_num,
+                                               int   size_per_head,
+                                               int   hidden_units_,
+                                               int   inter_size_,
                                                void* buffer_in,
-                                               bool isAppend);
+                                               bool  isAppend);
 #ifdef ENABLE_BF16
-template void generate_xlnet_gemm_config<__nv_bfloat16>(int batch_size,
-                                                        int seq_len,
-                                                        int head_num,
-                                                        int size_per_head,
-                                                        int hidden_units_,
-                                                        int inter_size_,
+template void generate_xlnet_gemm_config<__nv_bfloat16>(int   batch_size,
+                                                        int   seq_len,
+                                                        int   head_num,
+                                                        int   size_per_head,
+                                                        int   hidden_units_,
+                                                        int   inter_size_,
                                                         void* buffer_in,
-                                                        bool isAppend);
+                                                        bool  isAppend);
 #endif
 
 }  // namespace fastertransformer

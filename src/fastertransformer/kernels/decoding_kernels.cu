@@ -23,20 +23,20 @@ namespace fastertransformer {
 static const float HALF_FLT_MAX = 65504.F;
 
 template<typename T>
-__global__ void decodingInitialize(bool* finished,
-                                   int* sequence_length,
-                                   int* word_ids,
-                                   T* cum_log_probs,
+__global__ void decodingInitialize(bool*      finished,
+                                   int*       sequence_length,
+                                   int*       word_ids,
+                                   T*         cum_log_probs,
                                    const int* sentence_ids,
-                                   const int batch_size,
-                                   const int beam_width,
-                                   const int max_input_length)
+                                   const int  batch_size,
+                                   const int  beam_width,
+                                   const int  max_input_length)
 {
-    const bool IS_FP16 = std::is_same<T, half>::value;
-    const T MAX_T_VAL = (IS_FP16) ? (T)HALF_FLT_MAX : (T)1e20f;  // BF16 and FP32 have the same dynamic range
+    const bool IS_FP16   = std::is_same<T, half>::value;
+    const T    MAX_T_VAL = (IS_FP16) ? (T)HALF_FLT_MAX : (T)1e20f;  // BF16 and FP32 have the same dynamic range
     for (int index = blockIdx.x * blockDim.x + threadIdx.x; index < batch_size * beam_width;
          index += blockDim.x * gridDim.x) {
-        finished[index] = false;
+        finished[index]        = false;
         sequence_length[index] = max_input_length;
         if (word_ids != nullptr) {
             word_ids[index] = sentence_ids[index / beam_width];
@@ -46,14 +46,14 @@ __global__ void decodingInitialize(bool* finished,
 }
 
 template<typename T>
-void invokeDecodingInitialize(bool* finished,
-                              int* sequence_length,
-                              int* word_ids,
-                              T* cum_log_probs,
-                              const int* sentence_ids,
-                              const int batch_size,
-                              const int beam_width,
-                              const int max_input_length,
+void invokeDecodingInitialize(bool*        finished,
+                              int*         sequence_length,
+                              int*         word_ids,
+                              T*           cum_log_probs,
+                              const int*   sentence_ids,
+                              const int    batch_size,
+                              const int    beam_width,
+                              const int    max_input_length,
                               cudaStream_t stream)
 {
     dim3 grid((int)ceil(batch_size * beam_width * 1.0 / 256));
@@ -63,83 +63,92 @@ void invokeDecodingInitialize(bool* finished,
         finished, sequence_length, word_ids, cum_log_probs, sentence_ids, batch_size, beam_width, max_input_length);
 }
 
-template void invokeDecodingInitialize(bool* finished,
-                                       int* sequence_length,
-                                       int* word_ids,
-                                       float* cum_log_probs,
-                                       const int* sentence_ids,
-                                       const int batch_size,
-                                       const int beam_width,
-                                       const int max_input_length,
+template void invokeDecodingInitialize(bool*        finished,
+                                       int*         sequence_length,
+                                       int*         word_ids,
+                                       float*       cum_log_probs,
+                                       const int*   sentence_ids,
+                                       const int    batch_size,
+                                       const int    beam_width,
+                                       const int    max_input_length,
                                        cudaStream_t stream);
 
-template void invokeDecodingInitialize(bool* finished,
-                                       int* sequence_length,
-                                       int* word_ids,
-                                       half* cum_log_probs,
-                                       const int* sentence_ids,
-                                       const int batch_size,
-                                       const int beam_width,
-                                       const int max_input_length,
+template void invokeDecodingInitialize(bool*        finished,
+                                       int*         sequence_length,
+                                       int*         word_ids,
+                                       half*        cum_log_probs,
+                                       const int*   sentence_ids,
+                                       const int    batch_size,
+                                       const int    beam_width,
+                                       const int    max_input_length,
                                        cudaStream_t stream);
 
 #ifdef ENABLE_BF16
-template void invokeDecodingInitialize(bool* finished,
-                                       int* sequence_length,
-                                       int* word_ids,
+template void invokeDecodingInitialize(bool*          finished,
+                                       int*           sequence_length,
+                                       int*           word_ids,
                                        __nv_bfloat16* cum_log_probs,
-                                       const int* sentence_ids,
-                                       const int batch_size,
-                                       const int beam_width,
-                                       const int max_input_length,
-                                       cudaStream_t stream);
+                                       const int*     sentence_ids,
+                                       const int      batch_size,
+                                       const int      beam_width,
+                                       const int      max_input_length,
+                                       cudaStream_t   stream);
 #endif
 
 template<typename T>
-__global__ void embeddingLookupPosEncoding(T* from_tensor,
-                                           const T* embedding_table,
-                                           const T* position_encoding,
+__global__ void embeddingLookupPosEncoding(T*         from_tensor,
+                                           const T*   embedding_table,
+                                           const T*   position_encoding,
                                            const int* all_ids,
+                                           const int* padding_count,
                                            const int* input_lengths,
-                                           const int local_batch_size,
-                                           const int hidden_units,
-                                           const int step,
-                                           const int max_input_length,
-                                           const int batch_size,
-                                           const int ite,
-                                           const T scale)
+                                           const int  local_batch_size,
+                                           const int  hidden_units,
+                                           const int  step,
+                                           const int  max_input_length,
+                                           const int  batch_size,
+                                           const int  ite,
+                                           const T    scale)
 {
     // 1. lookup from embedding table
     // 2. multiply scale
     // 3. add the position encoding
     const int id_offset = step * batch_size + ite * local_batch_size;
 
+    const bool use_padding_count = padding_count != nullptr;
+    const bool use_input_len     = input_lengths != nullptr;
+
     for (int index = blockIdx.x * blockDim.x + threadIdx.x; index < local_batch_size * hidden_units;
          index += blockDim.x * gridDim.x) {
-        const int row_index = index / hidden_units;
-        const int col_index = index % hidden_units;
-        const int step_offset = input_lengths == nullptr ?
-                                    step * hidden_units :
-                                    (step - max_input_length + input_lengths[row_index]) * hidden_units;
+        const int row_index   = index / hidden_units;
+        const int col_index   = index % hidden_units;
+        int       step_offset = step;
+        if (use_padding_count) {
+            step_offset -= padding_count[row_index];
+        }
+        else if (use_input_len) {
+            step_offset -= max_input_length - input_lengths[row_index];
+        }
+        step_offset *= hidden_units;
+
         T val = embedding_table[all_ids[id_offset + row_index] * hidden_units + col_index] * scale;
-        val = val + position_encoding[step_offset + col_index];
+        val   = val + position_encoding[step_offset + col_index];
 
         from_tensor[index] = val;
     }
 }
 
-// No aboluste position embedding
+// No absolute position embedding
 template<typename T>
-__global__ void embeddingLookup(T* from_tensor,
-                                const T* embedding_table,
+__global__ void embeddingLookup(T*         from_tensor,
+                                const T*   embedding_table,
                                 const int* all_ids,
-                                const int local_batch_size,
-                                const int hidden_units,
-                                const int step,
-                                const int max_input_length,
-                                const int batch_size,
-                                const int ite,
-                                const T scale)
+                                const int  local_batch_size,
+                                const int  hidden_units,
+                                const int  step,
+                                const int  batch_size,
+                                const int  ite,
+                                const T    scale)
 {
     // 1. lookup from embedding table
     // 2. multiply scale
@@ -149,24 +158,26 @@ __global__ void embeddingLookup(T* from_tensor,
          index += blockDim.x * gridDim.x) {
         const int row_index = index / hidden_units;
         const int col_index = index % hidden_units;
-        T val = embedding_table[all_ids[id_offset + row_index] * hidden_units + col_index] * scale;
-        from_tensor[index] = val;
+        T         val       = embedding_table[all_ids[id_offset + row_index] * hidden_units + col_index] * scale;
+        from_tensor[index]  = val;
     }
 }
 
+/* Adapter function for invokeEmbeddingLookupPosEncoding{PadCount,InputLen} */
 template<typename T>
-void invokeEmbeddingLookupPosEncoding(T* from_tensor,
-                                      const T* embedding_table,
-                                      const T* position_encoding,
-                                      const int* all_ids,
-                                      const int* input_lengths,
-                                      const int local_batch_size,
-                                      const int hidden_units,
-                                      const T scale,
-                                      const int step,
-                                      const int max_input_length,
-                                      const int batch_size,
-                                      const int ite,
+void invokeEmbeddingLookupPosEncoding(T*           from_tensor,
+                                      const T*     embedding_table,
+                                      const T*     position_encoding,
+                                      const int*   all_ids,
+                                      const int*   padding_count,
+                                      const int*   input_lengths,
+                                      const int    local_batch_size,
+                                      const int    hidden_units,
+                                      const T      scale,
+                                      const int    step,
+                                      const int    max_input_length,
+                                      const int    batch_size,
+                                      const int    ite,
                                       cudaStream_t stream)
 {
     dim3 grid(min(local_batch_size, 65536));
@@ -176,6 +187,7 @@ void invokeEmbeddingLookupPosEncoding(T* from_tensor,
                                                                   embedding_table,
                                                                   position_encoding,
                                                                   all_ids,
+                                                                  padding_count,
                                                                   input_lengths,
                                                                   local_batch_size,
                                                                   hidden_units,
@@ -186,68 +198,66 @@ void invokeEmbeddingLookupPosEncoding(T* from_tensor,
                                                                   scale);
     }
     else {
-        embeddingLookup<T><<<grid, block, 0, stream>>>(from_tensor,
-                                                       embedding_table,
-                                                       all_ids,
-                                                       local_batch_size,
-                                                       hidden_units,
-                                                       step,
-                                                       max_input_length,
-                                                       batch_size,
-                                                       ite,
-                                                       scale);
+        embeddingLookup<T><<<grid, block, 0, stream>>>(
+            from_tensor, embedding_table, all_ids, local_batch_size, hidden_units, step, batch_size, ite, scale);
     }
 }
 
-template void invokeEmbeddingLookupPosEncoding(float* from_tensor,
-                                               const float* embedding_table,
-                                               const float* position_encoding,
-                                               const int* all_ids,
-                                               const int* input_lengths,
-                                               const int local_batch_size,
-                                               const int hidden_units,
-                                               const float scale,
-                                               const int step,
-                                               const int max_input_length,
-                                               const int batch_size,
-                                               const int ite,
-                                               cudaStream_t stream);
+template<typename T>
+void invokeEmbeddingLookupPosEncodingPadCount(T*           from_tensor,
+                                              const T*     embedding_table,
+                                              const T*     position_encoding,
+                                              const int*   all_ids,
+                                              const int*   pad_count,
+                                              const int    local_batch_size,
+                                              const int    hidden_units,
+                                              const T      scale,
+                                              const int    step,
+                                              const int    batch_size,
+                                              const int    ite,
+                                              cudaStream_t stream)
+{
+    invokeEmbeddingLookupPosEncoding<T>(from_tensor,
+                                        embedding_table,
+                                        position_encoding,
+                                        all_ids,
+                                        pad_count,
+                                        nullptr,
+                                        local_batch_size,
+                                        hidden_units,
+                                        scale,
+                                        step,
+                                        0,
+                                        batch_size,
+                                        ite,
+                                        stream);
+}
 
-template void invokeEmbeddingLookupPosEncoding(half* from_tensor,
-                                               const half* embedding_table,
-                                               const half* position_encoding,
-                                               const int* all_ids,
-                                               const int* input_lengths,
-                                               const int local_batch_size,
-                                               const int hidden_units,
-                                               const half scale,
-                                               const int step,
-                                               const int max_input_length,
-                                               const int batch_size,
-                                               const int ite,
-                                               cudaStream_t stream);
-
+#define INSTANTIATE_LOOKUP_POS_ENCODING_PAD_COUNT(T)                                                                   \
+    template void invokeEmbeddingLookupPosEncodingPadCount(T*           from_tensor,                                   \
+                                                           const T*     embedding_table,                               \
+                                                           const T*     position_encoding,                             \
+                                                           const int*   all_ids,                                       \
+                                                           const int*   pad_count,                                     \
+                                                           const int    local_batch_size,                              \
+                                                           const int    hidden_units,                                  \
+                                                           const T      scale,                                         \
+                                                           const int    step,                                          \
+                                                           const int    batch_size,                                    \
+                                                           const int    ite,                                           \
+                                                           cudaStream_t stream)
+INSTANTIATE_LOOKUP_POS_ENCODING_PAD_COUNT(float);
+INSTANTIATE_LOOKUP_POS_ENCODING_PAD_COUNT(half);
 #ifdef ENABLE_BF16
-template void invokeEmbeddingLookupPosEncoding(__nv_bfloat16* from_tensor,
-                                               const __nv_bfloat16* embedding_table,
-                                               const __nv_bfloat16* position_encoding,
-                                               const int* all_ids,
-                                               const int* input_lengths,
-                                               const int local_batch_size,
-                                               const int hidden_units,
-                                               const __nv_bfloat16 scale,
-                                               const int step,
-                                               const int max_input_length,
-                                               const int batch_size,
-                                               const int ite,
-                                               cudaStream_t stream);
+INSTANTIATE_LOOKUP_POS_ENCODING_PAD_COUNT(__nv_bfloat16);
 #endif
+#undef INSTANTIATE_LOOKUP_POS_ENCODING_PAD_COUNT
 
 template<typename T>
-__global__ void paddingEmbedding(T* padded_embedding_kernel,
-                                 T* padded_embedding_bias,
-                                 const T* embedding_kernel,
-                                 const T* embedding_bias,
+__global__ void paddingEmbedding(T*        padded_embedding_kernel,
+                                 T*        padded_embedding_bias,
+                                 const T*  embedding_kernel,
+                                 const T*  embedding_bias,
                                  const int hidden_unit,
                                  const int vocab_size,
                                  const int vocab_size_padded)
@@ -275,13 +285,13 @@ __global__ void paddingEmbedding(T* padded_embedding_kernel,
 }
 
 template<typename T>
-void invokePaddingEmbedding(T* padded_embedding_kernel,
-                            T* padded_embedding_bias,
-                            const T* embedding_kernel,
-                            const T* embedding_bias,
-                            const int hidden_unit,
-                            const int vocab_size,
-                            const int vocab_size_padded,
+void invokePaddingEmbedding(T*           padded_embedding_kernel,
+                            T*           padded_embedding_bias,
+                            const T*     embedding_kernel,
+                            const T*     embedding_bias,
+                            const int    hidden_unit,
+                            const int    vocab_size,
+                            const int    vocab_size_padded,
                             cudaStream_t stream)
 {
     dim3 block(512);
@@ -295,27 +305,37 @@ void invokePaddingEmbedding(T* padded_embedding_kernel,
                                                  vocab_size_padded);
 }
 
-template void invokePaddingEmbedding(float* padded_embedding_kernel,
-                                     float* padded_embedding_bias,
+template void invokePaddingEmbedding(float*       padded_embedding_kernel,
+                                     float*       padded_embedding_bias,
                                      const float* embedding_kernel,
                                      const float* embedding_bias,
-                                     const int hidden_unit,
-                                     const int vocab_size,
-                                     const int vocab_size_padded,
+                                     const int    hidden_unit,
+                                     const int    vocab_size,
+                                     const int    vocab_size_padded,
                                      cudaStream_t stream);
 
-template void invokePaddingEmbedding(half* padded_embedding_kernel,
-                                     half* padded_embedding_bias,
-                                     const half* embedding_kernel,
-                                     const half* embedding_bias,
-                                     const int hidden_unit,
-                                     const int vocab_size,
-                                     const int vocab_size_padded,
+template void invokePaddingEmbedding(half*        padded_embedding_kernel,
+                                     half*        padded_embedding_bias,
+                                     const half*  embedding_kernel,
+                                     const half*  embedding_bias,
+                                     const int    hidden_unit,
+                                     const int    vocab_size,
+                                     const int    vocab_size_padded,
                                      cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokePaddingEmbedding(__nv_bfloat16*       padded_embedding_kernel,
+                                     __nv_bfloat16*       padded_embedding_bias,
+                                     const __nv_bfloat16* embedding_kernel,
+                                     const __nv_bfloat16* embedding_bias,
+                                     const int            hidden_unit,
+                                     const int            vocab_size,
+                                     const int            vocab_size_padded,
+                                     cudaStream_t         stream);
+#endif
 
 template<typename T>
-__global__ void paddingEmbeddingKernel(T* padded_embedding_kernel,
-                                       const T* embedding_kernel,
+__global__ void paddingEmbeddingKernel(T*        padded_embedding_kernel,
+                                       const T*  embedding_kernel,
                                        const int hidden_unit,
                                        const int vocab_size,
                                        const int vocab_size_padded)
@@ -334,11 +354,11 @@ __global__ void paddingEmbeddingKernel(T* padded_embedding_kernel,
 }
 
 template<typename T>
-void invokePaddingEmbeddingKernel(T* padded_embedding_kernel,
-                                  const T* embedding_kernel,
-                                  const int hidden_unit,
-                                  const int vocab_size,
-                                  const int vocab_size_padded,
+void invokePaddingEmbeddingKernel(T*           padded_embedding_kernel,
+                                  const T*     embedding_kernel,
+                                  const int    hidden_unit,
+                                  const int    vocab_size,
+                                  const int    vocab_size_padded,
                                   cudaStream_t stream)
 {
     dim3 block(512);
@@ -347,22 +367,32 @@ void invokePaddingEmbeddingKernel(T* padded_embedding_kernel,
         padded_embedding_kernel, embedding_kernel, hidden_unit, vocab_size, vocab_size_padded);
 }
 
-template void invokePaddingEmbeddingKernel(float* padded_embedding_kernel,
+template void invokePaddingEmbeddingKernel(float*       padded_embedding_kernel,
                                            const float* embedding_kernel,
-                                           const int hidden_unit,
-                                           const int vocab_size,
-                                           const int vocab_size_padded,
+                                           const int    hidden_unit,
+                                           const int    vocab_size,
+                                           const int    vocab_size_padded,
                                            cudaStream_t stream);
 
-template void invokePaddingEmbeddingKernel(half* padded_embedding_kernel,
-                                           const half* embedding_kernel,
-                                           const int hidden_unit,
-                                           const int vocab_size,
-                                           const int vocab_size_padded,
+template void invokePaddingEmbeddingKernel(half*        padded_embedding_kernel,
+                                           const half*  embedding_kernel,
+                                           const int    hidden_unit,
+                                           const int    vocab_size,
+                                           const int    vocab_size_padded,
                                            cudaStream_t stream);
+
+#ifdef ENABLE_BF16
+template void invokePaddingEmbeddingKernel(__nv_bfloat16*       padded_embedding_kernel,
+                                           const __nv_bfloat16* embedding_kernel,
+                                           const int            hidden_unit,
+                                           const int            vocab_size,
+                                           const int            vocab_size_padded,
+                                           cudaStream_t         stream);
+#endif
 
 __global__ void gatherTree(gatherTreeParam param)
 {
+    //  PREFIX SOFT PROMPT
     //  beam: have six parts
     //      [prompt | input | input_padding | prompt_padding | generated output | padding (use end_token)]
     //  parents: have five parts
@@ -372,27 +402,41 @@ __global__ void gatherTree(gatherTreeParam param)
     //      need to transpose to output_ids [bs, beam_width, input_length + requested_output_length]
     //  max_input_length: input + input_padding + prompt_padding
 
+    //  P/PROMPT TUNING
+    //  NOTE: input (real ids | prompt virtual ids) have already been preprocessed during embedding lookup, no prompt
+    //  templates now beam: [input (real ids | prompt virtual ids) | input_padding | generated output | padding (use
+    //  end_token)] parents: [input (real ids | prompt virtual ids) | input_padding | generated output | padding (use
+    //  0)] step_ids: need to remove virtual prompt ids in input ids
+    //      the shape is [input_length (real input length, prompt length) + requested_output_length, bs, beam_width]
+    //      need to transpose to output_ids [bs, beam_width, input_length + requested_output_length]
+    //  max_input_length: input (real ids | prompt virtual ids) + input_padding
+
     const int max_input_length = param.input_lengths == nullptr ? 0 : param.max_input_length;
 
     for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < param.batch_size * param.beam_width;
          i += gridDim.x * blockDim.x) {
         const int batch = i / param.beam_width;
-        const int beam = i % param.beam_width;
+        const int beam  = i % param.beam_width;
         const int prompt_len =
             param.prefix_soft_prompt_lengths == nullptr ? 0 : param.prefix_soft_prompt_lengths[batch];
-        const int input_len = param.input_lengths == nullptr ? 0 : param.input_lengths[i];
+        int input_len = param.input_lengths == nullptr ? 0 : param.input_lengths[i];
+        // virtual prompts mean the prompt embedded in input ids (with prompt templates) [p/prompt tuning]
+        const int virtual_prompt_length =
+            param.p_prompt_tuning_prompt_lengths == nullptr ? 0 : param.p_prompt_tuning_prompt_lengths[batch];
+        // real input length (without virtual prompts) [p/prompt tuning]
+        input_len -= virtual_prompt_length;
 
         const int* parent_ids = param.parent_ids;
-        const int* step_ids = param.step_ids;
+        const int* step_ids   = param.step_ids;
 
         // TODO(bhsueh) optimize the reduce_max operation for large beam_width
-        int max_len = -1;
-        int selected_beam_index = 0;
+        int max_len             = -1;
+        // int selected_beam_index = 0;
         for (int j = 0; j < param.beam_width; j++) {
             int tmp_len = __ldg(param.max_sequence_lengths + batch * param.beam_width + j);
             if (tmp_len > max_len) {
-                max_len = tmp_len;
-                selected_beam_index = j;
+                max_len             = tmp_len;
+                // selected_beam_index = j;
             }
         }
         const int max_seq_len_b = min(param.max_time, max_len);
@@ -404,10 +448,10 @@ __global__ void gatherTree(gatherTreeParam param)
     (param.batch_size * param.beam_width * (time_ix) + param.beam_width * batch + (beam_ix))
 
         const int padding_offset_and_prompt_offset = max_input_length - input_len + prompt_len;
-        const int initial_tgt_ix = GET_IX(max_seq_len_b - 1 - padding_offset_and_prompt_offset, beam);
-        const int initial_parent_ix = GET_IX(max_seq_len_b - 1, beam);
-        param.beams[initial_tgt_ix] = __ldg(step_ids + initial_parent_ix);
-        int parent = parent_ids == nullptr ? 0 : __ldg(parent_ids + initial_parent_ix) % param.beam_width;
+        const int initial_tgt_ix                   = GET_IX(max_seq_len_b - 1 - padding_offset_and_prompt_offset, beam);
+        const int initial_parent_ix                = GET_IX(max_seq_len_b - 1, beam);
+        param.beams[initial_tgt_ix]                = __ldg(step_ids + initial_parent_ix);
+        int  parent    = parent_ids == nullptr ? 0 : __ldg(parent_ids + initial_parent_ix) % param.beam_width;
         bool found_bad = false;
 
         for (int level = max_seq_len_b - 2; level >= 0; --level) {
@@ -415,13 +459,13 @@ __global__ void gatherTree(gatherTreeParam param)
                 continue;
             }
             int tgt_level = level >= max_input_length ? level - padding_offset_and_prompt_offset : level - prompt_len;
-            const int level_beam_ix = GET_IX(tgt_level, beam);
+            const int level_beam_ix   = GET_IX(tgt_level, beam);
             const int level_parent_ix = GET_IX(level, parent);
             if (parent < 0 || parent > param.beam_width) {
                 // param.beams[level_beam_ix] = -1;
                 param.beams[level_beam_ix] = param.end_tokens[batch];
-                parent = -1;
-                found_bad = true;
+                parent                     = -1;
+                found_bad                  = true;
             }
             else {
                 param.beams[level_beam_ix] = __ldg(step_ids + level_parent_ix);
@@ -464,64 +508,64 @@ __global__ void gatherTree(gatherTreeParam param)
     }
 }
 
-void invokeGatherTree(int* beams,
-                      int* max_sequence_lengths,
-                      const int max_time,
-                      const int batch_size,
-                      const int beam_width,
-                      const int* step_ids,
-                      const int* parent_ids,
-                      const int* end_tokens,
+void invokeGatherTree(int*         beams,
+                      int*         max_sequence_lengths,
+                      const int    max_time,
+                      const int    batch_size,
+                      const int    beam_width,
+                      const int*   step_ids,
+                      const int*   parent_ids,
+                      const int*   end_tokens,
                       cudaStream_t stream)
 {
     gatherTreeParam param;
-    param.beams = beams;
-    param.max_sequence_lengths = max_sequence_lengths;
-    param.max_time = max_time;
-    param.batch_size = batch_size;
-    param.beam_width = beam_width;
-    param.step_ids = step_ids;
-    param.parent_ids = parent_ids;
-    param.end_tokens = end_tokens;
-    param.max_input_length = 1;
+    param.beams                      = beams;
+    param.max_sequence_lengths       = max_sequence_lengths;
+    param.max_time                   = max_time;
+    param.batch_size                 = batch_size;
+    param.beam_width                 = beam_width;
+    param.step_ids                   = step_ids;
+    param.parent_ids                 = parent_ids;
+    param.end_tokens                 = end_tokens;
+    param.max_input_length           = 1;
     param.prefix_soft_prompt_lengths = nullptr;
-    param.stream = stream;
+    param.stream                     = stream;
     invokeGatherTree(param);
 }
 
-void invokeGatherTree(int* beams,
-                      int* max_sequence_lengths,
-                      const int max_time,
-                      const int batch_size,
-                      const int beam_width,
-                      const int* step_ids,
-                      const int* parent_ids,
-                      const int* end_tokens,
-                      const int max_input_length,
+void invokeGatherTree(int*         beams,
+                      int*         max_sequence_lengths,
+                      const int    max_time,
+                      const int    batch_size,
+                      const int    beam_width,
+                      const int*   step_ids,
+                      const int*   parent_ids,
+                      const int*   end_tokens,
+                      const int    max_input_length,
                       cudaStream_t stream)
 {
     gatherTreeParam param;
-    param.beams = beams;
-    param.max_sequence_lengths = max_sequence_lengths;
-    param.max_time = max_time;
-    param.batch_size = batch_size;
-    param.beam_width = beam_width;
-    param.step_ids = step_ids;
-    param.parent_ids = parent_ids;
-    param.end_tokens = end_tokens;
-    param.max_input_length = max_input_length;
+    param.beams                      = beams;
+    param.max_sequence_lengths       = max_sequence_lengths;
+    param.max_time                   = max_time;
+    param.batch_size                 = batch_size;
+    param.beam_width                 = beam_width;
+    param.step_ids                   = step_ids;
+    param.parent_ids                 = parent_ids;
+    param.end_tokens                 = end_tokens;
+    param.max_input_length           = max_input_length;
     param.prefix_soft_prompt_lengths = nullptr;
-    param.stream = stream;
+    param.stream                     = stream;
     invokeGatherTree(param);
 }
 
 void invokeGatherTree(gatherTreeParam param)
 {
-    int batchbeam = param.batch_size * param.beam_width;
+    int  batchbeam = param.batch_size * param.beam_width;
     dim3 grid(1), block(batchbeam);
     // though decoder do not support > 1024 for now
     if (batchbeam > 1024) {
-        grid.x = ceil(param.batch_size * param.beam_width / 1024.);
+        grid.x  = ceil(param.batch_size * param.beam_width / 1024.);
         block.x = 1024;
     }
     gatherTree<<<grid, block, 0, param.stream>>>(param);

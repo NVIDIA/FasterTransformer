@@ -46,15 +46,15 @@ Tensor swin_weight_quantize(Tensor weight, Tensor quant_max)
     TORCH_CHECK(quant_max.dtype() == torch::kFloat32, "quant_max dtype should be float32");
     TORCH_CHECK(quant_max.numel() == 1, "quant_max wrong shape");
 
-    const half* weight_ = get_ptr<half>(weight);
+    const half*  weight_    = get_ptr<half>(weight);
     const float* quant_max_ = get_ptr<float>(quant_max);
 
-    auto output = torch::empty({k * n}, torch::dtype(torch::kFloat16).device(torch::kCUDA).requires_grad(false));
+    auto    output = torch::empty({k * n}, torch::dtype(torch::kFloat16).device(torch::kCUDA).requires_grad(false));
     int8_t* transform_out = get_ptr<int8_t>(output);
 
     auto stream = at::cuda::getCurrentCUDAStream().stream();
 
-    int format = use_ORDER_COL32_2R_4R4 ? 1 : 2;
+    int       format          = use_ORDER_COL32_2R_4R4 ? 1 : 2;
     const int scale_is_vector = 0;
     invokeQuantizeWeight(transform_out, weight_, quant_max_, n, k, format, stream, scale_is_vector);
     return output;

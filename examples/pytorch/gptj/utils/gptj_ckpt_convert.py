@@ -5,6 +5,7 @@ from os import makedirs
 import numpy as np
 
 import torch
+import configparser
 
 torch.set_printoptions(linewidth=130, sci_mode=False)
 np.set_printoptions(linewidth=130, suppress=True)
@@ -210,7 +211,7 @@ def main(ckpt_dir, num_layers=28, total_shards=8):
     while len(transforms) > 0:
         print(f"loading shards for part {part}")
         shards = [
-            read_shard(f"{ckpt_dir}shard_{i}/", part) for i in range(total_shards)
+            read_shard(f"{ckpt_dir}/shard_{i}/", part) for i in range(total_shards)
         ]
         print(f"read from checkpoint")
 
@@ -278,10 +279,30 @@ if __name__ == "__main__":
     print("saving")
     # load as in: https://github.com/finetuneanon/misc/blob/main/SizeTest.ipynb
     out_path = args.output_dir
+    output_dir = out_path + f"/{args.n_inference_gpus}-gpu/"
+
     if len(out_path)>3 and out_path[-3:] == ".pt":
         torch.save(checkpoint, out_path)
     else:
-        output_dir = out_path + f"/{args.n_inference_gpus}-gpu/"
         save(checkpoint, output_dir, args.n_inference_gpus, num_layers)
+
+        # NOTE: hard code for gptj-6B configuration (TODO: make this automatic)
+        config = configparser.ConfigParser()
+        config["gptj"] = {}
+        try:
+            config["gptj"]["model_name"] = "gptj-6B"
+            config["gptj"]["head_num"] = "16"
+            config["gptj"]["size_per_head"] = "256"
+            config["gptj"]["inter_size"] = "16384"
+            config["gptj"]["num_layer"] = "28"
+            config["gptj"]["rotary_embedding"] = "64"
+            config["gptj"]["vocab_size"] = "50400"
+            config["gptj"]["start_id"] = "50256"
+            config["gptj"]["end_id"] = "50256"
+            config["gptj"]["weight_data_type"] = "fp32"
+            with open(output_dir + "/config.ini", 'w') as configfile:
+                config.write(configfile)
+        except:
+            print(f"Fail to save the config in config.ini.")
 
     print("done")

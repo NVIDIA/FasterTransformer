@@ -13,4 +13,4 @@
 # limitations under the License.
 
 add_library(th_t5 SHARED T5EncoderOp.cc T5DecoderOp.cc T5DecodingOp.cc)
-target_link_libraries(th_t5 PRIVATE "${TORCH_LIBRARIES}" T5Encoder T5Decoder T5Decoding th_utils)
+target_link_libraries(th_t5 PRIVATE "${TORCH_LIBRARIES}" T5Encoder T5Decoder T5Decoding th_utils nccl_utils)

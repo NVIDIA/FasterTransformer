@@ -192,14 +192,18 @@ def validate_with_random_data(args, config, model):
     # diff = abs(FP32_torch_traced_output - FP32_op_output)
     diff = abs(FP32_torch_output - FP32_op_output)
     print("FP32_torch_traced_output vs FP32_op_output , avg diff : ", diff.mean(), "max diff : ", diff.max())
+    assert diff.mean() < 0.004, "[ERROR] VIT OP TEST FAIL !"
     # diff = abs(FP16_torch_traced_output - FP16_op_output)
     diff = abs(FP16_torch_output - FP16_op_output)
     print("FP16_torch_traced_output vs FP16_op_output , avg diff : ", diff.mean(), "max diff : ", diff.max())
-
+    assert diff.mean() < 0.005, "[ERROR] VIT OP TEST FAIL !"
+    print("[INFO] VIT OP TEST PASS !")
+    
 if __name__ == '__main__':
     args = parse_option()
 
-    seed = args.seed + int(time.time())
+    # seed = args.seed + int(time.time())
+    seed = args.seed
     torch.manual_seed(seed)
     np.random.seed(seed)
     cudnn.benchmark = True

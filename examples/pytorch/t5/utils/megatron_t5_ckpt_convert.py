@@ -16,6 +16,7 @@ import argparse
 import configparser
 from datetime import datetime
 import multiprocessing
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -89,7 +90,7 @@ decoder_new_config = {
     "eos_token_id":30523 ## need to adjust
 }
 
-model_new_config = {"structure":{"t5_with_bias":1, "position_embedding_type":0}}
+model_new_config = {"structure":{"t5_with_bias": "true", "use_gated_activation": "false", "position_embedding_type": "absolute"}}
 
 def get_weight_data_type(data_type):
     if data_type == "fp32":
@@ -351,9 +352,15 @@ def split_and_convert_process(model_type, i, pipeline_para_rank, saved_dir, fact
     else:
         print(f"[ERROR] cannot find key '{key}'")
 
+
 def convert_checkpoint(args):
     saved_dir = Path(args.saved_dir) / f"{args.infer_gpu_num:d}-gpu"
     saved_dir.mkdir(parents=True, exist_ok=True)
+
+    if args.vocab_path:
+        shutil.copy(args.vocab_path, (saved_dir / "vocab.json").as_posix())
+    if args.merges_path:
+        shutil.copy(args.merges_path, (saved_dir / "merges.txt").as_posix())
 
     prefix = Path(args.in_file)
     ckpt_name = "model_optim_rng.pt"
@@ -371,7 +378,7 @@ def convert_checkpoint(args):
 
     # update model structure config
     if not hasattr(model_args, 'position_embedding_type') or model_args.position_embedding_type == "absolute":
-        model_new_config["structure"]["position_embedding_type"] = 1
+        model_new_config["structure"]["position_embedding_type"] = "absolute"
     config = configparser.ConfigParser()
 
     config["encoder"] = {}
@@ -451,6 +458,7 @@ def convert_checkpoint(args):
     w_e_list = []
 
     torch.multiprocessing.set_start_method("spawn")
+    torch.multiprocessing.set_sharing_strategy("file_system")
     pool = multiprocessing.Pool(args.processes)
     for i in range(main_loop):
         for j in range(model_args.pipeline_model_parallel_size):
@@ -535,6 +543,15 @@ if __name__ == "__main__":
     parser.add_argument("-processes", "-p", type=int, help="How many processes to spawn for conversion (default: 64)", default=64)
     parser.add_argument("-weight_data_type", type=str, default="fp32", choices=["fp32", "fp16"])
     parser.add_argument("-model_name", "-m", type=str, help="model name", required=True)
+    parser.add_argument(
+        "--vocab-path",
+        type=str,
+        help="Path to vocabulary file to embed in FasterTransformer checkpoint",
+        required=False,
+    )
+    parser.add_argument(
+        "--merges-path", type=str, help="Path to merges file to embed in FasterTransformer checkpoint", required=False
+    )
     args = parser.parse_args()
     print("\n=============== Argument ===============")
     for key in vars(args):

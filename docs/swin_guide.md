@@ -66,7 +66,7 @@ In this demo, you can run Faster Swin-Transformer as a C++ program.
 - Python 3 is recommended because some features are not supported in python 2
 - PyTorch: Verify on 1.10.0, >= 1.5.0 should work.
 
-Recommand to use image `nvcr.io/nvidia/pytorch:21.07-py3`.  
+Recommend to use image `nvcr.io/nvidia/pytorch:21.07-py3`.  
 
 > docker run -ti --gpus all --rm nvcr.io/nvidia/pytorch:21.07-py3 bash
 
@@ -113,7 +113,7 @@ Data Type = 0 (FP32) or 1 (FP16) or 2 (BF16)
 #   4: swin-LARGE with window size 7x7
 #   5: swin-LARGE with window size 12x12
 ./bin/swin_gemm <batch_size> <image_width> <window_width> <head_number of the first block> <size_per_head> <data_type> <is_use_int8> 
-./bin/swin_example <is_fp16> <model_type[0-5]> <batch_size>
+./bin/swin_example <data_type> <model_type[0-5]> <batch_size>
 ./bin/swin_int8_example <model_type[0-5]> <batch_size>
 ```
 Take swin-TINY with batch=32 as an example:
@@ -125,6 +125,10 @@ Take swin-TINY with batch=32 as an example:
 # Run Swin-Transformer(TINY) under FP16 on C++
 ./bin/swin_gemm 32 224 7 3 32 1 0
 ./bin/swin_example 1 0 32 
+
+# Run Swin-Transformer(TINY) under BF16 on C++
+./bin/swin_gemm 32 224 7 3 32 2 0
+./bin/swin_example 2 0 32 
 
 # Run Swin-Transformer(TINY) under INT8 on C++
 ./bin/swin_gemm 32 224 7 3 32 0 1
@@ -170,7 +174,7 @@ python -m torch.distributed.launch --nproc_per_node 1 \
 (When `int8_mode=1`, all GEMMs are INT8-in-INT8-out.
 When `int8_mode=2`, GEMM of all `fc2` layers and `patchMerge` are relaxed to INT8-in-INT32-out, while other GEMMs keep INT8-I/O. )
 
-If you want to insists on using `--int8-mode 1` for LARGE model (because speed of mode=1 is much faster), we recommend using QAT to finetune paramters of LARGE checkpoint.
+If you want to insists on using `--int8-mode 1` for LARGE model (because speed of mode=1 is much faster), we recommend using QAT to finetune parameters of LARGE checkpoint.
 
 2. Run test
 ```bash
@@ -232,7 +236,7 @@ We here compared the performance between Swin-Transformer and FT Swin-Transforme
 * num_of_blocks = {2,2,6,2}
 
 ### Swin Performance on T4
-Here, `torch.jit.trace` means using tracing to convert Torch model to TorchScript model and then profile its performace. 
+Here, `torch.jit.trace` means using tracing to convert Torch model to TorchScript model and then profile its performance. 
 #### FP32
 | Batch_size | torch.jit.trace |  cpp   | speedup | trt plugin | speedup | torch op | speedup |
 | :--------: | :-------------: | :----: | :-----: | :--------: | :-----: | :------: | :-----: |
@@ -266,7 +270,7 @@ INT8 vs. FP16 speedup on Swin TINY/SMALL/BASE/LARGE:
 |     32     |    26.10    |    19.19    |  1.36   |    44.04     |    30.66     |  1.44   |    64.53    |    42.84    |  1.51   |    121.06    |    76.34     |  1.59   |
 
 ### Swin Performance on A100
-Here, `torch.jit.trace` means using tracing to convert Torch model to TorchScript model and then profile its performace. 
+Here, `torch.jit.trace` means using tracing to convert Torch model to TorchScript model and then profile its performance. 
 #### TF32
 On chips with Ampere architectures (like A30, A100), user can use `export NVIDIA_TF32_OVERRIDE=1` to enforce the program run under TF32, otherwise FP32 GEMM is used by default, which is much slower.
 | Batch_size | torch.jit.trace |  cpp  | speedup | trt plugin | speedup | torch op | speedup |

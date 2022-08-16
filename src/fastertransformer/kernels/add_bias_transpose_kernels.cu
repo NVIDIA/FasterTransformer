@@ -19,13 +19,14 @@
 #include <cuda_fp16.h>
 
 #include "add_bias_transpose_kernels.h"
+#include "src/fastertransformer/kernels/bfloat16_fallback_kenrels.cuh"
 
 namespace fastertransformer {
 
 template<typename T>
-__global__ void addBiasTransposeToMultiHead(const T* matrices,
-                                            const T* biases,
-                                            T* output,
+__global__ void addBiasTransposeToMultiHead(const T*  matrices,
+                                            const T*  biases,
+                                            T*        output,
                                             const int batch_size,
                                             const int head_num,
                                             const int size_per_head,
@@ -36,20 +37,20 @@ __global__ void addBiasTransposeToMultiHead(const T* matrices,
 {
     for (int j = 0; j < y_repeat_per_block; j++) {
         int y_offset = blockIdx.y * blockDim.y * y_repeat_per_block + j * blockDim.y + threadIdx.y;
-        int bias_id = -1;
-        T bias_element;
+        int bias_id  = -1;
+        T   bias_element;
         for (int i = 0; i < x_repeat_per_block; i++) {
-            int x_offset = blockIdx.x * blockDim.x * x_repeat_per_block + i * blockDim.x + threadIdx.x;
+            int x_offset    = blockIdx.x * blockDim.x * x_repeat_per_block + i * blockDim.x + threadIdx.x;
             int bias_id_new = x_offset / (batch_size * seq_len);
             if (bias_id_new != bias_id) {
                 bias_element = biases[bias_id_new * head_num * size_per_head + y_offset];
-                bias_id = bias_id_new;
+                bias_id      = bias_id_new;
             }
             if (x_offset < batch_size * seq_len * matrices_num && y_offset < head_num * size_per_head) {
-                int matrix_id = x_offset / (batch_size * seq_len);
-                int batch_id = (x_offset % (batch_size * seq_len)) / seq_len;
-                int seq_id = x_offset % seq_len;
-                int head_id = y_offset / size_per_head;
+                int matrix_id     = x_offset / (batch_size * seq_len);
+                int batch_id      = (x_offset % (batch_size * seq_len)) / seq_len;
+                int seq_id        = x_offset % seq_len;
+                int head_id       = y_offset / size_per_head;
                 int head_y_offset = y_offset % size_per_head;
 
                 int output_offset = matrix_id * batch_size * head_num * seq_len * size_per_head
@@ -63,14 +64,14 @@ __global__ void addBiasTransposeToMultiHead(const T* matrices,
 }
 
 template<typename T>
-void invokeAddBiasTransposeToMultiHead(const T* matrices,
-                                       const T* biases,
-                                       T* output,
-                                       const int batch_size,
-                                       const int head_num,
-                                       const int size_per_head,
-                                       const int seq_len,
-                                       const int matrices_num,
+void invokeAddBiasTransposeToMultiHead(const T*           matrices,
+                                       const T*           biases,
+                                       T*                 output,
+                                       const int          batch_size,
+                                       const int          head_num,
+                                       const int          size_per_head,
+                                       const int          seq_len,
+                                       const int          matrices_num,
                                        const cudaStream_t stream)
 {
     /*
@@ -86,8 +87,8 @@ void invokeAddBiasTransposeToMultiHead(const T* matrices,
 
     const int x_repeat_per_block = 8;
     const int y_repeat_per_block = 1;
-    const int block_dim_x = 1;
-    const int block_dim_y = 32;
+    const int block_dim_x        = 1;
+    const int block_dim_y        = 32;
 
     const int x_total_len = matrices_num * batch_size * seq_len;
     const int y_total_len = head_num * size_per_head;
@@ -108,25 +109,37 @@ void invokeAddBiasTransposeToMultiHead(const T* matrices,
                                                                y_repeat_per_block);
 }
 
-template void invokeAddBiasTransposeToMultiHead(const float* matrices,
-                                                const float* biases,
-                                                float* output,
-                                                const int batch_size,
-                                                const int head_num,
-                                                const int size_per_head,
-                                                const int seq_len,
-                                                const int matrices_num,
+template void invokeAddBiasTransposeToMultiHead(const float*       matrices,
+                                                const float*       biases,
+                                                float*             output,
+                                                const int          batch_size,
+                                                const int          head_num,
+                                                const int          size_per_head,
+                                                const int          seq_len,
+                                                const int          matrices_num,
                                                 const cudaStream_t stream);
 
-template void invokeAddBiasTransposeToMultiHead(const half* matrices,
-                                                const half* biases,
-                                                half* output,
-                                                const int batch_size,
-                                                const int head_num,
-                                                const int size_per_head,
-                                                const int seq_len,
-                                                const int matrices_num,
+template void invokeAddBiasTransposeToMultiHead(const half*        matrices,
+                                                const half*        biases,
+                                                half*              output,
+                                                const int          batch_size,
+                                                const int          head_num,
+                                                const int          size_per_head,
+                                                const int          seq_len,
+                                                const int          matrices_num,
                                                 const cudaStream_t stream);
+
+#ifdef ENABLE_BF16
+template void invokeAddBiasTransposeToMultiHead(const __nv_bfloat16* matrices,
+                                                const __nv_bfloat16* biases,
+                                                __nv_bfloat16*       output,
+                                                const int            batch_size,
+                                                const int            head_num,
+                                                const int            size_per_head,
+                                                const int            seq_len,
+                                                const int            matrices_num,
+                                                const cudaStream_t   stream);
+#endif
 
 __inline__ __device__ int target_index(int id1, int id2, int id3, int id4, int dim_1, int dim_2, int dim_3, int dim_4)
 {
@@ -137,45 +150,45 @@ template<typename T>
 __global__ void transposeMultiHeadToSingleKernel(
     T* src, T* dst, const int batch_size, const int seq_len, const int head_num, const int size_per_head)
 {
-    int batch_id = blockIdx.x / (head_num * seq_len);
-    int seq_id = blockIdx.x % seq_len;
-    int head_id = (blockIdx.x % (head_num * seq_len)) / seq_len;
-    dst[batch_id * (head_num * seq_len * size_per_head) + seq_id * head_num * size_per_head + head_id * size_per_head
-        + threadIdx.x] = src[blockIdx.x * size_per_head + threadIdx.x];
-}
-
-template<>
-__global__ void transposeMultiHeadToSingleKernel<half>(
-    half* src, half* dst, const int batch_size, const int seq_len, const int head_num, const int size_per_head)
-{
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
     int batch_id = tid / (head_num * seq_len * size_per_head);
-    int head_id = (tid % (head_num * seq_len * size_per_head)) / (seq_len * size_per_head);
-    int seq_id = (tid % (seq_len * size_per_head)) / size_per_head;
-    int id = tid % size_per_head;
+    int head_id  = (tid % (head_num * seq_len * size_per_head)) / (seq_len * size_per_head);
+    int seq_id   = (tid % (seq_len * size_per_head)) / size_per_head;
+    int id       = tid % size_per_head;
 
-    int target_id = target_index(batch_id, head_id, seq_id, id, batch_size, head_num, seq_len, size_per_head);
-    half2* src_ptr = (half2*)src;
-    half2* dst_ptr = (half2*)dst;
+    int       target_id = target_index(batch_id, head_id, seq_id, id, batch_size, head_num, seq_len, size_per_head);
+    uint32_t* src_ptr   = (uint32_t*)src;
+    uint32_t* dst_ptr   = (uint32_t*)dst;
 
     dst_ptr[target_id] = src_ptr[tid];
 }
 
+template<>
+__global__ void transposeMultiHeadToSingleKernel<float>(
+    float* src, float* dst, const int batch_size, const int seq_len, const int head_num, const int size_per_head)
+{
+    int batch_id       = blockIdx.x / (head_num * seq_len);
+    int seq_id         = blockIdx.x % seq_len;
+    int head_id        = (blockIdx.x % (head_num * seq_len)) / seq_len;
+    dst[batch_id * (head_num * seq_len * size_per_head) + seq_id * head_num * size_per_head + head_id * size_per_head
+        + threadIdx.x] = src[blockIdx.x * size_per_head + threadIdx.x];
+}
+
 template<typename T>
-void invokeTransposeMultiHeadToSingle(T* dst,
-                                      T* src,
-                                      const int batch_size,
-                                      const int seq_len,
-                                      const int head_num,
-                                      const int size_per_head,
+void invokeTransposeMultiHeadToSingle(T*           dst,
+                                      T*           src,
+                                      const int    batch_size,
+                                      const int    seq_len,
+                                      const int    head_num,
+                                      const int    size_per_head,
                                       cudaStream_t stream)
 {
     dim3 grid, block;
     if (sizeof(T) == 2) {
         const int seq_per_block = 4;
-        grid.x = batch_size * head_num * seq_len / seq_per_block;
-        block.x = seq_per_block * size_per_head / 2;
+        grid.x                  = batch_size * head_num * seq_len / seq_per_block;
+        block.x                 = seq_per_block * size_per_head / 2;
 
         assert(grid.x * seq_per_block == batch_size * head_num * seq_len);
 
@@ -184,27 +197,37 @@ void invokeTransposeMultiHeadToSingle(T* dst,
     }
     else {
         const int seq_per_block = 1;
-        grid.x = batch_size * head_num * seq_len / seq_per_block;
-        block.x = seq_per_block * size_per_head;
+        grid.x                  = batch_size * head_num * seq_len / seq_per_block;
+        block.x                 = seq_per_block * size_per_head;
         transposeMultiHeadToSingleKernel<T>
             <<<grid, block, 0, stream>>>(src, dst, batch_size, seq_len, head_num, size_per_head);
     }
 }
 
-template void invokeTransposeMultiHeadToSingle(float* dst,
-                                               float* src,
-                                               const int batch_size,
-                                               const int seq_len,
-                                               const int head_num,
-                                               const int size_per_head,
+template void invokeTransposeMultiHeadToSingle(float*       dst,
+                                               float*       src,
+                                               const int    batch_size,
+                                               const int    seq_len,
+                                               const int    head_num,
+                                               const int    size_per_head,
                                                cudaStream_t stream);
 
-template void invokeTransposeMultiHeadToSingle(half* dst,
-                                               half* src,
-                                               const int batch_size,
-                                               const int seq_len,
-                                               const int head_num,
-                                               const int size_per_head,
+template void invokeTransposeMultiHeadToSingle(half*        dst,
+                                               half*        src,
+                                               const int    batch_size,
+                                               const int    seq_len,
+                                               const int    head_num,
+                                               const int    size_per_head,
                                                cudaStream_t stream);
+
+#ifdef ENABLE_BF16
+template void invokeTransposeMultiHeadToSingle(__nv_bfloat16* dst,
+                                               __nv_bfloat16* src,
+                                               const int      batch_size,
+                                               const int      seq_len,
+                                               const int      head_num,
+                                               const int      size_per_head,
+                                               cudaStream_t   stream);
+#endif
 
 }  // namespace fastertransformer

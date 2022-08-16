@@ -23,22 +23,37 @@
 #endif
 
 #include "src/fastertransformer/kernels/beam_search_topk_kernels.h"
+#include "src/fastertransformer/kernels/bfloat16_fallback_kenrels.cuh"
 #include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
 
 namespace fastertransformer {
+
+template<typename T>
+__device__ __forceinline__ T apply_length_penalty(T log_prob, int length, float length_penalty)
+{
+    // score = log(prob) / (length)^length_penalty.
+    return log_prob / static_cast<T>(powf(length, length_penalty));
+}
+
 template<typename T, int MAX_K, int THREADBLOCK_SIZE>
-__launch_bounds__(THREADBLOCK_SIZE) __global__ void beam_topK_kernel(
-    const T* log_probs, int* topk_tmp_id_buf, T* topk_tmp_val_buf, const int vocab_size, T diversity_rate)
+__launch_bounds__(THREADBLOCK_SIZE) __global__ void beam_topK_kernel(const T*    log_probs,
+                                                                     int*        topk_tmp_id_buf,
+                                                                     T*          topk_tmp_val_buf,
+                                                                     const bool* finished,
+                                                                     const int*  sequence_lengths,
+                                                                     const int   vocab_size,
+                                                                     T           diversity_rate,
+                                                                     float       length_penalty)
 {
     typedef cub::BlockReduce<TopK<T, MAX_K>, THREADBLOCK_SIZE> BlockReduce;
-    __shared__ typename BlockReduce::TempStorage temp_storage;
+    __shared__ typename BlockReduce::TempStorage               temp_storage;
 
-    int thread_id = threadIdx.x;
-    int block_id = blockIdx.x;
+    int            thread_id = threadIdx.x;
+    int            block_id  = blockIdx.x;  // batch beam index.
     TopK<T, MAX_K> partial;
 
-    const bool IS_FP16 = std::is_same<T, half>::value;
-    const T MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
+    const bool IS_FP16   = std::is_same<T, half>::value;
+    const T    MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
 
 #pragma unroll
     for (int i = 0; i < MAX_K; ++i) {
@@ -49,7 +64,12 @@ __launch_bounds__(THREADBLOCK_SIZE) __global__ void beam_topK_kernel(
 #pragma unroll
     for (int elem_id = thread_id; elem_id < vocab_size; elem_id += THREADBLOCK_SIZE) {
         int index = elem_id + block_id * vocab_size;
-        partial.insert(log_probs[index], index);
+        T   score = length_penalty == 0.0f ? log_probs[index] :
+                                             apply_length_penalty(log_probs[index],
+                                                                finished[block_id] ? sequence_lengths[block_id] :
+                                                                                       sequence_lengths[block_id] + 1,
+                                                                length_penalty);
+        partial.insert(score, index);
     }
 
     TopK<T, MAX_K> total = BlockReduce(temp_storage).Reduce(partial, reduce_topk_op<T, MAX_K>);
@@ -59,7 +79,7 @@ __launch_bounds__(THREADBLOCK_SIZE) __global__ void beam_topK_kernel(
 
 #pragma unroll
         for (int i = 0; i < MAX_K; ++i) {
-            topk_tmp_id_buf[index + i] = total.p[i];
+            topk_tmp_id_buf[index + i]  = total.p[i];
             topk_tmp_val_buf[index + i] = total.u[i] + diversity_rate * (T)i;
         }
     }
@@ -69,10 +89,10 @@ template<typename T, int MAX_K, int THREADBLOCK_SIZE>
 __launch_bounds__(THREADBLOCK_SIZE) __global__
     void batch_topK_kernel(int* topk_tmp_id_buf, T* topk_tmp_val_buf, int* id_buf)
 {
-    int thread_id = threadIdx.x;
-    int block_id = blockIdx.x;
-    const bool IS_FP16 = std::is_same<T, half>::value;
-    const T MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
+    int            thread_id = threadIdx.x;
+    int            block_id  = blockIdx.x;
+    const bool     IS_FP16   = std::is_same<T, half>::value;
+    const T        MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
     TopK<T, MAX_K> partial;
     if (thread_id == 0) {
         for (int i = 0; i < MAX_K; ++i) {
@@ -97,13 +117,13 @@ __launch_bounds__(THREADBLOCK_SIZE) __global__
     void batch_topK_kernel_v2(int* topk_tmp_id_buf, T* topk_tmp_val_buf, int* id_buf)
 {
     typedef cub::BlockReduce<TopK<T, MAX_K>, THREADBLOCK_SIZE> BlockReduce;
-    __shared__ typename BlockReduce::TempStorage temp_storage;
+    __shared__ typename BlockReduce::TempStorage               temp_storage;
 
-    int tid = threadIdx.x;
-    int bid = blockIdx.x;
+    int            tid = threadIdx.x;
+    int            bid = blockIdx.x;
     TopK<T, MAX_K> partial;
-    const bool IS_FP16 = std::is_same<T, half>::value;
-    const T MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
+    const bool     IS_FP16   = std::is_same<T, half>::value;
+    const T        MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
 
 #pragma unroll
     for (int i = 0; i < MAX_K; ++i) {
@@ -130,38 +150,44 @@ __launch_bounds__(THREADBLOCK_SIZE) __global__
 
 template<typename T, int BLOCK_SIZE_, int BLOCKS_PER_BEAM_>
 __global__ void topk_stage_1_opt3(const T* __restrict log_probs,
-                                  T* tmp_log_probs,
-                                  int* topk_tmp_id_buf,
-                                  T* topk_tmp_val_buf,
+                                  T*          tmp_log_probs,
+                                  int*        topk_tmp_id_buf,
+                                  T*          topk_tmp_val_buf,
                                   const bool* finished,
-                                  const int k,
-                                  const int vocab_size,
-                                  const int* end_ids)
+                                  const int*  sequence_lengths,
+                                  const int   k,
+                                  const int   vocab_size,
+                                  const float length_penalty,
+                                  const int*  end_ids)
 {
     typedef cub::BlockReduce<TopK_2<T>, BLOCK_SIZE_> BlockReduce;
-    __shared__ typename BlockReduce::TempStorage temp_storage;
+    __shared__ typename BlockReduce::TempStorage     temp_storage;
 
     const int tid = threadIdx.x;
     const int bid = blockIdx.x;
 
-    const int row_id = bid / BLOCKS_PER_BEAM_;      // row id for log_probs
-    const int block_lane = bid % BLOCKS_PER_BEAM_;  // block id for a beam
-    const int tmp_log_buf_index = row_id * vocab_size;
-    const int tmp_topk_buf_index = row_id * BLOCKS_PER_BEAM_ * k + block_lane * k;
-    TopK_2<T> partial;
-    const bool IS_FP16 = std::is_same<T, half>::value;
-    const T MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
+    const int  row_id             = bid / BLOCKS_PER_BEAM_;  // row id for log_probs (batchbeam index)
+    const int  block_lane         = bid % BLOCKS_PER_BEAM_;  // block id for a beam
+    const int  tmp_log_buf_index  = row_id * vocab_size;
+    const int  tmp_topk_buf_index = row_id * BLOCKS_PER_BEAM_ * k + block_lane * k;
+    TopK_2<T>  partial;
+    const bool IS_FP16   = std::is_same<T, half>::value;
+    const T    MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
 
     if (finished != nullptr && finished[row_id] == true) {
         if (tid < k) {
             const int index = tmp_topk_buf_index + tid;
             if (block_lane == 0 && tid == 0) {
-                const int end_id = end_ids[row_id / k];
-                topk_tmp_id_buf[index] = tmp_log_buf_index + end_id;
-                topk_tmp_val_buf[index] = log_probs[tmp_log_buf_index + end_id];
+                const int end_id        = end_ids[row_id / k];
+                topk_tmp_id_buf[index]  = tmp_log_buf_index + end_id;
+                topk_tmp_val_buf[index] = length_penalty == 0.0f ?
+                                              log_probs[tmp_log_buf_index + end_id] :
+                                              apply_length_penalty(log_probs[tmp_log_buf_index + end_id],
+                                                                   sequence_lengths[row_id],
+                                                                   length_penalty);
             }
             else {
-                topk_tmp_id_buf[index] = -1;
+                topk_tmp_id_buf[index]  = -1;
                 topk_tmp_val_buf[index] = -MAX_T_VAL;
             }
         }
@@ -170,8 +196,10 @@ __global__ void topk_stage_1_opt3(const T* __restrict log_probs,
 
     for (int elem_id = tid + block_lane * BLOCK_SIZE_; elem_id < vocab_size;
          elem_id += BLOCK_SIZE_ * BLOCKS_PER_BEAM_) {
-        int index = elem_id + tmp_log_buf_index;
-        tmp_log_probs[index] = log_probs[index];
+        int index            = elem_id + tmp_log_buf_index;
+        tmp_log_probs[index] = length_penalty == 0.0f ?
+                                   log_probs[index] :
+                                   apply_length_penalty(log_probs[index], sequence_lengths[row_id] + 1, length_penalty);
     }
 
     for (int ite = 0; ite < k; ite++) {
@@ -186,10 +214,10 @@ __global__ void topk_stage_1_opt3(const T* __restrict log_probs,
         TopK_2<T> total = BlockReduce(temp_storage).Reduce(partial, reduce_topk_op_2<T>);
 
         if (tid == 0) {
-            const int index = tmp_topk_buf_index + ite;
-            topk_tmp_id_buf[index] = total.p;
+            const int index         = tmp_topk_buf_index + ite;
+            topk_tmp_id_buf[index]  = total.p;
             topk_tmp_val_buf[index] = total.u;
-            tmp_log_probs[total.p] = -MAX_T_VAL;
+            tmp_log_probs[total.p]  = -MAX_T_VAL;
         }
         __syncthreads();
     }
@@ -198,17 +226,17 @@ __global__ void topk_stage_1_opt3(const T* __restrict log_probs,
 template<typename T, int BLOCK_SIZE_, int BLOCKS_PER_BEAM_>
 __global__ void topk_stage_2_opt3(const int* __restrict topk_tmp_id_buf, T* topk_tmp_val_buf, int* ids, const int k)
 {
-    const int size = k * k * BLOCKS_PER_BEAM_;
-    const int tid = threadIdx.x;
-    const int batch_id = blockIdx.x;
-    const bool IS_FP16 = std::is_same<T, half>::value;
-    const T MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
+    const int  size      = k * k * BLOCKS_PER_BEAM_;
+    const int  tid       = threadIdx.x;
+    const int  batch_id  = blockIdx.x;
+    const bool IS_FP16   = std::is_same<T, half>::value;
+    const T    MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
 
     typedef cub::BlockReduce<TopK_2<T>, BLOCK_SIZE_> BlockReduce;
-    __shared__ typename BlockReduce::TempStorage temp_storage;
-    extern __shared__ char array[];
-    T* s_val = topk_tmp_val_buf + batch_id * size;
-    int* s_id = (int*)(array);
+    __shared__ typename BlockReduce::TempStorage     temp_storage;
+    extern __shared__ char                           array[];
+    T*                                               s_val = topk_tmp_val_buf + batch_id * size;
+    int*                                             s_id  = (int*)(array);
 
     TopK_2<T> partial;
 
@@ -222,7 +250,7 @@ __global__ void topk_stage_2_opt3(const int* __restrict topk_tmp_id_buf, T* topk
         TopK_2<T> total = BlockReduce(temp_storage).Reduce(partial, reduce_topk_op_2<T>);
 
         if (tid == 0) {
-            s_id[ite] = total.p;
+            s_id[ite]      = total.p;
             s_val[total.p] = -MAX_T_VAL;
         }
         __syncthreads();
@@ -234,28 +262,35 @@ __global__ void topk_stage_2_opt3(const int* __restrict topk_tmp_id_buf, T* topk
 
 template<typename T, int BLOCK_SIZE, int BLOCKS_PER_BEAM>
 __global__ void topk_stage_1_opt2_general(const T* __restrict log_probs,
-                                          T* tmp_log_probs,
-                                          int* topk_tmp_id_buf,
-                                          T* topk_tmp_val_buf,
-                                          const int k,
-                                          const int vocab_size)
+                                          T*          tmp_log_probs,
+                                          int*        topk_tmp_id_buf,
+                                          T*          topk_tmp_val_buf,
+                                          const bool* finished,
+                                          const int*  sequence_lengths,
+                                          const int   k,
+                                          const int   vocab_size,
+                                          const float length_penalty)
 {
-    const bool IS_FP16 = std::is_same<T, half>::value;
-    const T MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
+    const bool                                      IS_FP16   = std::is_same<T, half>::value;
+    const T                                         MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
     typedef cub::BlockReduce<TopK_2<T>, BLOCK_SIZE> BlockReduce;
-    __shared__ typename BlockReduce::TempStorage temp_storage;
+    __shared__ typename BlockReduce::TempStorage    temp_storage;
 
-    const int tid = threadIdx.x;
-    const int bid = blockIdx.x;
-    const int row_id = bid / BLOCKS_PER_BEAM;      // row id for log_probs
-    const int block_lane = bid % BLOCKS_PER_BEAM;  // block id for a beam
-    const int tmp_log_buf_index = row_id * vocab_size;
+    const int tid                = threadIdx.x;
+    const int bid                = blockIdx.x;
+    const int row_id             = bid / BLOCKS_PER_BEAM;  // row id for log_probs
+    const int block_lane         = bid % BLOCKS_PER_BEAM;  // block id for a beam
+    const int tmp_log_buf_index  = row_id * vocab_size;
     const int tmp_topk_buf_index = row_id * BLOCKS_PER_BEAM * k + block_lane * k;
     TopK_2<T> partial;
 
     for (int elem_id = tid + block_lane * BLOCK_SIZE; elem_id < vocab_size; elem_id += BLOCK_SIZE * BLOCKS_PER_BEAM) {
-        int index = elem_id + tmp_log_buf_index;
-        tmp_log_probs[index] = log_probs[index];
+        int index            = elem_id + tmp_log_buf_index;
+        tmp_log_probs[index] = length_penalty == 0.0f ? log_probs[index] :
+                                                        apply_length_penalty(log_probs[index],
+                                                                             finished[bid] ? sequence_lengths[bid] :
+                                                                                             sequence_lengths[bid] + 1,
+                                                                             length_penalty);
     }
 
     for (int ite = 0; ite < k; ite++) {
@@ -270,10 +305,10 @@ __global__ void topk_stage_1_opt2_general(const T* __restrict log_probs,
         TopK_2<T> total = BlockReduce(temp_storage).Reduce(partial, reduce_topk_op_2<T>);
 
         if (tid == 0) {
-            const int index = tmp_topk_buf_index + ite;
-            topk_tmp_id_buf[index] = total.p;
+            const int index         = tmp_topk_buf_index + ite;
+            topk_tmp_id_buf[index]  = total.p;
             topk_tmp_val_buf[index] = total.u;
-            tmp_log_probs[total.p] = -MAX_T_VAL;
+            tmp_log_probs[total.p]  = -MAX_T_VAL;
         }
         __syncthreads();
     }
@@ -283,17 +318,17 @@ template<typename T, int BLOCK_SIZE, int BLOCKS_PER_BEAM>
 __global__ void
 topk_stage_2_opt2_general(const int* __restrict topk_tmp_id_buf, T* topk_tmp_val_buf, int* ids, const int k)
 {
-    const int size = k * k * BLOCKS_PER_BEAM;
-    const int tid = threadIdx.x;
-    const int batch_id = blockIdx.x;
-    const bool IS_FP16 = std::is_same<T, half>::value;
-    const T MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
+    const int  size      = k * k * BLOCKS_PER_BEAM;
+    const int  tid       = threadIdx.x;
+    const int  batch_id  = blockIdx.x;
+    const bool IS_FP16   = std::is_same<T, half>::value;
+    const T    MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
 
     typedef cub::BlockReduce<TopK_2<T>, BLOCK_SIZE> BlockReduce;
-    __shared__ typename BlockReduce::TempStorage temp_storage;
-    extern __shared__ char array[];
-    T* s_val = topk_tmp_val_buf + batch_id * size;
-    int* s_id = (int*)(array);
+    __shared__ typename BlockReduce::TempStorage    temp_storage;
+    extern __shared__ char                          array[];
+    T*                                              s_val = topk_tmp_val_buf + batch_id * size;
+    int*                                            s_id  = (int*)(array);
 
     TopK_2<T> partial;
 
@@ -307,7 +342,7 @@ topk_stage_2_opt2_general(const int* __restrict topk_tmp_id_buf, T* topk_tmp_val
         TopK_2<T> total = BlockReduce(temp_storage).Reduce(partial, reduce_topk_op_2<T>);
 
         if (tid == 0) {
-            s_id[ite] = total.p;
+            s_id[ite]      = total.p;
             s_val[total.p] = -MAX_T_VAL;
         }
         __syncthreads();
@@ -319,8 +354,14 @@ topk_stage_2_opt2_general(const int* __restrict topk_tmp_id_buf, T* topk_tmp_val
 
 #define CASE_K_DIV(K, BLOCK_SIZE_1, BLOCK_SIZE_2)                                                                      \
     case K:                                                                                                            \
-        beam_topK_kernel<T, K, BLOCK_SIZE_2><<<batch_size * beam_width, BLOCK_SIZE_2, 0, stream>>>(                    \
-            log_probs, topk_tmp_id_buf, topk_tmp_val_buf, vocab_size, diversity_rate);                                 \
+        beam_topK_kernel<T, K, BLOCK_SIZE_2><<<batch_size * beam_width, BLOCK_SIZE_2, 0, stream>>>(log_probs,          \
+                                                                                                   topk_tmp_id_buf,    \
+                                                                                                   topk_tmp_val_buf,   \
+                                                                                                   finished,           \
+                                                                                                   sequence_lengths,   \
+                                                                                                   vocab_size,         \
+                                                                                                   diversity_rate,     \
+                                                                                                   length_penalty);    \
         if (K < 10)                                                                                                    \
             batch_topK_kernel<T, K, BLOCK_SIZE_1>                                                                      \
                 <<<batch_size, BLOCK_SIZE_1, 0, stream>>>(topk_tmp_id_buf, topk_tmp_val_buf, ids);                     \
@@ -336,8 +377,10 @@ topk_stage_2_opt2_general(const int* __restrict topk_tmp_id_buf, T* topk_tmp_val
                                                                               topk_tmp_id_buf,                         \
                                                                               topk_tmp_val_buf,                        \
                                                                               finished,                                \
+                                                                              sequence_lengths,                        \
                                                                               beam_width,                              \
                                                                               vocab_size,                              \
+                                                                              length_penalty,                          \
                                                                               end_ids);                                \
         topk_stage_2_opt3<float, BLOCK_SIZE_2_, BLOCKS_PER_BEAM_>                                                      \
             <<<batch_size, BLOCK_SIZE_2_, K * sizeof(int), stream>>>(                                                  \
@@ -345,29 +388,33 @@ topk_stage_2_opt2_general(const int* __restrict topk_tmp_id_buf, T* topk_tmp_val
         break;
 
 template<typename T>
-void invokeTopkBeamSearch(void* workspace,
-                          size_t& workspace_size,
-                          T* log_probs,
-                          int* ids,
-                          const bool* finished,
-                          const int batch_size,
-                          const int beam_width,
-                          const int vocab_size_padded_,
-                          const T diversity_rate,
-                          const int* end_ids,
+void invokeTopkBeamSearch(void*        workspace,
+                          size_t&      workspace_size,
+                          T*           log_probs,
+                          int*         ids,
+                          const bool*  finished,
+                          const int*   sequence_lengths,
+                          const int    batch_size,
+                          const int    beam_width,
+                          const int    vocab_size_padded_,
+                          const T      diversity_rate,
+                          const float  length_penalty,
+                          const int*   end_ids,
                           cudaStream_t stream)
 {
+    // log_probs: (batch, beam, vocab) cumulative log_probs of beams ending with a token.
     const int vocab_size = vocab_size_padded_;
+    // Beam search needs the sequence lengths of beams to apply length penalty.
+    assert(length_penalty == 0.0f || sequence_lengths != nullptr);
+    const int max_block_per_beam      = 8;
+    int       temp_log_probs_buf_size = batch_size * beam_width * vocab_size;                       // type float
+    int       topk_tmp_ids_buf_size   = batch_size * beam_width * beam_width * max_block_per_beam;  // type int
+    int       topk_tmp_val_buf_size   = batch_size * beam_width * beam_width * max_block_per_beam;  // type float
 
-    const int max_block_per_beam = 8;
-    int temp_log_probs_buf_size = batch_size * beam_width * vocab_size;                     // type float
-    int topk_tmp_ids_buf_size = batch_size * beam_width * beam_width * max_block_per_beam;  // type int
-    int topk_tmp_val_buf_size = batch_size * beam_width * beam_width * max_block_per_beam;  // type float
-
-    // prevent memory misalinged address
+    // prevent memory misaligned address
     temp_log_probs_buf_size = (int)(ceil(temp_log_probs_buf_size / 4.)) * 4;
-    topk_tmp_ids_buf_size = (int)(ceil(topk_tmp_ids_buf_size / 4.)) * 4;
-    topk_tmp_val_buf_size = (int)(ceil(topk_tmp_val_buf_size / 4.)) * 4;
+    topk_tmp_ids_buf_size   = (int)(ceil(topk_tmp_ids_buf_size / 4.)) * 4;
+    topk_tmp_val_buf_size   = (int)(ceil(topk_tmp_val_buf_size / 4.)) * 4;
 
     if (workspace == nullptr) {
         workspace_size = sizeof(float) * temp_log_probs_buf_size + sizeof(int) * topk_tmp_ids_buf_size
@@ -375,9 +422,9 @@ void invokeTopkBeamSearch(void* workspace,
         return;
     }
     else {
-        T* temp_log_probs = (T*)workspace;
-        int* topk_tmp_id_buf = (int*)(temp_log_probs + temp_log_probs_buf_size);
-        T* topk_tmp_val_buf = (T*)(topk_tmp_id_buf + topk_tmp_ids_buf_size);
+        T*   temp_log_probs   = (T*)workspace;
+        int* topk_tmp_id_buf  = (int*)(temp_log_probs + temp_log_probs_buf_size);
+        T*   topk_tmp_val_buf = (T*)(topk_tmp_id_buf + topk_tmp_ids_buf_size);
         if (diversity_rate == 0.0f) {
             switch (beam_width) {
                 CASE_K(1, 128, 128, 8);
@@ -387,8 +434,16 @@ void invokeTopkBeamSearch(void* workspace,
                 CASE_K(32, 256, 128, 1);
                 CASE_K(64, 256, 256, 1);
                 default:
-                    topk_stage_1_opt2_general<T, 128, 1><<<batch_size * beam_width * 1, 128, 0, stream>>>(
-                        log_probs, temp_log_probs, topk_tmp_id_buf, topk_tmp_val_buf, beam_width, vocab_size);
+                    topk_stage_1_opt2_general<T, 128, 1>
+                        <<<batch_size * beam_width * 1, 128, 0, stream>>>(log_probs,
+                                                                          temp_log_probs,
+                                                                          topk_tmp_id_buf,
+                                                                          topk_tmp_val_buf,
+                                                                          finished,
+                                                                          sequence_lengths,
+                                                                          beam_width,
+                                                                          vocab_size,
+                                                                          length_penalty);
                     topk_stage_2_opt2_general<T, 128, 1>
                         <<<batch_size,
                            128,
@@ -416,22 +471,24 @@ void invokeTopkBeamSearch(void* workspace,
 #undef CASE_K
 #undef CASE_K_DIV
 
-template void invokeTopkBeamSearch(void* workspace,
-                                   size_t& workspace_size,
-                                   float* log_probs,
-                                   int* ids,
-                                   const bool* finished,
-                                   const int batch_size,
-                                   const int beam_width,
-                                   const int vocab_size_padded_,
-                                   const float diversity_rate,
-                                   const int* end_ids,
+template void invokeTopkBeamSearch(void*        workspace,
+                                   size_t&      workspace_size,
+                                   float*       log_probs,
+                                   int*         ids,
+                                   const bool*  finished,
+                                   const int*   sequence_lengths,
+                                   const int    batch_size,
+                                   const int    beam_width,
+                                   const int    vocab_size_padded_,
+                                   const float  diversity_rate,
+                                   const float  length_penalty,
+                                   const int*   end_ids,
                                    cudaStream_t stream);
 
 template<typename T>
-__global__ void tileEncoderResults(T* tiled_output,
-                                   int* tiled_sequence_length,
-                                   const T* output,
+__global__ void tileEncoderResults(T*         tiled_output,
+                                   int*       tiled_sequence_length,
+                                   const T*   output,
                                    const int* sequence_length,
                                    const uint batch_size,
                                    const uint beam_width,
@@ -452,10 +509,10 @@ __global__ void tileEncoderResults(T* tiled_output,
 }
 
 template<typename T>
-void invokeTileEncoderResults(T* tiled_output,
-                              int* tiled_sequence_length,
-                              const T* output,
-                              const int* sequence_length,
+void invokeTileEncoderResults(T*           tiled_output,
+                              int*         tiled_sequence_length,
+                              const T*     output,
+                              const int*   sequence_length,
                               const size_t batch_size,
                               const size_t beam_width,
                               const size_t mem_max_seq_len,
@@ -469,16 +526,18 @@ void invokeTileEncoderResults(T* tiled_output,
     // sequence_length [batch_size]
 
     dim3 grid(batch_size, beam_width, mem_max_seq_len);
+    bool is_half2 = (std::is_same<T, half>::value) && (d_model % 2 == 0);
 
-    if (d_model % 2 == 0 && std::is_same<T, half>::value) {
+    if (is_half2) {
+        using T2 = typename TypeConverter<T>::Type;  // fp16 to half2, bf16 to bf162
         dim3 block(min(512, (int)(d_model / 2)));
-        tileEncoderResults<half2><<<grid, block, 0, stream>>>((half2*)tiled_output,
-                                                              tiled_sequence_length,
-                                                              (const half2*)output,
-                                                              sequence_length,
-                                                              batch_size,
-                                                              beam_width,
-                                                              d_model / 2);
+        tileEncoderResults<T2><<<grid, block, 0, stream>>>((T2*)tiled_output,
+                                                           tiled_sequence_length,
+                                                           (const T2*)output,
+                                                           sequence_length,
+                                                           batch_size,
+                                                           beam_width,
+                                                           d_model / 2);
     }
     else {
         dim3 block(min(512, (int)d_model));
@@ -487,33 +546,45 @@ void invokeTileEncoderResults(T* tiled_output,
     }
 }
 
-template void invokeTileEncoderResults(float* tiled_output,
-                                       int* tiled_sequence_length,
+template void invokeTileEncoderResults(float*       tiled_output,
+                                       int*         tiled_sequence_length,
                                        const float* output,
-                                       const int* sequence_length,
+                                       const int*   sequence_length,
                                        const size_t batch_size,
                                        const size_t beam_width,
                                        const size_t mem_max_seq_len,
                                        const size_t d_model,
                                        cudaStream_t stream);
 
-template void invokeTileEncoderResults(half* tiled_output,
-                                       int* tiled_sequence_length,
-                                       const half* output,
-                                       const int* sequence_length,
+template void invokeTileEncoderResults(half*        tiled_output,
+                                       int*         tiled_sequence_length,
+                                       const half*  output,
+                                       const int*   sequence_length,
                                        const size_t batch_size,
                                        const size_t beam_width,
                                        const size_t mem_max_seq_len,
                                        const size_t d_model,
                                        cudaStream_t stream);
 
-template void invokeTileEncoderResults(half2* tiled_output,
-                                       int* tiled_sequence_length,
+template void invokeTileEncoderResults(half2*       tiled_output,
+                                       int*         tiled_sequence_length,
                                        const half2* output,
-                                       const int* sequence_length,
+                                       const int*   sequence_length,
                                        const size_t batch_size,
                                        const size_t beam_width,
                                        const size_t mem_max_seq_len,
                                        const size_t d_model,
                                        cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeTileEncoderResults(__nv_bfloat16*       tiled_output,
+                                       int*                 tiled_sequence_length,
+                                       const __nv_bfloat16* output,
+                                       const int*           sequence_length,
+                                       const size_t         batch_size,
+                                       const size_t         beam_width,
+                                       const size_t         mem_max_seq_len,
+                                       const size_t         d_model,
+                                       cudaStream_t         stream);
+#endif
+
 }  // namespace fastertransformer

@@ -16,6 +16,10 @@
 
 #include "src/fastertransformer/th_op/bert/BertOp.h"
 
+#ifdef USE_NVTX
+bool NVTX_ON = true;
+#endif
+
 namespace th = torch;
 namespace torch_ext {
 
@@ -35,13 +39,15 @@ FasterTransformerBert::FasterTransformerBert(th::Tensor q_kernel,
                                              th::Tensor output_bias,
                                              th::Tensor output_layernorm_gamma,
                                              th::Tensor output_layernorm_beta,
-                                             int64_t head_num,
-                                             int64_t head_size,
-                                             int64_t inter_size,
-                                             bool remove_padding,
-                                             int64_t layer_num,
-                                             bool sparse,
-                                             double q_scaling):
+                                             int64_t    head_num,
+                                             int64_t    head_size,
+                                             int64_t    inter_size,
+                                             bool       remove_padding,
+                                             int64_t    layer_num,
+                                             bool       sparse,
+                                             double     q_scaling,
+                                             int64_t    tensor_para_size,
+                                             int64_t    pipeline_para_size):
     _st(q_kernel.scalar_type()),
     _remove_padding(remove_padding),
     weights{q_kernel,
@@ -80,22 +86,53 @@ FasterTransformerBert::FasterTransformerBert(th::Tensor q_kernel,
 
     switch (_st) {
         case at::ScalarType::Float:
-            ftbert = new FTBert<float>(head_num, head_size, inter_size, layer_num, sparse, q_scaling, weights);
+            ftbert = new FTBert<float>(head_num,
+                                       head_size,
+                                       inter_size,
+                                       layer_num,
+                                       sparse,
+                                       q_scaling,
+                                       tensor_para_size,
+                                       pipeline_para_size,
+                                       weights);
             break;
         case at::ScalarType::Half:
-            ftbert = new FTBert<half>(head_num, head_size, inter_size, layer_num, sparse, q_scaling, weights);
+            ftbert = new FTBert<half>(head_num,
+                                      head_size,
+                                      inter_size,
+                                      layer_num,
+                                      sparse,
+                                      q_scaling,
+                                      tensor_para_size,
+                                      pipeline_para_size,
+                                      weights);
             break;
+#ifdef ENABLE_BF16
+        case at::ScalarType::BFloat16:
+            ftbert = new FTBert<__nv_bfloat16>(head_num,
+                                               head_size,
+                                               inter_size,
+                                               layer_num,
+                                               sparse,
+                                               q_scaling,
+                                               tensor_para_size,
+                                               pipeline_para_size,
+                                               weights);
+            break;
+#endif
         default:
             throw std::runtime_error("Wrong Tensor type.");
     }
-    head_info = torch::empty({6}, torch::dtype(torch::kInt64));
-    head_info[0] = head_num;
-    head_info[1] = head_size;
-    head_info[2] = (int64_t)remove_padding;
-    head_info[3] = layer_num;
-    head_info[4] = (int64_t)sparse;
-    head_info[5] = inter_size;
-    scaling_info = torch::empty({1}, torch::dtype(torch::kFloat64));
+    head_info       = torch::empty({8}, torch::dtype(torch::kInt64));
+    head_info[0]    = head_num;
+    head_info[1]    = head_size;
+    head_info[2]    = (int64_t)remove_padding;
+    head_info[3]    = layer_num;
+    head_info[4]    = (int64_t)sparse;
+    head_info[5]    = inter_size;
+    head_info[6]    = tensor_para_size;
+    head_info[7]    = pipeline_para_size;
+    scaling_info    = torch::empty({1}, torch::dtype(torch::kFloat64));
     scaling_info[0] = (double)q_scaling;
 }
 
@@ -111,7 +148,7 @@ th::Tensor FasterTransformerBert::forward(th::Tensor input, th::Tensor sequence_
     CHECK_CONTIGUOUS(sequence_lengths);
     TORCH_CHECK(sequence_lengths.dtype() == torch::kInt32, "sequence_lengths dtype should be int32");
     size_t batch_size = (size_t)input.size(0);
-    size_t seq_len = (size_t)input.size(1);
+    size_t seq_len    = (size_t)input.size(1);
 
     auto output = torch::empty_like(input);
     ftbert->forward(batch_size, seq_len, input, sequence_lengths, output, _remove_padding);
@@ -156,20 +193,24 @@ static auto fasterTransformerBertTHS =
                               bool,
                               int64_t,
                               bool,
-                              double>())
+                              double,
+                              int64_t,
+                              int64_t>())
         .def("forward", &torch_ext::FasterTransformerBert::forward)
         .def_pickle(
             [](const c10::intrusive_ptr<torch_ext::FasterTransformerBert>& self) -> std::vector<th::Tensor> {
                 return self->get_pickle_info();
             },
             [](std::vector<th::Tensor> state) -> c10::intrusive_ptr<torch_ext::FasterTransformerBert> {
-                int64_t head_num = state[16][0].item().to<int>();
-                int64_t head_size = state[16][1].item().to<int>();
-                bool remove_padding = (bool)(state[16][2].item().to<int>());
-                int64_t layer_num = state[16][3].item().to<int>();
-                bool sparse = (bool)(state[16][4].item().to<int>());
-                int64_t inter_size = state[16][5].item().to<int>();
-                double q_scaling = state[17][0].item().to<double>();
+                int64_t head_num           = state[16][0].item().to<int>();
+                int64_t head_size          = state[16][1].item().to<int>();
+                bool    remove_padding     = (bool)(state[16][2].item().to<int>());
+                int64_t layer_num          = state[16][3].item().to<int>();
+                bool    sparse             = (bool)(state[16][4].item().to<int>());
+                int64_t inter_size         = state[16][5].item().to<int>();
+                int64_t tensor_para_size   = state[16][6].item().to<int>();
+                int64_t pipeline_para_size = state[16][7].item().to<int>();
+                double  q_scaling          = state[17][0].item().to<double>();
                 return c10::make_intrusive<torch_ext::FasterTransformerBert>(state[0],
                                                                              state[1],
                                                                              state[2],
@@ -192,5 +233,7 @@ static auto fasterTransformerBertTHS =
                                                                              remove_padding,
                                                                              layer_num,
                                                                              sparse,
-                                                                             q_scaling);
+                                                                             q_scaling,
+                                                                             tensor_para_size,
+                                                                             pipeline_para_size);
             });

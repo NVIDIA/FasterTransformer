@@ -86,7 +86,7 @@ def main(args, config):
     validate_with_random_data(args, config, model)
 
 @torch.no_grad()
-def run_swintransformernv_op(args, config, model, images, use_fp16):
+def run_swintransformernv_op(args, config, model, images, data_type):
     th_path = args.th_path
     depths = config.MODEL.SWIN.DEPTHS
     depths_tensor = torch.tensor(depths, dtype=torch.int)
@@ -109,9 +109,12 @@ def run_swintransformernv_op(args, config, model, images, use_fp16):
         qk_scale = 1.0
     torch.classes.load_library(th_path)
     sw_weights = SwinTransformerWeightTransposeQKVWeight(layer_num, window_size, depths, num_heads, th_path, model.state_dict())
-    if use_fp16:
+    if data_type == 'fp16':
         sw_weights.to_half()
         model.half()
+    elif data_type == 'bf16':
+        sw_weights.to_bfloat16()
+        model.bfloat16()
     sw_weights.to_cuda()
 
     ##run pytorch op 
@@ -134,9 +137,11 @@ def run_swintransformernv_op(args, config, model, images, use_fp16):
     #_nvtx.rangePop()
     torch.cuda.synchronize()
     op_end = time.time()
-    op_output = op_output.cpu().numpy() 
-    if use_fp16:
+    op_output = op_output.float().cpu().numpy() 
+    if data_type == 'fp16':
         print("FP16 op time : ", (op_end - op_begin)/test_time*1000.0, "ms")
+    elif data_type == 'bf16':
+        print("BF16 op time : ", (op_end - op_begin)/test_time*1000.0, "ms")
     else:
         print("FP32 op time : ", (op_end - op_begin)/test_time*1000.0, "ms")
 
@@ -157,7 +162,7 @@ def run_torch(model, images, mark):
     #_nvtx.rangePop()
     torch.cuda.synchronize()
     torch_end = time.time()
-    torch_output = torch_output.cpu().numpy()
+    torch_output = torch_output.float().cpu().numpy() # Numpy doesn't support BF16
     print(mark + " time : ", (torch_end - torch_start)/test_time*1000.0, "ms")
     return torch_output
 
@@ -171,35 +176,49 @@ def validate_with_random_data(args, config, model):
     image = np.random.rand(1, in_chans, img_size, img_size)
     images = np.repeat(image, max_batch, axis=0)
     images_half = torch.tensor(images, dtype=torch.half)
+    images_bfloat16 = torch.tensor(images, dtype=torch.bfloat16)
     images_float = torch.tensor(images, dtype=torch.float)
     images_half = images_half.cuda(non_blocking=True)
+    images_bfloat16 = images_bfloat16.cuda(non_blocking=True)
     images_float = images_float.cuda(non_blocking=True)
     ##run original swin-transformer
 
     # run pytorch op
-    FP32_op_output = run_swintransformernv_op(args, config, model, images_float, False)
+    FP32_op_output = run_swintransformernv_op(args, config, model, images_float, 'fp32')
 
     traced_module_float = torch.jit.trace(model, images_float)
     FP32_torch_traced_output = run_torch(traced_module_float, images_float, "FP32 torch trace")
     FP32_torch_output = run_torch(model, images_float, "FP32 torch")
 
-    FP16_op_output = run_swintransformernv_op(args, config, model, images_half, True)
+    FP16_op_output = run_swintransformernv_op(args, config, model, images_half, 'fp16')
 
-    traced_module_half = torch.jit.trace(model, images_half)
+    traced_module_half = torch.jit.trace(model.half(), images_half)
     FP16_torch_traced_output = run_torch(traced_module_half, images_half, "FP16 torch trace")
     FP16_torch_output = run_torch(model, images_half, "FP16 torch")
 
+    BF16_op_output = run_swintransformernv_op(args, config, model, images_bfloat16, 'bf16')
 
+    traced_module_bfloat16 = torch.jit.trace(model.bfloat16(), images_bfloat16)
+    BF16_torch_traced_output = run_torch(traced_module_bfloat16, images_bfloat16, "BF16 torch trace")
+    BF16_torch_output = run_torch(model, images_bfloat16, "BF16 torch")
 
     diff = abs(FP32_torch_traced_output - FP32_op_output)
     print("FP32_torch_traced_output vs FP32_op_output , avg diff : ", diff.mean(), "max diff : ", diff.max())
+    assert diff.mean() < 0.001, "[ERROR] SWIN FP32 Op TEST FAIL !"
     diff = abs(FP16_torch_traced_output - FP16_op_output)
     print("FP16_torch_traced_output vs FP16_op_output , avg diff : ", diff.mean(), "max diff : ", diff.max())
+    assert diff.mean() < 0.001, "[ERROR] SWIN FP16 Op TEST FAIL !"
+    diff = abs(BF16_torch_traced_output - BF16_op_output)
+    print("BF16_torch_traced_output vs BF16_op_output , avg diff : ", diff.mean(), "max diff : ", diff.max())
+    assert diff.mean() < 0.003, "[ERROR] SWIN BF16 Op TEST FAIL !"
+    
+    print("[INFO] SWIN Op TEST PASS !")
 
 if __name__ == '__main__':
     args, config = parse_option()
 
-    seed = config.SEED + int(time.time())
+    # seed = config.SEED + int(time.time())
+    seed = config.SEED
     torch.manual_seed(seed)
     np.random.seed(seed)
     cudnn.benchmark = True

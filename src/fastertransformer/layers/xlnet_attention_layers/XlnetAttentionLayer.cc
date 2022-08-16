@@ -19,12 +19,12 @@
 namespace fastertransformer {
 
 template<typename T>
-void XlnetAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* output_tensors,
+void XlnetAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                                      const std::vector<fastertransformer::Tensor>* input_tensors,
-                                     const XlnetAttentionWeight<T>* attention_weights)
+                                     const XlnetAttentionWeight<T>*                attention_weights)
 {
     const size_t request_batch_size = input_tensors->at(0).shape[0];
-    const size_t request_seq_len = input_tensors->at(0).shape[1];
+    const size_t request_seq_len    = input_tensors->at(0).shape[1];
 
     FT_CHECK(isValidBatchSize(input_tensors->at(1).shape[0]));
     FT_CHECK(isValidSeqLen(input_tensors->at(1).shape[2]));
@@ -40,11 +40,11 @@ void XlnetAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* out
     FT_CHECK(input_tensors->at(1).shape[1] == request_seq_len);
     FT_CHECK(input_tensors->at(2).shape[1] == request_seq_len);
 
-    T* out_tensor = (T*)output_tensors->at(0).data;
-    T* in_tensor = (T*)input_tensors->at(0).data;
+    T* out_tensor     = (T*)output_tensors->at(0).data;
+    T* in_tensor      = (T*)input_tensors->at(0).data;
     T* attention_mask = (T*)input_tensors->at(1).data;
-    T* seg_mat = (T*)input_tensors->at(2).data;
-    T* attr_k_head_r = (T*)input_tensors->at(3).data;
+    T* seg_mat        = (T*)input_tensors->at(2).data;
+    T* attr_k_head_r  = (T*)input_tensors->at(3).data;
 
     cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_N,
                                         CUBLAS_OP_N,
@@ -161,7 +161,6 @@ void XlnetAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* out
 
     invokeTranspose201(request_batch_size, request_seq_len, head_num_, qk_buf_ef_seg_trans_, qk_buf_ef_seg_, stream_);
     invokeRelShiftBd(request_batch_size, head_num_, request_seq_len, qk_buf_bd_shift_, qk_buf_bd_, stream_);
-
     invokeCalAttnScore(request_batch_size,
                        head_num_,
                        request_seq_len,
@@ -209,15 +208,15 @@ void XlnetAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* out
 }
 
 template<typename T>
-XlnetAttentionLayer<T>::XlnetAttentionLayer(size_t max_batch_size,
-                                            size_t max_seq_len,
-                                            size_t head_num,
-                                            size_t size_per_head,
-                                            float q_scaling,
-                                            cudaStream_t stream,
+XlnetAttentionLayer<T>::XlnetAttentionLayer(size_t           max_batch_size,
+                                            size_t           max_seq_len,
+                                            size_t           head_num,
+                                            size_t           size_per_head,
+                                            float            q_scaling,
+                                            cudaStream_t     stream,
                                             cublasMMWrapper* cublas_wrapper,
-                                            IAllocator* allocator,
-                                            bool is_free_buffer_after_forward):
+                                            IAllocator*      allocator,
+                                            bool             is_free_buffer_after_forward):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     max_batch_size_(max_batch_size),
     max_seq_len_(max_seq_len),
@@ -233,33 +232,44 @@ template<typename T>
 void XlnetAttentionLayer<T>::allocateBuffer()
 {
     if (is_allocate_buffer_ == false) {
-        k_head_r_ = (T*)allocator_->malloc(sizeof(T) * max_seq_len_ * 2 * hidden_units_, false);
-        query_buf_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_ * 3, false);
-        key_buf_ = query_buf_ + max_batch_size_ * max_seq_len_ * hidden_units_;
+        k_head_r_ = (T*)allocator_->reMalloc(k_head_r_, sizeof(T) * max_seq_len_ * 2 * hidden_units_, false);
+        query_buf_ =
+            (T*)allocator_->reMalloc(query_buf_, sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_ * 3, false);
+        key_buf_   = query_buf_ + max_batch_size_ * max_seq_len_ * hidden_units_;
         value_buf_ = query_buf_ + 2 * max_batch_size_ * max_seq_len_ * hidden_units_;
-        q_buf_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
-        k_buf_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
-        qk_buf_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * max_seq_len_ * head_num_, false);
-        q_buf_bd_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
-        k_buf_bd_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * 2 * hidden_units_, false);
-        qk_buf_bd_ =
-            (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * head_num_ * max_seq_len_ * 2, false);
-        qk_buf_bd_shift_ =
-            (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * head_num_ * max_seq_len_, false);
-        q_buf_ef_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
-        k_buf_ef_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * hidden_units_ * 2, false);
-        qk_buf_ef_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * head_num_ * 2, false);
-        qk_buf_ef_trans_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * head_num_ * 2, false);
-        qk_buf_ef_seg_ =
-            (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * max_seq_len_ * head_num_, false);
-        qk_buf_ef_seg_trans_ =
-            (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * max_seq_len_ * head_num_, false);
-        attn_score_ =
-            (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * max_seq_len_ * head_num_, false);
-        value_buf_trans_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
-        attn_vec_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
-        attn_vec_trans_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
-        attn_out_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
+        q_buf_  = (T*)allocator_->reMalloc(q_buf_, sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
+        k_buf_  = (T*)allocator_->reMalloc(k_buf_, sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
+        qk_buf_ = (T*)allocator_->reMalloc(
+            qk_buf_, sizeof(T) * max_batch_size_ * max_seq_len_ * max_seq_len_ * head_num_, false);
+        q_buf_bd_ =
+            (T*)allocator_->reMalloc(q_buf_bd_, sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
+        k_buf_bd_ =
+            (T*)allocator_->reMalloc(k_buf_bd_, sizeof(T) * max_batch_size_ * max_seq_len_ * 2 * hidden_units_, false);
+        qk_buf_bd_ = (T*)allocator_->reMalloc(
+            qk_buf_bd_, sizeof(T) * max_batch_size_ * max_seq_len_ * head_num_ * max_seq_len_ * 2, false);
+        qk_buf_bd_shift_ = (T*)allocator_->reMalloc(
+            qk_buf_bd_shift_, sizeof(T) * max_batch_size_ * max_seq_len_ * head_num_ * max_seq_len_, false);
+        q_buf_ef_ =
+            (T*)allocator_->reMalloc(q_buf_ef_, sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
+        k_buf_ef_ = (T*)allocator_->reMalloc(k_buf_ef_, sizeof(T) * max_batch_size_ * hidden_units_ * 2, false);
+        qk_buf_ef_ =
+            (T*)allocator_->reMalloc(qk_buf_ef_, sizeof(T) * max_batch_size_ * max_seq_len_ * head_num_ * 2, false);
+        qk_buf_ef_trans_ = (T*)allocator_->reMalloc(
+            qk_buf_ef_trans_, sizeof(T) * max_batch_size_ * max_seq_len_ * head_num_ * 2, false);
+        qk_buf_ef_seg_ = (T*)allocator_->reMalloc(
+            qk_buf_ef_seg_, sizeof(T) * max_batch_size_ * max_seq_len_ * max_seq_len_ * head_num_, false);
+        qk_buf_ef_seg_trans_ = (T*)allocator_->reMalloc(
+            qk_buf_ef_seg_trans_, sizeof(T) * max_batch_size_ * max_seq_len_ * max_seq_len_ * head_num_, false);
+        attn_score_ = (T*)allocator_->reMalloc(
+            attn_score_, sizeof(T) * max_batch_size_ * max_seq_len_ * max_seq_len_ * head_num_, false);
+        value_buf_trans_ = (T*)allocator_->reMalloc(
+            value_buf_trans_, sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
+        attn_vec_ =
+            (T*)allocator_->reMalloc(attn_vec_, sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
+        attn_vec_trans_ = (T*)allocator_->reMalloc(
+            attn_vec_trans_, sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
+        attn_out_ =
+            (T*)allocator_->reMalloc(attn_out_, sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
 
         is_allocate_buffer_ = true;
     }
@@ -293,26 +303,26 @@ template<typename T>
 void XlnetAttentionLayer<T>::freeBuffer()
 {
     if (is_allocate_buffer_ == true) {
-        allocator_->free(k_head_r_);
-        allocator_->free(query_buf_);
-        allocator_->free(q_buf_);
-        allocator_->free(k_buf_);
-        allocator_->free(qk_buf_);
-        allocator_->free(q_buf_bd_);
-        allocator_->free(k_buf_bd_);
-        allocator_->free(qk_buf_bd_);
-        allocator_->free(qk_buf_bd_shift_);
-        allocator_->free(q_buf_ef_);
-        allocator_->free(k_buf_ef_);
-        allocator_->free(qk_buf_ef_);
-        allocator_->free(qk_buf_ef_trans_);
-        allocator_->free(qk_buf_ef_seg_);
-        allocator_->free(qk_buf_ef_seg_trans_);
-        allocator_->free(attn_score_);
-        allocator_->free(value_buf_trans_);
-        allocator_->free(attn_vec_);
-        allocator_->free(attn_vec_trans_);
-        allocator_->free(attn_out_);
+        allocator_->free((void**)(&k_head_r_));
+        allocator_->free((void**)(&query_buf_));
+        allocator_->free((void**)(&q_buf_));
+        allocator_->free((void**)(&k_buf_));
+        allocator_->free((void**)(&qk_buf_));
+        allocator_->free((void**)(&q_buf_bd_));
+        allocator_->free((void**)(&k_buf_bd_));
+        allocator_->free((void**)(&qk_buf_bd_));
+        allocator_->free((void**)(&qk_buf_bd_shift_));
+        allocator_->free((void**)(&q_buf_ef_));
+        allocator_->free((void**)(&k_buf_ef_));
+        allocator_->free((void**)(&qk_buf_ef_));
+        allocator_->free((void**)(&qk_buf_ef_trans_));
+        allocator_->free((void**)(&qk_buf_ef_seg_));
+        allocator_->free((void**)(&qk_buf_ef_seg_trans_));
+        allocator_->free((void**)(&attn_score_));
+        allocator_->free((void**)(&value_buf_trans_));
+        allocator_->free((void**)(&attn_vec_));
+        allocator_->free((void**)(&attn_vec_trans_));
+        allocator_->free((void**)(&attn_out_));
 
         is_allocate_buffer_ = false;
     }
@@ -327,5 +337,8 @@ XlnetAttentionLayer<T>::~XlnetAttentionLayer()
 
 template class XlnetAttentionLayer<float>;
 template class XlnetAttentionLayer<half>;
+#ifdef ENABLE_BF16
+template class XlnetAttentionLayer<__nv_bfloat16>;
+#endif
 
 }  // namespace fastertransformer

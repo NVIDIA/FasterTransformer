@@ -66,7 +66,7 @@ if __name__ == "__main__":
     parser.add_argument('-v', '--vocab_size', type=int, default=30000, metavar='BOOL',
                         help='vocabulary size. (default: 30000).')
     parser.add_argument('-d', '--data_type', type=str, default="fp32", metavar='STRING',
-                        help='data type (default: fp32)', choices=['fp32', 'fp16'])
+                        help='data type (default: fp32)', choices=['fp32', 'fp16', 'bf16'])
     parser.add_argument('-x', '--use_XLA', type=int, default=0, metavar='BOOL',
                         help='use XLA (default: False 0)', choices=[0, 1])
     parser.add_argument('-time', '--test_time', type=str, default='', metavar='STRING',
@@ -117,6 +117,8 @@ if __name__ == "__main__":
     if args.data_type == "fp16":
         tf_datatype = tf.float16
         np_datatype = np.float16
+    elif args.data_type == 'bf16':
+        tf_datatype = tf.bfloat16
     use_XLA = args.use_XLA
     beam_search_diversity_rate = args.beam_search_diversity_rate
     sampling_topk = args.sampling_topk

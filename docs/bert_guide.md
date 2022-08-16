@@ -14,15 +14,20 @@ The FasterTransformer BERT contains the optimized BERT model, Effective FasterTr
       - [Prepare](#prepare)
       - [Build the project](#build-the-project)
   - [How to use](#how-to-use)
-    - [BERT process](#bert-process)
+    - [Run FasterTransformer BERT on C++](#run-fastertransformer-bert-on-c)
+    - [Run FasterTransformer BERT on TensorFlow](#run-fastertransformer-bert-on-tensorflow)
+    - [Run FasterTransformer BERT on PyTorch](#run-fastertransformer-bert-on-pytorch)
+    - [Run the PyTorch BERT sample with multi-GPU:](#run-the-pytorch-bert-sample-with-multi-gpu)
   - [Performance](#performance)
-    - [BERT performance](#bert-performance)
+    - [Multi-GPU BERT-6B performance on A100 and triton example](#multi-gpu-bert-6b-performance-on-a100-and-triton-example)
+    - [Single GPU BERT performance](#single-gpu-bert-performance)
       - [BERT performance on A100 and TensorFlow](#bert-performance-on-a100-and-tensorflow)
       - [BERT performance on T4 and TensorFlow](#bert-performance-on-t4-and-tensorflow)
       - [BERT performance on V100 and TensorFlow](#bert-performance-on-v100-and-tensorflow)
       - [BERT performance comparison between T4, V100, A100 and A100 with MIG mode on TensorFlow](#bert-performance-comparison-between-t4-v100-a100-and-a100-with-mig-mode-on-tensorflow)
       - [BERT performance comparison between different features on T4 and TensorFlow](#bert-performance-comparison-between-different-features-on-t4-and-tensorflow)
       - [BERT performance on A100 and PyTorch](#bert-performance-on-a100-and-pytorch)
+      - [BERT performance on A10 and PyTorch](#bert-performance-on-a10-and-pytorch)
       - [BERT performance on T4 and PyTorch](#bert-performance-on-t4-and-pytorch)
       - [BERT performance on V100 and PyTorch](#bert-performance-on-v100-and-pytorch)
     - [Performance on BERT Applications: SQuAD MRPC](#performance-on-bert-applications-squad-mrpc)
@@ -38,13 +43,14 @@ The following configurations are supported in the FasterTransformer encoder.
 - Sequence length (S): smaller or equal to 4096. For INT8 mode=1, S should be a multiple of 32 when S > 384.
 - Size per head (N): Even number and smaller than 128.
 - Head number (H): Any number satisfying that H * N <= 1024 under FP32, or H * N <= 2048 under FP16.
-- Data type: FP32, FP16 and INT8
+- Data type: FP32, FP16, BF16 and INT8
 - Any number layer (N<sub>1</sub>) if the memory is enough
 
-In the FasterTransformer v1.0, we provide a highly optimized BERT-equivalent encoder model. Next, based on the idea of [Effective Transformer](https://github.com/bytedance/effective_transformer), we further optimize BERT inference by removing the useless padding in FasterTransformer v2.1 and provide the Effective FasterTransformer. In FasterTransformer v3.0, we provide INT8 quantization inference to get better performance. In FasterTransformer v3.1, we optimize the INT8 kernels to improve the performance of INT8 inference and integrate the multi-head attention of TensorRT plugin into FasterTransformer. In FasterTransformer v4.0, we add the multi-head attention kernel to support FP16 on V100 and INT8 on T4, A100. The following graph demonstrates the flow chart of these optimization, except INT8. In FasterTransformer v5.0, we refactor the codes, encapsulating the mask building and padding removing into the Bert forward function, and add the sparsity feature of Ampere GPU to accelerate the GEMM.
+In the FasterTransformer v1.0, we provide a highly optimized BERT-equivalent encoder model. Next, based on the idea of [Effective Transformer](https://github.com/bytedance/effective_transformer), we further optimize BERT inference by removing the useless padding in FasterTransformer v2.1 and provide the Effective FasterTransformer. In FasterTransformer v3.0, we provide INT8 quantization inference to get better performance. In FasterTransformer v3.1, we optimize the INT8 kernels to improve the performance of INT8 inference and integrate the multi-head attention of TensorRT plugin into FasterTransformer. In FasterTransformer v4.0, we add the multi-head attention kernel to support FP16 on V100 and INT8 on T4, A100. The following graph demonstrates the flow chart of these optimization, except INT8. In FasterTransformer v5.0, we refactor the codes, encapsulating the mask building and padding removing into the Bert forward function, and add the sparsity feature of Ampere GPU to accelerate the GEMM. In FasterTransformer v5.1, we support multi-node multi-GPU inference on Bert FP16.
  
 <div align=center><img  width='864' height='1067' src ="images/encoder_flowchart.png"/></div>
 <div align=center>Fig. 1 Flowchart of encoder.</div>
+<br/><br/>
 
 The BERT model is proposed by google in 2018. The encoder of FasterTransformer is equivalent to BERT model, but do lots of optimization. The leftmost flow of Fig. 1 shows the optimization in FasterTransformer. After optimization, FasterTransformer only uses 8 or 6 gemms (blue blocks) and 6 custom CUDA kernels (green blocks) to implement one transformer block.
 
@@ -54,40 +60,57 @@ To further improve the performance of multi head attention, we integrate the mul
 
 <div align=center><img  src ="images/effective_transformer.png"/></div>
 <div align=center>Fig. 2 Effective Transformer.</div>
+<br/><br/>
 
 Besides, we find that the padding would affect the accuracy for some tasks although they should be useless. So, we recommend removing the padding in the final outputs of downstream tasks. 
 
 The arguments, inputs, and outputs of encoder: 
 
-* Arguments:
-  1. Maximum batch size
-  2. Maximum sequence length
-  3. Head number
-  4. Size per head
-  5. Intermediate size. The inter size of feed forward network. It is often set to 4 * head_num * size_per_head.
-  6. Number of decoder layers
-  7. SM version of GPU device. Some kernel chosen depend on the GPU device.
-  8. Query scaling. It is used to scale the query before the batch multiplication of query and key.
-  9. CUDA stream.
-  10. Pointer of cuBLAS wrapper, which is declared in `src/fastertransformer/utils/cublasMMWrapper.h`.
-  11. Pointer of memory allocator, which is declared in `src/fastertransformer/utils/allocator.h`
-  12. “is_free_buffer_after_forward” flag. If setting to be true, FasterTransformer will allocate buffer before forward, and free buffer after forward. If the memory is controlled by memory pool and the cost of allocating/releasing memory is small, setting the flag to be true can save some memory.
-  13. Attention type. There are four different types. Users can use `getAttentionType(size_per_head, sm, remove_padding, seq_len)` to determine the attention type automatically.
-  14. The flag of sparsity. This feature requires Ampere GPU and a sparse model. If setting to true, then FT will use sparse gemm to accelerate the gemm computation.
-  15. Activation type. There are two options, GeLU and ReLU now.
-  16. LayerNorm type. There are two options, post layernorm and pre layernorm.
-* Inputs:
-  1. Bert input feature. This feature should be after the embedding lookup and position embedding. The shape is \[ request batch size, maximum sequence length, hidden dimension \].
-  2. Sequence length. The shape is \[ request batch size \].
-* Outputs:
-  1. Bert output feature. The shape is \[ request batch size, maximum sequence length, hidden dimension \].
+* Constructor of BERT
+
+| Classification |             Name             |     Data Type      |                                                                                                            Description                                                                                                            |
+| :------------: | :--------------------------: | :----------------: | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
+|      [0]       |        max_batch_size        |        int         |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [1]       |         max_seq_len          |        int         |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [2]       |           head_num           |        int         |                                                                                                Head number for model configuration                                                                                                |
+|      [3]       |        size_per_head         |        int         |                                                                                               Size per head for model configuration                                                                                               |
+|      [4]       |          inter_size          |        int         |                                                                     The inter size of feed forward network. It is often set to 4 * head_num * size_per_head.                                                                      |
+|      [5]       |          num_layer           |        int         |                                                                                       Number of transformer layers for model configuration                                                                                        |
+|      [6]       |              sm              |        int         |                                                                                                    The compute capacity of GPU                                                                                                    |
+|      [7]       |          q_scaling           |       float        |                                                                          It is used to scale the query before the batch multiplication of query and key                                                                           |
+|      [8]       |            stream            |    cudaStream_t    |                                                                                                            CUDA stream                                                                                                            |
+|      [9]       |        cublas_wrapper        |  cublasMMWrapper*  |                                                                  Pointer of cuBLAS wrapper, which is declared in `src/fastertransformer/utils/cublasMMWrapper.h`                                                                  |
+|      [10]      |          allocator           |    IAllocator*     |                                                                    Pointer of memory allocator, which is declared in `src/fastertransformer/utils/allocator.h`                                                                    |
+|      [11]      | is_free_buffer_after_forward |        bool        | If setting to be `true`, FasterTransformer will allocate buffer before forward, and free buffer after forward. When the allocator is based on memory pool, setting to `true` may help reducing the memory usage during inference. |
+|      [12]      |        attention_type        |   AttentionType    |                                      Determine fusing the attention or not, remove padding or not, which is declared in `src/fastertransformer/layers/attention_layers/BaseAttentionLayer.h`                                      |
+|      [13]      |            sparse            |        bool        |                                                                                            Is using sparsity. **Experimental feature**                                                                                            |
+|      [14]      |       activation_type        |   ActivationType   |                                                         Determine the activation in FFN, which is declared in `src/fastertransformer/layers/attention_layers/FfnLayer.h`                                                          |
+|      [15]      |        layernorm_type        |   LayerNormType    |                                                     Determine using pre-layernorm or post-layernorm, which is declared in `src/fastertransformer/kernels/layernorm_kernels.h`                                                     |
+|      [16]      |         tensor_para          |     NcclParam      |                                                                   Tensor Parallel information, which is declared in `src/fastertransformer/utils/nccl_utils.h`                                                                    |
+|      [17]      |        pipeline_para         |     NcclParam      |                                                                  Pipeline Parallel information, which is declared in `src/fastertransformer/utils/nccl_utils.h`                                                                   |
+|      [18]      |    custom_all_reduce_comm    | AbstractCustomComm |                                                Custom all reduction communication for custom all reduction in model parallelism. It is only supported in 8-way tensor parallelism                                                 |
+|      [19]      |   enable_custom_all_reduce   |        int         |                                                                                           Flag of enabling custom all reduction or not                                                                                            |
+
+* Input of BERT
+
+|        Name        |                 Tensor/Parameter Shape                  | Location |   Data Type    |            Description            |
+| :----------------: | :-----------------------------------------------------: | :------: | :------------: | :-------------------------------: |
+| input_hidden_state | [batch_size, sequence_length, head_num * size_per_head] |   GPU    | fp32/fp16/bf16 |  The input of transformer layer   |
+|   input_lengths    |                      [batch_size]                       |   GPU    |      int       | The lengths of input_hidden_state |
+
+* Output of BERT
+
+|        Name         |                 Tensor/Parameter Shape                  | Location |   Data Type    |           Description           |
+| :-----------------: | :-----------------------------------------------------: | :------: | :------------: | :-----------------------------: |
+| output_hidden_state | [batch_size, sequence_length, head_num * size_per_head] |   GPU    | fp32/fp16/bf16 | The output of transformer layer |
 
 Besides, notice that the multi-head attention kernel from TensorRT is powerful but have some limitation. First, this kernel requires Turing or new GPU and the size per head must be 64. When the conditions are not satisfied, we use original multi-head attention implementation of FasterTransformer. Second, it requires an additional sequence length offset like fig 2 shows. More details are in [link](https://github.com/NVIDIA/TensorRT/tree/release/7.2/plugin/embLayerNormPlugin). When the input has padding, the shape of the sequence length offset is \[2 x B<sub>1</sub> + 1 \]. Assume there are three sentences with sequence length s<sub>1</sub>, s<sub>2</sub> and s<sub>3</sub>, and the sequence length after padding is S. Then the sequence length offset is \[0, s<sub>1</sub>, S, s<sub>2</sub> + S, 2 x S, 2 x S + s<sub>3</sub>, 3 x S\]. On the other hand, when we remove the padding, the shape of the sequence length offset is \[B<sub>1</sub> + 1\], and the sequence length offset is \[0, s<sub>1</sub>, s<sub>1</sub> + s<sub>2</sub>, s<sub>1</sub> + s<sub>2</sub> + s<sub>3</sub> \]. Namely, the sequence length offset records the sequence length for each sentence. When we have padding, we view the padding as some independent sentences. 
 
-In FasterTransformer v4.0, we implement two pipelines of INT8 inference, as shown in Fig. 3.. For int8_mode == 1 (int8v1), we don't quantize residual connection, use int32 as the output of int8 gemms and use per-channel quantization for weights. For int8_mode == 2 (int8v2), we quantize residual connection, use int8 as the output of int8 gemms and use per-tensor quantization for weights. Generally speaking, int8_mode == 1 will have higher accuracy while int8_mode == 2 will have better performance.
+In FasterTransformer v4.0, we implement two pipelines of INT8 inference, as shown in Fig. 3. For int8_mode == 1 (int8v1), we don't quantize residual connection, use int32 as the output of int8 gemms and use per-channel quantization for weights. For int8_mode == 2 (int8v2), we quantize residual connection, use int8 as the output of int8 gemms and use per-tensor quantization for weights. Generally speaking, int8_mode == 1 will have higher accuracy while int8_mode == 2 will have better performance.
 
 <div align=center><img width='864' height='560' src ="images/workflow-of-int8-inference.png"/></div>
 <div align=center>Fig. 3 Workflow of int8 inference.</div>
+<br/><br/>
 
 |               feature               | int8_mode == 1 | int8_mode == 2 |
 | :---------------------------------: | :------------: | :------------: |
@@ -99,6 +122,8 @@ For INT8 inference, quantized model is needed. We provide TensorFlow quantizatio
 
 In FasterTransformer v5.0, we support the sparsity gemm to leverage the sparsity feature of Ampere GPU. We also provide an example on PyTorch.
 
+In FasterTransformer v5.1, we support the multi-GPU multi-node inference for BERT model.
+
 ## Setup
 
 The following section lists the requirements to use FasterTransformer BERT.
@@ -107,7 +132,7 @@ The following section lists the requirements to use FasterTransformer BERT.
 
 - CMake >= 3.8 for Tensorflow, CMake >= 3.13 for PyTorch
 - CUDA 11.0 or newer version
-- Python 3 is recommended because some features are not supported in python 2
+- Python: Only verify on python 3
 - Tensorflow: Verify on 1.15, 1.13 and 1.14 should work.
 - PyTorch: Verify on 1.8.0, >= 1.5.0 should work.
 
@@ -138,10 +163,20 @@ For those unable to use the NGC container, to set up the required environment or
     - `nvcr.io/nvidia/pytorch:20.07-py3` contains the PyTorch 1.6.0 and python 3.6
     - `nvcr.io/nvidia/pytorch:20.12-py3` contains the PyTorch 1.8.0 and python 3.8
 
-    To achieve best performance, we recommend to use the latest image. For example, running image `nvcr.io/nvidia/tensorflow:20.12-tf1-py3` by 
+    To achieve best performance, we recommend to use the latest image. For example, running image `nvcr.io/nvidia/tensorflow:22.04-tf1-py3` by 
 
     ```bash
-    nvidia-docker run -ti --rm nvcr.io/nvidia/tensorflow:20.12-tf1-py3 bash
+    nvidia-docker run -ti --rm nvcr.io/nvidia/tensorflow:22.04-tf1-py3 bash
+    git clone https://github.com/NVIDIA/FasterTransformer.git
+    mkdir -p FasterTransformer/build
+    cd FasterTransformer/build
+    git submodule init && git submodule update
+    ```
+
+    For pytorch, it is similar
+
+    ```bash
+    nvidia-docker run -ti --rm nvcr.io/nvidia/pytorch:22.04-py3 bash
     git clone https://github.com/NVIDIA/FasterTransformer.git
     mkdir -p FasterTransformer/build
     cd FasterTransformer/build
@@ -150,7 +185,19 @@ For those unable to use the NGC container, to set up the required environment or
 
 #### Build the project
 
-* Note: the `xx` of `-DSM=xx` in following scripts means the compute capability of your GPU. For example, 60 (P40) or 61 (P4) or 70 (V100) or 75(T4) or 80 (A100).  Default setting is including 70, 75, 80 and 86.
+* Note: the `xx` of `-DSM=xx` in following scripts means the compute capability of your GPU. The following table shows the compute capability of common GPUs.
+
+|  GPU  | compute capacity |
+| :---: | :--------------: |
+|  P40  |        60        |
+|  P4   |        61        |
+| V100  |        70        |
+|  T4   |        75        |
+| A100  |        80        |
+|  A30  |        80        |
+|  A10  |        86        |
+
+By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-DSM`, it requires longer time to compile. So, we suggest setting the `-DSM` for the device you use only. Here, we use `xx` as an example due to convenience.
 
 1. build with C++
 
@@ -161,7 +208,7 @@ For those unable to use the NGC container, to set up the required environment or
 
 2. build with TensorFlow 
 
-    Uses need to set the path of TensorFlow. For example, if we use `nvcr.io/nvidia/tensorflow:20.12-tf1-py3`, then
+    Uses need to set the path of TensorFlow. For example, if we use `nvcr.io/nvidia/tensorflow:22.04-tf1-py3`, then
 
     ```bash
     cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_TF=ON -DTF_PATH=/usr/local/lib/python3.8/dist-packages/tensorflow_core/ ..
@@ -171,7 +218,7 @@ For those unable to use the NGC container, to set up the required environment or
 3. build with PyTorch
 
     ```bash
-    cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON ..
+    cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON -DBUILD_MULTI_GPU=ON ..
     make
     ```
 
@@ -188,27 +235,21 @@ For those unable to use the NGC container, to set up the required environment or
 
 ## How to use
 
-### BERT process
+### Run FasterTransformer BERT on C++
 
-1. Run FasterTransformer BERT on C++
-
-    1.1 Generate the `gemm_config.in` file for FP32/FP16 and the `igemm_config.in` file for INT8
+    1. Generate the `gemm_config.in` file for FP32/FP16/BF16 and the `igemm_config.in` file for INT8
 
     There are two methods to generate the best GEMM configuration
     
-    1.1.1 Using `./bin/bert_gemm` to generate the best GEMM configuration.  
+    1.1 Using `./bin/bert_gemm` to generate the best GEMM configuration. 
+
+    Data Type = 0 (FP32) or 1 (FP16) or 2 (BF16) 
 
     ```bash
-    ./bin/bert_gemm <batch_size> <sequence_length> <head_number> <size_per_head> <is_use_fp16> <int8_mode>
+    ./bin/bert_gemm <batch_size> <sequence_length> <head_number> <size_per_head> <data_type> <int8_mode>
     ```
 
-    1.1.2 Generate the best GEMM configuration when running BERT.
-
-    When <allow_gemm_test> == 1, it will first check if the corresponding GEMM configuration exists, if not, it will automatically generate the best GEMM configuration.
-
-    ```bash
-    ./bin/bert_example <batch_size> <num_layers> <sequence_length> <head_number> <size_per_head> <is_use_fp16> <is_remove_padding> <int8_mode> <allow_gemm_test>
-    ```
+    1.2 Generate the best GEMM configuration when running BERT.
 
     The generation of best GEMM configuration is recommended no matter what platform we use when we use FasterTransformer. If we do not generate the configure file, the FasterTransformer will use the default configuration and the inference speed may be slower. 
 
@@ -230,13 +271,14 @@ For those unable to use the NGC container, to set up the required environment or
 
     In the following subsection, we use the same settings and 12 transformer layers unless specified. 
 
-    1.2 Run FasterTransformer BERT under FP32 on C++
+    2 Run FasterTransformer BERT under FP32 on C++
 
     `./bin/bert_example` runs the BERT in the `C++`. The arguments of `bert_example` is:
 
     ```bash
-    ./bin/bert_example <batch_size> <num_layers> <sequence_length> <head_number> <size_per_head> <is_use_fp16> <is_remove_padding> <int8_mode>
+    ./bin/bert_example <batch_size> <num_layers> <sequence_length> <head_number> <size_per_head> <data_type> <is_remove_padding> <int8_mode>
     ```
+    Data Type = 0 (FP32) or 1 (FP16) or 2 (BF16) 
 
     Then the following scripts can run the BERT under the above settings. 
 
@@ -253,18 +295,20 @@ For those unable to use the NGC container, to set up the required environment or
     [INFO] batch_size 32 seq_len 32 layer 12 FT-CPP-time 16.51 ms (100 iterations)
     ```
 
-    1.3 Run FasterTransformer BERT under FP16 on C++
+    3 Run FasterTransformer BERT under FP16/BF16 on C++
 
-    So far, we use the FP32 to run the FasterTransformer. If we use the volta or newer NVIDIA GPU, we can use tensor core when we use the FP16. 
+    So far, we use the FP32 to run the FasterTransformer. If we use the volta or newer NVIDIA GPU, we can use tensor core when we use the FP16. BF16 is only supported after Ampere NVIDIA GPU (SM 80).
 
-    To use the FP16, we only need to set the `<is_use_fp16>` flag to 1 like following:
+    To use the FP16, we only need to set the `<data_type>` flag to 1 like following:
 
     ```bash
     ./bin/bert_gemm 32 32 12 64 1 0
     ./bin/bert_example 32 12 32 12 64 1 0 0 
     ```
 
-    Note that the configuration of FP32 and FP16 are different, so we need to generate the configuration again. 
+    To use the BF16, we only need to set the `<data_type>` flag to 2.
+
+    Note that the configuration of FP32 and FP16/BF16 are different, so we need to generate the configuration again. 
 
     The outputs should be like to the following:  
 
@@ -275,7 +319,7 @@ For those unable to use the NGC container, to set up the required environment or
     [INFO] batch_size 32 seq_len 32 layer 12 FT-CPP-time 4.00 ms 
     ```
     
-    1.4 Run FasterTransformer BERT under INT8 on C++
+    4 Run FasterTransformer BERT under INT8 on C++
 
     If we use the Turing or newer NVIDIA GPUs, we can use tensor core when we use the INT8.    
 
@@ -311,7 +355,7 @@ For those unable to use the NGC container, to set up the required environment or
     [INFO] batch_size 32 seq_len 32 layer 12 FT-CPP-time 4.79 ms ( 50 iterations)
     ```
 
-    1.5 Run Effective FasterTransformer under FP32 on C++
+    5 Run Effective FasterTransformer under FP32 on C++
 
     To use the Effective FasterTransformer, we only need to set the `<is_remove_padding>` flag to 1 like following:
 
@@ -322,14 +366,14 @@ For those unable to use the NGC container, to set up the required environment or
 
     The outputs should be like to the following:  
 
-    ```bash 
+    ```bash
     Device Tesla V100-PCIE-32GB
     before allocate free 29.46 GB total 31.75 GB
     After allocate free 29.40 GB used 2.35 GB total 31.75 GB
     [INFO] batch_size 32 seq_len 32 layer 12 FT-CPP-time 9.77 ms 
     ```
     
-    1.6 Run Effective FasterTransformer under INT8 on C++
+    6 Run Effective FasterTransformer under INT8 on C++
     
     To use the Effective FasterTransformer under INT8, we need to set the `<is_remove_padding>` flag to 1 and `<int8_mode>` flag to 1 or 2 like following. Since the sequence length in INT8 should be a multiple of 32, Effective FasterTransformer could be a good choice for INT8.
     
@@ -345,7 +389,7 @@ For those unable to use the NGC container, to set up the required environment or
     
     The outputs should be like to the following:
     
-    ```bash 
+    ```bash
     #For int8_mode == 1
     Device Tesla T4
     Device Tesla T4
@@ -362,9 +406,9 @@ For those unable to use the NGC container, to set up the required environment or
     [INFO] batch_size 32 seq_len 32 layer 12 FT-CPP-time 2.69 ms ( 50 iterations)
     ```
 
-2. Run FasterTransformer on TensorFlow (on T4 GPU)
+### Run FasterTransformer BERT on TensorFlow
 
-    2.1 Run FasterTransformer encoder under FP32 on TensorFlow
+    1 Run FasterTransformer encoder under FP32 on TensorFlow
 
     ```bash
     ./bin/bert_gemm 32 32 12 64 0 0
@@ -395,7 +439,7 @@ For those unable to use the NGC container, to set up the required environment or
     Note: We can also generate the best GEMM configuration when running encoder by setting `--allow_gemm_test True`.
     Note: If users use Ampere GPUs, then TensorFlow will uses TF32 by default, and hence TensorFlow will be faster than FasterTransformer, and have large value differences.
 
-    2.2 Run FasterTransformer BERT under FP16 on TensorFlow
+    2 Run FasterTransformer BERT under FP16 on TensorFlow
 
     To use the FP16 in TensorFlow, we only need to set the `--data_type fp16` like following:
 
@@ -425,7 +469,7 @@ For those unable to use the NGC container, to set up the required environment or
     [INFO] batch_size 32 max_seq_len 32 precision FP16 12 layer EFF-OP-while-time   4.98 ms ( 50 iterations)
     ```
 
-    2.3 Run FasterTransformer and Effective FasterTransformer encoder under INT8 on TensorFlow
+    3 Run FasterTransformer and Effective FasterTransformer encoder under INT8 on TensorFlow
 
     To use the INT8 in TensorFlow, we only need to set the `--int8_mode 1` or `--int8_mode 2` like following:
 
@@ -483,11 +527,11 @@ For those unable to use the NGC container, to set up the required environment or
     
     Note: since we do not use the correct scales for quantization in this test, the Cross Check between TF and FT should fail.
 
-    2.5 Run FasterTransformer for GLUE dataset
+    4 Run FasterTransformer for GLUE dataset
 
     This subsection demonstrates how to integrate the FasterTransformer in TensorFlow and evaluate the accuracy of FasterTransformer on GLUE dataset. To evaluate on GLUE dataset, it requires the repo of [BERT](https://github.com/google-research/bert).
 
-    2.5.1 Prepare the BERT codes, Download the BERT pretrained model.
+    4.1 Prepare the BERT codes, Download the BERT pretrained model.
 
     ```bash
     git clone https://github.com/google-research/bert.git tensorflow/tensorflow_bert/bert
@@ -495,7 +539,7 @@ For those unable to use the NGC container, to set up the required environment or
     unzip uncased_L-12_H-768_A-12.zip
     ```
 
-    2.5.2 Download the GLUE MRPC dataset. Note that the file `download_glue_data.py` can only executed under python3. 
+    4.2 Download the GLUE MRPC dataset. Note that the file `download_glue_data.py` can only executed under python3. 
 
     ```bash
     wget https://gist.githubusercontent.com/W4ngatang/60c2bdb54d156a41194446737ce03e2e/raw/1502038877f6a88c225a34450793fbc3ea87eaba/download_glue_data.py
@@ -504,7 +548,7 @@ For those unable to use the NGC container, to set up the required environment or
 
     Note: If the `download_glue_data.py` has some issues, try to use [this](https://gist.github.com/vlasenkoalexey/fef1601580f269eca73bf26a198595f3).
 
-    2.5.3 Finetune the pretrained model on MRPC datasets. This takes some minutes. 
+    4.3 Finetune the pretrained model on MRPC datasets. This takes some minutes. 
 
     ```bash
     export BERT_BASE_DIR=${PWD}/uncased_L-12_H-768_A-12
@@ -541,11 +585,11 @@ For those unable to use the NGC container, to set up the required environment or
 
     ```
 
-    2.5.4 Evaluate the accuracy of FasterTransformer under FP32
+    4.4 Evaluate the accuracy of FasterTransformer under FP32
 
     To evaluate the accuracy of FasterTransformer, we can use `tensorflow/tensorflow_bert/run_classifier_wrap.py`. This file uses `run_classifier.py` of BERT repo, replacing the transformer model by FasterTransformer and add some additional arguments like `--floatx`. 
 
-    ```bash 
+    ```bash
     ./bin/bert_gemm 8 128 12 64 0 0
     python ../examples/tensorflow/bert/tensorflow_bert/run_classifier_wrap.py \
           --floatx=float32 \
@@ -575,7 +619,7 @@ For those unable to use the NGC container, to set up the required environment or
     I1204 01:25:59.203072 140314814412608 run_classifier.py:925]   loss = 0.50261945
     ```
 
-    2.5.5 Convert the finetuned checkpoint to FP16 and evaluate the accuracy of FasterTransformer under FP16. 
+    4.5 Convert the finetuned checkpoint to FP16 and evaluate the accuracy of FasterTransformer under FP16. 
 
     To convert the checkpoint from FP32 to FP16, we can use `../examples/tensorflow/bert/tensorflow_bert/ckpt_type_convert.py` to convert the checkpoint. This file requires two arguments, the location of FP32 checkpoint, and the location putting the FP16 checkpoint.
 
@@ -612,7 +656,7 @@ For those unable to use the NGC container, to set up the required environment or
     I1204 01:27:49.962604 139736813242176 run_classifier.py:925]   loss = 0.5103358
     ```
 
-    2.5.6 Compare the speed of BERT of TensorFlow and FasterTransformer under both FP32 and FP16.
+    4.6 Compare the speed of BERT of TensorFlow and FasterTransformer under both FP32 and FP16.
 
     To compare the speed of TensorFlow and FasterTransformer on BERT model directly, we can use `../examples/tensorflow/bert/tensorflow_bert/profile_transformer_inferece.py`. 
 
@@ -649,11 +693,11 @@ For those unable to use the NGC container, to set up the required environment or
     average time (seconds) elapsed fast transformer: 0.009342837333679199 sec
     ```
 
-    2.7 Run FasterTransformer for SQuAD 1.1 dataset
+    5 Run FasterTransformer for SQuAD 1.1 dataset
 
     This subsection demonstrates how to integrate the FasterTransformer in TensorFlow and evaluates the accuracy of FasterTransformer on SQuAD 1.1 dataset. To evaluate on SQuAD 1.1 dataset, it requires the repo of [BERT](https://github.com/google-research/bert).
 
-    2.7.1 Prepare the BERT codes and download the fine-tuned model of SQuAD 1.1 from NGC
+    5.1 Prepare the BERT codes and download the fine-tuned model of SQuAD 1.1 from NGC
 
     Because the training time of SQuAD is longer, and the NVIDIA NGC has provided the fine-tuned BERT model, we download the fine-tuned model directly.
 
@@ -663,7 +707,7 @@ For those unable to use the NGC container, to set up the required environment or
     unzip bert_tf_ckpt_base_qa_squad11_amp_128_19.03.1.zip -d squad_model
     ```
 
-    2.7.2 Download the SQuAD dataset. 
+    5.2 Download the SQuAD dataset. 
 
     ```bash
     mkdir squad_data
@@ -671,7 +715,7 @@ For those unable to use the NGC container, to set up the required environment or
     wget -P squad_data https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v1.1.json
     ```
 
-    2.7.3 Evaluate the accuracy of TensorFlow under FP32
+    5.3 Evaluate the accuracy of TensorFlow under FP32
 
     ```bash
     python ../examples/tensorflow/bert/tensorflow_bert/bert/run_squad.py \
@@ -694,7 +738,7 @@ For those unable to use the NGC container, to set up the required environment or
     {"exact_match": 78.9120151371807, "f1": 86.22012390507868}
     ```
 
-    2.7.4 Evaluate the accuracy of FasterTransformer under FP32
+    5.4 Evaluate the accuracy of FasterTransformer under FP32
 
     To evaluate the accuracy of FasterTransformer, we can use `../examples/tensorflow/bert/tensorflow_bert/run_squad_wrap.py`. This file uses `run_squad.py` of BERT repo, replacing the transformer model by FasterTransformer, and add some additional arguments like `--floatx`. 
 
@@ -722,7 +766,7 @@ For those unable to use the NGC container, to set up the required environment or
     {"exact_match": 78.9120151371807, "f1": 86.22012390507868}
     ```
 
-    2.7.5 Convert the checkpoint to FP16 and evaluate the accuracy of TensorFlow and FasterTransformer under FP16
+    5.5 Convert the checkpoint to FP16 and evaluate the accuracy of TensorFlow and FasterTransformer under FP16
 
     To convert the checkpoint from FP32 to FP16, we can use `tensorflow/tensorflow_bert/ckpt_type_convert.py` to convert the checkpoint. This file requires two arguments, the location of FP32 checkpoint, and the location putting the FP16 checkpoint.
 
@@ -752,216 +796,230 @@ For those unable to use the NGC container, to set up the required environment or
     {"exact_match": 79.03500473036897, "f1": 86.23027825772257}
     ```
 
-      2.7.6 Evaluate the accuracy of Effective FasterTransformer under FP16
- 
-      Since the total sequence length is not fixed, we recommend using the default gemm configuration directly for Effective FasterTransformer.
+    5.6 Evaluate the accuracy of Effective FasterTransformer under FP16
 
-      ```bash
-      python ../examples/tensorflow/bert/tensorflow_bert/run_squad_wrap.py \
-            --floatx=float16 \
-            --predict_batch_size=8 \
-            --vocab_file=squad_model/vocab.txt \
-            --bert_config_file=squad_model/bert_config.json \
-            --init_checkpoint=squad_fp16_model/model.ckpt \
-            --train_file=squad_data/train-v1.1.json \
-            --do_predict=True \
-            --predict_file=squad_data/dev-v1.1.json \
-            --max_seq_length=384 \
-            --output_dir=./squad_ft_output/fp_16/ \
-            --allow_gemm_test=False \
-            --remove_padding=True
+    Since the total sequence length is not fixed, we recommend using the default gemm configuration directly for Effective FasterTransformer.
 
-      python ../examples/tensorflow/bert/tensorflow_bert/squad_evaluate_v1_1.py squad_data/dev-v1.1.json squad_ft_output/fp_16/predictions.json
-      ```
+    ```bash
+    python ../examples/tensorflow/bert/tensorflow_bert/run_squad_wrap.py \
+        --floatx=float16 \
+        --predict_batch_size=8 \
+        --vocab_file=squad_model/vocab.txt \
+        --bert_config_file=squad_model/bert_config.json \
+        --init_checkpoint=squad_fp16_model/model.ckpt \
+        --train_file=squad_data/train-v1.1.json \
+        --do_predict=True \
+        --predict_file=squad_data/dev-v1.1.json \
+        --max_seq_length=384 \
+        --output_dir=./squad_ft_output/fp_16/ \
+        --allow_gemm_test=False \
+        --remove_padding=True
 
-      The results of TensorFlow would be like:
+    python ../examples/tensorflow/bert/tensorflow_bert/squad_evaluate_v1_1.py squad_data/dev-v1.1.json squad_ft_output/fp_16/predictions.json
+    ```
 
-      ```bash
-      {"exact_match": 79.04446546830653, "f1": 86.23343183703513}
-      ```
+    The results of TensorFlow would be like:
 
-      2.7.7 Evaluate the accuracy of FasterTransformer under INT8
+    ```bash
+    {"exact_match": 79.04446546830653, "f1": 86.23343183703513}
+    ```
 
-      Please refer to the directory `examples/tensorflow/bert/bert-quantization` first for how to get a quantized model. In `section 2.7.7` and `section 2.7.8`, to keep consistent with the procedures described in `examples/tensorflow/bert/bert-quantization`, we use `https://storage.googleapis.com/bert_models/2020_02_20/uncased_L-12_H-768_A-12.zip` as initial checkpoint with finetuned accuracy of <f1, exact_match> == <89.57, 82.44>. 
-      
-      In `bert-tf-quantization`, we give detailed procedure of Post Training Quantization (PTQ), Quantization Aware Training (QAT) and QAT with Knowledge-distillation. Since they have the same inference procedure, we use QAT-KD checkpoint to show how to evaluate the accuracy of FasterTransformer under INT8.  
-      
-      Suppose we already fine-tuned a FP32 checkpoint using QAT-KD with int8_mode == 2 as described in `bert-quantization`. The path to checkpoint is `squad_model/QAT_KD_mode_2/`.
+    5.7 Evaluate the accuracy of FasterTransformer under INT8
 
-      We first convert the checkpoint from FP32 to FP16 (this step is not necessary, but it will give us a better performance) and then quantize the FP16 checkpoint using `../examples/tensorflow/bert/tensorflow_bert/ckpt_quantization.py`. This file requires three arguments, the location of initial checkpoint, the location putting the quantized checkpoint and the int8_mode.
-      
-      ```bash
-      python ../examples/tensorflow/bert/tensorflow_bert/ckpt_type_convert.py --init_checkpoint=squad_model/QAT_KD_mode_2/model.ckpt-27374 --fp16_checkpoint=squad_model/QAT_KD_mode_2_fp16/model.ckpt
+    Please refer to the directory `examples/tensorflow/bert/bert-quantization` first for how to get a quantized model. In `section 5.7` and `section 5.8`, to keep consistent with the procedures described in `examples/tensorflow/bert/bert-quantization`, we use `https://storage.googleapis.com/bert_models/2020_02_20/uncased_L-12_H-768_A-12.zip` as initial checkpoint with finetuned accuracy of <f1, exact_match> == <89.57, 82.44>. 
+    
+    In `bert-tf-quantization`, we give detailed procedure of Post Training Quantization (PTQ), Quantization Aware Training (QAT) and QAT with Knowledge-distillation. Since they have the same inference procedure, we use QAT-KD checkpoint to show how to evaluate the accuracy of FasterTransformer under INT8.
+    
+    Suppose we already fine-tuned a FP32 checkpoint using QAT-KD with int8_mode == 2 as described in `bert-quantization`. The path to checkpoint is `squad_model/QAT_KD_mode_2/`.
 
-      python ../examples/tensorflow/bert/tensorflow_bert/ckpt_quantization.py --init_checkpoint=squad_model/QAT_KD_mode_2_fp16/model.ckpt --quantized_checkpoint=squad_model/QAT_KD_mode_2_fp16_quantized/model.ckpt --int8_mode=2
+    We first convert the checkpoint from FP32 to FP16 (this step is not necessary, but it will give us a better performance) and then quantize the FP16 checkpoint using `../examples/tensorflow/bert/tensorflow_bert/ckpt_quantization.py`. This file requires three arguments, the location of initial checkpoint, the location putting the quantized checkpoint and the int8_mode.
+    
+    ```bash
+    python ../examples/tensorflow/bert/tensorflow_bert/ckpt_type_convert.py --init_checkpoint=squad_model/QAT_KD_mode_2/model.ckpt-27374 --fp16_checkpoint=squad_model/QAT_KD_mode_2_fp16/model.ckpt
 
-      ./bin/bert_gemm 8 384 12 64 1 1
-      python ../examples/tensorflow/bert/tensorflow_bert/run_squad_wrap.py \
-            --floatx=float16 \
-            --predict_batch_size=8 \
-            --vocab_file=squad_model/vocab.txt \
-            --bert_config_file=squad_model/bert_config.json \
-            --init_checkpoint=squad_model/QAT_KD_mode_2_fp16_quantized/model.ckpt \
-            --train_file=squad_data/train-v1.1.json \
-            --do_predict=True \
-            --predict_file=squad_data/dev-v1.1.json \
-            --max_seq_length=384 \
-            --output_dir=./squad_ft_output/int8_mode_2/ \
-            --int8_mode=2 \
-            --allow_gemm_test=False
+    python ../examples/tensorflow/bert/tensorflow_bert/ckpt_quantization.py --init_checkpoint=squad_model/QAT_KD_mode_2_fp16/model.ckpt --quantized_checkpoint=squad_model/QAT_KD_mode_2_fp16_quantized/model.ckpt --int8_mode=2
 
-      python ../examples/tensorflow/bert/tensorflow_bert/squad_evaluate_v1_1.py squad_data/dev-v1.1.json squad_ft_output/int8_mode_2/predictions.json
-      ```
-      
-      The results of TensorFlow would be like:
+    ./bin/bert_gemm 8 384 12 64 1 1
+    python ../examples/tensorflow/bert/tensorflow_bert/run_squad_wrap.py \
+        --floatx=float16 \
+        --predict_batch_size=8 \
+        --vocab_file=squad_model/vocab.txt \
+        --bert_config_file=squad_model/bert_config.json \
+        --init_checkpoint=squad_model/QAT_KD_mode_2_fp16_quantized/model.ckpt \
+        --train_file=squad_data/train-v1.1.json \
+        --do_predict=True \
+        --predict_file=squad_data/dev-v1.1.json \
+        --max_seq_length=384 \
+        --output_dir=./squad_ft_output/int8_mode_2/ \
+        --int8_mode=2 \
+        --allow_gemm_test=False
 
-      ```bash
-      {"exact_match": 83.85052034058657, "f1": 90.46351799300075}
-      ```
-      
-      2.7.8 Evaluate the accuracy of Effective FasterTransformer under INT8
-      
-      To evaluate the accuracy of Effective FasterTransformer under INT8, we follow the steps described in above section to get the correct checkpoint, and then run `../examples/tensorflow/bert/tensorflow_bert/run_squad_wrap.py` with `--remove_padding True` flag.
-      
-      ```bash
-      ./bin/bert_gemm 8 384 12 64 1 1
-      python ../examples/tensorflow/bert/tensorflow_bert/run_squad_wrap.py \
-            --floatx=float16 \
-            --predict_batch_size=8 \
-            --vocab_file=squad_model/vocab.txt \
-            --bert_config_file=squad_model/bert_config.json \
-            --init_checkpoint=squad_model/QAT_KD_mode_2_fp16_quantized/model.ckpt \
-            --train_file=squad_data/train-v1.1.json \
-            --do_predict=True \
-            --predict_file=squad_data/dev-v1.1.json \
-            --max_seq_length=384 \
-            --output_dir=./squad_ft_output/int8_mode_2_effectiveTransformer/ \
-            --remove_padding=True \
-            --int8_mode=2 \
-            --allow_gemm_test=False
+    python ../examples/tensorflow/bert/tensorflow_bert/squad_evaluate_v1_1.py squad_data/dev-v1.1.json squad_ft_output/int8_mode_2/predictions.json
+    ```
+    
+    The results of TensorFlow would be like:
 
-      python ../examples/tensorflow/bert/tensorflow_bert/squad_evaluate_v1_1.py squad_data/dev-v1.1.json squad_ft_output/int8_mode_2_effectiveTransformer/predictions.json
-      ```
-      
-      The results of TensorFlow would be like:
+    ```bash
+    {"exact_match": 83.85052034058657, "f1": 90.46351799300075}
+    ```
+    
+    5.8 Evaluate the accuracy of Effective FasterTransformer under INT8
+    
+    To evaluate the accuracy of Effective FasterTransformer under INT8, we follow the steps described in above section to get the correct checkpoint, and then run `../examples/tensorflow/bert/tensorflow_bert/run_squad_wrap.py` with `--remove_padding True` flag.
+    
+    ```bash
+    ./bin/bert_gemm 8 384 12 64 1 1
+    python ../examples/tensorflow/bert/tensorflow_bert/run_squad_wrap.py \
+        --floatx=float16 \
+        --predict_batch_size=8 \
+        --vocab_file=squad_model/vocab.txt \
+        --bert_config_file=squad_model/bert_config.json \
+        --init_checkpoint=squad_model/QAT_KD_mode_2_fp16_quantized/model.ckpt \
+        --train_file=squad_data/train-v1.1.json \
+        --do_predict=True \
+        --predict_file=squad_data/dev-v1.1.json \
+        --max_seq_length=384 \
+        --output_dir=./squad_ft_output/int8_mode_2_effectiveTransformer/ \
+        --remove_padding=True \
+        --int8_mode=2 \
+        --allow_gemm_test=False
 
-      ```bash
-      {"exact_match": 83.85052034058657, "f1": 90.46351799300075}
-      ```
+    python ../examples/tensorflow/bert/tensorflow_bert/squad_evaluate_v1_1.py squad_data/dev-v1.1.json squad_ft_output/int8_mode_2_effectiveTransformer/predictions.json
+    ```
+    
+    The results of TensorFlow would be like:
 
-3. Run FasterTransformer on PyTorch
+    ```bash
+    {"exact_match": 83.85052034058657, "f1": 90.46351799300075}
+    ```
 
-      Please install HuggingFace's `transformers` first before running the demos by
-      ```bash
-      pip install transformers==2.5.1
-      ```
+### Run FasterTransformer BERT on PyTorch
 
-      3.1 Generate the `gemm_config.in` file:
+    Please install HuggingFace's `transformers` first before running the demos by
 
-      ```bash
-      ./bin/bert_gemm <batch_size> <sequence_length> <head_number> <size_per_head> <is_use_fp16> <int8_mode>
-      ./bin/bert_gemm 1 32 12 64 1 0
-      ```
-      If you want to use the library in other directory, please generate this file according to your setting and copy it to your working directory.
+    ```bash
+    pip install transformers==2.5.1
+    ```
 
-      3.2 Run the PyTorch BERT sample: 
+    1 Generate the `gemm_config.in` file:
 
-      ```bash
-      python ../examples/pytorch/bert/bert_example.py <batch_size> <layer_num> <sequence_length> <head_number> <size_per_head> <--fp16> <--int8_mode 0/1/2/3> <--sparse> <--time>
-      python ../examples/pytorch/bert/bert_example.py 1 12 32 12 64 --fp16 --time
-      ```
-      
-      Remove `--fp16` for fp32 mode. `--int8_mode 1` or `--int8_mode 2` or `--int8_mode 3` will use int8_mode 1 or 2 or 3 in FasterTransformer. `--sparse` will use Ampere sparsity feature if FasterTransformer is built with sparsity support.
+    ```bash
+    ./bin/bert_gemm <batch_size> <sequence_length> <head_number> <size_per_head> <data_type> <int8_mode>
+    ./bin/bert_gemm 1 32 12 64 1 0
+    ```
+    Data Type = 0 (FP32) or 1 (FP16) or 2 (BF16)
 
-      The outputs should be like to the following:
+    If you want to use the library in other directory, please generate this file according to your setting and copy it to your working directory.
 
-      ```bash
-      FT Mean diff: 0.0004119873046875
-      FT Max diff:  0.00830078125
-      FT Min diff:  0.0
-      EFF-FT Mean diff: 0.0004119873046875
-      EFF-FT Max diff:  0.00830078125
-      EFF-FT Min diff:  0.0
-      [INFO] HuggingFaceEnocder time costs:    5.77 ms
-      [INFO] FasterTransformer time costs:     1.12 ms
-      [INFO] EFF-FasterTransformer time costs: 1.33 ms
-      ```
+    2 Run the PyTorch BERT sample: 
 
-      3.3 Run the BERT MRPC sample code:
+    ```bash
+    python ../examples/pytorch/bert/bert_example.py <batch_size> <layer_num> <sequence_length> <head_number> <size_per_head> <--data_type fp32/fp16/bf16> <--int8_mode 0/1/2/3> <--sparse> <--time>
+    python ../examples/pytorch/bert/bert_example.py 1 12 32 12 64 --data_type fp16 --time
+    ```
+    
+    Set `--data_type fp32` for fp32 mode, and set `--data_type bf16` for bf16 mode. `--int8_mode 1` or `--int8_mode 2` or `--int8_mode 3` will use int8_mode 1 or 2 or 3 in FasterTransformer. `--sparse` will use Ampere sparsity feature if FasterTransformer is built with sparsity support.
 
-      ```bash
-      bash ../examples/pytorch/bert/scripts/run_mrpc.sh <model_type> <data_type>
-      ```
-      the `<mode_type>` can be:
-      - `ori`: original HuggingFace's BERT encoder
-      - `ths`: original HuggingFace's BERT encoder in TorchScript mode
-      - `thsext`: our TorchScript custom class
+    The outputs should be like to the following:
 
-      the `<data_type>` can be `fp32` or `fp16`
+    ```bash
+    FT Mean diff: 0.0004119873046875
+    FT Max diff:  0.00830078125
+    FT Min diff:  0.0
+    EFF-FT Mean diff: 0.0004119873046875
+    EFF-FT Max diff:  0.00830078125
+    EFF-FT Min diff:  0.0
+    [INFO] HuggingFaceEnocder time costs:    5.77 ms
+    [INFO] FasterTransformer time costs:     1.12 ms
+    [INFO] EFF-FasterTransformer time costs: 1.33 ms
+    ```
 
-      For example, run HuggingFace's BERT under FP32 by following scripts:
+    3 Run the BERT MRPC sample code:
 
-      ```bash
-      bash ../examples/pytorch/bert/scripts/run_mrpc.sh ori fp32
-      ```
+    ```bash
+    bash ../examples/pytorch/bert/scripts/run_mrpc.sh <model_type> <data_type>
+    ```
+    the `<mode_type>` can be:
+    - `ori`: original HuggingFace's BERT encoder
+    - `ths`: original HuggingFace's BERT encoder in TorchScript mode
+    - `thsext`: our TorchScript custom class
 
-      The outputs should be like to the following:
+    the `<data_type>` can be `fp32` or `fp16` or `bf16`
 
-      ```bash 
-      06/28/2020 07:29:59 - INFO - __main__ -     Evaluation for mrpc done in total 4.646116 secs (0.011388 sec per example)
-      06/28/2020 07:29:59 - INFO - __main__ -   ***** Eval results  *****
-      06/28/2020 07:29:59 - INFO - __main__ -     acc = 0.8284313725490197
-      06/28/2020 07:29:59 - INFO - __main__ -     acc_and_f1 = 0.8556872581808643
-      06/28/2020 07:29:59 - INFO - __main__ -     f1 = 0.8829431438127091
-      ```
+    For example, run HuggingFace's BERT under FP32 by following scripts:
 
-      For example, run our PyTorch custom op under FP16 by following scripts:
+    ```bash
+    bash ../examples/pytorch/bert/scripts/run_mrpc.sh ori fp32
+    ```
 
-      ```bash
-      bash ../examples/pytorch/bert/scripts/run_mrpc.sh thsext fp16
-      ```
+    The outputs should be like to the following:
 
-      The outputs should be like to the following:
+    ```bash
+    06/28/2020 07:29:59 - INFO - __main__ -     Evaluation for mrpc done in total 4.646116 secs (0.011388 sec per example)
+    06/28/2020 07:29:59 - INFO - __main__ -   ***** Eval results  *****
+    06/28/2020 07:29:59 - INFO - __main__ -     acc = 0.8284313725490197
+    06/28/2020 07:29:59 - INFO - __main__ -     acc_and_f1 = 0.8556872581808643
+    06/28/2020 07:29:59 - INFO - __main__ -     f1 = 0.8829431438127091
+    ```
 
-      ```bash 
-      06/28/2020 07:30:19 - INFO - __main__ -     Evaluation for mrpc done in total 1.725153 secs (0.004228 sec per example)
-      06/28/2020 07:30:19 - INFO - __main__ -   ***** Eval results  *****
-      06/28/2020 07:30:19 - INFO - __main__ -     acc = 0.8284313725490197
-      06/28/2020 07:30:19 - INFO - __main__ -     acc_and_f1 = 0.8556872581808643
-      06/28/2020 07:30:19 - INFO - __main__ -     f1 = 0.8829431438127091
-      ```
+    For example, run our PyTorch custom op under FP16 by following scripts:
 
-      3.4 Run the BERT SQuAD sample code:
+    ```bash
+    bash ../examples/pytorch/bert/scripts/run_mrpc.sh thsext fp16
+    ```
 
-      ```bash
-      bash ../examples/pytorch/bert/scripts/run_squad.sh --mtype <model_type> --dtype <date_type> --path <model_path> --head_num <head_num> --head_size <head_size> --bs <batch_size> --seqlen <max_seq_len> --sparse <if_use_sparse> --remove_padding <if_remove_padding>
-      ```
-      - the `<mode_type>` can be:
-          - `ori`: original HuggingFace's BERT encoder
-          - `ths`: original HuggingFace's BERT encoder in TorchScript mode
-          - `thsext`: our TorchScript custom class
-      - the `<data_type>` can be `fp32` or `fp16` or `int8_1` or `int8_2` or `int8_3`
-      - `<model_path>` is the directory containing the checkpoint
-      - `<head_num>`, `<head_size>`, `<batch_size>`, and `<max_seq_len>` are the model and running parameters
-      - `<if_use_sparse>` can be `true` or `false`
-      - `<if_remove_padding>` can be `true` or `false`
-      
-      For example, run our PyTorch custom op under FP16 by following scripts (using HuggingFace's checkpoint):
+    The outputs should be like to the following:
 
-      ```bash
-      bash ../examples/pytorch/bert/scripts/run_squad.sh --mtype thsext --dtype fp16
-      ```
+    ```bash
+    06/28/2020 07:30:19 - INFO - __main__ -     Evaluation for mrpc done in total 1.725153 secs (0.004228 sec per example)
+    06/28/2020 07:30:19 - INFO - __main__ -   ***** Eval results  *****
+    06/28/2020 07:30:19 - INFO - __main__ -     acc = 0.8284313725490197
+    06/28/2020 07:30:19 - INFO - __main__ -     acc_and_f1 = 0.8556872581808643
+    06/28/2020 07:30:19 - INFO - __main__ -     f1 = 0.8829431438127091
+    ```
 
-      If we want to do INT8 or sparse tests, please refer to the directory `examples/pytorch/bert/bert-quantization-sparsity` first for how to get a trained model. After we obtained a model checkpoint, we can run it by specify the `<model_path>` and the related parameters. For example, run a BERT base model with INT8 mode 2 and sparse mode (need to do sparse training and QAT simultaneously for the checkpoint):
-      ```bash
-      bash ../examples/pytorch/bert/scripts/run_squad.sh \
-            --mtype thsext \
-            --dtype int8_2 \
-            --path <the_trained_model_path> \
-            --head_num 12 \
-            -head_size 64 \
-            --sparse true
-      ```
+    4 Run the BERT SQuAD sample code:
+
+    ```bash
+    bash ../examples/pytorch/bert/scripts/run_squad.sh --mtype <model_type> --dtype <date_type> --path <model_path> --head_num <head_num> --head_size <head_size> --bs <batch_size> --seqlen <max_seq_len> --sparse <if_use_sparse> --remove_padding <if_remove_padding>
+    ```
+    - the `<mode_type>` can be:
+        - `ori`: original HuggingFace's BERT encoder
+        - `ths`: original HuggingFace's BERT encoder in TorchScript mode
+        - `thsext`: our TorchScript custom class
+    - the `<data_type>` can be `fp32` or `fp16` or `bf16` or `int8_1` or `int8_2` or `int8_3`
+    - `<model_path>` is the directory containing the checkpoint
+    - `<head_num>`, `<head_size>`, `<batch_size>`, and `<max_seq_len>` are the model and running parameters
+    - `<if_use_sparse>` can be `true` or `false`
+    - `<if_remove_padding>` can be `true` or `false`
+    
+    For example, run our PyTorch custom op under FP16 by following scripts (using HuggingFace's checkpoint):
+
+    ```bash
+    bash ../examples/pytorch/bert/scripts/run_squad.sh --mtype thsext --dtype fp16
+    ```
+
+    If we want to do INT8 or sparse tests, please refer to the directory `examples/pytorch/bert/bert-quantization-sparsity` first for how to get a trained model. After we obtained a model checkpoint, we can run it by specify the `<model_path>` and the related parameters. For example, run a BERT base model with INT8 mode 2 and sparse mode (need to do sparse training and QAT simultaneously for the checkpoint):
+    ```bash
+    bash ../examples/pytorch/bert/scripts/run_squad.sh \
+        --mtype thsext \
+        --dtype int8_2 \
+        --path <the_trained_model_path> \
+        --head_num 12 \
+        -head_size 64 \
+        --sparse true
+    ```
+
+### Run the PyTorch BERT sample with multi-GPU:
+
+    Since v5.1, FasterTransformer supports multi-node multi-GPU inference on BERT model under FP32, FP16 and BF16. Users can use `--tensor_para_size` and `pipeline_para_size` to control the tensor parallelism and pipeline parallelism.
+
+    ```bash
+    mpirun -n 4 python3 ../examples/pytorch/bert/bert_example.py 32 12 32 12 64 --data_type fp16 --tensor_para_size 2 --pipeline_para_size 2
+    ```
+
+    * Note that multi-node inference is also supported. The usage is same to multi-GPU under MPI.
+    * Note that the performances under model parallelism are affected by the hardware and network significantly. If your GPUs are connected by PCIe, using model parallelism may bring few speedup or even worse performance.
 
 ## Performance
 
@@ -969,6 +1027,7 @@ Hardware settings:
 * A100 (with mclk 1593MHz, pclk 1410MHz) with AMD EPYC 7742 64-Core Processor
 * T4 (with mclk 5000MHz, pclk 1590MHz) with Intel(R) Xeon(R) CPU E5-2670 0 @ 2.60GHz
 * V100 (with mclk 877MHz, pclk 1380MHz) with Intel(R) Xeon(R) CPU E5-2698 v4 @ 2.20GHz (dgx-1 server)
+* A10 (with mclk 6251, pclk 1695) with AMD EPYC 7232P 8-Core Processor
 
 Note that the CPU may affect the performance when the batch size and sequence length are small. 
 
@@ -978,7 +1037,58 @@ To run the following benchmark, we need to install the unix computing tool "bc" 
 apt-get install bc
 ```
 
-### BERT performance
+### Multi-GPU BERT-6B performance on A100 and triton example
+
+These benchmarks are ran by `bert_triton_example.cc`. These benchmark compare the performance of different model parallelism size. The GPUs are connected by NVLink. Note that for model parallelism, there are large effects on hardware and network.
+
+The model configuration are:
+* head_num = 32
+* size_per_head = 128
+* num_layers = 32
+
+* Compare tensor parallelism (TP) and pipeline parallelism (PP)
+
+| Batch_size | Seq_len | Precision | TP1, PP1 <br/> Latency (ms) | TP2, PP1 <br/> Latency (ms) | TP1, PP2 <br/> Latency (ms) | TP2, PP 1 <br/> Speedup | TP1, PP 2 <br/> Speedup |
+| :--------: | :-----: | :-------: | :-------------------------: | :-------------------------: | :-------------------------: | :---------------------: | :---------------------: |
+|     1      |   32    |   fp16    |            10.58            |            8.35             |            10.81            |          1.27           |          0.98           |
+|     1      |   128   |   fp16    |            10.87            |            9.39             |            11.14            |          1.16           |          0.98           |
+|     1      |   384   |   fp16    |            26.07            |            19.48            |            25.42            |          1.34           |          1.03           |
+|     1      |  1024   |   fp16    |            47.02            |            32.13            |            46.56            |          1.46           |          1.01           |
+|     4      |   32    |   fp16    |            12.44            |            10.91            |            16.4             |          1.14           |          0.76           |
+|     4      |   128   |   fp16    |            24.98            |            18.34            |            26.86            |          1.36           |          0.93           |
+|     4      |   384   |   fp16    |            61.99            |            38.19            |            50.46            |          1.62           |          1.23           |
+|     32     |   32    |   fp16    |            26.36            |            19.62            |            27.01            |          1.34           |          0.98           |
+|     32     |   32    |   fp16    |            26.5             |            19.67            |            27.51            |          1.35           |          0.96           |
+|     32     |   128   |   fp16    |             132             |            81.42            |            89.9             |          1.62           |          1.47           |
+|     32     |   384   |   fp16    |           409.41            |           233.69            |           282.46            |          1.75           |          1.45           |
+|     32     |  1024   |   fp16    |           1145.01           |           613.86            |           760.44            |          1.87           |          1.51           |
+|    128     |   32    |   fp16    |           112.37            |            70.65            |            87.77            |          1.59           |          1.28           |
+|    128     |   128   |   fp16    |           469.51            |           264.02            |           303.99            |          1.78           |          1.54           |
+|    128     |   384   |   fp16    |           1477.78           |           804.84            |           1020.95           |          1.84           |          1.45           |
+|    128     |  1024   |   fp16    |           4975.6            |           2629.93           |           3136.76           |          1.89           |          1.59           |
+
+* Compare scaling of different tensor parallelism (TP)
+
+| Batch_size | Seq_len | Precision | TP1, PP1 <br/> Latency (ms) | TP2, PP1 <br/> Latency (ms) | TP4, PP1 <br/> Latency (ms) | TP2, PP 1 <br/> Speedup | TP4, PP 1 <br/> Speedup |
+| :--------: | :-----: | :-------: | :-------------------------: | :-------------------------: | :-------------------------: | :---------------------: | :---------------------: |
+|     1      |   32    |   fp16    |            10.58            |            8.35             |            6.21             |          1.27           |          1.70           |
+|     1      |   128   |   fp16    |            10.87            |            9.39             |            6.98             |          1.16           |          1.56           |
+|     1      |   384   |   fp16    |            26.07            |            19.48            |            14.65            |          1.34           |          1.78           |
+|     1      |  1024   |   fp16    |            47.02            |            32.13            |            21.29            |          1.46           |          2.21           |
+|     4      |   32    |   fp16    |            12.44            |            10.91            |            8.67             |          1.14           |          1.43           |
+|     4      |   128   |   fp16    |            24.98            |            18.34            |            14.12            |          1.36           |          1.77           |
+|     4      |   384   |   fp16    |            61.99            |            38.19            |            26.56            |          1.62           |          2.33           |
+|     32     |   32    |   fp16    |            26.36            |            19.62            |            14.55            |          1.34           |          1.81           |
+|     32     |   32    |   fp16    |            26.5             |            19.67            |            14.53            |          1.35           |          1.82           |
+|     32     |   128   |   fp16    |             132             |            81.42            |            48.93            |          1.62           |          2.70           |
+|     32     |   384   |   fp16    |           409.41            |           233.69            |           138.12            |          1.75           |          2.96           |
+|     32     |  1024   |   fp16    |           1145.01           |           613.86            |            364.4            |          1.87           |          3.14           |
+|    128     |   32    |   fp16    |           112.37            |            70.65            |            44.84            |          1.59           |          2.51           |
+|    128     |   128   |   fp16    |           469.51            |           264.02            |           161.36            |          1.78           |          2.91           |
+|    128     |   384   |   fp16    |           1477.78           |           804.84            |           477.71            |          1.84           |          3.09           |
+|    128     |  1024   |   fp16    |           4975.6            |           2629.93           |           1529.07           |          1.89           |          3.25           |
+
+### Single GPU BERT performance
 
 We demonstrate the inference time of FasterTransformer in C++, TensorFlow and PyTorch, and compared to the performance on A100, T4 and V100.
 
@@ -999,6 +1109,7 @@ In the experiments of encoder, we updated the following parameters:
 * head_num = 12
 * size_per_head = 64 
 * num_layers = 12
+* EFF-FT: Use remove padding. The avereage sequence length is set to half of `Seq_len`. For example, when `Seq_len` is 128, the real sequence length is 64, and other 64 tokens are paddings.
 
 #### BERT performance on A100 and TensorFlow
 
@@ -1297,6 +1408,64 @@ User can use `export NVIDIA_TF32_OVERRIDE=1` to enforce the program run under TF
 |       <32, 32>        |     1.70      |      1.63      |      1.50      |      1.65       |       1.04        |        0.91        |
 |       <32, 128>       |     3.62      |      2.94      |      2.28      |      2.04       |       1.23        |        1.12        |
 |       <32, 384>       |     10.10     |      8.60      |      5.77      |      5.38       |       1.17        |        1.07        |
+
+#### BERT performance on A10 and PyTorch
+
+* Performance on FP32
+
+| Batch_size | Seq_len | Precision | TorchScript <br/> Latency (ms) | FT <br/> Latency (ms) | EFF-FT <br/> Latency (ms) | FT <br/> Speedup | EFF-FT <br/> Speedup |
+| :--------: | :-----: | :-------: | :----------------------------: | :-------------------: | :-----------------------: | :--------------: | :------------------: |
+|     1      |   32    |   FP32    |              3.98              |         2.08          |           2.31            |       1.91       |         1.72         |
+|     1      |   128   |   FP32    |              3.98              |         3.58          |           2.70            |       1.11       |         1.47         |
+|     1      |   384   |   FP32    |              9.38              |         7.95          |           3.83            |       1.17       |         2.44         |
+|     8      |   32    |   FP32    |              6.91              |         5.83          |           3.31            |       1.18       |         2.08         |
+|     8      |   128   |   FP32    |             20.30              |         16.82         |           12.94           |       1.20       |         1.56         |
+|     8      |   384   |   FP32    |             65.68              |         54.49         |           28.36           |       1.20       |         2.31         |
+|     32     |   32    |   FP32    |             20.48              |         17.13         |           10.51           |       1.19       |         1.94         |
+|     32     |   128   |   FP32    |             80.18              |         68.22         |           41.48           |       1.17       |         1.93         |
+|     32     |   384   |   FP32    |             264.69             |        213.87         |          141.08           |       1.23       |         1.87         |
+
+* Performance on FP16
+
+| Batch_size | Seq_len | Precision | TorchScript <br/> Latency (ms) | FT <br/> Latency (ms) | EFF-FT <br/> Latency (ms) | FT <br/> Speedup | EFF-FT <br/> Speedup |
+| :--------: | :-----: | :-------: | :----------------------------: | :-------------------: | :-----------------------: | :--------------: | :------------------: |
+|     1      |   32    |   FP16    |              4.20              |         1.06          |           1.76            |       3.96       |         2.38         |
+|     1      |   128   |   FP16    |              4.38              |         1.02          |           1.83            |       4.29       |         2.39         |
+|     1      |   384   |   FP16    |              4.09              |         2.30          |           1.81            |       1.77       |         2.25         |
+|     8      |   32    |   FP16    |              3.76              |         1.54          |           1.92            |       2.44       |         1.95         |
+|     8      |   128   |   FP16    |              5.78              |         4.02          |           2.81            |       1.43       |         2.05         |
+|     8      |   384   |   FP16    |             18.43              |         10.91         |           4.52            |       1.68       |         4.07         |
+|     32     |   32    |   FP16    |              5.36              |         3.92          |           2.41            |       1.36       |         2.22         |
+|     32     |   128   |   FP16    |             21.59              |         15.30         |           8.13            |       1.41       |         2.65         |
+|     32     |   384   |   FP16    |             73.50              |         43.74         |           25.22           |       1.68       |         2.91         |
+
+* Performance on INT8-v1
+
+| Batch_size | Seq_len | TorchScript-FP16 <br/> Latency (ms) | FT-INT8-v1 <br/> Latency (ms) | EFF-FT-INT8-v1 <br/> Latency (ms) | FT-INT8-v1 <br/> Speedup | EFF-FT-INT8-v1 <br/> Speedup |
+| :--------: | :-----: | :---------------------------------: | :---------------------------: | :-------------------------------: | :----------------------: | :--------------------------: |
+|     1      |   32    |                4.00                 |             1.34              |               1.37                |           2.98           |             2.91             |
+|     1      |   128   |                4.43                 |             1.56              |               1.42                |           2.83           |             3.11             |
+|     1      |   384   |                3.93                 |             2.01              |               1.48                |           1.95           |             2.65             |
+|     8      |   32    |                3.60                 |             1.79              |               1.59                |           2.01           |             2.26             |
+|     8      |   128   |                5.82                 |             3.48              |               2.49                |           1.67           |             2.33             |
+|     8      |   384   |                18.41                |             9.55              |               4.47                |           1.92           |             4.11             |
+|     32     |   32    |                5.42                 |             3.77              |               2.28                |           1.43           |             2.37             |
+|     32     |   128   |                21.51                |             12.08             |               6.63                |           1.78           |             3.24             |
+|     32     |   384   |                73.67                |             35.65             |               20.96               |           2.06           |             3.51             |
+
+* Performance on INT8-v2
+
+| Batch_size | Seq_len | TorchScript-FP16 <br/> Latency (ms) | FT-INT8-v2 <br/> Latency (ms) | EFF-FT-INT8-v2 <br/> Latency (ms) | FT-INT8-v2 <br/> Speedup | EFF-FT-INT8-v2 <br/> Speedup |
+| :--------: | :-----: | :---------------------------------: | :---------------------------: | :-------------------------------: | :----------------------: | :--------------------------: |
+|     1      |   32    |                4.04                 |             1.37              |               1.40                |           2.94           |             2.88             |
+|     1      |   128   |                4.41                 |             1.42              |               1.42                |           3.10           |             3.10             |
+|     1      |   384   |                3.88                 |             1.73              |               1.49                |           2.24           |             2.60             |
+|     8      |   32    |                3.69                 |             1.57              |               1.51                |           2.35           |             2.44             |
+|     8      |   128   |                5.87                 |             2.37              |               1.89                |           2.47           |             3.10             |
+|     8      |   384   |                18.43                |             6.42              |               3.21                |           2.87           |             5.74             |
+|     32     |   32    |                5.41                 |             2.64              |               1.91                |           2.04           |             2.83             |
+|     32     |   128   |                21.50                |             8.08              |               4.64                |           2.66           |             4.63             |
+|     32     |   384   |                73.65                |             25.42             |               14.04               |           2.89           |             5.24             |
 
 #### BERT performance on T4 and PyTorch
 

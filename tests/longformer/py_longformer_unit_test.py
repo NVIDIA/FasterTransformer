@@ -61,14 +61,14 @@ class TestLongformerPytorchQA(unittest.TestCase):
         self.model_dir = "examples/pytorch/longformer/longformer-large-4096-finetuned-triviaqa"
         self.ft_longformer_lib = os.path.join('build', 'lib', 'libth_longformer.so')
 
-    def run_all_qa(self, seq_len, batch_size, ft_longformer, fp16):
+    def run_all_qa(self, seq_len, batch_size, ft_longformer, data_type):
         for idx in range(len(self.passage_texts)):
             passage_text = self.passage_texts[idx]
             question = self.questions[idx]
             answer = self.answers[idx]
 
             input_ids_b, local_attn_mask_b, global_attn_mask_b, input_ids, actual_seq_len = prepare_input(
-                question, passage_text, seq_len, batch_size, self.model_dir, fp16)
+                question, passage_text, seq_len, batch_size, self.model_dir, data_type)
 
             with torch.no_grad():
                 outputs = ft_longformer(input_ids_b,
@@ -88,9 +88,9 @@ class TestLongformerPytorchQA(unittest.TestCase):
         ft_longformer = build_ft_longformer(self.model_dir, layer_num, head_num, size_per_head,
                                             intermediate_size, local_attn_window_size,
                                             max_global_token_num, batch_size, seq_len,
-                                            attn_scaler, self.ft_longformer_lib, fp16=False)
+                                            attn_scaler, self.ft_longformer_lib, data_type='fp32')
 
-        self.run_all_qa(seq_len, batch_size, ft_longformer, False)
+        self.run_all_qa(seq_len, batch_size, ft_longformer, 'fp32')
 
     def test_fp32_with_qa_answer_2(self):
         seq_len = 2048
@@ -103,9 +103,9 @@ class TestLongformerPytorchQA(unittest.TestCase):
         ft_longformer = build_ft_longformer(self.model_dir, layer_num, head_num, size_per_head,
                                             intermediate_size, local_attn_window_size,
                                             max_global_token_num, batch_size, seq_len,
-                                            attn_scaler, self.ft_longformer_lib, fp16=False)
+                                            attn_scaler, self.ft_longformer_lib, data_type='fp32')
 
-        self.run_all_qa(seq_len, batch_size, ft_longformer, False)
+        self.run_all_qa(seq_len, batch_size, ft_longformer, 'fp32')
 
     def test_fp32_with_qa_answer_3(self):
         seq_len = 4096
@@ -118,9 +118,9 @@ class TestLongformerPytorchQA(unittest.TestCase):
         ft_longformer = build_ft_longformer(self.model_dir, layer_num, head_num, size_per_head,
                                             intermediate_size, local_attn_window_size,
                                             max_global_token_num, batch_size, seq_len,
-                                            attn_scaler, self.ft_longformer_lib, fp16=False)
+                                            attn_scaler, self.ft_longformer_lib, data_type='fp32')
 
-        self.run_all_qa(seq_len, batch_size, ft_longformer, False)
+        self.run_all_qa(seq_len, batch_size, ft_longformer, 'fp32')
 
     def test_fp16_with_qa_answer(self):
         seq_len = 1024
@@ -133,9 +133,9 @@ class TestLongformerPytorchQA(unittest.TestCase):
         ft_longformer = build_ft_longformer(self.model_dir, layer_num, head_num, size_per_head,
                                             intermediate_size, local_attn_window_size,
                                             max_global_token_num, batch_size, seq_len,
-                                            attn_scaler, self.ft_longformer_lib, fp16=True)
+                                            attn_scaler, self.ft_longformer_lib, data_type='fp16')
 
-        self.run_all_qa(seq_len, batch_size, ft_longformer, True)
+        self.run_all_qa(seq_len, batch_size, ft_longformer, 'fp16')
 
     def test_fp16_with_qa_answer_2(self):
         seq_len = 1536
@@ -148,9 +148,9 @@ class TestLongformerPytorchQA(unittest.TestCase):
         ft_longformer = build_ft_longformer(self.model_dir, layer_num, head_num, size_per_head,
                                             intermediate_size, local_attn_window_size,
                                             max_global_token_num, batch_size, seq_len,
-                                            attn_scaler, self.ft_longformer_lib, fp16=True)
+                                            attn_scaler, self.ft_longformer_lib, data_type='fp16')
 
-        self.run_all_qa(seq_len, batch_size, ft_longformer, True)
+        self.run_all_qa(seq_len, batch_size, ft_longformer, 'fp16')
 
     def test_fp16_with_qa_answer_3(self):
         seq_len = 4096
@@ -163,9 +163,54 @@ class TestLongformerPytorchQA(unittest.TestCase):
         ft_longformer = build_ft_longformer(self.model_dir, layer_num, head_num, size_per_head,
                                             intermediate_size, local_attn_window_size,
                                             max_global_token_num, batch_size, seq_len,
-                                            attn_scaler, self.ft_longformer_lib, fp16=True)
+                                            attn_scaler, self.ft_longformer_lib, data_type='fp16')
 
-        self.run_all_qa(seq_len, batch_size, ft_longformer, True)
+        self.run_all_qa(seq_len, batch_size, ft_longformer, 'fp16')
+
+    def test_bf16_with_qa_answer(self):
+        seq_len = 1024
+        batch_size = 1
+        max_global_token_num = 128
+
+        (layer_num, _, head_num, size_per_head,
+         intermediate_size, local_attn_window_size, attn_scaler) = parse_from_config(self.model_dir)
+
+        ft_longformer = build_ft_longformer(self.model_dir, layer_num, head_num, size_per_head,
+                                            intermediate_size, local_attn_window_size,
+                                            max_global_token_num, batch_size, seq_len,
+                                            attn_scaler, self.ft_longformer_lib, data_type='bf16')
+
+        self.run_all_qa(seq_len, batch_size, ft_longformer, 'bf16')
+
+    def test_bf16_with_qa_answer_2(self):
+        seq_len = 1536
+        batch_size = 4
+        max_global_token_num = 64
+
+        (layer_num, _, head_num, size_per_head,
+         intermediate_size, local_attn_window_size, attn_scaler) = parse_from_config(self.model_dir)
+
+        ft_longformer = build_ft_longformer(self.model_dir, layer_num, head_num, size_per_head,
+                                            intermediate_size, local_attn_window_size,
+                                            max_global_token_num, batch_size, seq_len,
+                                            attn_scaler, self.ft_longformer_lib, data_type='bf16')
+
+        self.run_all_qa(seq_len, batch_size, ft_longformer, 'bf16')
+
+    def test_bf16_with_qa_answer_3(self):
+        seq_len = 4096
+        batch_size = 8
+        max_global_token_num = 256
+
+        (layer_num, _, head_num, size_per_head,
+         intermediate_size, local_attn_window_size, attn_scaler) = parse_from_config(self.model_dir)
+
+        ft_longformer = build_ft_longformer(self.model_dir, layer_num, head_num, size_per_head,
+                                            intermediate_size, local_attn_window_size,
+                                            max_global_token_num, batch_size, seq_len,
+                                            attn_scaler, self.ft_longformer_lib, data_type='bf16')
+
+        self.run_all_qa(seq_len, batch_size, ft_longformer, 'bf16')
 
 
 if __name__ == "__main__":

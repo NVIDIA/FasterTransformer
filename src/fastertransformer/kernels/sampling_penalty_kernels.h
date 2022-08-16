@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,27 +22,46 @@
 namespace fastertransformer {
 
 template<typename T>
-void invokeApplyRepetitionPenalty(T* logits,
-                                  const float penalty,
-                                  const int* start_ids,
-                                  int* output_ids,
-                                  const int batch_size,
-                                  const int local_batch_size,
-                                  const int vocab_size,
-                                  const int vocab_size_padd,
-                                  const int* input_lengths,
-                                  const int max_input_len,
-                                  const int step,
-                                  const int ite,
+void invokeApplyRepetitionPenalty(T*           logits,
+                                  const float  penalty,
+                                  const int*   start_ids,
+                                  int*         output_ids,
+                                  const int    batch_size,
+                                  const int    local_batch_size,
+                                  const int    vocab_size,
+                                  const int    vocab_size_padd,
+                                  const int*   input_lengths,
+                                  const int    max_input_len,
+                                  const int    step,
                                   cudaStream_t stream);
 
 template<typename T>
-void invokeApplyTemperaturePenalty(T* logits,
-                                   const T* bias,
-                                   const float temperature,
-                                   const int m,
-                                   const int vocab_size,
-                                   const int vocab_size_padd,
+void invokeBatchApplyRepetitionPenalty(T*           logits,
+                                       const float* penalties,
+                                       const int*   output_ids,
+                                       const int    batch_size,
+                                       const int    local_batch_size,
+                                       const int    vocab_size,
+                                       const int*   input_lengths,
+                                       const int    max_input_length,
+                                       const int    step,
+                                       cudaStream_t stream);
+
+template<typename T>
+void invokeApplyTemperaturePenalty(T*           logits,
+                                   const T*     bias,
+                                   const float  temperature,
+                                   const int    batch_size,
+                                   const int    vocab_size,
+                                   const int    vocab_size_padd,
                                    cudaStream_t stream);
 
+template<typename T>
+void invokeBatchApplyTemperaturePenalty(T*           logits,
+                                        const T*     bias,
+                                        const float* temperatures,
+                                        const int    batch_size,
+                                        const int    vocab_size,
+                                        const int    vocab_size_padd,
+                                        cudaStream_t stream);
 }  // namespace fastertransformer

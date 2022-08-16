@@ -19,9 +19,9 @@
 namespace fastertransformer {
 
 template<typename T>
-void TensorParallelUnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* output_tensors,
+void TensorParallelUnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                                                      const std::vector<fastertransformer::Tensor>* input_tensors,
-                                                     const AttentionWeight<T>* attention_weights)
+                                                     const AttentionWeight<T>*                     attention_weights)
 {
     // input_tensors:
     //      input_query [token_num, d_model],
@@ -56,20 +56,20 @@ void TensorParallelUnfusedAttentionLayer<T>::forward(std::vector<fastertransform
 
 template<typename T>
 TensorParallelUnfusedAttentionLayer<T>::TensorParallelUnfusedAttentionLayer(
-    size_t max_batch_size,
-    size_t max_seq_len,
-    size_t head_num,
-    size_t size_per_head,
-    size_t d_model,
-    float q_scaling,
-    NcclParam tensor_para,
-    cudaStream_t stream,
-    cublasMMWrapper* cublas_wrapper,
-    IAllocator* allocator,
-    bool is_free_buffer_after_forward,
-    bool is_sparse,
+    size_t                              max_batch_size,
+    size_t                              max_seq_len,
+    size_t                              head_num,
+    size_t                              size_per_head,
+    size_t                              d_model,
+    float                               q_scaling,
+    NcclParam                           tensor_para,
+    cudaStream_t                        stream,
+    cublasMMWrapper*                    cublas_wrapper,
+    IAllocator*                         allocator,
+    bool                                is_free_buffer_after_forward,
+    bool                                is_sparse,
     std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
-    int enable_custom_all_reduce):
+    int                                 enable_custom_all_reduce):
     UnfusedAttentionLayer<T>(max_batch_size,
                              max_seq_len,
                              head_num / tensor_para.world_size_,
@@ -97,5 +97,8 @@ TensorParallelUnfusedAttentionLayer<T>::TensorParallelUnfusedAttentionLayer(
 
 template class TensorParallelUnfusedAttentionLayer<float>;
 template class TensorParallelUnfusedAttentionLayer<half>;
+#ifdef ENABLE_BF16
+template class TensorParallelUnfusedAttentionLayer<__nv_bfloat16>;
+#endif
 
 }  // namespace fastertransformer

@@ -24,24 +24,24 @@ namespace torch_ext {
 class IFEncoder {
 public:
     virtual ~IFEncoder() {}
-    virtual void forward(size_t batch_size,
-                         size_t seq_len,
+    virtual void forward(size_t      batch_size,
+                         size_t      seq_len,
                          th::Tensor& input,
                          th::Tensor& sequence_lengths,
                          th::Tensor& output,
-                         bool removing_padding) = 0;
+                         bool        removing_padding) = 0;
 };
 
 template<typename T>
 class FTEncoder: public IFEncoder {
 public:
-    FTEncoder(int head_num,
-              int head_size,
-              int inter_size,
-              int layer_num,
-              bool allow_gemm_test,
-              bool sparse,
-              float q_scaling,
+    FTEncoder(int                            head_num,
+              int                            head_size,
+              int                            inter_size,
+              int                            layer_num,
+              bool                           allow_gemm_test,
+              bool                           sparse,
+              float                          q_scaling,
               const std::vector<th::Tensor>& w):
         _head_num(head_num),
         _head_size(head_size),
@@ -65,8 +65,8 @@ public:
         }
 #endif
         std::string sp_config_fname = sparse ? "spgemm_config.in" : "";
-        cublas_algo_map_ = new ft::cublasAlgoMap("gemm_config.in", sp_config_fname);
-        cublas_wrapper_mutex_ = new std::mutex();
+        cublas_algo_map_            = new ft::cublasAlgoMap("gemm_config.in", sp_config_fname);
+        cublas_wrapper_mutex_       = new std::mutex();
         encoder_weights.bert_layer_weights.clear();
         encoder_weights.bert_layer_weights.resize(_layer_num);
 
@@ -105,10 +105,10 @@ public:
                 get_ptr<T>(_weights[15]) + hidden_dim * i;
         }
         encoder_weights.post_transformer_layernorm_weights.gamma = get_ptr<T>(_weights[16]);
-        encoder_weights.post_transformer_layernorm_weights.beta = get_ptr<T>(_weights[17]);
+        encoder_weights.post_transformer_layernorm_weights.beta  = get_ptr<T>(_weights[17]);
 #ifdef SPARSITY_ENABLED
         if (sparse) {
-            auto stream = at::cuda::getCurrentCUDAStream().stream();
+            auto           stream        = at::cuda::getCurrentCUDAStream().stream();
             cublasHandle_t _cublasHandle = at::cuda::getCurrentCUDABlasHandle();
             cublasSetStream(_cublasHandle, stream);
             ft::cublasMMWrapper cublas_wrapper = ft::cublasMMWrapper(_cublasHandle,
@@ -137,18 +137,18 @@ public:
         delete cublas_wrapper_mutex_;
     }
 
-    void forward(size_t batch_size,
-                 size_t seq_len,
+    void forward(size_t      batch_size,
+                 size_t      seq_len,
                  th::Tensor& input,
                  th::Tensor& sequence_lengths,
                  th::Tensor& output,
-                 bool removing_padding) override
+                 bool        removing_padding) override
     {
-        auto stream = at::cuda::getCurrentCUDAStream().stream();
+        auto           stream        = at::cuda::getCurrentCUDAStream().stream();
         cublasHandle_t _cublasHandle = at::cuda::getCurrentCUDABlasHandle();
         cublasSetStream(_cublasHandle, stream);
         ft::Allocator<ft::AllocatorType::TH>* allocator = new ft::Allocator<ft::AllocatorType::TH>();
-        ft::cublasMMWrapper* cublas_wrapper =
+        ft::cublasMMWrapper*                  cublas_wrapper =
 #ifdef SPARSITY_ENABLED
             new ft::cublasMMWrapper(_cublasHandle,
                                     _cublasltHandle,
@@ -165,6 +165,11 @@ public:
         if (std::is_same<T, half>::value) {
             cublas_wrapper->setFP16GemmConfig();
         }
+#ifdef ENABLE_BF16
+        else if (std::is_same<T, __nv_bfloat16>::value) {
+            cublas_wrapper->setBF16GemmConfig();
+        }
+#endif
         else if (std::is_same<T, float>::value) {
             cublas_wrapper->setFP32GemmConfig();
         }
@@ -182,13 +187,13 @@ public:
                                                stream,
                                                cublas_wrapper,
                                                allocator,
-                                               true,
+                                               false,
                                                attention_type,
                                                _sparse,
                                                ft::ActivationType::Relu,
                                                ft::LayerNormType::pre_layernorm);
 
-        ft::DataType data_type = ft::getTensorType<T>();
+        ft::DataType            data_type     = ft::getTensorType<T>();
         std::vector<ft::Tensor> input_tensors = std::vector<ft::Tensor>{
             ft::Tensor{ft::MEMORY_GPU,
                        data_type,
@@ -220,21 +225,21 @@ public:
     }
 
 private:
-    const int _head_num;
-    const int _head_size;
-    const int _inter_size;
+    const int               _head_num;
+    const int               _head_size;
+    const int               _inter_size;
     std::vector<th::Tensor> _weights;
-    const int _layer_num;
-    bool _sparse;
-    const float _q_scaling;
-    int sm_;
-    cublasLtHandle_t _cublasltHandle;
+    const int               _layer_num;
+    bool                    _sparse;
+    const float             _q_scaling;
+    int                     sm_;
+    cublasLtHandle_t        _cublasltHandle;
 #ifdef SPARSITY_ENABLED
     cusparseLtHandle_t _cusparseLtHandle;
 #endif
-    std::mutex* cublas_wrapper_mutex_;
+    std::mutex*        cublas_wrapper_mutex_;
     ft::cublasAlgoMap* cublas_algo_map_;
-    ft::BertWeight<T> encoder_weights;
+    ft::BertWeight<T>  encoder_weights;
 };
 
 class FasterTransformerEncoder: public th::jit::CustomClassHolder {
@@ -257,14 +262,14 @@ public:
                              th::Tensor output_bias,
                              th::Tensor post_transformer_layernorm_gamma,
                              th::Tensor post_transformer_layernorm_beta,
-                             int64_t head_num,
-                             int64_t head_size,
-                             int64_t inter_size,
-                             bool remove_padding,
-                             int64_t layer_num,
-                             bool allow_gemm_test,
-                             bool sparse,
-                             double q_scaling);
+                             int64_t    head_num,
+                             int64_t    head_size,
+                             int64_t    inter_size,
+                             bool       remove_padding,
+                             int64_t    layer_num,
+                             bool       allow_gemm_test,
+                             bool       sparse,
+                             double     q_scaling);
 
     ~FasterTransformerEncoder();
 
@@ -273,13 +278,13 @@ public:
     std::vector<th::Tensor> get_pickle_info() const;
 
 private:
-    const at::ScalarType _st;
-    bool _remove_padding;
-    IFEncoder* ftencoder;
-    th::Tensor head_info;
-    th::Tensor scaling_info;
+    const at::ScalarType    _st;
+    bool                    _remove_padding;
+    IFEncoder*              ftencoder;
+    th::Tensor              head_info;
+    th::Tensor              scaling_info;
     std::vector<th::Tensor> weights;
-    bool _allow_gemm_test;
+    bool                    _allow_gemm_test;
 };
 
 }  // namespace torch_ext

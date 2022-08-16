@@ -14,8 +14,9 @@
 
 add_executable(gptj_example gptj_example.cc)
 target_link_libraries(gptj_example PUBLIC -lcublas -lcublasLt -lcudart
-                      GptJ nvtx_utils -lmpi gpt_example_utils word_list)
+                      GptJ nvtx_utils gpt_example_utils word_list mpi_utils nccl_utils)
 
 add_executable(gptj_triton_example gptj_triton_example.cc)
-target_link_libraries(gptj_triton_example PUBLIC -lcublas -lcublasLt -lcudart
-                      GptJTritonBackend custom_ar_comm -lmpi gpt_example_utils word_list -lpthread)
+target_link_libraries(gptj_triton_example PUBLIC -lcublas -lcublasLt -lcudart -lpthread
+                      GptJTritonBackend TransformerTritonBackend custom_ar_comm
+                      gpt_example_utils word_list mpi_utils nccl_utils)

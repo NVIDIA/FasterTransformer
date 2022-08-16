@@ -34,13 +34,13 @@
 namespace fastertransformer {
 
 template<typename T>
-void generate_xlnet_gemm_config(int batch_size,
-                                int seq_len,
-                                int head_num,
-                                int size_per_head,
-                                int hidden_units_,
-                                int inter_size_,
+void generate_xlnet_gemm_config(int   batch_size,
+                                int   seq_len,
+                                int   head_num,
+                                int   size_per_head,
+                                int   hidden_units_,
+                                int   inter_size_,
                                 void* buffer_in,
-                                bool isAppend = true);
+                                bool  isAppend = true);
 
 }  // namespace fastertransformer

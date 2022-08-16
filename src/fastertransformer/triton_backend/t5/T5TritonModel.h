@@ -31,34 +31,29 @@ template<typename T>
 struct T5TritonModel: public AbstractTransformerModel {
     T5TritonModel(INIReader reader, std::string model_dir);
 
-    T5TritonModel(size_t tensor_para_size,
-                  size_t pipeline_para_size,
-                  int enable_custom_all_reduce,
+    T5TritonModel(size_t      tensor_para_size,
+                  size_t      pipeline_para_size,
+                  int         enable_custom_all_reduce,
                   std::string model_dir,
-                  int int8_mode);
+                  int         int8_mode);
 
     ~T5TritonModel() = default;
 
     virtual std::unique_ptr<AbstractTransformerModelInstance>
-    createModelInstance(int deviceId,
-                        int rank,
-                        cudaStream_t stream,
-                        std::pair<std::vector<ncclComm_t>, std::vector<ncclComm_t>> nccl_comms,
+    createModelInstance(int                                                               deviceId,
+                        int                                                               rank,
+                        cudaStream_t                                                      stream,
+                        std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params,
                         std::shared_ptr<ft::AbstractCustomComm> custom_all_reduce_comm = nullptr);
 
+    virtual void createSharedWeights(int deviceId, int rank) override;
+
     virtual void createCustomComms(std::vector<std::shared_ptr<ft::AbstractCustomComm>>* custom_all_reduce_comms,
-                                   int world_size) override;
+                                   int                                                   world_size) override;
 
-    virtual std::pair<std::vector<ncclComm_t>, std::vector<ncclComm_t>>
-    createNcclComms(std::vector<ncclUniqueId> nccl_ids,
-                    const int node_id,
-                    bool multi_instances = false,
-                    int instance_id = 0) override;
-
-    virtual std::vector<ncclUniqueId> createNcclIds(const uint32_t world_size, bool multi_instances = false) override;
     virtual std::string toString() override;
-    virtual int getTensorParaSize() override;
-    virtual int getPipelineParaSize() override;
+    virtual int         getTensorParaSize() override;
+    virtual int         getPipelineParaSize() override;
 
 private:
     // encoder
@@ -82,18 +77,26 @@ private:
     float q_scaling_;
 
     size_t max_distance_;
-    int start_id_;
-    int end_id_;
+    int    start_id_;
+    int    end_id_;
+
+    bool tie_word_embeddings_;
 
     size_t tensor_para_size_;
     size_t pipeline_para_size_;
 
+    // shared weights for each device
+    std::vector<std::shared_ptr<ft::T5EncoderWeight<T>>>  encoder_shared_weights_;
+    std::vector<std::shared_ptr<ft::T5DecodingWeight<T>>> decoding_shared_weights_;
+
     // t5 structure difference
-    bool t5_with_bias_;
+    bool                      t5_with_bias_;
+    bool                      use_gated_activation_;
     ft::PositionEmbeddingType position_embedding_type_;
+    ft::ActivationType        activation_type_;
 
     bool is_fp16_;
-    int int8_mode_;
+    int  int8_mode_;
 
     int enable_custom_all_reduce_ = 0;
 

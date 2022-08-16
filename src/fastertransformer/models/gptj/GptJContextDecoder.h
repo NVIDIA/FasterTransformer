@@ -37,7 +37,7 @@ class GptJContextDecoder: public BaseLayer {
 private:
     // buffer handling
     size_t max_batch_size_ = 0;
-    size_t max_seq_len_ = 0;
+    size_t max_seq_len_    = 0;
 
     // meta data
     size_t head_num_;
@@ -45,6 +45,9 @@ private:
     size_t inter_size_;
     size_t num_layer_;
     size_t rotary_embedding_dim_;
+    bool   neox_rotary_style_;  // A unify way for GPT-NeoX in the future, not used now.
+
+    float layernorm_eps_;
 
     // calculated data
     size_t hidden_units_;
@@ -53,61 +56,61 @@ private:
     NcclParam pipeline_para_;
 
     std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm_;
-    int enable_custom_all_reduce_;
+    int                                 enable_custom_all_reduce_;
 
     bool is_qk_buf_float_;
 
     BaseAttentionLayer<T>* self_attention_layer_;
-    FfnLayer<T>* ffn_layer_;
+    FfnLayer<T>*           ffn_layer_;
 
     void allocateBuffer() override;
+    void allocateBuffer(size_t batch_size, size_t seq_len);
     void freeBuffer() override;
-
-    bool isValidBatchSize(size_t batch_size);
-    bool isValidSeqLen(size_t seq_len);
 
     bool isValidLayerParallelId(uint l);
     bool isFirstLayerParallelId(uint l);
     bool isLastLayerParallelId(uint l);
-    int getFirstLayerParallelId();
+    int  getFirstLayerParallelId();
 
     void initialize();
 
 protected:
-    T* decoder_normed_input_;
-    T* self_attn_output_;
-    T* ffn_output_;
-    T* decoder_layer_output_;
+    T* decoder_normed_input_ = nullptr;
+    T* self_attn_output_     = nullptr;
+    T* ffn_output_           = nullptr;
+    T* decoder_layer_output_ = nullptr;
 
 public:
-    GptJContextDecoder(size_t max_batch_size,
-                       size_t max_seq_len,
-                       size_t head_num,
-                       size_t size_per_head,
-                       size_t inter_size,
-                       size_t num_layer,
-                       size_t rotary_embedding_dim,
-                       NcclParam tensor_para,
-                       NcclParam pipeline_para,
-                       cudaStream_t stream,
-                       cublasMMWrapper* cublas_wrapper,
-                       IAllocator* allocator,
-                       bool is_free_buffer_after_forward,
-                       bool is_qk_buf_float,
-                       std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm = nullptr,
-                       int enable_custom_all_reduce_ = 0);
+    GptJContextDecoder(size_t                              max_batch_size,
+                       size_t                              max_seq_len,
+                       size_t                              head_num,
+                       size_t                              size_per_head,
+                       size_t                              inter_size,
+                       size_t                              num_layer,
+                       size_t                              rotary_embedding_dim,
+                       bool                                neox_rotary_style,
+                       float                               layernorm_eps,
+                       NcclParam                           tensor_para,
+                       NcclParam                           pipeline_para,
+                       cudaStream_t                        stream,
+                       cublasMMWrapper*                    cublas_wrapper,
+                       IAllocator*                         allocator,
+                       bool                                is_free_buffer_after_forward,
+                       bool                                is_qk_buf_float,
+                       std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm    = nullptr,
+                       int                                 enable_custom_all_reduce_ = 0);
 
     GptJContextDecoder(GptJContextDecoder<T> const& decoder);
 
     ~GptJContextDecoder();
 
-    void forward(std::vector<Tensor>* output_tensors,
-                 const std::vector<Tensor>* input_tensors,
+    void forward(std::vector<Tensor>*                          output_tensors,
+                 const std::vector<Tensor>*                    input_tensors,
                  const std::vector<GptJDecoderLayerWeight<T>>* decoder_layer_weights);
 
-    void forward(std::unordered_map<std::string, Tensor>* output_tensors,
+    void forward(std::unordered_map<std::string, Tensor>*       output_tensors,
                  const std::unordered_map<std::string, Tensor>* input_tensors,
-                 const std::vector<GptJDecoderLayerWeight<T>>* gpt_decoder_layer_weight);
+                 const std::vector<GptJDecoderLayerWeight<T>>*  gpt_decoder_layer_weight);
 };
 
 }  // namespace fastertransformer

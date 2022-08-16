@@ -172,7 +172,8 @@ def validate_with_random_data(plugin_loader:ViTPluginLoader, model, engine):
 
     diff = abs(torch_output - plugin_output.reshape(torch_output.shape))
     print("torch_output vs plugin_output , avg diff : ", diff.mean(), "max diff : ", diff.max())
-
+    assert diff.mean() < 0.006, "[ERROR] VIT TRT PLUGIN TEST FAIL !"
+    print("[INFO] VIT TRT PLUGIN TEST PASS !")
 
 if __name__ == '__main__':
     args = parse_option()

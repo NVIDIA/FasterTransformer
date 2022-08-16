@@ -18,16 +18,16 @@
 
 namespace fastertransformer {
 
-__global__ void getPaddingOffsetKernel(size_t* valid_word_num,
-                                       int* tmp_mask_offset,
+__global__ void getPaddingOffsetKernel(size_t*    valid_word_num,
+                                       int*       tmp_mask_offset,
                                        const int* sequence_length,
-                                       const int batch_size,
-                                       const int max_seq_len)
+                                       const int  batch_size,
+                                       const int  max_seq_len)
 {
     // do cumulated sum
     int total_seq_len = 0;
-    int cum_offset = 0;
-    int index = 0;
+    int cum_offset    = 0;
+    int index         = 0;
     for (int i = 0; i < batch_size; i++) {
         const int seq_len = sequence_length[i];
         for (int j = 0; j < seq_len; j++) {
@@ -40,12 +40,12 @@ __global__ void getPaddingOffsetKernel(size_t* valid_word_num,
     valid_word_num[0] = (size_t)total_seq_len;
 }
 
-void invokeGetPaddingOffset(size_t* h_token_num,
-                            size_t* d_token_num,
-                            int* tmp_mask_offset,
-                            const int* sequence_lengths,
-                            const int batch_size,
-                            const int max_seq_len,
+void invokeGetPaddingOffset(size_t*      h_token_num,
+                            size_t*      d_token_num,
+                            int*         tmp_mask_offset,
+                            const int*   sequence_lengths,
+                            const int    batch_size,
+                            const int    max_seq_len,
                             cudaStream_t stream)
 {
     getPaddingOffsetKernel<<<1, 1, 0, stream>>>(
@@ -83,16 +83,23 @@ void invokeBuildEncoderAttentionMask(
     buildEncoderAttentionMaskKernel<<<batch_size, 256, 0, stream>>>(attention_mask, sequence_lengths, max_seq_len);
 }
 
-template void invokeBuildEncoderAttentionMask(float* attention_mask,
-                                              const int* sequence_lengths,
-                                              const int batch_size,
-                                              const int max_seq_len,
+template void invokeBuildEncoderAttentionMask(float*       attention_mask,
+                                              const int*   sequence_lengths,
+                                              const int    batch_size,
+                                              const int    max_seq_len,
                                               cudaStream_t stream);
-template void invokeBuildEncoderAttentionMask(half* attention_mask,
-                                              const int* sequence_lengths,
-                                              const int batch_size,
-                                              const int max_seq_len,
+template void invokeBuildEncoderAttentionMask(half*        attention_mask,
+                                              const int*   sequence_lengths,
+                                              const int    batch_size,
+                                              const int    max_seq_len,
                                               cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeBuildEncoderAttentionMask(__nv_bfloat16* attention_mask,
+                                              const int*     sequence_lengths,
+                                              const int      batch_size,
+                                              const int      max_seq_len,
+                                              cudaStream_t   stream);
+#endif
 
 __global__ void getTrtPaddingOffsetKernel(int* trt_mha_padding_offset, const int* sequence_length, const int batch_size)
 {
@@ -113,19 +120,19 @@ __global__ void getTrtPaddingOffsetKernel(int* trt_mha_padding_offset, const int
     }
 }
 
-void invokeGetTrtPaddingOffset(int* trt_mha_padding_offset,
-                               const int* sequence_length,
-                               const int batch_size,
+void invokeGetTrtPaddingOffset(int*         trt_mha_padding_offset,
+                               const int*   sequence_length,
+                               const int    batch_size,
                                cudaStream_t stream)
 {
     getTrtPaddingOffsetKernel<<<1, 256, sizeof(int) * (batch_size + 1), stream>>>(
         trt_mha_padding_offset, sequence_length, batch_size);
 }
 
-__global__ void getTrtPaddingOffsetKernel(int* trt_mha_padding_offset,
+__global__ void getTrtPaddingOffsetKernel(int*       trt_mha_padding_offset,
                                           const int* sequence_length,
-                                          const int request_batch_size,
-                                          const int request_seq_len)
+                                          const int  request_batch_size,
+                                          const int  request_seq_len)
 {
     // use for get tensorrt fused mha padding offset
     // when we keep the padding
@@ -145,10 +152,10 @@ __global__ void getTrtPaddingOffsetKernel(int* trt_mha_padding_offset,
     }
 }
 
-void invokeGetTrtPaddingOffset(int* trt_mha_padding_offset,
-                               const int* sequence_length,
-                               const int request_batch_size,
-                               const int request_seq_len,
+void invokeGetTrtPaddingOffset(int*         trt_mha_padding_offset,
+                               const int*   sequence_length,
+                               const int    request_batch_size,
+                               const int    request_seq_len,
                                cudaStream_t stream)
 {
     getTrtPaddingOffsetKernel<<<1, 256, sizeof(int) * (2 * request_batch_size + 1), stream>>>(
@@ -158,8 +165,8 @@ void invokeGetTrtPaddingOffset(int* trt_mha_padding_offset,
 template<typename T>
 __global__ void rebuild_sequence_length_padding(const T* src, T* dst, const int* padding_offset, const int n)
 {
-    const int tid = threadIdx.x;
-    const int bid = blockIdx.x;
+    const int tid        = threadIdx.x;
+    const int bid        = blockIdx.x;
     const int dst_seq_id = bid + padding_offset[bid];
     const int src_seq_id = bid;
 
@@ -180,24 +187,32 @@ void invokeRebuildPadding(
 template<typename T>
 void invokeRebuildPadding(
     T* dst, const T* src, const int* padding_offset, const int token_num, const int hidden_dim, cudaStream_t stream);
-template void invokeRebuildPadding(float* dst,
+template void invokeRebuildPadding(float*       dst,
                                    const float* src,
-                                   const int* padding_offset,
-                                   const int token_num,
-                                   const int hidden_dim,
+                                   const int*   padding_offset,
+                                   const int    token_num,
+                                   const int    hidden_dim,
                                    cudaStream_t stream);
-template void invokeRebuildPadding(half* dst,
-                                   const half* src,
-                                   const int* padding_offset,
-                                   const int token_num,
-                                   const int hidden_dim,
+template void invokeRebuildPadding(half*        dst,
+                                   const half*  src,
+                                   const int*   padding_offset,
+                                   const int    token_num,
+                                   const int    hidden_dim,
                                    cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeRebuildPadding(__nv_bfloat16*       dst,
+                                   const __nv_bfloat16* src,
+                                   const int*           padding_offset,
+                                   const int            token_num,
+                                   const int            hidden_dim,
+                                   cudaStream_t         stream);
+#endif
 
 template<typename T>
 __global__ void remove_padding(T* tgt, const T* src, const int* padding_offset, const int n)
 {
-    const int tid = threadIdx.x;
-    const int bid = blockIdx.x;
+    const int tid        = threadIdx.x;
+    const int bid        = blockIdx.x;
     const int src_seq_id = bid + padding_offset[bid];
     const int tgt_seq_id = bid;
 
@@ -213,28 +228,37 @@ void invokeRemovePadding(
     remove_padding<<<token_num, 256, 0, stream>>>(dst, src, padding_offset, hidden_dim);
 }
 
-template void invokeRemovePadding(float* dst,
+template void invokeRemovePadding(float*       dst,
                                   const float* src,
-                                  const int* padding_offset,
-                                  const int token_num,
-                                  const int hidden_dim,
+                                  const int*   padding_offset,
+                                  const int    token_num,
+                                  const int    hidden_dim,
                                   cudaStream_t stream);
 
-template void invokeRemovePadding(half* dst,
-                                  const half* src,
-                                  const int* padding_offset,
-                                  const int token_num,
-                                  const int hidden_dim,
+template void invokeRemovePadding(half*        dst,
+                                  const half*  src,
+                                  const int*   padding_offset,
+                                  const int    token_num,
+                                  const int    hidden_dim,
                                   cudaStream_t stream);
+
+#ifdef ENABLE_BF16
+template void invokeRemovePadding(__nv_bfloat16*       dst,
+                                  const __nv_bfloat16* src,
+                                  const int*           padding_offset,
+                                  const int            token_num,
+                                  const int            hidden_dim,
+                                  cudaStream_t         stream);
+#endif
 
 template<typename T>
-__global__ void buildRelativeAttentionBias(T* relative_attention_bias,
-                                           const T* relative_attention_bias_table,
-                                           const int head_num,
-                                           const int seq_len,
-                                           const int num_bucket,
+__global__ void buildRelativeAttentionBias(T*         relative_attention_bias,
+                                           const T*   relative_attention_bias_table,
+                                           const int  head_num,
+                                           const int  seq_len,
+                                           const int  num_bucket,
                                            const bool is_bidirectional,
-                                           const int max_distance)
+                                           const int  max_distance)
 {
 
     const int head_id = blockIdx.x;
@@ -245,7 +269,7 @@ __global__ void buildRelativeAttentionBias(T* relative_attention_bias,
         int relative_position = col_id - row_id;
 
         int relative_buckets = 0;
-        int tmp_num_bucket = num_bucket;
+        int tmp_num_bucket   = num_bucket;
         if (is_bidirectional) {
             tmp_num_bucket /= 2;
             if (relative_position > 0) {
@@ -259,8 +283,8 @@ __global__ void buildRelativeAttentionBias(T* relative_attention_bias,
             relative_position = abs(relative_position);
         }
 
-        int max_exact = tmp_num_bucket / 2;
-        bool is_small = relative_position < max_exact;
+        int  max_exact = tmp_num_bucket / 2;
+        bool is_small  = relative_position < max_exact;
 
         int relative_position_if_large =
             max_exact
@@ -277,15 +301,15 @@ __global__ void buildRelativeAttentionBias(T* relative_attention_bias,
 }
 
 template<typename T>
-void invokeBuildRelativeAttentionBias(T* relative_attention_bias,
-                                      const T* relative_attention_bias_table,
-                                      const int head_num,
-                                      const int seq_len,
-                                      const int num_bucket,
-                                      const bool is_bidirectional,
-                                      const int max_distance,
+void invokeBuildRelativeAttentionBias(T*                          relative_attention_bias,
+                                      const T*                    relative_attention_bias_table,
+                                      const int                   head_num,
+                                      const int                   seq_len,
+                                      const int                   num_bucket,
+                                      const bool                  is_bidirectional,
+                                      const int                   max_distance,
                                       const PositionEmbeddingType position_embedding_type,
-                                      cudaStream_t stream)
+                                      cudaStream_t                stream)
 {
     if (position_embedding_type == PositionEmbeddingType::absolute) {
         return;
@@ -301,24 +325,36 @@ void invokeBuildRelativeAttentionBias(T* relative_attention_bias,
                                                            max_distance);
 }
 
-template void invokeBuildRelativeAttentionBias(float* relative_attention_bias,
-                                               const float* relative_attention_bias_table,
-                                               const int head_num,
-                                               const int seq_len,
-                                               const int num_bucket,
-                                               const bool is_bidirectional,
-                                               const int max_distance,
+template void invokeBuildRelativeAttentionBias(float*                      relative_attention_bias,
+                                               const float*                relative_attention_bias_table,
+                                               const int                   head_num,
+                                               const int                   seq_len,
+                                               const int                   num_bucket,
+                                               const bool                  is_bidirectional,
+                                               const int                   max_distance,
                                                const PositionEmbeddingType position_embedding_type,
-                                               cudaStream_t stream);
+                                               cudaStream_t                stream);
 
-template void invokeBuildRelativeAttentionBias(half* relative_attention_bias,
-                                               const half* relative_attention_bias_table,
-                                               const int head_num,
-                                               const int seq_len,
-                                               const int num_bucket,
-                                               const bool is_bidirectional,
-                                               const int max_distance,
+template void invokeBuildRelativeAttentionBias(half*                       relative_attention_bias,
+                                               const half*                 relative_attention_bias_table,
+                                               const int                   head_num,
+                                               const int                   seq_len,
+                                               const int                   num_bucket,
+                                               const bool                  is_bidirectional,
+                                               const int                   max_distance,
                                                const PositionEmbeddingType position_embedding_type,
-                                               cudaStream_t stream);
+                                               cudaStream_t                stream);
+
+#ifdef ENABLE_BF16
+template void invokeBuildRelativeAttentionBias(__nv_bfloat16*              relative_attention_bias,
+                                               const __nv_bfloat16*        relative_attention_bias_table,
+                                               const int                   head_num,
+                                               const int                   seq_len,
+                                               const int                   num_bucket,
+                                               const bool                  is_bidirectional,
+                                               const int                   max_distance,
+                                               const PositionEmbeddingType position_embedding_type,
+                                               cudaStream_t                stream);
+#endif
 
 }  // namespace fastertransformer

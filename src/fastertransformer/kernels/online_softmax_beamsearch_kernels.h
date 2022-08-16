@@ -18,19 +18,21 @@
 namespace fastertransformer {
 
 template<typename T>
-void invokeTopkSoftMax(const T* log_probs,
-                       const T* bias,
-                       const bool* finished,
-                       float* cum_log_probs,
-                       float* output_log_probs,
-                       int* ids,
-                       void* tmp_storage,
-                       const int temp_storage_size,
-                       const int batch_size,
-                       const int beam_width,
-                       const int vocab_size,
-                       const int* end_ids,
-                       const float diversity_rate,
+void invokeTopkSoftMax(const T*     log_probs,
+                       const T*     bias,
+                       const bool*  finished,
+                       const int*   sequence_lengths,
+                       float*       cum_log_probs,
+                       float*       output_log_probs,
+                       int*         ids,
+                       void*        tmp_storage,
+                       const int    temp_storage_size,
+                       const int    batch_size,
+                       const int    beam_width,
+                       const int    vocab_size,
+                       const int*   end_ids,
+                       const float  diversity_rate,
+                       const float  length_penalty,
                        cudaStream_t stream);
 
 }  // namespace fastertransformer

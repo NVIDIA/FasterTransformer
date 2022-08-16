@@ -37,24 +37,24 @@ template<typename T>
 class WindowAttention: public BaseAttentionLayer<T> {
 
 private:
-    int max_batch_ = 1;
-    int dim_ = 96;
-    int num_head_ = 2;
-    int window_size_ = 7;
-    int head_dim_ = 48;
-    int input_resolution_ = 56;
-    int window_len_ = 49;
-    int embed_dim_ = 96;
-    int window_num_ = 64;
-    int size_per_head_;
-    bool qkv_bias_ = true;
+    int   max_batch_        = 1;
+    int   dim_              = 96;
+    int   num_head_         = 2;
+    int   window_size_      = 7;
+    int   head_dim_         = 48;
+    int   input_resolution_ = 56;
+    int   window_len_       = 49;
+    int   embed_dim_        = 96;
+    int   window_num_       = 64;
+    int   size_per_head_;
+    bool  qkv_bias_ = true;
     float qk_scale_ = 1.0f;
-    bool use_trt_ = false;
+    bool  use_trt_  = false;
 
     void allocateBuffer() override;
     void freeBuffer() override;
 
-    int dispatcher_fp16_num_head_ = -1;
+    int                        dispatcher_fp16_num_head_ = -1;
     std::unique_ptr<MHARunner> dispatcher_fp16_;
 
     using BaseAttentionLayer<T>::stream_;
@@ -76,20 +76,20 @@ public:
     static size_t
     getBufSize(const int batch, const int num_head, const int window_num, const int window_len, const int dim);
 
-    WindowAttention(int max_batch,
-                    int window_size,
-                    cudaStream_t stream,
+    WindowAttention(int              max_batch,
+                    int              window_size,
+                    cudaStream_t     stream,
                     cublasMMWrapper* cublas_wrapper,
-                    IAllocator* allocator,
-                    bool is_free_buffer_after_forward = false,
-                    bool qkv_bias = true,
-                    float qk_scale = 1.0f);
+                    IAllocator*      allocator,
+                    bool             is_free_buffer_after_forward = false,
+                    bool             qkv_bias                     = true,
+                    float            qk_scale                     = 1.0f);
 
     ~WindowAttention();
 
-    void forward(std::vector<fastertransformer::Tensor>* output_tensors,
+    void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                  const std::vector<fastertransformer::Tensor>* input_tensors,
-                 const AttentionWeight<T>* attention_weights);
+                 const AttentionWeight<T>*                     attention_weights);
 
 };  // class WindowAttention
 }  // namespace fastertransformer

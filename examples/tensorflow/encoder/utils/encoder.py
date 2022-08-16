@@ -215,7 +215,7 @@ def ft_encoder_opennmt(inputs,
         encoder_vars_dict: A dict of tf.Tensor or numpy array.
                             The variables for encoder. They can be either some tensor or some numpy array.
                             The key is the name of the tensor, like 'layer_0/attention/self/query/kernel:0'.
-                            Teh value is the corresponding tensor or numpy array
+                            The value is the corresponding tensor or numpy array
         sequence_length: A tf.Tensor or numpy array with shape [batch_size].
                         The sequence length of the sentences
     Outputs:

@@ -91,25 +91,32 @@ def translate(args_dict):
     infer_iterations = args_dict['iterations']
     infer_duration = args_dict['duration']
     seed = args_dict['seed']
+    skip_gemm = args_dict['skip_gemm']
     torch.manual_seed(seed)
 
     ## huggingface without bias and use relative position embedding
     ## relative position embedding -> 0, absolute position embedding -> 1
-    t5_with_bias = 0
+    t5_with_bias = False
+    use_gated_activation = False
     position_embedding_type = 0
+    weight_data_type = np.float32
     ## only huggingface model path supported
     model_path = args_dict['model_path'] if args_dict['model_path'] != None else args_dict['model']
     ckpt_path = args_dict['ckpt_path']
     model_type = args_dict['model_type']
     ## read checkpoint config if exists
     ckpt_config = configparser.ConfigParser()
+    activation_type = "relu"
     if (model_type == "Megatron"):
         ckpt_config_path = os.path.join(ckpt_path, 'config.ini')
         if os.path.isfile(ckpt_config_path):
             ckpt_config.read(ckpt_config_path)
             ## update structure config
-            t5_with_bias = ckpt_config.getint('structure', 't5_with_bias')
-            position_embedding_type = ckpt_config.getint('structure', 'position_embedding_type')
+            t5_with_bias = ckpt_config.getboolean('structure', 't5_with_bias')
+            position_embedding_type = 0 if ckpt_config.get('structure', 'position_embedding_type') == 'relative' else 1
+            use_gated_activation = ckpt_config.getboolean('structure', 'use_gated_activation')
+            weight_data_type = {"fp16": np.float16, "fp32": np.float32}[ckpt_config.get("encoder", "weight_data_type")]
+            activation_type = "gated-gelu" if use_gated_activation else "gelu" # change to gelu, which is default setting of Megatron T5
         else:
             raise Exception("config file does exist with the ckpt !")
 
@@ -178,9 +185,9 @@ def translate(args_dict):
     if time_args.find("1") != -1:
         translation_result_list.append(TranslationResult("ft-beamsearch-warmup", "FT"))
         translation_result_list.append(TranslationResult("ft-beamsearch", "FT"))
-        if rank == 0:
+        if rank == 0 and not skip_gemm:
             is_fp16 = 1 if args_dict['data_type'] == 'fp16' else 0
-            cmd = f"./bin/t5_gemm {batch_size // pipeline_para_size} {beam_size} {128} " \
+            cmd = f"./bin/t5_gemm {math.ceil(batch_size / pipeline_para_size)} {beam_size} {128} " \
                 f"{encoder_config.d_model} {encoder_config.num_heads} {encoder_config.d_kv} {encoder_config.d_ff} " \
                 f"{decoder_config.d_model} {decoder_config.num_heads} {decoder_config.d_kv} {decoder_config.d_ff} " \
                 f"{decoder_config.vocab_size} {is_fp16} {tensor_para_size} 1 > .tmp_gemm.log"
@@ -192,9 +199,9 @@ def translate(args_dict):
     if time_args.find("3") != -1:
         translation_result_list.append(TranslationResult("ft-sampling-warmup", "FT"))
         translation_result_list.append(TranslationResult("ft-sampling", "FT"))
-        if rank == 0:
+        if rank == 0 and not skip_gemm:
             is_fp16 = 1 if args_dict['data_type'] == 'fp16' else 0
-            cmd = f"./bin/t5_gemm {batch_size // pipeline_para_size} {1} {128} " \
+            cmd = f"./bin/t5_gemm {math.ceil(batch_size / pipeline_para_size)} {1} {128} " \
                 f"{encoder_config.d_model} {encoder_config.num_heads} {encoder_config.d_kv} {encoder_config.d_ff} " \
                 f"{decoder_config.d_model} {decoder_config.num_heads} {decoder_config.d_kv} {decoder_config.d_ff} " \
                 f"{decoder_config.vocab_size} {is_fp16} {tensor_para_size} 1 1 > .tmp_gemm.log"
@@ -202,8 +209,24 @@ def translate(args_dict):
             os.system(cmd)
 
     if time_args.find("1") != -1 or time_args.find("3") != -1:
-        ft_encoder_weight = FTT5EncoderWeight(encoder_config, tensor_para_size, pipeline_para_size, t5_with_bias, position_embedding_type)
-        ft_decoding_weight = FTT5DecodingWeight(decoder_config, tensor_para_size, pipeline_para_size, t5_with_bias, position_embedding_type)
+        ft_encoder_weight = FTT5EncoderWeight(
+            encoder_config,
+            tensor_para_size,
+            pipeline_para_size,
+            t5_with_bias=t5_with_bias,
+            use_gated_activation=use_gated_activation,
+            position_embedding_type=position_embedding_type,
+            weight_data_type=weight_data_type
+        )
+        ft_decoding_weight = FTT5DecodingWeight(
+            decoder_config,
+            tensor_para_size,
+            pipeline_para_size,
+            t5_with_bias=t5_with_bias,
+            use_gated_activation=use_gated_activation,
+            position_embedding_type=position_embedding_type,
+            weight_data_type=weight_data_type,
+        )
 
         if args_dict["ckpt_path"] is not None:
             ft_encoder_weight.load_from_bin(args_dict["ckpt_path"])
@@ -223,7 +246,8 @@ def translate(args_dict):
                                 encoder_config.d_kv, encoder_config.d_ff,
                                 encoder_config.d_model, remove_padding, encoder_config.num_layers,
                                 encoder_config.relative_attention_num_buckets,
-                                128, False, q_scaling, tensor_para_size, pipeline_para_size, t5_with_bias, position_embedding_type)
+                                128, False, q_scaling, tensor_para_size, pipeline_para_size, t5_with_bias,
+                                position_embedding_type, activation_type)
         ft_decoding = FTT5Decoding(ft_decoding_weight.w, lib_path,
                                 decoder_config.num_heads, decoder_config.d_kv,
                                 decoder_config.d_ff, encoder_config.d_model,
@@ -236,7 +260,8 @@ def translate(args_dict):
                                 q_scaling,
                                 decoder_config.relative_attention_num_buckets, max_distance=128,
                                 tensor_para_size=tensor_para_size, pipeline_para_size=pipeline_para_size,
-                                t5_with_bias=t5_with_bias, position_embedding_type = position_embedding_type)
+                                t5_with_bias=t5_with_bias, activation_type=activation_type,
+                                position_embedding_type = position_embedding_type)
 
         ft_t5 = FTT5(ft_encoder, ft_decoding)
 
@@ -275,6 +300,7 @@ def translate(args_dict):
                 if translation_result_list[i].name.find("sampling") != -1:
                     tmp_beam_size = 1
                 ft_decoding_outputs, ft_decoding_seq_lens = ft_t5(input_token,
+                                                                  None,
                                                                   tmp_beam_size,
                                                                   output_seq_len,
                                                                   topk,
@@ -359,6 +385,8 @@ if __name__ == "__main__":
                         help='Minimal duration in seconds for inference iterations for each implementation.')
     parser.add_argument('-seed', '--seed', type=int, default=0, metavar='NUMBER',
                         help='Random seed used to generate random input values.')
+    parser.add_argument('-skip_gemm', '--skip_gemm', action="store_true",
+                        help='Skip the gemm autotuning by not calling the ./bin/t5_gemm binary.')
     args = parser.parse_args()
 
     translate(vars(args))

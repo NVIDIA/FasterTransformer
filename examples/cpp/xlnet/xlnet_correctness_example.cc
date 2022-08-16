@@ -16,6 +16,7 @@
 
 #include "cnpy.h"
 #include "src/fastertransformer/models/xlnet/Xlnet.h"
+#include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
 using namespace fastertransformer;
 using namespace std;
 #include <iomanip>
@@ -30,7 +31,7 @@ int xlnetCorrectnessExample(size_t batch_size,
                             string input_name,
                             string model_name,
                             string check_name,
-                            bool allow_gemm_test = false);
+                            bool   allow_gemm_test = false);
 
 /*************** NPZ related operations *****************/
 template<typename T>
@@ -68,6 +69,14 @@ float castToFloat(__half input)
     return output;
 }
 
+#ifdef ENABLE_BF16
+template<>
+float castToFloat(__nv_bfloat16 input)
+{
+    return __bfloat162float(input);
+}
+#endif
+
 template<typename T>
 void setByNpz(cnpy::npz_t& my_npz, std::string name, T* d_ptr, int size, int offset = 0)
 {
@@ -86,8 +95,8 @@ void setByNpz<__half>(cnpy::npz_t& my_npz, std::string name, __half* d_ptr, int 
     cnpy::NpyArray arr = my_npz[name];
 
     // load it into a new array
-    float* loaded_data = arr.data<float>();
-    __half* half_data = (__half*)malloc(sizeof(__half) * size);
+    float*  loaded_data = arr.data<float>();
+    __half* half_data   = (__half*)malloc(sizeof(__half) * size);
 
     loaded_data = loaded_data + offset;
     for (int i = 0; i < size; i++) {
@@ -97,6 +106,26 @@ void setByNpz<__half>(cnpy::npz_t& my_npz, std::string name, __half* d_ptr, int 
     check_cuda_error(cudaMemcpy(d_ptr, half_data, sizeof(__half) * size, cudaMemcpyHostToDevice));
     free(half_data);
 }
+#ifdef ENABLE_BF16
+template<>
+void setByNpz<__nv_bfloat16>(cnpy::npz_t& my_npz, std::string name, __nv_bfloat16* d_ptr, int size, int offset)
+{
+    // check that the loaded myVar1 matches myVar1
+    cnpy::NpyArray arr = my_npz[name];
+
+    // load it into a new array
+    float*         loaded_data = arr.data<float>();
+    __nv_bfloat16* half_data   = (__nv_bfloat16*)malloc(sizeof(__nv_bfloat16) * size);
+
+    loaded_data = loaded_data + offset;
+    for (int i = 0; i < size; i++) {
+        half_data[i] = __float2bfloat16_rn(loaded_data[i]);
+    }
+
+    check_cuda_error(cudaMemcpy(d_ptr, half_data, sizeof(__nv_bfloat16) * size, cudaMemcpyHostToDevice));
+    free(half_data);
+}
+#endif
 
 std::string paraName(int i_layer, std::string sub_para)
 {
@@ -116,19 +145,19 @@ template<typename T>
 void checkByNpz(cnpy::npz_t& data_npz, cudaStream_t stream, std::string name, T* d_ptr, int size)
 {
     std::cout << name << " " << size << std::endl;
-    bool ifCorrect = 1;
-    cnpy::NpyArray arr = data_npz[name];
-    T* loaded_data = arr.data<T>();
+    bool           ifCorrect   = 1;
+    cnpy::NpyArray arr         = data_npz[name];
+    float*         loaded_data = arr.data<float>();
 
     T* h_ptr = (T*)malloc(size * sizeof(T));
     check_cuda_error(cudaMemcpyAsync(h_ptr, d_ptr, sizeof(T) * size, cudaMemcpyDeviceToHost, stream));
 
     float err = 0;
     float max = castToFloat(h_ptr[0]);
-    int i = 0;
+    int   i   = 0;
 
     for (i = 0; i < size; i++) {
-        float sub = abs(castToFloat(h_ptr[i]) - castToFloat(loaded_data[i]));
+        float sub = abs(castToFloat(h_ptr[i]) - loaded_data[i]);
         if (sub > err) {
             err = sub;
         }
@@ -139,7 +168,7 @@ void checkByNpz(cnpy::npz_t& data_npz, cudaStream_t stream, std::string name, T*
 
     std::cout << name << " Max err :" << err << " Max value :" << max << " Ralative error rate: " << err / max
               << std::endl;
-
+    assert(err < 0.004f || err / max < 0.001f);
     free(h_ptr);
 }
 
@@ -167,28 +196,28 @@ int main(int argc, char** argv)
     if (argc != 11) {
         printf("[ERROR] ./bin/xlnet_correctness_example batch_size num_layers seq_len "
                "head_num size_per_head num_token input_name model_name check_name "
-               "is_fp16\n");
+               "data_type 0: fp32, 1: fp16, 2: bf16\n");
         printf("e.g., ./bin/xlnet_correctness_example 8 12 128 12 64 32000 "
                "./data/data.npz ./data/model.npz ./data/output.npz 0\n");
         return 0;
     }
     bool allow_gemm_test = false;
 
-    int batch_size = atoi(argv[1]);
-    int num_layers = atoi(argv[2]);
-    int seq_len = atoi(argv[3]);
-    int head_num = atoi(argv[4]);
-    int size_per_head = atoi(argv[5]);
-    int num_token = atoi(argv[6]);
-    input_name = argv[7];
-    model_name = argv[8];
-    check_name = argv[9];
-    bool is_fp16 = atoi(argv[10]);
+    int batch_size           = atoi(argv[1]);
+    int num_layers           = atoi(argv[2]);
+    int seq_len              = atoi(argv[3]);
+    int head_num             = atoi(argv[4]);
+    int size_per_head        = atoi(argv[5]);
+    int num_token            = atoi(argv[6]);
+    input_name               = argv[7];
+    model_name               = argv[8];
+    check_name               = argv[9];
+    FtCudaDataType data_type = static_cast<FtCudaDataType>(atoi(argv[10]));  // 0: fp32, 1: fp16, 2: bf16
 
     cout << " " << batch_size << " " << num_layers << " " << seq_len << " " << head_num << " " << size_per_head << " "
-         << num_token << " " << input_name << " " << model_name << " " << check_name << " " << is_fp16 << endl;
+         << num_token << " " << input_name << " " << model_name << " " << check_name << " " << data_type << endl;
 
-    if (is_fp16 == 0) {
+    if (data_type == FP32) {
         return xlnetCorrectnessExample<float>(batch_size,
                                               num_layers,
                                               seq_len,
@@ -200,7 +229,7 @@ int main(int argc, char** argv)
                                               check_name,
                                               allow_gemm_test);
     }
-    else if (is_fp16 == 1) {
+    else if (data_type == FP16) {
         return xlnetCorrectnessExample<half>(batch_size,
                                              num_layers,
                                              seq_len,
@@ -212,9 +241,22 @@ int main(int argc, char** argv)
                                              check_name,
                                              allow_gemm_test);
     }
+#ifdef ENABLE_BF16
+    else if (data_type == BF16) {
+        return xlnetCorrectnessExample<__nv_bfloat16>(batch_size,
+                                                      num_layers,
+                                                      seq_len,
+                                                      head_num,
+                                                      size_per_head,
+                                                      num_token,
+                                                      input_name,
+                                                      model_name,
+                                                      check_name,
+                                                      allow_gemm_test);
+    }
+#endif
     else {
-        throw std::runtime_error(std::string("[FT][ERROR] is_fp16 should be 0 (use float)"
-                                             "or 1 (use half). \n "));
+        throw std::runtime_error(std::string("[FT][ERROR] data_type should be fp32, fp16, or bf16 \n "));
     }
 }
 
@@ -229,15 +271,15 @@ int xlnetCorrectnessExample(size_t batch_size,
                             string input_name,
                             string model_name,
                             string check_name,
-                            bool allow_gemm_test)
+                            bool   allow_gemm_test)
 {
     printf("[INFO] Device: %s \n", getDeviceName().c_str());
 
     const size_t hidden_units = head_num * size_per_head;
-    const size_t inter_size = 4 * hidden_units;
+    const size_t inter_size   = 4 * hidden_units;
 
-    cudaStream_t stream;
-    cublasHandle_t cublas_handle;
+    cudaStream_t     stream;
+    cublasHandle_t   cublas_handle;
     cublasLtHandle_t cublaslt_handle;
     cudaStreamCreate(&stream);
     cublasCreate(&cublas_handle);
@@ -256,35 +298,40 @@ int xlnetCorrectnessExample(size_t batch_size,
     if (std::is_same<T, half>::value) {
         cublas_wrapper.setFP16GemmConfig();
     }
+#ifdef ENABLE_BF16
+    else if (std::is_same<T, __nv_bfloat16>::value) {
+        cublas_wrapper.setBF16GemmConfig();
+    }
+#endif
     else if (std::is_same<T, float>::value) {
         cublas_wrapper.setFP32GemmConfig();
     }
 
     // Set layer weight
     std::vector<XlnetLayerWeight<T>> xlnet_layer_weights(num_layers, XlnetLayerWeight<T>(hidden_units, inter_size));
-    const int weight_nums = 17;
-    string weight_name[17] = {"/rel_attn/q/kernel:0",
-                              "/rel_attn/k/kernel:0",
-                              "/rel_attn/v/kernel:0",
-                              "/rel_attn/r/kernel:0",
-                              "model/transformer/r_w_bias:0",
-                              "model/transformer/r_r_bias:0",
-                              "model/transformer/r_s_bias:0",
-                              "model/transformer/seg_embed:0",
-                              "/rel_attn/o/kernel:0",
-                              "/rel_attn/LayerNorm/gamma:0",
-                              "/rel_attn/LayerNorm/beta:0",
-                              "/ff/layer_1/kernel:0",
-                              "/ff/layer_1/bias:0",
-                              "/ff/layer_2/kernel:0",
-                              "/ff/layer_2/bias:0",
-                              "/ff/LayerNorm/gamma:0",
-                              "/ff/LayerNorm/beta:0"};
+    const int                        weight_nums     = 17;
+    string                           weight_name[17] = {"/rel_attn/q/kernel:0",
+                                                        "/rel_attn/k/kernel:0",
+                                                        "/rel_attn/v/kernel:0",
+                                                        "/rel_attn/r/kernel:0",
+                                                        "model/transformer/r_w_bias:0",
+                                                        "model/transformer/r_r_bias:0",
+                                                        "model/transformer/r_s_bias:0",
+                                                        "model/transformer/seg_embed:0",
+                                                        "/rel_attn/o/kernel:0",
+                                                        "/rel_attn/LayerNorm/gamma:0",
+                                                        "/rel_attn/LayerNorm/beta:0",
+                                                        "/ff/layer_1/kernel:0",
+                                                        "/ff/layer_1/bias:0",
+                                                        "/ff/layer_2/kernel:0",
+                                                        "/ff/layer_2/bias:0",
+                                                        "/ff/LayerNorm/gamma:0",
+                                                        "/ff/LayerNorm/beta:0"};
 
     cnpy::npz_t model_npz = cnpy::npz_load(model_name);
 
     for (int i = 0; i < num_layers; i++) {
-        T** weight_ptrs = xlnet_layer_weights[i].getWeightPtrs();
+        T**  weight_ptrs  = xlnet_layer_weights[i].getWeightPtrs();
         int* weight_sizes = xlnet_layer_weights[i].getWeightSizes();
         for (int j = 0; j < weight_nums; j++) {
             string str;

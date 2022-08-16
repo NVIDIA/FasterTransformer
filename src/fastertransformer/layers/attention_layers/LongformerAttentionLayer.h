@@ -30,11 +30,11 @@ private:
     size_t max_global_token_num_;
     size_t max_batch_size_;
     size_t max_seq_len_;
-    float attn_scaler_;
+    float  attn_scaler_;
 
-    // interal buffers
+    // internal buffers
     void* internal_vars_device_;
-    T* attn_buffer_;
+    T*    attn_buffer_;
 
     cudaStream_t memcpy_stream_;
 
@@ -42,19 +42,19 @@ private:
     void freeBuffer() override;
 
 public:
-    LongformerAttentionLayer(size_t head_num,
-                             size_t size_per_head,
-                             size_t local_attn_window_size,
-                             size_t max_global_token_num,
-                             size_t max_batch_size,
-                             size_t max_seq_len,
-                             float attn_scaler,
-                             cudaStream_t stream,
+    LongformerAttentionLayer(size_t           head_num,
+                             size_t           size_per_head,
+                             size_t           local_attn_window_size,
+                             size_t           max_global_token_num,
+                             size_t           max_batch_size,
+                             size_t           max_seq_len,
+                             float            attn_scaler,
+                             cudaStream_t     stream,
                              cublasMMWrapper* cublas_wrapper,
-                             IAllocator* allocator,
-                             bool is_free_buffer_after_forward = false);
+                             IAllocator*      allocator,
+                             bool             is_free_buffer_after_forward = false);
     ~LongformerAttentionLayer();
-    void forward(std::vector<fastertransformer::Tensor>* output_tensors,
+    void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                  const std::vector<fastertransformer::Tensor>* input_tensors);
 };
 

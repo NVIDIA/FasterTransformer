@@ -23,6 +23,7 @@ namespace fastertransformer {
 template<typename T>
 struct FfnWeight {
     DenseWeight<T> intermediate_weight;
+    DenseWeight<T> intermediate_weight2;  // for gated activation
     DenseWeight<T> output_weight;
 };
 

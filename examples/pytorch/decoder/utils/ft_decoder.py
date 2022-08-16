@@ -112,6 +112,10 @@ class FtDecoderWeights(object):
         for i in range(len(self.w)):
             self.w[i] = self.w[i].half()
 
+    def to_bfloat16(self):
+        for i in range(len(self.w)):
+            self.w[i] = self.w[i].bfloat16()
+
 class FTDecoder(nn.Module):
     def __init__(self, head_num, head_size, mem_hidden_dim, layer_num, weights, args):
         super().__init__()

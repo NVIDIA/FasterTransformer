@@ -28,23 +28,23 @@ namespace torch_ext {
 class IFBertINT8 {
 public:
     virtual ~IFBertINT8() {}
-    virtual void forward(int batch_size,
-                         int seq_len,
+    virtual void forward(int         batch_size,
+                         int         seq_len,
                          th::Tensor& input,
                          th::Tensor& sequence_lengths,
                          th::Tensor& output,
-                         bool removing_padding) = 0;
+                         bool        removing_padding) = 0;
 };
 
 template<typename T>
 class FTBertINT8: public IFBertINT8 {
 public:
-    FTBertINT8(int head_num,
-               int head_size,
-               int layer_num,
-               const float q_scaling,
-               int int8_mode,
-               bool sparse,
+    FTBertINT8(int                            head_num,
+               int                            head_size,
+               int                            layer_num,
+               const float                    q_scaling,
+               int                            int8_mode,
+               bool                           sparse,
                const std::vector<th::Tensor>& w):
         _head_num(head_num),
         _head_size(head_size),
@@ -74,8 +74,8 @@ public:
         }
 #endif
         std::string sp_config_fname = sparse ? "spigemm_config.in" : "";
-        cublas_algo_map_ = new ft::cublasAlgoMap("igemm_config.in", sp_config_fname);
-        cublas_wrapper_mutex_ = new std::mutex();
+        cublas_algo_map_            = new ft::cublasAlgoMap("igemm_config.in", sp_config_fname);
+        cublas_wrapper_mutex_       = new std::mutex();
         bert_layer_weights.clear();
         bert_layer_weights.resize(_layer_num);
 
@@ -94,15 +94,15 @@ public:
             bert_layer_weights[i].attention_weights.attention_output_weight.bias =
                 get_ptr<T>(_weights[7]) + hidden_dim * i;
             bert_layer_weights[i].attn_layernorm_weights.gamma = get_ptr<T>(_weights[8]) + hidden_dim * i;
-            bert_layer_weights[i].attn_layernorm_weights.beta = get_ptr<T>(_weights[9]) + hidden_dim * i;
+            bert_layer_weights[i].attn_layernorm_weights.beta  = get_ptr<T>(_weights[9]) + hidden_dim * i;
             bert_layer_weights[i].ffn_weights.intermediate_weight.kernel =
                 get_ptr<T>(_weights[10]) + hidden_dim * hidden_dim * 4 * i;
             bert_layer_weights[i].ffn_weights.intermediate_weight.bias = get_ptr<T>(_weights[11]) + hidden_dim * 4 * i;
             bert_layer_weights[i].ffn_weights.output_weight.kernel =
                 get_ptr<T>(_weights[12]) + hidden_dim * hidden_dim * 4 * i;
             bert_layer_weights[i].ffn_weights.output_weight.bias = get_ptr<T>(_weights[13]) + hidden_dim * i;
-            bert_layer_weights[i].ffn_layernorm_weights.gamma = get_ptr<T>(_weights[14]) + hidden_dim * i;
-            bert_layer_weights[i].ffn_layernorm_weights.beta = get_ptr<T>(_weights[15]) + hidden_dim * i;
+            bert_layer_weights[i].ffn_layernorm_weights.gamma    = get_ptr<T>(_weights[14]) + hidden_dim * i;
+            bert_layer_weights[i].ffn_layernorm_weights.beta     = get_ptr<T>(_weights[15]) + hidden_dim * i;
 
             // for scale_list
             bert_layer_weights[i].scale_list_.size_ =
@@ -114,7 +114,7 @@ public:
             bert_layer_weights[i].scale_list_.h_scale_list_ =
                 get_ptr<float>(_weights[17]) + i * bert_layer_weights[i].scale_list_.size_;
             bert_layer_weights[i].attention_weights.scale_list_ptr = &(bert_layer_weights[i].scale_list_);
-            bert_layer_weights[i].ffn_weights.scale_list_ptr = &(bert_layer_weights[i].scale_list_);
+            bert_layer_weights[i].ffn_weights.scale_list_ptr       = &(bert_layer_weights[i].scale_list_);
         }
         if (sparse) {
             for (int i = 0; i < _layer_num; ++i) {
@@ -146,14 +146,14 @@ public:
         delete cublas_wrapper_mutex_;
     }
 
-    void forward(int batch_size,
-                 int seq_len,
+    void forward(int         batch_size,
+                 int         seq_len,
                  th::Tensor& input,
                  th::Tensor& sequence_lengths,
                  th::Tensor& output,
-                 bool removing_padding) override
+                 bool        removing_padding) override
     {
-        auto stream = at::cuda::getCurrentCUDAStream().stream();
+        auto                    stream = at::cuda::getCurrentCUDAStream().stream();
         ft::cublasINT8MMWrapper cublas_wrapper =
 #ifdef SPARSITY_ENABLED
             ft::cublasINT8MMWrapper(_cublasltHandle,
@@ -188,7 +188,7 @@ public:
                                                          attention_type,
                                                          _sparse);
 
-        ft::DataType data_type = ft::getTensorType<T>();
+        ft::DataType            data_type     = ft::getTensorType<T>();
         std::vector<ft::Tensor> input_tensors = std::vector<ft::Tensor>{
             ft::Tensor{ft::MEMORY_GPU,
                        data_type,
@@ -221,21 +221,21 @@ public:
     }
 
 private:
-    const int _head_num;
-    const int _head_size;
+    const int               _head_num;
+    const int               _head_size;
     std::vector<th::Tensor> _weights;
-    const int _layer_num;
-    const float _q_scaling;
-    int _int8_mode;
-    bool _sparse;
-    int sm_;
-    bool _use_ORDER_COL32_2R_4R4;
-    cublasLtHandle_t _cublasltHandle;
+    const int               _layer_num;
+    const float             _q_scaling;
+    int                     _int8_mode;
+    bool                    _sparse;
+    int                     sm_;
+    bool                    _use_ORDER_COL32_2R_4R4;
+    cublasLtHandle_t        _cublasltHandle;
 #ifdef SPARSITY_ENABLED
     cusparseLtHandle_t _cusparseLtHandle;
 #endif
-    std::mutex* cublas_wrapper_mutex_;
-    ft::cublasAlgoMap* cublas_algo_map_;
+    std::mutex*                             cublas_wrapper_mutex_;
+    ft::cublasAlgoMap*                      cublas_algo_map_;
     std::vector<ft::BertLayerINT8Weight<T>> bert_layer_weights;
 };
 
@@ -259,13 +259,13 @@ public:
                               th::Tensor output_layernorm_beta,
                               th::Tensor d_scale_list,
                               th::Tensor h_scale_list,
-                              int64_t head_num,
-                              int64_t head_size,
-                              bool remove_padding,
-                              int64_t layer_num,
-                              int64_t int8_mode,
-                              bool sparse,
-                              double q_scaling);
+                              int64_t    head_num,
+                              int64_t    head_size,
+                              bool       remove_padding,
+                              int64_t    layer_num,
+                              int64_t    int8_mode,
+                              bool       sparse,
+                              double     q_scaling);
 
     ~FasterTransformerINT8Bert();
     th::Tensor forward(th::Tensor input, th::Tensor sequence_lengths);
@@ -273,11 +273,11 @@ public:
     std::vector<th::Tensor> get_pickle_info() const;
 
 private:
-    const at::ScalarType _st;
-    bool _remove_padding;
-    IFBertINT8* ftbert;
-    th::Tensor head_info;
-    th::Tensor scaling_info;
+    const at::ScalarType    _st;
+    bool                    _remove_padding;
+    IFBertINT8*             ftbert;
+    th::Tensor              head_info;
+    th::Tensor              scaling_info;
     std::vector<th::Tensor> weights;
 };
 

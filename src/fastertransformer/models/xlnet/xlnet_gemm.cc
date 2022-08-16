@@ -28,11 +28,11 @@ int main(int argc, char* argv[])
         return 0;
     }
 
-    const int batch_size = atoi(argv[1]);
-    const int seq_len = atoi(argv[2]);
-    const int head_num = atoi(argv[3]);
-    const int size_per_head = atoi(argv[4]);
-    const ft::CublasDataType data_type = static_cast<ft::CublasDataType>(atoi(argv[5]));  // 0 FP32, 1 FP16, 2 BF 16
+    const int                batch_size    = atoi(argv[1]);
+    const int                seq_len       = atoi(argv[2]);
+    const int                head_num      = atoi(argv[3]);
+    const int                size_per_head = atoi(argv[4]);
+    const ft::CublasDataType data_type     = static_cast<ft::CublasDataType>(atoi(argv[5]));  // 0 FP32, 1 FP16, 2 BF 16
     printf("[INFO] arguments: \n");
     printf("  batch_size: %d \n", batch_size);
     printf("  head_num: %d \n", head_num);
@@ -41,9 +41,9 @@ int main(int argc, char* argv[])
     std::cout << std::endl;
 
     int hidden_units_ = size_per_head * head_num;
-    int inter_size_ = 4 * hidden_units_;
+    int inter_size_   = 4 * hidden_units_;
 
-    void* gemm_test_buf;
+    void*  gemm_test_buf;
     size_t buf_size_in_byte = ft::calGemmTestBufSizeInByteXlnet(
         batch_size, seq_len, head_num, size_per_head, inter_size_, hidden_units_, data_type);
     size_t total, free;

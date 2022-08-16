@@ -83,10 +83,10 @@ invokeTransposeMatrixCOL32ToColMajor<half>(half* dst, const half* src, const int
 template void invokeTransposeMatrixCOL32ToColMajor<int8_t>(
     int8_t* dst, const int8_t* src, const int m, const int n, cudaStream_t stream);
 
-// transpose matrix & transfrom col-major to COL32
+// transpose matrix & transform col-major to COL32
 // input matrix is (m, n) col-major
 // output matrix is (n, m) COL32
-// m should be a mutiple of 32
+// m should be a multiple of 32
 // grid((m+31)/32, (n+31)/32)
 // block(32, 32)
 template<typename T>
@@ -105,10 +105,10 @@ __global__ void transposeMatrix_colMajorToCOL32_kernel(T* dst, const T* src, con
     }
 }
 
-// transpose matrix & transfrom col-major to COL32
+// transpose matrix & transform col-major to COL32
 // input matrix is (m, n) col-major
 // output matrix is (n, m) COL32
-// m should be a mutiple of 32
+// m should be a multiple of 32
 // grid((m+31)/32, (n+31)/32)
 // block(16, 32)
 template<>
@@ -127,10 +127,10 @@ __global__ void transposeMatrix_colMajorToCOL32_kernel(half2* dst, const half2* 
     }
 }
 
-// transpose matrix & transfrom col-major to COL32
+// transpose matrix & transform col-major to COL32
 // input matrix is (m, n) col-major
 // output matrix is (n, m) COL32, using char4 to write out
-// m should be a mutiple of 32
+// m should be a multiple of 32
 // grid((m+31)/32, (n+31)/32)
 // block(8, 32)
 template<typename T>
@@ -153,10 +153,10 @@ template void invokeTransposeMatrixColMajorToCOL32<float>(
 template void
 invokeTransposeMatrixColMajorToCOL32<half>(half* dst, const half* src, const int m, const int n, cudaStream_t stream);
 
-// transpose matrix & transfrom col-major to COL32 & quantize
+// transpose matrix & transform col-major to COL32 & quantize
 // input matrix is (m, n) col-major
 // output matrix is (n, m) COL32, using char4 to write out
-// m should be a mutiple of 32
+// m should be a multiple of 32
 // grid((m+31)/32, (n+31)/32)
 // block(8, 32)
 template<typename T>
@@ -184,10 +184,10 @@ __global__ void transposeMatrix_colMajorToCOL32_quantize_kernel(
     }
 }
 
-// transpose matrix & transfrom col-major to COL32 & quantize
+// transpose matrix & transform col-major to COL32 & quantize
 // input matrix is (m, n) col-major
 // output matrix is (n, m) COL32, using char4 to write out
-// m should be a mutiple of 32
+// m should be a multiple of 32
 // grid((m+31)/32, (n+31)/32)
 // block(8, 32)
 template<typename T>
@@ -205,10 +205,10 @@ template void invokeTransposeMatrixColMajorToCOL32Quantize<float>(
 template void invokeTransposeMatrixColMajorToCOL32Quantize<half>(
     int8_t* dst, const half* src, const int m, const int n, const float* scale_ptr, cudaStream_t stream);
 
-// transfrom row-major to COL32
+// transform row-major to COL32
 // input matrix is (m, n) row-major
 // output matrix is (m, n) COL32
-// n should be a mutiple of 32
+// n should be a multiple of 32
 // grid((n+31)/32, (m+31)/32)
 // block(8, 32)
 __global__ void rowMajorToCOL32_kernel(char4* dst, const char4* src, const int m, const int n)
@@ -226,10 +226,10 @@ __global__ void rowMajorToCOL32_kernel(char4* dst, const char4* src, const int m
     }
 }
 
-// transfrom row-major to COL32
+// transform row-major to COL32
 // input matrix is (m, n) row-major
 // output matrix is (m, n) COL32
-// n should be a mutiple of 32
+// n should be a multiple of 32
 // grid((n+31)/32, (m+31)/32)
 // block(8, 32)
 void invokeRowMajorToCOL32(int8_t* dst, const int8_t* src, const int m, const int n, cudaStream_t stream)

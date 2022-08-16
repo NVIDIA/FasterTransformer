@@ -23,8 +23,13 @@
 #include "stdlib.h"
 #include <cuda_fp16.h>
 #include <cuda_runtime_api.h>
+#include <dirent.h>
+#include <numeric>
 #include <stdlib.h>
 #include <string>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <unordered_map>
 #include <vector>
 
 namespace fastertransformer {
@@ -45,6 +50,7 @@ typedef enum datatype_enum {
     TYPE_FP64,
     TYPE_BYTES,
     TYPE_BF16,
+    TYPE_STR,
 } DataType;
 
 typedef enum memorytype_enum {
@@ -54,93 +60,32 @@ typedef enum memorytype_enum {
 } MemoryType;
 
 struct Tensor {
-    const MemoryType where;
-    const DataType type;
+    const MemoryType          where;
+    const DataType            type;
     const std::vector<size_t> shape;
-    const void* data;  // TODO(bhseuh) modify from const void* to void* const
+    const void*               data;  // TODO(bhseuh) modify from const void* to void* const
+    const std::vector<size_t> offsets = std::vector<size_t>{};
 
-    Tensor(const MemoryType _where, const DataType _type, const std::vector<size_t> _shape, const void* _data):
-        where(_where), type(_type), shape(_shape), data(_data)
-    {
-    }
+    Tensor();
+    Tensor(const MemoryType _where, const DataType _type, const std::vector<size_t> _shape, const void* _data);
+    Tensor(const MemoryType          _where,
+           const DataType            _type,
+           const std::vector<size_t> _shape,
+           const void*               _data,
+           const std::vector<size_t> _offset);
 
-    size_t size() const
-    {
-        size_t n_elements = 1;
-        for (size_t s : shape) {
-            n_elements *= s;
-        }
-        return n_elements;
-    }
+    size_t size() const;
+    size_t sizeBytes() const;
 
-    std::string toString() const
-    {
-        std::string memtype_str;
-        switch (where) {
-            case MEMORY_CPU:
-                memtype_str = "CPU";
-                break;
-            case MEMORY_CPU_PINNED:
-                memtype_str = "CPU_PINNED";
-                break;
-            case MEMORY_GPU:
-                memtype_str = "GPU";
-                break;
-        }
+    std::string whereToString() const;
+    std::string toString() const;
+    std::string getNumpyTypeDesc(DataType type) const;
 
-        std::string dtype_str = "";
-        switch (type) {
-            case TYPE_BOOL:
-                dtype_str = "BOOL";
-                break;
-            case TYPE_UINT8:
-                dtype_str = "UINT8";
-                break;
-            case TYPE_UINT16:
-                dtype_str = "UINT16";
-                break;
-            case TYPE_UINT32:
-                dtype_str = "UINT32";
-                break;
-            case TYPE_UINT64:
-                dtype_str = "UINT64";
-                break;
-            case TYPE_INT8:
-                dtype_str = "INT8";
-                break;
-            case TYPE_INT16:
-                dtype_str = "INT16";
-                break;
-            case TYPE_INT32:
-                dtype_str = "INT32";
-                break;
-            case TYPE_INT64:
-                dtype_str = "INT64";
-                break;
-            case TYPE_BF16:
-                dtype_str = "BF16";
-                break;
-            case TYPE_FP16:
-                dtype_str = "FP16";
-                break;
-            case TYPE_FP32:
-                dtype_str = "FP32";
-                break;
-            case TYPE_FP64:
-                dtype_str = "FP64";
-                break;
-            case TYPE_BYTES:
-                dtype_str = "BYTES";
-                break;
-            case TYPE_INVALID:
-                dtype_str = "INVALID";
-                break;
-            default:
-                break;
-        }
-        return fmtstr(
-            "Tensor[where=%s, type=%s, shape=%s]", memtype_str.c_str(), dtype_str.c_str(), vec2str(shape).c_str());
-    }
+    void          saveNpy(const std::string& filename) const;
+    static Tensor loadNpy(const std::string& npy_file, const MemoryType where);
+
+    static DataType typeFromNumpyDesc(std::string type);
+    static size_t   getTypeSize(DataType type);
 
     template<typename T>
     inline T getVal(size_t index) const
@@ -170,7 +115,7 @@ struct Tensor {
         }
         else {
             FT_CHECK_WITH_INFO(offset < size(), "offset is larger than buffer size");
-            return (void*)((char*)data + offset * getDataTypeByteNum(type));
+            return (void*)((char*)data + offset * Tensor::getTypeSize(type));
         }
     }
 
@@ -186,129 +131,75 @@ struct Tensor {
         }
     }
 
-    std::string getNumpyTypeDesc(DataType type) const
+    template<typename T>
+    T max() const
     {
-        switch (type) {
-            case TYPE_BOOL:
-                return "?";
-            case TYPE_UINT8:
-                return "u1";
-            case TYPE_UINT16:
-                return "u2";
-            case TYPE_UINT32:
-                return "u4";
-            case TYPE_UINT64:
-                return "u8";
-            case TYPE_INT8:
-                return "i1";
-            case TYPE_INT16:
-                return "i2";
-            case TYPE_INT32:
-                return "i4";
-            case TYPE_INT64:
-                return "i8";
-            case TYPE_FP16:
-                return "f2";
-            case TYPE_FP32:
-                return "f4";
-            case TYPE_FP64:
-                return "f8";
-            case TYPE_INVALID:
-            default:;
+        FT_CHECK_WITH_INFO(shape.size() > 0 && data != nullptr, "Should be a non-empty tensor.");
+        FT_CHECK_WITH_INFO(where == MEMORY_CPU || where == MEMORY_CPU_PINNED,
+                           "max() supports MEMORY_CPU or MEMORY_CPU_PINNED tensor.");
+        size_t max_idx = 0;
+        T      max_val = getVal<T>(max_idx);
+        for (size_t i = 1; i < size(); ++i) {
+            T val = getVal<T>(i);
+            if (val > max_val) {
+                max_idx = i;
+                max_val = val;
+            }
         }
-        return "";
-    }
-
-    int getDataTypeByteNum(DataType type) const
-    {
-        switch (type) {
-            case TYPE_BOOL:
-                return 1;
-            case TYPE_UINT8:
-                return 1;
-            case TYPE_UINT16:
-                return 2;
-            case TYPE_UINT32:
-                return 4;
-            case TYPE_UINT64:
-                return 8;
-            case TYPE_INT8:
-                return 1;
-            case TYPE_INT16:
-                return 2;
-            case TYPE_INT32:
-                return 4;
-            case TYPE_INT64:
-                return 8;
-            case TYPE_FP16:
-                return 2;
-            case TYPE_BF16:
-                return 2;
-            case TYPE_FP32:
-                return 4;
-            case TYPE_FP64:
-                return 8;
-            case TYPE_INVALID:
-                FT_CHECK(false);
-            default:
-                FT_CHECK(false);
-        }
+        return max_val;
     }
 
     template<typename T>
-    void save(const std::string& filename) const
+    T min() const
     {
-        // Save tensor to NPY 1.0 format (see https://numpy.org/neps/nep-0001-npy-format.html)
-        void* cpu_data = (void*)data;
-        bool is_data_temp = false;
-        size_t tensor_size = size();
-        if (where == MemoryType::MEMORY_GPU) {
-            cpu_data = malloc(tensor_size * sizeof(T));
-            is_data_temp = true;
-            cudaDeviceSynchronize();
-            cudaMemcpy(cpu_data, data, tensor_size * sizeof(T), cudaMemcpyDeviceToHost);
-        }
-
-        const char magic[] = "\x93"
-                             "NUMPY";
-        const uint8_t npy_major = 1;
-        const uint8_t npy_minor = 0;
-
-        std::stringstream header_stream;
-        header_stream << "{'descr': '" << getNumpyTypeDesc(type) << "', 'fortran_order': False, 'shape': (";
-        for (size_t i = 0; i < shape.size(); ++i) {
-            header_stream << shape[i];
-            if (i + 1 < shape.size() || shape.size() == 1) {
-                header_stream << ", ";
+        FT_CHECK_WITH_INFO(shape.size() > 0 && data != nullptr, "Should be a non-empty tensor.");
+        FT_CHECK_WITH_INFO(where == MEMORY_CPU || where == MEMORY_CPU_PINNED,
+                           "min() supports MEMORY_CPU or MEMORY_CPU_PINNED tensor.");
+        size_t min_idx = 0;
+        T      min_val = getVal<T>(min_idx);
+        for (size_t i = 1; i < size(); ++i) {
+            T val = getVal<T>(i);
+            if (val < min_val) {
+                min_idx = i;
+                min_val = val;
             }
         }
-        header_stream << ")}";
-        int base_length = 6 + 4 + header_stream.str().size();
-        int pad_length = 16 * ((base_length + 1 + 15) / 16);  // Take ceiling of base_length + 1 (for '\n' ending)
-        for (int i = 0; i < pad_length - base_length; ++i) {
-            header_stream << ((i == pad_length - base_length - 1) ? "\n" : "\x20");
-        }
-        std::string header = header_stream.str();
-        const uint16_t header_len = header.size();
-
-        FILE* f_ptr = fopen(filename.c_str(), "wb");
-        if (f_ptr == nullptr) {
-            printf("Unable to open %s for writing.\n", filename.c_str());
-            exit(-1);
-        }
-        fwrite(magic, sizeof(char), sizeof(magic) - 1, f_ptr);
-        fwrite(&npy_major, sizeof(uint8_t), 1, f_ptr);
-        fwrite(&npy_minor, sizeof(uint8_t), 1, f_ptr);
-        fwrite(&header_len, sizeof(uint16_t), 1, f_ptr);
-        fwrite(header.c_str(), sizeof(char), header_len, f_ptr);
-        fwrite(cpu_data, sizeof(T), tensor_size, f_ptr);
-
-        fclose(f_ptr);
-
-        if (is_data_temp) {
-            free(cpu_data);
-        }
+        return min_val;
     }
+
+    template<typename T>
+    T any(T val) const
+    {
+        FT_CHECK_WITH_INFO(shape.size() > 0 && data != nullptr, "Should be a non-empty tensor.");
+        FT_CHECK_WITH_INFO(where == MEMORY_CPU || where == MEMORY_CPU_PINNED,
+                           "any() supports MEMORY_CPU or MEMORY_CPU_PINNED tensor.");
+        for (size_t i = 0; i < size(); ++i) {
+            if (getVal<T>(i) == val) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    template<typename T>
+    T all(T val) const
+    {
+        FT_CHECK_WITH_INFO(shape.size() > 0 && data != nullptr, "Should be a non-empty tensor.");
+        FT_CHECK_WITH_INFO(where == MEMORY_CPU || where == MEMORY_CPU_PINNED,
+                           "all() supports MEMORY_CPU or MEMORY_CPU_PINNED tensor.");
+        for (size_t i = 0; i < size(); ++i) {
+            if (getVal<T>(i) != val) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    Tensor slice(std::vector<size_t> shape, size_t offset = 0) const;
+
+private:
+    static void parseNpyIntro(FILE*& f_ptr, uint32_t& header_len, uint32_t& start_data);
+    static int  parseNpyHeader(FILE*& f_ptr, uint32_t header_len, DataType& type, std::vector<size_t>& shape);
 };
 
 template<typename T>
@@ -331,9 +222,139 @@ DataType getTensorType()
     else if (std::is_same<T, int8_t>::value) {
         return TYPE_INT8;
     }
+    else if (std::is_same<T, uint>::value) {
+        return TYPE_UINT32;
+    }
+    else if (std::is_same<T, unsigned long long int>::value) {
+        return TYPE_UINT64;
+    }
+    else if (std::is_same<T, bool>::value) {
+        return TYPE_BOOL;
+    }
     else {
         return TYPE_INVALID;
     }
 }
+
+class TensorMap {
+private:
+    std::unordered_map<std::string, Tensor> tensor_map_;
+
+    inline bool isValid(const Tensor& tensor)
+    {
+        return tensor.size() > 0 && tensor.data != nullptr;
+    }
+
+public:
+    TensorMap() = default;
+    TensorMap(const std::unordered_map<std::string, Tensor>& tensor_map);
+    TensorMap(const std::vector<Tensor>& tensor_map);
+    ~TensorMap();
+
+    inline size_t size() const
+    {
+        return tensor_map_.size();
+    }
+
+    inline bool isExist(const std::string& key) const
+    {
+        return tensor_map_.find(key) != tensor_map_.end();
+    }
+
+    std::vector<std::string> keys() const;
+
+    inline void insert(const std::string& key, const Tensor& value)
+    {
+        FT_CHECK_WITH_INFO(!isExist(key), fmtstr("Duplicated key %s", key.c_str()));
+        FT_CHECK_WITH_INFO(isValid(value), "A none tensor or nullptr is not allowed");
+        tensor_map_.insert({key, value});
+    }
+
+    // prevent converting int or size_t to string automatically
+    Tensor at(int tmp)    = delete;
+    Tensor at(size_t tmp) = delete;
+
+    inline Tensor& at(const std::string& key)
+    {
+        FT_CHECK_WITH_INFO(isExist(key),
+                           fmtstr("Cannot find a tensor of name %s in the tensor map (keys: %s)",
+                                  key.c_str(),
+                                  vec2str(keys()).c_str()));
+        return tensor_map_.at(key);
+    }
+
+    inline Tensor& at(const std::string& key, Tensor& default_tensor)
+    {
+        if (isExist(key)) {
+            return tensor_map_.at(key);
+        }
+        return default_tensor;
+    }
+
+    inline Tensor& at(const std::string& key, Tensor&& default_tensor)
+    {
+        if (isExist(key)) {
+            return tensor_map_.at(key);
+        }
+        return default_tensor;
+    }
+
+    template<typename T>
+    inline T getVal(const std::string& key) const
+    {
+        FT_CHECK_WITH_INFO(isExist(key),
+                           fmtstr("Cannot find a tensor of name %s in the tensor map (keys: %s)",
+                                  key.c_str(),
+                                  vec2str(keys()).c_str()));
+        return tensor_map_.at(key).getVal<T>();
+    }
+
+    template<typename T>
+    inline T getVal(const std::string& key, T default_value) const
+    {
+        if (isExist(key)) {
+            return tensor_map_.at(key).getVal<T>();
+        }
+        return default_value;
+    }
+
+    template<typename T>
+    inline T getValWithOffset(const std::string& key, size_t index) const
+    {
+        FT_CHECK_WITH_INFO(isExist(key),
+                           fmtstr("Cannot find a tensor of name %s in the tensor map (keys: %s)",
+                                  key.c_str(),
+                                  vec2str(keys()).c_str()));
+        return tensor_map_.at(key).getVal<T>(index);
+    }
+
+    template<typename T>
+    inline T getValWithOffset(const std::string& key, size_t index, T default_value) const
+    {
+        if (isExist(key)) {
+            return tensor_map_.at(key).getVal<T>(index);
+        }
+        return default_value;
+    }
+
+    inline std::unordered_map<std::string, Tensor> getMap() const
+    {
+        return tensor_map_;
+    }
+
+    inline std::unordered_map<std::string, Tensor>::iterator begin()
+    {
+        return tensor_map_.begin();
+    }
+
+    inline std::unordered_map<std::string, Tensor>::iterator end()
+    {
+        return tensor_map_.end();
+    }
+
+    std::string      toString();
+    static TensorMap fromNpyFolder(const std::string& base_folder);
+    void             saveNpy(const std::string& base_folder);
+};
 
 }  // namespace fastertransformer

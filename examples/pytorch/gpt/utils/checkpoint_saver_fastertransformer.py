@@ -3,7 +3,6 @@ import sys
 import numpy as np
 import torch
 
-# This file is used with "https://gitlab-master.nvidia.com/ADLR/megatron-lm/-/blob/checkpoint_util/tools/checkpoint_util.py"
 # Example
 # python tools/checkpoint_util.py --model-type GPT --loader megatron --saver fastertransformer \
 # --input /home/scratch.bhsueh_sw/megatron_new_ckpt/357m-pipeline-2-tensor-2/  --output ./tmp  --target-tensor-parallel-size 2

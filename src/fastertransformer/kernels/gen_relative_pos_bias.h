@@ -28,11 +28,11 @@ enum class PositionEmbeddingType {
 };
 
 template<typename T, typename Tindex>
-void invokeGenRelativePosBias(T* relative_position_bias,
-                              const T* relative_position_bias_table,
+void invokeGenRelativePosBias(T*            relative_position_bias,
+                              const T*      relative_position_bias_table,
                               const Tindex* relative_position_bias_index,
-                              const int window_size,
-                              const int head_num,
-                              cudaStream_t stream);
+                              const int     window_size,
+                              const int     head_num,
+                              cudaStream_t  stream);
 
 }  // namespace fastertransformer

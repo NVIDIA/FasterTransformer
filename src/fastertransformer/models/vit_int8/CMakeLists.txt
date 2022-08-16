@@ -20,4 +20,4 @@ set_property(TARGET ViTINT8 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(ViTINT8 PUBLIC -lcudart -lcublasLt -lcublas cublasINT8MMWrapper 
                       UnfusedAttentionLayerINT8 FusedAttentionLayerINT8 FfnLayerINT8 layernorm_kernels
                       layernorm_int8_kernels add_residual_kernels activation_kernels layout_transformer_int8_kernels
-                      vit_kernels bert_preprocess_kernels)
+                      vit_kernels bert_preprocess_kernels tensor)

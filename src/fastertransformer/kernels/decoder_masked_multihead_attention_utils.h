@@ -219,6 +219,22 @@ inline __device__ float2 half2_to_float2(uint32_t v)
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+inline __device__ float add(float a, uint16_t b)
+{
+    return a + half_to_float(b);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#ifdef ENABLE_BF16
+inline __device__ float add(float a, __nv_bfloat16 b)
+{
+    return a + __bfloat162float(b);
+}
+#endif
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 inline __device__ float2 add(uint32_t a, float2 fb)
 {
     float2 fa = half2_to_float2(a);
@@ -392,7 +408,7 @@ inline __device__ uint2 fma(uint2 a, uint2 b, uint2 c)
 inline __device__ uint2 fma(uint16_t a, uint2 b, uint2 c)
 {
     uint32_t s = h0_h0(a);
-    uint2 d;
+    uint2    d;
     d.x = fma(s, b.x, c.x);
     d.y = fma(s, b.y, c.y);
     return d;
@@ -415,7 +431,7 @@ inline __device__ uint4 fma(uint4 a, uint4 b, uint4 c)
 inline __device__ uint4 fma(uint16_t a, uint4 b, uint4 c)
 {
     uint32_t s = h0_h0(a);
-    uint4 d;
+    uint4    d;
     d.x = fma(s, b.x, c.x);
     d.y = fma(s, b.y, c.y);
     d.z = fma(s, b.z, c.z);
@@ -463,7 +479,7 @@ inline __device__ Float4_ fma(uint2 a, uint2 b, Float4_ fc)
 inline __device__ Float4_ fma(uint16_t a, uint2 b, Float4_ fc)
 {
     uint32_t s = h0_h0(a);
-    Float4_ fd;
+    Float4_  fd;
     fd.x = fma(s, b.x, fc.x);
     fd.y = fma(s, b.y, fc.y);
     return fd;
@@ -486,7 +502,7 @@ inline __device__ Float8_ fma(uint4 a, uint4 b, Float8_ fc)
 inline __device__ Float8_ fma(uint16_t a, uint4 b, Float8_ fc)
 {
     uint32_t s = h0_h0(a);
-    Float8_ fd;
+    Float8_  fd;
     fd.x = fma(s, b.x, fc.x);
     fd.y = fma(s, b.y, fc.y);
     fd.z = fma(s, b.z, fc.z);
@@ -522,7 +538,7 @@ inline __device__ bf16_4_t fma(bf16_4_t a, bf16_4_t b, bf16_4_t c)
 inline __device__ bf16_4_t fma(__nv_bfloat16 a, bf16_4_t b, bf16_4_t c)
 {
     __nv_bfloat162 s = bf162bf162(a);
-    bf16_4_t d;
+    bf16_4_t       d;
     d.x = fma(s, b.x, c.x);
     d.y = fma(s, b.y, c.y);
     return d;
@@ -545,7 +561,7 @@ inline __device__ bf16_8_t fma(bf16_8_t a, bf16_8_t b, bf16_8_t c)
 inline __device__ bf16_8_t fma(__nv_bfloat16 a, bf16_8_t b, bf16_8_t c)
 {
     __nv_bfloat162 s = bf162bf162(a);
-    bf16_8_t d;
+    bf16_8_t       d;
     d.x = fma(s, b.x, c.x);
     d.y = fma(s, b.y, c.y);
     d.z = fma(s, b.z, c.z);
@@ -591,7 +607,7 @@ inline __device__ Float4_ fma(bf16_4_t a, bf16_4_t b, Float4_ fc)
 inline __device__ Float4_ fma(__nv_bfloat16 a, bf16_4_t b, Float4_ fc)
 {
     __nv_bfloat162 s = bf162bf162(a);
-    Float4_ fd;
+    Float4_        fd;
     fd.x = fma(s, b.x, fc.x);
     fd.y = fma(s, b.y, fc.y);
     return fd;
@@ -614,7 +630,7 @@ inline __device__ Float8_ fma(bf16_8_t a, bf16_8_t b, Float8_ fc)
 inline __device__ Float8_ fma(__nv_bfloat16 a, bf16_8_t b, Float8_ fc)
 {
     __nv_bfloat162 s = bf162bf162(a);
-    Float8_ fd;
+    Float8_        fd;
     fd.x = fma(s, b.x, fc.x);
     fd.y = fma(s, b.y, fc.y);
     fd.z = fma(s, b.z, fc.z);
@@ -728,7 +744,7 @@ template<>
 inline __device__ uint2 mul(uint16_t a, uint2 b)
 {
     uint32_t s = h0_h0(a);
-    uint2 c;
+    uint2    c;
     c.x = mul<uint32_t, uint32_t, uint32_t>(s, b.x);
     c.y = mul<uint32_t, uint32_t, uint32_t>(s, b.y);
     return c;
@@ -753,7 +769,7 @@ template<>
 inline __device__ uint4 mul(uint16_t a, uint4 b)
 {
     uint32_t s = h0_h0(a);
-    uint4 c;
+    uint4    c;
     c.x = mul<uint32_t, uint32_t, uint32_t>(s, b.x);
     c.y = mul<uint32_t, uint32_t, uint32_t>(s, b.y);
     c.z = mul<uint32_t, uint32_t, uint32_t>(s, b.z);
@@ -806,7 +822,7 @@ template<>
 inline __device__ Float4_ mul(uint16_t a, uint2 b)
 {
     uint32_t s = h0_h0(a);
-    Float4_ fc;
+    Float4_  fc;
     fc.x = mul<float2, uint32_t, uint32_t>(s, b.x);
     fc.y = mul<float2, uint32_t, uint32_t>(s, b.y);
     return fc;
@@ -831,7 +847,7 @@ template<>
 inline __device__ Float8_ mul(uint16_t a, uint4 b)
 {
     uint32_t s = h0_h0(a);
-    Float8_ fc;
+    Float8_  fc;
     fc.x = mul<float2, uint32_t, uint32_t>(s, b.x);
     fc.y = mul<float2, uint32_t, uint32_t>(s, b.y);
     fc.z = mul<float2, uint32_t, uint32_t>(s, b.z);
@@ -885,7 +901,7 @@ template<>
 inline __device__ bf16_4_t mul(__nv_bfloat16 a, bf16_4_t b)
 {
     __nv_bfloat162 s = bf162bf162(a);
-    bf16_4_t c;
+    bf16_4_t       c;
     c.x = mul<__nv_bfloat162, __nv_bfloat162, __nv_bfloat162>(s, b.x);
     c.y = mul<__nv_bfloat162, __nv_bfloat162, __nv_bfloat162>(s, b.y);
     return c;
@@ -910,7 +926,7 @@ template<>
 inline __device__ bf16_8_t mul(__nv_bfloat16 a, bf16_8_t b)
 {
     __nv_bfloat162 s = bf162bf162(a);
-    bf16_8_t c;
+    bf16_8_t       c;
     c.x = mul<__nv_bfloat162, __nv_bfloat162, __nv_bfloat162>(s, b.x);
     c.y = mul<__nv_bfloat162, __nv_bfloat162, __nv_bfloat162>(s, b.y);
     c.z = mul<__nv_bfloat162, __nv_bfloat162, __nv_bfloat162>(s, b.z);
@@ -963,7 +979,7 @@ template<>
 inline __device__ Float4_ mul(__nv_bfloat16 a, bf16_4_t b)
 {
     __nv_bfloat162 s = bf162bf162(a);
-    Float4_ fc;
+    Float4_        fc;
     fc.x = mul<float2, __nv_bfloat162, __nv_bfloat162>(s, b.x);
     fc.y = mul<float2, __nv_bfloat162, __nv_bfloat162>(s, b.y);
     return fc;
@@ -988,7 +1004,7 @@ template<>
 inline __device__ Float8_ mul(__nv_bfloat16 a, bf16_8_t b)
 {
     __nv_bfloat162 s = bf162bf162(a);
-    Float8_ fc;
+    Float8_        fc;
     fc.x = mul<float2, __nv_bfloat162, __nv_bfloat162>(s, b.x);
     fc.y = mul<float2, __nv_bfloat162, __nv_bfloat162>(s, b.y);
     fc.z = mul<float2, __nv_bfloat162, __nv_bfloat162>(s, b.z);
@@ -1069,12 +1085,12 @@ inline __device__ float sum(uint4 v)
 {
 #if 1
     uint32_t c = add(v.x, v.y);
-    c = add(c, v.z);
-    c = add(c, v.w);
+    c          = add(c, v.z);
+    c          = add(c, v.w);
 #else
     uint32_t c = add(v.x, v.y);
     uint32_t d = add(v.z, v.w);
-    c = add(c, d);
+    c          = add(c, d);
 #endif
     return sum(c);
 }
@@ -1123,7 +1139,7 @@ inline __device__ void zero(T& dst)
 {
     constexpr int WORDS = sizeof(T) / 4;
     union {
-        T raw;
+        T        raw;
         uint32_t words[WORDS];
     } tmp;
 #pragma unroll
@@ -1151,7 +1167,7 @@ inline __device__ float2 rotary_embedding_transform(const float2 v, const float2
 
 inline __device__ uint32_t rotary_embedding_transform(const uint32_t v, const float2 coef)
 {
-    float2 fv = half2_to_float2(v);
+    float2 fv     = half2_to_float2(v);
     float2 rot_fv = rotary_embedding_transform(fv, coef);
     return float2_to_half2(rot_fv);
 }
@@ -1159,7 +1175,7 @@ inline __device__ uint32_t rotary_embedding_transform(const uint32_t v, const fl
 #ifdef ENABLE_BF16
 inline __device__ __nv_bfloat162 rotary_embedding_transform(const __nv_bfloat162 v, const float2 coef)
 {
-    float2 fv = bf1622float2(v);
+    float2 fv     = bf1622float2(v);
     float2 rot_fv = rotary_embedding_transform(fv, coef);
     return __floats2bfloat162_rn(rot_fv.x, rot_fv.y);
 }
@@ -1181,7 +1197,7 @@ inline __device__ void apply_rotary_embedding(float2& q, int tid, int rot_embed_
         return;
     }
     const auto coef = rotary_embedding_coefficient(2 * tid, rot_embed_dim, t_step);
-    q = rotary_embedding_transform(q, coef);
+    q               = rotary_embedding_transform(q, coef);
 }
 
 inline __device__ void apply_rotary_embedding(float2& q, float2& k, int tid, int rot_embed_dim, int t_step)
@@ -1190,8 +1206,8 @@ inline __device__ void apply_rotary_embedding(float2& q, float2& k, int tid, int
         return;
     }
     const auto coef = rotary_embedding_coefficient(2 * tid, rot_embed_dim, t_step);
-    q = rotary_embedding_transform(q, coef);
-    k = rotary_embedding_transform(k, coef);
+    q               = rotary_embedding_transform(q, coef);
+    k               = rotary_embedding_transform(k, coef);
 }
 
 inline __device__ void apply_rotary_embedding(float4& q, int tid, int rot_embed_dim, int t_step)
@@ -1200,11 +1216,11 @@ inline __device__ void apply_rotary_embedding(float4& q, int tid, int rot_embed_
         return;
     }
 
-    Float4_& q_ = *reinterpret_cast<Float4_*>(&q);
+    Float4_&   q_    = *reinterpret_cast<Float4_*>(&q);
     const auto coef0 = rotary_embedding_coefficient(4 * tid, rot_embed_dim, t_step);
-    q_.x = rotary_embedding_transform(q_.x, coef0);
+    q_.x             = rotary_embedding_transform(q_.x, coef0);
     const auto coef1 = rotary_embedding_coefficient(4 * tid + 2, rot_embed_dim, t_step);
-    q_.y = rotary_embedding_transform(q_.y, coef1);
+    q_.y             = rotary_embedding_transform(q_.y, coef1);
 }
 
 inline __device__ void apply_rotary_embedding(float4& q, float4& k, int tid, int rot_embed_dim, int t_step)
@@ -1213,14 +1229,14 @@ inline __device__ void apply_rotary_embedding(float4& q, float4& k, int tid, int
         return;
     }
 
-    Float4_& q_ = *reinterpret_cast<Float4_*>(&q);
-    Float4_& k_ = *reinterpret_cast<Float4_*>(&k);
+    Float4_&   q_    = *reinterpret_cast<Float4_*>(&q);
+    Float4_&   k_    = *reinterpret_cast<Float4_*>(&k);
     const auto coef0 = rotary_embedding_coefficient(4 * tid, rot_embed_dim, t_step);
-    q_.x = rotary_embedding_transform(q_.x, coef0);
-    k_.x = rotary_embedding_transform(k_.x, coef0);
+    q_.x             = rotary_embedding_transform(q_.x, coef0);
+    k_.x             = rotary_embedding_transform(k_.x, coef0);
     const auto coef1 = rotary_embedding_coefficient(4 * tid + 2, rot_embed_dim, t_step);
-    q_.y = rotary_embedding_transform(q_.y, coef1);
-    k_.y = rotary_embedding_transform(k_.y, coef1);
+    q_.y             = rotary_embedding_transform(q_.y, coef1);
+    k_.y             = rotary_embedding_transform(k_.y, coef1);
 }
 
 inline __device__ void apply_rotary_embedding(uint32_t& q, int tid, int rot_embed_dim, int t_step)
@@ -1229,7 +1245,7 @@ inline __device__ void apply_rotary_embedding(uint32_t& q, int tid, int rot_embe
         return;
     }
     const auto coef = rotary_embedding_coefficient(2 * tid, rot_embed_dim, t_step);
-    q = rotary_embedding_transform(q, coef);
+    q               = rotary_embedding_transform(q, coef);
 }
 
 inline __device__ void apply_rotary_embedding(uint32_t& q, uint32_t& k, int tid, int rot_embed_dim, int t_step)
@@ -1238,8 +1254,8 @@ inline __device__ void apply_rotary_embedding(uint32_t& q, uint32_t& k, int tid,
         return;
     }
     const auto coef = rotary_embedding_coefficient(2 * tid, rot_embed_dim, t_step);
-    q = rotary_embedding_transform(q, coef);
-    k = rotary_embedding_transform(k, coef);
+    q               = rotary_embedding_transform(q, coef);
+    k               = rotary_embedding_transform(k, coef);
 }
 
 inline __device__ void apply_rotary_embedding(uint2& q, int tid, int rot_embed_dim, int t_step)
@@ -1248,9 +1264,9 @@ inline __device__ void apply_rotary_embedding(uint2& q, int tid, int rot_embed_d
         return;
     }
     const auto coef0 = rotary_embedding_coefficient(4 * tid, rot_embed_dim, t_step);
-    q.x = rotary_embedding_transform(q.x, coef0);
+    q.x              = rotary_embedding_transform(q.x, coef0);
     const auto coef1 = rotary_embedding_coefficient(4 * tid + 2, rot_embed_dim, t_step);
-    q.y = rotary_embedding_transform(q.y, coef1);
+    q.y              = rotary_embedding_transform(q.y, coef1);
 }
 
 inline __device__ void apply_rotary_embedding(uint2& q, uint2& k, int tid, int rot_embed_dim, int t_step)
@@ -1259,11 +1275,11 @@ inline __device__ void apply_rotary_embedding(uint2& q, uint2& k, int tid, int r
         return;
     }
     const auto coef0 = rotary_embedding_coefficient(4 * tid, rot_embed_dim, t_step);
-    q.x = rotary_embedding_transform(q.x, coef0);
-    k.x = rotary_embedding_transform(k.x, coef0);
+    q.x              = rotary_embedding_transform(q.x, coef0);
+    k.x              = rotary_embedding_transform(k.x, coef0);
     const auto coef1 = rotary_embedding_coefficient(4 * tid + 2, rot_embed_dim, t_step);
-    q.y = rotary_embedding_transform(q.y, coef1);
-    k.y = rotary_embedding_transform(k.y, coef1);
+    q.y              = rotary_embedding_transform(q.y, coef1);
+    k.y              = rotary_embedding_transform(k.y, coef1);
 }
 
 inline __device__ void apply_rotary_embedding(uint4& q, int tid, int rot_embed_dim, int t_step)
@@ -1272,13 +1288,13 @@ inline __device__ void apply_rotary_embedding(uint4& q, int tid, int rot_embed_d
         return;
     }
     const auto coef0 = rotary_embedding_coefficient(8 * tid, rot_embed_dim, t_step);
-    q.x = rotary_embedding_transform(q.x, coef0);
+    q.x              = rotary_embedding_transform(q.x, coef0);
     const auto coef1 = rotary_embedding_coefficient(8 * tid + 2, rot_embed_dim, t_step);
-    q.y = rotary_embedding_transform(q.y, coef1);
+    q.y              = rotary_embedding_transform(q.y, coef1);
     const auto coef2 = rotary_embedding_coefficient(8 * tid + 4, rot_embed_dim, t_step);
-    q.z = rotary_embedding_transform(q.z, coef2);
+    q.z              = rotary_embedding_transform(q.z, coef2);
     const auto coef3 = rotary_embedding_coefficient(8 * tid + 6, rot_embed_dim, t_step);
-    q.w = rotary_embedding_transform(q.w, coef3);
+    q.w              = rotary_embedding_transform(q.w, coef3);
 }
 
 inline __device__ void apply_rotary_embedding(uint4& q, uint4& k, int tid, int rot_embed_dim, int t_step)
@@ -1287,17 +1303,17 @@ inline __device__ void apply_rotary_embedding(uint4& q, uint4& k, int tid, int r
         return;
     }
     const auto coef0 = rotary_embedding_coefficient(8 * tid, rot_embed_dim, t_step);
-    q.x = rotary_embedding_transform(q.x, coef0);
-    k.x = rotary_embedding_transform(k.x, coef0);
+    q.x              = rotary_embedding_transform(q.x, coef0);
+    k.x              = rotary_embedding_transform(k.x, coef0);
     const auto coef1 = rotary_embedding_coefficient(8 * tid + 2, rot_embed_dim, t_step);
-    q.y = rotary_embedding_transform(q.y, coef1);
-    k.y = rotary_embedding_transform(k.y, coef1);
+    q.y              = rotary_embedding_transform(q.y, coef1);
+    k.y              = rotary_embedding_transform(k.y, coef1);
     const auto coef2 = rotary_embedding_coefficient(8 * tid + 4, rot_embed_dim, t_step);
-    q.z = rotary_embedding_transform(q.z, coef2);
-    k.z = rotary_embedding_transform(k.z, coef2);
+    q.z              = rotary_embedding_transform(q.z, coef2);
+    k.z              = rotary_embedding_transform(k.z, coef2);
     const auto coef3 = rotary_embedding_coefficient(8 * tid + 6, rot_embed_dim, t_step);
-    q.w = rotary_embedding_transform(q.w, coef3);
-    k.w = rotary_embedding_transform(k.w, coef3);
+    q.w              = rotary_embedding_transform(q.w, coef3);
+    k.w              = rotary_embedding_transform(k.w, coef3);
 }
 
 #ifdef ENABLE_BF16
@@ -1307,7 +1323,7 @@ inline __device__ void apply_rotary_embedding(__nv_bfloat162& q, int tid, int ro
         return;
     }
     const auto coef = rotary_embedding_coefficient(2 * tid, rot_embed_dim, t_step);
-    q = rotary_embedding_transform(q, coef);
+    q               = rotary_embedding_transform(q, coef);
 }
 
 inline __device__ void
@@ -1317,8 +1333,8 @@ apply_rotary_embedding(__nv_bfloat162& q, __nv_bfloat162& k, int tid, int rot_em
         return;
     }
     const auto coef = rotary_embedding_coefficient(2 * tid, rot_embed_dim, t_step);
-    q = rotary_embedding_transform(q, coef);
-    k = rotary_embedding_transform(k, coef);
+    q               = rotary_embedding_transform(q, coef);
+    k               = rotary_embedding_transform(k, coef);
 }
 
 inline __device__ void apply_rotary_embedding(bf16_4_t& q, int tid, int rot_embed_dim, int t_step)
@@ -1327,9 +1343,9 @@ inline __device__ void apply_rotary_embedding(bf16_4_t& q, int tid, int rot_embe
         return;
     }
     const auto coef0 = rotary_embedding_coefficient(4 * tid, rot_embed_dim, t_step);
-    q.x = rotary_embedding_transform(q.x, coef0);
+    q.x              = rotary_embedding_transform(q.x, coef0);
     const auto coef1 = rotary_embedding_coefficient(4 * tid + 2, rot_embed_dim, t_step);
-    q.y = rotary_embedding_transform(q.y, coef1);
+    q.y              = rotary_embedding_transform(q.y, coef1);
 }
 
 inline __device__ void apply_rotary_embedding(bf16_4_t& q, bf16_4_t& k, int tid, int rot_embed_dim, int t_step)
@@ -1338,11 +1354,11 @@ inline __device__ void apply_rotary_embedding(bf16_4_t& q, bf16_4_t& k, int tid,
         return;
     }
     const auto coef0 = rotary_embedding_coefficient(4 * tid, rot_embed_dim, t_step);
-    q.x = rotary_embedding_transform(q.x, coef0);
-    k.x = rotary_embedding_transform(k.x, coef0);
+    q.x              = rotary_embedding_transform(q.x, coef0);
+    k.x              = rotary_embedding_transform(k.x, coef0);
     const auto coef1 = rotary_embedding_coefficient(4 * tid + 2, rot_embed_dim, t_step);
-    q.y = rotary_embedding_transform(q.y, coef1);
-    k.y = rotary_embedding_transform(k.y, coef1);
+    q.y              = rotary_embedding_transform(q.y, coef1);
+    k.y              = rotary_embedding_transform(k.y, coef1);
 }
 
 inline __device__ void apply_rotary_embedding(bf16_8_t& q, int tid, int rot_embed_dim, int t_step)
@@ -1351,13 +1367,13 @@ inline __device__ void apply_rotary_embedding(bf16_8_t& q, int tid, int rot_embe
         return;
     }
     const auto coef0 = rotary_embedding_coefficient(8 * tid, rot_embed_dim, t_step);
-    q.x = rotary_embedding_transform(q.x, coef0);
+    q.x              = rotary_embedding_transform(q.x, coef0);
     const auto coef1 = rotary_embedding_coefficient(8 * tid + 2, rot_embed_dim, t_step);
-    q.y = rotary_embedding_transform(q.y, coef1);
+    q.y              = rotary_embedding_transform(q.y, coef1);
     const auto coef2 = rotary_embedding_coefficient(8 * tid + 4, rot_embed_dim, t_step);
-    q.z = rotary_embedding_transform(q.z, coef2);
+    q.z              = rotary_embedding_transform(q.z, coef2);
     const auto coef3 = rotary_embedding_coefficient(8 * tid + 6, rot_embed_dim, t_step);
-    q.w = rotary_embedding_transform(q.w, coef3);
+    q.w              = rotary_embedding_transform(q.w, coef3);
 }
 
 inline __device__ void apply_rotary_embedding(bf16_8_t& q, bf16_8_t& k, int tid, int rot_embed_dim, int t_step)
@@ -1366,18 +1382,286 @@ inline __device__ void apply_rotary_embedding(bf16_8_t& q, bf16_8_t& k, int tid,
         return;
     }
     const auto coef0 = rotary_embedding_coefficient(8 * tid, rot_embed_dim, t_step);
-    q.x = rotary_embedding_transform(q.x, coef0);
-    k.x = rotary_embedding_transform(k.x, coef0);
+    q.x              = rotary_embedding_transform(q.x, coef0);
+    k.x              = rotary_embedding_transform(k.x, coef0);
     const auto coef1 = rotary_embedding_coefficient(8 * tid + 2, rot_embed_dim, t_step);
-    q.y = rotary_embedding_transform(q.y, coef1);
-    k.y = rotary_embedding_transform(k.y, coef1);
+    q.y              = rotary_embedding_transform(q.y, coef1);
+    k.y              = rotary_embedding_transform(k.y, coef1);
     const auto coef2 = rotary_embedding_coefficient(8 * tid + 4, rot_embed_dim, t_step);
-    q.z = rotary_embedding_transform(q.z, coef2);
-    k.z = rotary_embedding_transform(k.z, coef2);
+    q.z              = rotary_embedding_transform(q.z, coef2);
+    k.z              = rotary_embedding_transform(k.z, coef2);
     const auto coef3 = rotary_embedding_coefficient(8 * tid + 6, rot_embed_dim, t_step);
-    q.w = rotary_embedding_transform(q.w, coef3);
-    k.w = rotary_embedding_transform(k.w, coef3);
+    q.w              = rotary_embedding_transform(q.w, coef3);
+    k.w              = rotary_embedding_transform(k.w, coef3);
 }
 #endif  // ENABLE_BF16
+
+template<typename Vec_T, typename T>
+__device__ __inline__ void vec_from_smem_transpose(Vec_T& vec, T* smem, int transpose_idx, int smem_pitch);
+
+template<>
+__device__ __inline__ void vec_from_smem_transpose(float& vec, float* smem, int transpose_idx, int smem_pitch)
+{
+    return;
+}
+
+template<>
+__device__ __inline__ void vec_from_smem_transpose(uint32_t& vec, uint16_t* smem, int transpose_idx, int smem_pitch)
+{
+    union {
+        uint32_t u32;
+        uint16_t u16[2];
+    } tmp;
+    tmp.u16[0] = smem[transpose_idx];
+    tmp.u16[1] = smem[smem_pitch + transpose_idx];
+
+    vec = tmp.u32;
+}
+
+template<>
+__device__ __inline__ void vec_from_smem_transpose(uint2& vec, uint16_t* smem, int transpose_idx, int smem_pitch)
+{
+    union {
+        uint32_t u32;
+        uint16_t u16[2];
+    } tmp_1, tmp_2;
+    tmp_1.u32 = *reinterpret_cast<uint32_t*>(&smem[transpose_idx]);
+    tmp_2.u32 = *reinterpret_cast<uint32_t*>(&smem[smem_pitch + transpose_idx]);
+
+    union {
+        uint2    u32x2;
+        uint16_t u16[4];
+    } tmp_3;
+    tmp_3.u16[0] = tmp_1.u16[0];
+    tmp_3.u16[1] = tmp_2.u16[0];
+    tmp_3.u16[2] = tmp_1.u16[1];
+    tmp_3.u16[3] = tmp_2.u16[1];
+
+    vec = tmp_3.u32x2;
+}
+
+template<>
+__device__ __inline__ void vec_from_smem_transpose(uint4& vec, uint16_t* smem, int transpose_idx, int smem_pitch)
+{
+    union {
+        uint64_t u64;
+        uint16_t u16[4];
+    } tmp_1, tmp_2;
+    tmp_1.u64 = *reinterpret_cast<uint64_t*>(&smem[transpose_idx]);
+    tmp_2.u64 = *reinterpret_cast<uint64_t*>(&smem[smem_pitch + transpose_idx]);
+
+    union {
+        uint4    u32x4;
+        uint16_t u16[8];
+    } tmp_3;
+    tmp_3.u16[0] = tmp_1.u16[0];
+    tmp_3.u16[1] = tmp_2.u16[0];
+    tmp_3.u16[2] = tmp_1.u16[1];
+    tmp_3.u16[3] = tmp_2.u16[1];
+    tmp_3.u16[4] = tmp_1.u16[2];
+    tmp_3.u16[5] = tmp_2.u16[2];
+    tmp_3.u16[6] = tmp_1.u16[3];
+    tmp_3.u16[7] = tmp_2.u16[3];
+
+    vec = tmp_3.u32x4;
+}
+
+#ifdef ENABLE_BF16
+template<>
+__device__ __inline__ void
+vec_from_smem_transpose(bf16_4_t& vec, __nv_bfloat16* smem, int transpose_idx, int smem_pitch)
+{
+    union {
+        uint32_t      u32;
+        __nv_bfloat16 bf16[2];
+    } tmp_1, tmp_2;
+    tmp_1.u32 = *reinterpret_cast<uint32_t*>(&smem[transpose_idx]);
+    tmp_2.u32 = *reinterpret_cast<uint32_t*>(&smem[smem_pitch + transpose_idx]);
+
+    vec.x = __nv_bfloat162{tmp_1.bf16[0], tmp_2.bf16[0]};
+    vec.y = __nv_bfloat162{tmp_1.bf16[1], tmp_2.bf16[1]};
+}
+
+template<>
+__device__ __inline__ void
+vec_from_smem_transpose(bf16_8_t& vec, __nv_bfloat16* smem, int transpose_idx, int smem_pitch)
+{
+    union {
+        uint64_t      u64;
+        __nv_bfloat16 bf16[4];
+    } tmp_1, tmp_2;
+    tmp_1.u64 = *reinterpret_cast<uint64_t*>(&smem[transpose_idx]);
+    tmp_2.u64 = *reinterpret_cast<uint64_t*>(&smem[smem_pitch + transpose_idx]);
+
+    vec.x = __nv_bfloat162{tmp_1.bf16[0], tmp_2.bf16[0]};
+    vec.y = __nv_bfloat162{tmp_1.bf16[1], tmp_2.bf16[1]};
+    vec.z = __nv_bfloat162{tmp_1.bf16[2], tmp_2.bf16[2]};
+    vec.w = __nv_bfloat162{tmp_1.bf16[3], tmp_2.bf16[3]};
+}
+#endif  // ENABLE_BF16
+
+template<>
+__device__ __inline__ void vec_from_smem_transpose(float4& vec, float* smem, int transpose_idx, int smem_pitch)
+{
+    vec.x = smem[transpose_idx];
+    vec.z = smem[transpose_idx + 1];
+    vec.y = smem[smem_pitch + transpose_idx];
+    vec.w = smem[smem_pitch + transpose_idx + 1];
+}
+
+template<>
+__device__ __inline__ void vec_from_smem_transpose(uint32_t& vec, half* smem, int transpose_idx, int smem_pitch)
+{
+    union {
+        uint32_t u32;
+        half     u16[2];
+    } tmp;
+    tmp.u16[0] = smem[transpose_idx];
+    tmp.u16[1] = smem[smem_pitch + transpose_idx];
+
+    vec = tmp.u32;
+}
+
+#ifdef ENABLE_BF16
+template<>
+__device__ __inline__ void
+vec_from_smem_transpose(__nv_bfloat162& vec, __nv_bfloat16* smem, int transpose_idx, int smem_pitch)
+{
+    vec.x = smem[transpose_idx];
+    vec.y = smem[smem_pitch + transpose_idx];
+}
+#endif
+
+template<>
+__device__ __inline__ void vec_from_smem_transpose(float2& vec, float* smem, int transpose_idx, int smem_pitch)
+{
+    vec.x = smem[transpose_idx];
+    vec.y = smem[smem_pitch + transpose_idx];
+}
+
+template<typename Vec_T, typename T>
+__device__ __inline__ void write_smem_transpose(const Vec_T& vec, T* smem, int transpose_idx, int smem_pitch);
+
+template<>
+__device__ __inline__ void write_smem_transpose(const float& vec, float* smem, int transpose_idx, int smem_pitch)
+{
+    return;
+}
+
+#ifdef ENABLE_BF16
+template<>
+__device__ __inline__ void
+write_smem_transpose(const bf16_4_t& vec, __nv_bfloat16* smem, int transpose_idx, int smem_pitch)
+{
+    return;
+}
+
+template<>
+__device__ __inline__ void
+write_smem_transpose(const bf16_8_t& vec, __nv_bfloat16* smem, int transpose_idx, int smem_pitch)
+{
+    return;
+}
+#endif
+
+template<>
+__device__ __inline__ void write_smem_transpose(const uint4& vec, uint16_t* smem, int transpose_idx, int smem_pitch)
+{
+    union {
+        uint64_t u64;
+        uint16_t u16[4];
+    } tmp_1, tmp_2;
+
+    union {
+        uint4    u32x4;
+        uint16_t u16[8];
+    } tmp_3;
+    tmp_3.u32x4  = vec;
+    tmp_1.u16[0] = tmp_3.u16[0];
+    tmp_2.u16[0] = tmp_3.u16[1];
+    tmp_1.u16[1] = tmp_3.u16[2];
+    tmp_2.u16[1] = tmp_3.u16[3];
+    tmp_1.u16[2] = tmp_3.u16[4];
+    tmp_2.u16[2] = tmp_3.u16[5];
+    tmp_1.u16[3] = tmp_3.u16[6];
+    tmp_2.u16[3] = tmp_3.u16[7];
+
+    *reinterpret_cast<uint64_t*>(&smem[transpose_idx])              = tmp_1.u64;
+    *reinterpret_cast<uint64_t*>(&smem[smem_pitch + transpose_idx]) = tmp_2.u64;
+}
+
+template<>
+__device__ __inline__ void write_smem_transpose(const uint2& vec, uint16_t* smem, int transpose_idx, int smem_pitch)
+{
+    union {
+        uint32_t u32;
+        uint16_t u16[2];
+    } tmp_1, tmp_2;
+
+    union {
+        uint2    u32x2;
+        uint16_t u16[4];
+    } tmp_3;
+    tmp_3.u32x2  = vec;
+    tmp_1.u16[0] = tmp_3.u16[0];
+    tmp_2.u16[0] = tmp_3.u16[1];
+    tmp_1.u16[1] = tmp_3.u16[2];
+    tmp_2.u16[1] = tmp_3.u16[3];
+
+    *reinterpret_cast<uint32_t*>(&smem[transpose_idx])              = tmp_1.u32;
+    *reinterpret_cast<uint32_t*>(&smem[smem_pitch + transpose_idx]) = tmp_2.u32;
+}
+
+template<>
+__device__ __inline__ void write_smem_transpose(const uint32_t& vec, uint16_t* smem, int transpose_idx, int smem_pitch)
+{
+    union {
+        uint32_t u32;
+        uint16_t u16[2];
+    } tmp;
+    tmp.u32 = vec;
+
+    smem[transpose_idx]              = tmp.u16[0];
+    smem[smem_pitch + transpose_idx] = tmp.u16[1];
+}
+
+template<>
+__device__ __inline__ void write_smem_transpose(const float4& vec, float* smem, int transpose_idx, int smem_pitch)
+{
+    smem[transpose_idx]                  = vec.x;
+    smem[transpose_idx + 1]              = vec.z;
+    smem[smem_pitch + transpose_idx]     = vec.y;
+    smem[smem_pitch + transpose_idx + 1] = vec.w;
+}
+
+template<>
+__device__ __inline__ void write_smem_transpose(const uint32_t& vec, half* smem, int transpose_idx, int smem_pitch)
+{
+    union {
+        uint32_t u32;
+        half     u16[2];
+    } tmp;
+
+    tmp.u32                          = vec;
+    smem[transpose_idx]              = tmp.u16[0];
+    smem[smem_pitch + transpose_idx] = tmp.u16[1];
+}
+
+#ifdef ENABLE_BF16
+template<>
+__device__ __inline__ void
+write_smem_transpose(const __nv_bfloat162& vec, __nv_bfloat16* smem, int transpose_idx, int smem_pitch)
+{
+    smem[transpose_idx]              = vec.x;
+    smem[smem_pitch + transpose_idx] = vec.y;
+}
+#endif
+
+template<>
+__device__ __inline__ void write_smem_transpose(const float2& vec, float* smem, int transpose_idx, int smem_pitch)
+{
+    smem[transpose_idx]              = vec.x;
+    smem[smem_pitch + transpose_idx] = vec.y;
+}
 
 }  // namespace mmha

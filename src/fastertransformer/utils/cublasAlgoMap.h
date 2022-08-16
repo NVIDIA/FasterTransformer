@@ -35,28 +35,28 @@ typedef struct {
     int algoId, customOption, tile, splitK_val;
     int swizzle, reductionScheme, workspaceSize;
     // only used in cublasLt >= 11.0
-    int stages;
+    int   stages;
     float exec_time;
 } cublasLtMatmulAlgo_info;
 
 /* Structure to store information about different run trials */
 typedef struct {
-    cublasLtMatmulAlgo_t algo;
-    cublasStatus_t status;
-    float time;
-    size_t workspaceSize;  // actual memory workspace needed
-    cublasMath_t mathMode;
+    cublasLtMatmulAlgo_t      algo;
+    cublasStatus_t            status;
+    float                     time;
+    size_t                    workspaceSize;  // actual memory workspace needed
+    cublasMath_t              mathMode;
     cublasLtReductionScheme_t reductionScheme;
-    int customOption;
-    float wavesCount;
+    int                       customOption;
+    float                     wavesCount;
 } customMatmulPerf_t;
 
 class cublasAlgoMap {
 private:
     std::map<std::string, cublasLtMatmulAlgo_info> algo_map_;
-    std::string config_filename_;
-    std::string sp_config_filename_;
-    std::map<std::string, int> sp_algo_map_;
+    std::string                                    config_filename_;
+    std::string                                    sp_config_filename_;
+    std::map<std::string, int>                     sp_algo_map_;
 
 public:
     explicit cublasAlgoMap(const std::string filename, const std::string sp_config_filename = "");
@@ -64,7 +64,7 @@ public:
     ~cublasAlgoMap();
     void loadGemmConfig();
     void loadSpGemmConfig();
-    int getSpAlgo(const int batch_count, const int m, const int n, const int k);
+    int  getSpAlgo(const int batch_count, const int m, const int n, const int k);
     bool isUseSparse(const int batch_count, const int m, const int n, const int k);
 
     bool isExist(const int batch_count, const int m, const int n, const int k, const CublasDataType data_type);

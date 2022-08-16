@@ -26,11 +26,11 @@ template<typename T>
 void invokeDequantization(T* dst, const int8_t* src, const int size, const float* scale_ptr, cudaStream_t stream);
 
 template<typename T>
-void invokeDequantization_INT32(T* dst,
+void invokeDequantization_INT32(T*             dst,
                                 const int32_t* src,
-                                const int size,
-                                cudaStream_t stream,
-                                const float* input_amax_ptr,
-                                const float* weight_amax_ptr);
+                                const int      size,
+                                cudaStream_t   stream,
+                                const float*   input_amax_ptr,
+                                const float*   weight_amax_ptr);
 
 }  // namespace fastertransformer

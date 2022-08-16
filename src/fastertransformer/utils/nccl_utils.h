@@ -16,9 +16,17 @@
 
 #pragma once
 
-#include "cuda_runtime.h"
-#include "nccl.h"
+#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/fastertransformer/utils/logger.h"
+#include "src/fastertransformer/utils/mpi_utils.h"
+
+#include <cuda_runtime.h>
+#ifdef BUILD_MULTI_GPU
+#include <mpi.h>
+#include <nccl.h>
+#endif
 #include <stdio.h>
+#include <string>
 
 #if defined(NCCL_VERSION_CODE) && (NCCL_VERSION_CODE >= 21003)
 #define ENABLE_BF16_NCCL
@@ -26,6 +34,7 @@
 
 namespace fastertransformer {
 
+#ifdef BUILD_MULTI_GPU
 #define NCCLCHECK(cmd)                                                                                                 \
     do {                                                                                                               \
         ncclResult_t r = cmd;                                                                                          \
@@ -34,26 +43,47 @@ namespace fastertransformer {
             exit(EXIT_FAILURE);                                                                                        \
         }                                                                                                              \
     } while (0)
+#else
+#define NCCLCHECK(cmd)
+#endif
+
+struct NcclUid {
+#ifndef BUILD_MULTI_GPU
+    NcclUid(){};
+    NcclUid(NcclUid const& uid){};
+#else
+    ncclUniqueId nccl_uid_;
+    NcclUid(){};
+    NcclUid(NcclUid const& uid): nccl_uid_(uid.nccl_uid_){};
+#endif
+};
 
 struct NcclParam {
     int rank_{0};
     int world_size_{1};
-    ncclComm_t nccl_comm_ = nullptr;
+#ifdef BUILD_MULTI_GPU
+    ncclUniqueId nccl_uid_;
+    ncclComm_t   nccl_comm_ = nullptr;
+#endif
 
+#ifdef BUILD_MULTI_GPU
     NcclParam(): rank_(0), world_size_(1), nccl_comm_(nullptr){};
-    NcclParam(int rank, int world_size, ncclComm_t comm): rank_(rank), world_size_(world_size), nccl_comm_(comm){};
+    NcclParam(int rank, int world_size): rank_(rank), world_size_(world_size){};
     NcclParam(NcclParam const& param):
-        rank_(param.rank_), world_size_(param.world_size_), nccl_comm_(param.nccl_comm_){};
-
-    // int layers_per_group{0};
-    // bool is_valid(int i)
-    // {
-    //     if (i >= layers_per_group * rank && i < layers_per_group * (rank + 1))
-    //         return true;
-    //     else
-    //         return false;
-    // }
-    // int local_batch_size{-1};
+        rank_(param.rank_), world_size_(param.world_size_), nccl_uid_(param.nccl_uid_), nccl_comm_(param.nccl_comm_){};
+    std::string toString()
+    {
+        return fmtstr("NcclParam[rank=%d, world_size=%d, nccl_comm=%p]", rank_, world_size_, nccl_comm_);
+    }
+#else
+    NcclParam(): rank_(0), world_size_(1){};
+    NcclParam(int rank, int world_size): rank_(rank), world_size_(world_size){};
+    NcclParam(NcclParam const& param): rank_(param.rank_), world_size_(param.world_size_){};
+    std::string toString()
+    {
+        return fmtstr("NcclParam[rank=%d, world_size=%d]", rank_, world_size_);
+    }
+#endif
 };
 
 // New APIs
@@ -73,8 +103,19 @@ void ftNcclRecv(T* recv_buf, const int data_size, const int peer, NcclParam nccl
 template<typename T>
 void ftNcclSend(const T* send_buf, const int data_size, const int peer, NcclParam nccl_param, cudaStream_t stream);
 
-template<typename T>
-ncclDataType_t getNcclDataType();
+// nccl stream synchronize, abort nccl comms and throw errors when nccl async errors detected
+void ftNcclStreamSynchronize(NcclParam tensor_para, NcclParam pipeline_para_, cudaStream_t stream);
+
+void ftNcclGroupStart();
+void ftNcclGroupEnd();
+void ftNcclGetUniqueId(NcclUid& uid);
+void ftNcclCommInitRank(NcclParam& param, const int rank, const int world_size, const NcclUid uid);
+void ftNcclParamDestroy(NcclParam& param);
+
+void ftNcclInitialize(NcclParam& tensor_para,
+                      NcclParam& pipeline_para,
+                      const int  tensor_para_size,
+                      const int  pipeline_para_size);
 
 size_t getLocalBatchSize(const size_t batch_size, const size_t seq_len, const size_t pipeline_para_size);
 

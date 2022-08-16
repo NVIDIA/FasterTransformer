@@ -37,8 +37,8 @@
 
 using CPUDevice = Eigen::ThreadPoolDevice;
 using GPUDevice = Eigen::GpuDevice;
-namespace tf = tensorflow;
-namespace ft = fastertransformer;
+namespace tf    = tensorflow;
+namespace ft    = fastertransformer;
 
 template<typename T>
 class BaseOp: public tf::OpKernel {
@@ -102,7 +102,7 @@ protected:
                 ft::MEMORY_GPU, ft::getTensorType<half>(), convert_shape(tensor), (half*)(tensor.flat<T>().data())};
         }
 #ifdef ENABLE_BF16
-        if (std::is_same<T, Eigen::bfloat16>::value == true) {
+        else if (std::is_same<T, Eigen::bfloat16>::value == true) {
             return ft::Tensor{ft::MEMORY_GPU,
                               ft::getTensorType<__nv_bfloat16>(),
                               convert_shape(tensor),
@@ -140,9 +140,9 @@ protected:
     }
 
 private:
-    cublasHandle_t cublas_handle_;
+    cublasHandle_t   cublas_handle_;
     cublasLtHandle_t cublaslt_handle_;
-    std::mutex* cublas_wrapper_mutex_;
+    std::mutex*      cublas_wrapper_mutex_;
 };
 
 #endif

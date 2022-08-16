@@ -23,26 +23,32 @@ add_subdirectory(sampling_layers)
 add_library(FfnLayer STATIC FfnLayer.cc)
 set_property(TARGET FfnLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET FfnLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(FfnLayer PUBLIC -lcublas -lcudart cublasMMWrapper activation_kernels memory_utils matrix_vector_multiplication)
+target_link_libraries(FfnLayer PUBLIC -lcublas -lcudart cublasMMWrapper activation_kernels memory_utils matrix_vector_multiplication tensor)
 
 add_library(FfnLayerINT8 STATIC FfnLayerINT8.cc)
 set_property(TARGET FfnLayerINT8 PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET FfnLayerINT8 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(FfnLayerINT8 PUBLIC -lcublasLt -lcublas -lcudart cublasMMWrapper cublasINT8MMWrapper activation_int8_kernels memory_utils)
+target_link_libraries(FfnLayerINT8 PUBLIC -lcublasLt -lcublas -lcudart cublasMMWrapper cublasINT8MMWrapper activation_int8_kernels memory_utils tensor)
 
 add_library(TensorParallelGeluFfnLayer STATIC TensorParallelGeluFfnLayer.cc)
 set_property(TARGET TensorParallelGeluFfnLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET TensorParallelGeluFfnLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(TensorParallelGeluFfnLayer PUBLIC -lcudart FfnLayer nccl_utils)
+target_link_libraries(TensorParallelGeluFfnLayer PUBLIC -lcudart FfnLayer nccl_utils tensor)
 
 add_library(TensorParallelReluFfnLayer STATIC TensorParallelReluFfnLayer.cc)
 set_property(TARGET TensorParallelReluFfnLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET TensorParallelReluFfnLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(TensorParallelReluFfnLayer PUBLIC -lcudart FfnLayer nccl_utils)
+target_link_libraries(TensorParallelReluFfnLayer PUBLIC -lcudart FfnLayer nccl_utils tensor)
 
 add_library(DynamicDecodeLayer STATIC DynamicDecodeLayer.cc)
 set_property(TARGET DynamicDecodeLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET DynamicDecodeLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(DynamicDecodeLayer PUBLIC -lcudart 
-                        TopKSamplingLayer TopPSamplingLayer TopKTopPSamplingLayer 
-                        OnlineBeamSearchLayer BeamSearchLayer ban_bad_words stop_criteria)
+target_link_libraries(DynamicDecodeLayer PUBLIC -lcudart
+                        TopKSamplingLayer TopPSamplingLayer TopKTopPSamplingLayer
+                        OnlineBeamSearchLayer BeamSearchLayer ban_bad_words stop_criteria
+                        gpt_kernels tensor)
+
+add_library(TensorParallelSiluFfnLayer STATIC TensorParallelSiluFfnLayer.cc)
+set_property(TARGET TensorParallelSiluFfnLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET TensorParallelSiluFfnLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+target_link_libraries(TensorParallelSiluFfnLayer PUBLIC -lcudart FfnLayer nccl_utils)

@@ -22,8 +22,8 @@ template<typename T>
 void SwinTransformerBasicLayer<T>::allocateBuffer()
 {
     if (is_allocate_buffer_ == false) {
-        block_output_ = (T*)allocator_->malloc(
-            2 * max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_ * sizeof(T), false);
+        block_output_ = (T*)allocator_->reMalloc(
+            block_output_, 2 * max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_ * sizeof(T), false);
 
         is_allocate_buffer_ = true;
     }
@@ -33,31 +33,34 @@ template<typename T>
 void SwinTransformerBasicLayer<T>::freeBuffer()
 {
     if (is_allocate_buffer_ == true) {
-        allocator_->free(block_output_);
+        allocator_->free((void**)(&block_output_));
         is_allocate_buffer_ = false;
     }
 }
 
 template<typename T>
-SwinTransformerBasicLayer<T>::SwinTransformerBasicLayer(int max_batch,
-                                                        int window_size,
-                                                        float mlp_ratio,
-                                                        cudaStream_t stream,
+SwinTransformerBasicLayer<T>::SwinTransformerBasicLayer(int              max_batch,
+                                                        int              window_size,
+                                                        float            mlp_ratio,
+                                                        float            layernorm_eps,
+                                                        cudaStream_t     stream,
                                                         cublasMMWrapper* cublas_wrapper,
-                                                        IAllocator* allocator,
-                                                        bool is_free_buffer_after_forward,
-                                                        bool qkv_bias,
-                                                        float qk_scale):
+                                                        IAllocator*      allocator,
+                                                        bool             is_free_buffer_after_forward,
+                                                        bool             qkv_bias,
+                                                        float            qk_scale):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     max_batch_(max_batch),
     window_size_(window_size),
     mlp_ratio_(mlp_ratio),
+    layernorm_eps_(layernorm_eps),
     qkv_bias_(qkv_bias),
     qk_scale_(qk_scale)
 {
     block_ = new SwinTransformerBlock<T>(max_batch_,
                                          window_size_,
                                          mlp_ratio_,
+                                         layernorm_eps_,
                                          stream,
                                          cublas_wrapper,
                                          allocator,
@@ -77,18 +80,26 @@ SwinTransformerBasicLayer<T>::~SwinTransformerBasicLayer()
 }
 
 template<typename T>
-void SwinTransformerBasicLayer<T>::patchMerge(T* output,
-                                              T* merge_layernorm_buf,
+void SwinTransformerBasicLayer<T>::patchMerge(T*       output,
+                                              T*       merge_layernorm_buf,
                                               const T* input,
                                               const T* gamma,
                                               const T* beta,
                                               const T* weight,
-                                              int batch,
-                                              int input_resolution,
-                                              int dim)
+                                              int      batch,
+                                              int      input_resolution,
+                                              int      dim)
 {
-    invokeMergeLayernorm(
-        merge_layernorm_buf, input, gamma, beta, batch, input_resolution, input_resolution, dim, stream_);
+    invokeMergeLayernorm(merge_layernorm_buf,
+                         input,
+                         gamma,
+                         beta,
+                         layernorm_eps_,
+                         batch,
+                         input_resolution,
+                         input_resolution,
+                         dim,
+                         stream_);
 
     cublas_wrapper_->Gemm(CUBLAS_OP_T,
                           CUBLAS_OP_N,
@@ -104,8 +115,8 @@ void SwinTransformerBasicLayer<T>::patchMerge(T* output,
 }
 
 template<typename T>
-void SwinTransformerBasicLayer<T>::forward(std::vector<Tensor>* output_tensors,
-                                           std::vector<Tensor>* input_tensors,
+void SwinTransformerBasicLayer<T>::forward(std::vector<Tensor>*                output_tensors,
+                                           std::vector<Tensor>*                input_tensors,
                                            SwinTransformerBasicLayerWeight<T>& swin_basic_layer_weights)
 {
     // input_tensors:
@@ -114,29 +125,29 @@ void SwinTransformerBasicLayer<T>::forward(std::vector<Tensor>* output_tensors,
     // output_tensors:
     //      output [batch, output_resolution, output_resolution, output_dim]
 
-    T* from_tensor = (T*)input_tensors->at(0).data;
-    T* output_tensor = (T*)(output_tensors->at(0).data);
-    size_t batch = input_tensors->at(0).shape[0];
+    T*     from_tensor      = (T*)input_tensors->at(0).data;
+    T*     output_tensor    = (T*)(output_tensors->at(0).data);
+    size_t batch            = input_tensors->at(0).shape[0];
     size_t input_resolution = input_tensors->at(0).shape[1];
     assert(input_resolution == input_tensors->at(0).shape[2]);
-    size_t dim = input_tensors->at(0).shape[3];
-    int* input_paramters = (int*)input_tensors->at(1).data;
-    const int depth = input_paramters[0];
-    const int num_head = input_paramters[1];
-    bool do_patch_merge = (input_paramters[2] == 1) ? true : false;
-    const int sm = input_paramters[3];
+    size_t    dim             = input_tensors->at(0).shape[3];
+    int*      input_paramters = (int*)input_tensors->at(1).data;
+    const int depth           = input_paramters[0];
+    const int num_head        = input_paramters[1];
+    bool      do_patch_merge  = (input_paramters[2] == 1) ? true : false;
+    const int sm              = input_paramters[3];
 
     patches_resolution_ = input_resolution;
-    embed_dim_ = dim;
+    embed_dim_          = dim;
     allocateBuffer();
 
-    int block_output_size = batch * input_resolution * input_resolution * dim;
-    size_t m = batch * input_resolution * input_resolution;
-    size_t n = dim;
-    size_t window_num = (input_resolution / window_size_) * (input_resolution / window_size_);
-    size_t window_len = window_size_ * window_size_;
-    int shift_size = 0;
-    DataType data_type = getTensorType<T>();
+    int      block_output_size = batch * input_resolution * input_resolution * dim;
+    size_t   m                 = batch * input_resolution * input_resolution;
+    size_t   n                 = dim;
+    size_t   window_num        = (input_resolution / window_size_) * (input_resolution / window_size_);
+    size_t   window_len        = window_size_ * window_size_;
+    int      shift_size        = 0;
+    DataType data_type         = getTensorType<T>();
 
     if (do_patch_merge) {
         for (int i = 0; i < depth; i++) {
@@ -145,8 +156,8 @@ void SwinTransformerBasicLayer<T>::forward(std::vector<Tensor>* output_tensors,
                        data_type,
                        std::vector<size_t>{batch, input_resolution, input_resolution, dim},
                        block_output_ + (i % 2) * block_output_size}};
-            shift_size = (i % 2 == 0) ? 0 : (window_size_ / 2);
-            int additional_parameters[3] = {num_head, shift_size, sm};
+            shift_size                                   = (i % 2 == 0) ? 0 : (window_size_ / 2);
+            int                 additional_parameters[3] = {num_head, shift_size, sm};
             std::vector<Tensor> tmp_input_tensors{
                 Tensor{MEMORY_GPU,
                        data_type,
@@ -177,8 +188,8 @@ void SwinTransformerBasicLayer<T>::forward(std::vector<Tensor>* output_tensors,
                        data_type,
                        std::vector<size_t>{batch, input_resolution, input_resolution, dim},
                        i == depth - 1 ? output_tensor : block_output_ + (i % 2) * block_output_size}};
-            shift_size = (i % 2 == 0) ? 0 : (window_size_ / 2);
-            int additional_parameters[3] = {num_head, shift_size, sm};
+            shift_size                                   = (i % 2 == 0) ? 0 : (window_size_ / 2);
+            int                 additional_parameters[3] = {num_head, shift_size, sm};
             std::vector<Tensor> tmp_input_tensors{
                 Tensor{MEMORY_GPU,
                        data_type,
@@ -200,4 +211,7 @@ void SwinTransformerBasicLayer<T>::forward(std::vector<Tensor>* output_tensors,
 
 template class SwinTransformerBasicLayer<float>;
 template class SwinTransformerBasicLayer<half>;
+#ifdef ENABLE_BF16
+template class SwinTransformerBasicLayer<__nv_bfloat16>;
+#endif
 }  // namespace fastertransformer

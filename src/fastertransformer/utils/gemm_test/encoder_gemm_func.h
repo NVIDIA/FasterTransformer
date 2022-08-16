@@ -34,7 +34,12 @@
 namespace fastertransformer {
 
 template<typename T>
-void generate_encoder_gemm_config(
-    int batch_size, int seq_len, int head_num, int size_per_head, void* buffer, bool isAppend = true);
+void generate_encoder_gemm_config(int   batch_size,
+                                  int   seq_len,
+                                  int   head_num,
+                                  int   size_per_head,
+                                  void* buffer,
+                                  bool  isAppend         = true,
+                                  int   tensor_para_size = 1);
 
 }  // namespace fastertransformer

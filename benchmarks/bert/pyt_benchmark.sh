@@ -54,7 +54,7 @@ if [ -f "gemm_config.in" ] ; then
 
     tmp_log_ths=${logdir}/batchsize-${batch_size}-seq-${seq_len}-${precision}-ths-log.log
     if [ "$precision" = "fp16" ]; then
-        python ../examples/pytorch/bert/bert_example.py ${batch_size} 12 ${seq_len} 12 64 --fp16 --time 2>&1 | tee $tmp_log_ths
+        python ../examples/pytorch/bert/bert_example.py ${batch_size} 12 ${seq_len} 12 64 --data_type fp16 --time 2>&1 | tee $tmp_log_ths
     else
         python ../examples/pytorch/bert/bert_example.py ${batch_size} 12 ${seq_len} 12 64 --time 2>&1 | tee $tmp_log_ths
     fi

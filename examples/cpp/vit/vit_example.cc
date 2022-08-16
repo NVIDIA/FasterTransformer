@@ -28,10 +28,10 @@ template<typename T>
 void test(
     int batch_size, int img_size, int patch_size, int embed_dim, int head_num, int layer_num, int token_classifier)
 {
-    cudnnHandle_t cudnn_handle;
-    cublasHandle_t cublas_handle;
+    cudnnHandle_t    cudnn_handle;
+    cublasHandle_t   cublas_handle;
     cublasLtHandle_t cublaslt_handle;
-    cudaStream_t stream = 0;
+    cudaStream_t     stream = 0;
     checkCUDNN(cudnnCreate(&cudnn_handle));
     checkCUDNN(cudnnSetStream(cudnn_handle, stream));
     check_cuda_error(cublasCreate(&cublas_handle));
@@ -51,11 +51,11 @@ void test(
     else if (std::is_same<T, float>::value) {
         cublas_wrapper->setFP32GemmConfig();
     }
-    const int in_chans = 3;
+    const int  in_chans       = 3;
     const bool with_cls_token = token_classifier > 0;
-    const int inter_size = embed_dim * 4;
-    const int head_dim = embed_dim / head_num;
-    const int seq_len = (img_size / patch_size) * (img_size / patch_size) + (with_cls_token ? 1 : 0);
+    const int  inter_size     = embed_dim * 4;
+    const int  head_dim       = embed_dim / head_num;
+    const int  seq_len        = (img_size / patch_size) * (img_size / patch_size) + (with_cls_token ? 1 : 0);
 
     ViTWeight<T> params =
         ViTWeight<T>(embed_dim, inter_size, layer_num, img_size, patch_size, in_chans, with_cls_token);
@@ -78,8 +78,8 @@ void test(
     AttentionType attention_type = getAttentionType<T>(head_dim, getSMVersion(), true, seq_len);
     printf("Attention Type: %d\n", int(attention_type));
     fastertransformer::Allocator<AllocatorType::CUDA> allocator(0);
-    int max_batch = batch_size;
-    ViTTransformer<T>* vit = new ViTTransformer<T>(max_batch,
+    int                                               max_batch = batch_size;
+    ViTTransformer<T>*                                vit       = new ViTTransformer<T>(max_batch,
                                                    img_size,
                                                    in_chans,
                                                    patch_size,
@@ -118,7 +118,7 @@ void test(
         vit->forward(&output_tensors, &input_tensors, &params);
     }
 
-    int ite = 100;
+    int       ite = 100;
     CudaTimer cuda_timer(stream);
     cuda_timer.start();
     for (int i = 0; i < ite; i++) {
@@ -170,14 +170,14 @@ int main(int argc, char* argv[])
         return 0;
     }
 
-    const int batch_size = atoi(argv[1]);
-    const int img_size = atoi(argv[2]);
-    const int patch_size = atoi(argv[3]);
-    const int embed_dim = atoi(argv[4]);
-    const int head_num = atoi(argv[5]);
-    const int layer_num = atoi(argv[6]);
+    const int batch_size       = atoi(argv[1]);
+    const int img_size         = atoi(argv[2]);
+    const int patch_size       = atoi(argv[3]);
+    const int embed_dim        = atoi(argv[4]);
+    const int head_num         = atoi(argv[5]);
+    const int layer_num        = atoi(argv[6]);
     const int token_classifier = atoi(argv[7]);
-    const int is_fp16 = atoi(argv[8]);
+    const int is_fp16          = atoi(argv[8]);
 
     if (is_fp16) {
         test<half>(batch_size, img_size, patch_size, embed_dim, head_num, layer_num, token_classifier);

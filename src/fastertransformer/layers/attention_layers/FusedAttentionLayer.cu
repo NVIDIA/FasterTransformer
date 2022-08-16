@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,16 +18,16 @@
 
 namespace fastertransformer {
 
-__global__ void trt_add_QKV_bias(half2* qkv_buf,
+__global__ void trt_add_QKV_bias(half2*       qkv_buf,
                                  const half2* Q,
                                  const half2* bias_Q,
                                  const half2* K,
                                  const half2* bias_K,
                                  const half2* V,
                                  const half2* bias_V,
-                                 const int valid_word_num,
-                                 const int head_num,
-                                 const int size_per_head)
+                                 const int    valid_word_num,
+                                 const int    head_num,
+                                 const int    size_per_head)
 {
     // Add bias, and then transpose from
     // [3, valid_word_num, head, size] -> [valid_word_num, head, 3, size]
@@ -41,7 +41,7 @@ __global__ void trt_add_QKV_bias(half2* qkv_buf,
         const int head_id = (index - size_id) / size_per_head;
 
         const int target_offset = blockIdx.x * head_num * 3 * size_per_head + head_id * 3 * size_per_head;
-        const int src_id = seq_id * head_num * size_per_head + index;
+        const int src_id        = seq_id * head_num * size_per_head + index;
 
         qkv_buf[target_offset + 0 * size_per_head + size_id] = Q[src_id] + bias_Q[index];
         qkv_buf[target_offset + 1 * size_per_head + size_id] = K[src_id] + bias_K[index];
@@ -52,6 +52,7 @@ __global__ void trt_add_QKV_bias(half2* qkv_buf,
 template<typename T>
 void FusedAttentionLayer<T>::invokeTrtAddQkvBias(size_t token_num, const AttentionWeight<T>* attention_weights)
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     dim3 grid(token_num);
     dim3 block(min((int)(head_num_ * size_per_head_ / 2), 512));
 
@@ -68,25 +69,24 @@ void FusedAttentionLayer<T>::invokeTrtAddQkvBias(size_t token_num, const Attenti
 }
 
 template<typename T>
-void FusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* output_tensors,
+void FusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                                      const std::vector<fastertransformer::Tensor>* input_tensors,
-                                     const AttentionWeight<T>* attention_weights)
+                                     const AttentionWeight<T>*                     attention_weights)
 {
-    // input_tensors: [input_query (token_num, hidden_dimension),
+    // input_tensors: [input_query (h_token_num, d_model),
     //                 attention_mask (batch, 1, seqlen, seqlen),
     //                 padding_offset (batch + 1 or batch * 2 + 1))]
     // If padding_offset.data is nullptr, then not remove padding
 
-    FT_CHECK(isValidBatchSize(input_tensors->at(1).shape[0]));
-    FT_CHECK(isValidSeqLen(input_tensors->at(1).shape[2]));
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
 
     const int request_batch_size = input_tensors->at(1).shape[0];
-    const int request_seq_len = input_tensors->at(1).shape[2];
+    const int request_seq_len    = input_tensors->at(1).shape[2];
     allocateBuffer(request_batch_size, request_seq_len);
 
-    T* attention_out = (T*)output_tensors->at(0).data;
-    const T* from_tensor = (const T*)input_tensors->at(0).data;
-    const T* attention_mask = (const T*)input_tensors->at(1).data;
+    T*         attention_out  = (T*)output_tensors->at(0).data;
+    const T*   from_tensor    = (const T*)input_tensors->at(0).data;
+    const T*   attention_mask = (const T*)input_tensors->at(1).data;
     const int* padding_offset = (const int*)input_tensors->at(2).data;
 
     size_t m_tmp = input_tensors->at(0).shape[0];
@@ -94,8 +94,8 @@ void FusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* out
         m_tmp = (m_tmp / 8 + 1) * 8;
     }
     const size_t m = input_tensors->at(0).shape[0];
-    const int k = hidden_units_;
-    const int n = hidden_units_;
+    int          k = d_model_;
+    int          n = hidden_units_;
 
 #ifdef SPARSITY_ENABLED
     const size_t m_padded = m_tmp;
@@ -181,6 +181,8 @@ void FusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* out
     dispatcher_fp16->run(qkv_buf_, nullptr, (int*)input_tensors->at(2).data, attn_workspace_, qkv_buf_2_, stream_);
     sync_check_cuda_error();
 
+    k = hidden_units_;
+    n = d_model_;
 #ifdef SPARSITY_ENABLED
     if (sparse_ && cublas_wrapper_->isUseSparse(1, n, m, k)) {
         cublas_wrapper_->SpGemm(CUBLAS_OP_N,
@@ -215,26 +217,27 @@ void FusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>* out
 }
 
 template<typename T>
-FusedAttentionLayer<T>::FusedAttentionLayer(size_t max_batch_size,
-                                            size_t max_seq_len,
-                                            size_t head_num,
-                                            size_t size_per_head,
-                                            int sm,
-                                            float q_scaling,
-                                            cudaStream_t stream,
+FusedAttentionLayer<T>::FusedAttentionLayer(size_t           max_batch_size,
+                                            size_t           max_seq_len,
+                                            size_t           head_num,
+                                            size_t           size_per_head,
+                                            size_t           d_model,
+                                            int              sm,
+                                            float            q_scaling,
+                                            cudaStream_t     stream,
                                             cublasMMWrapper* cublas_wrapper,
-                                            IAllocator* allocator,
-                                            bool is_free_buffer_after_forward,
-                                            bool sparse):
+                                            IAllocator*      allocator,
+                                            bool             is_free_buffer_after_forward,
+                                            bool             sparse):
     BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
-    max_batch_size_(max_batch_size),
-    max_seq_len_(max_seq_len),
     head_num_(head_num),
     size_per_head_(size_per_head),
+    d_model_(d_model),
     sm_(sm),
     q_scaling_(q_scaling),
     sparse_(sparse)
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     if ((sm_ == kSM_70 || sm_ == kSM_86 || sm_ == kSM_80 || sm_ == kSM_75 || sm_ == kSM_72) && size_per_head_ == 64) {
         dispatcher_fp16.reset(new FusedMHARunnerFP16v2(head_num_, size_per_head_, sm_, q_scaling_));
     }
@@ -246,30 +249,25 @@ FusedAttentionLayer<T>::FusedAttentionLayer(size_t max_batch_size,
 
 template<typename T>
 FusedAttentionLayer<T>::FusedAttentionLayer(FusedAttentionLayer<T> const& attention_layer):
-    BaseAttentionLayer<T>(attention_layer.stream_,
-                          attention_layer.cublas_wrapper_,
-                          attention_layer.allocator_,
-                          attention_layer.is_free_buffer_after_forward_),
-    max_batch_size_(attention_layer.max_batch_size_),
-    max_seq_len_(attention_layer.max_seq_len_),
-    head_num_(attention_layer.head_num_),
-    size_per_head_(attention_layer.size_per_head_),
-    hidden_units_(attention_layer.hidden_units_),
-    sm_(attention_layer.sm_),
-    q_scaling_(attention_layer.q_scaling_),
-    sparse_(attention_layer.sparse_)
+    FusedAttentionLayer(0,
+                        0,
+                        attention_layer.head_num_,
+                        attention_layer.size_per_head_,
+                        attention_layer.d_model_,
+                        attention_layer.sm_,
+                        attention_layer.q_scaling_,
+                        attention_layer.stream_,
+                        attention_layer.cublas_wrapper_,
+                        attention_layer.allocator_,
+                        attention_layer.is_free_buffer_after_forward_,
+                        attention_layer.sparse_)
 {
-    if ((sm_ == kSM_70 || sm_ == kSM_86 || sm_ == kSM_80 || sm_ == kSM_75 || sm_ == kSM_72) && size_per_head_ == 64) {
-        dispatcher_fp16.reset(new FusedMHARunnerFP16v2(head_num_, size_per_head_, sm_, q_scaling_));
-    }
-    else {
-        throw std::runtime_error(std::string("[FT][ERROR] FusedAttentionLayer not support \n"));
-    }
 }
 
 template<typename T>
 FusedAttentionLayer<T>::~FusedAttentionLayer()
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     cublas_wrapper_ = nullptr;
     freeBuffer();
 }
@@ -277,72 +275,53 @@ FusedAttentionLayer<T>::~FusedAttentionLayer()
 template<typename T>
 void FusedAttentionLayer<T>::allocateBuffer()
 {
-    if (is_allocate_buffer_ == false) {
-        q_buf_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
-        k_buf_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
-        v_buf_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
-        qkv_buf_ = (T*)allocator_->malloc(sizeof(T) * 3 * max_batch_size_ * max_seq_len_ * hidden_units_, false);
-        qkv_buf_2_ = (T*)allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
-        attn_workspace_ = (T*)allocator_->malloc(dispatcher_fp16->getWorkspaceSize(), false);
-
-        batch_qkv_kernel_ptr_ = (T**)allocator_->malloc(sizeof(T*) * 12, false);
-        batch_qkv_input_ptr_ = batch_qkv_kernel_ptr_ + 4;
-        batch_qkv_buf_ptr_ = batch_qkv_input_ptr_ + 4;
-        is_allocate_buffer_ = true;
-    }
+    FT_CHECK(false);
 }
 
 template<typename T>
 void FusedAttentionLayer<T>::allocateBuffer(size_t batch_size, size_t seq_len)
 {
-    q_buf_ = (T*)allocator_->reMalloc(q_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
-    k_buf_ = (T*)allocator_->reMalloc(k_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
-    v_buf_ = (T*)allocator_->reMalloc(v_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
-    qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * 3 * batch_size * seq_len * hidden_units_, false);
-    qkv_buf_2_ = (T*)allocator_->reMalloc(qkv_buf_2_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    q_buf_          = (T*)allocator_->reMalloc(q_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
+    k_buf_          = (T*)allocator_->reMalloc(k_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
+    v_buf_          = (T*)allocator_->reMalloc(v_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
+    qkv_buf_        = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * 3 * batch_size * seq_len * hidden_units_, false);
+    qkv_buf_2_      = (T*)allocator_->reMalloc(qkv_buf_2_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
     attn_workspace_ = (T*)allocator_->reMalloc(attn_workspace_, dispatcher_fp16->getWorkspaceSize(), false);
 
     batch_qkv_kernel_ptr_ = (T**)allocator_->reMalloc(batch_qkv_kernel_ptr_, sizeof(T*) * 12, false);
-    batch_qkv_input_ptr_ = batch_qkv_kernel_ptr_ + 4;
-    batch_qkv_buf_ptr_ = batch_qkv_input_ptr_ + 4;
-    is_allocate_buffer_ = true;
+    batch_qkv_input_ptr_  = batch_qkv_kernel_ptr_ + 4;
+    batch_qkv_buf_ptr_    = batch_qkv_input_ptr_ + 4;
+    is_allocate_buffer_   = true;
 }
 
 template<typename T>
 void FusedAttentionLayer<T>::freeBuffer()
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_) {
-        allocator_->free(q_buf_);
-        allocator_->free(k_buf_);
-        allocator_->free(v_buf_);
-        allocator_->free(qkv_buf_);
-        allocator_->free(qkv_buf_2_);
-        allocator_->free(attn_workspace_);
-        allocator_->free(batch_qkv_kernel_ptr_);
+        allocator_->free((void**)(&q_buf_));
+        allocator_->free((void**)(&k_buf_));
+        allocator_->free((void**)(&v_buf_));
+        allocator_->free((void**)(&qkv_buf_));
+        allocator_->free((void**)(&qkv_buf_2_));
+        allocator_->free((void**)(&attn_workspace_));
+        allocator_->free((void**)(&batch_qkv_kernel_ptr_));
         sync_check_cuda_error();
         is_allocate_buffer_ = false;
     }
 }
 
 template<typename T>
-bool FusedAttentionLayer<T>::isValidBatchSize(size_t batch_size)
+bool FusedAttentionLayer<T>::isValidSeqLen(const size_t seq_len)
 {
-    if (max_batch_size_ < batch_size) {
-        max_batch_size_ = batch_size;
-    }
-    return true;
-}
-
-template<typename T>
-bool FusedAttentionLayer<T>::isValidSeqLen(size_t seq_len)
-{
-    if (max_seq_len_ < seq_len) {
-        max_seq_len_ = seq_len;
-    }
     return seq_len <= 384;
 }
 
 template class FusedAttentionLayer<float>;
 template class FusedAttentionLayer<half>;
+#ifdef ENABLE_BF16
+template class FusedAttentionLayer<__nv_bfloat16>;
+#endif
 
 }  // namespace fastertransformer

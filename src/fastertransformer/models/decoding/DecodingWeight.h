@@ -55,13 +55,13 @@ struct DecodingWeight {
                 deviceFree(weights_ptr[i]);
             }
 
-            position_encoding_table = nullptr;
-            pre_decoder_embedding_table = nullptr;
-            post_decoder_layernorm.beta = nullptr;
-            post_decoder_layernorm.gamma = nullptr;
+            position_encoding_table       = nullptr;
+            pre_decoder_embedding_table   = nullptr;
+            post_decoder_layernorm.beta   = nullptr;
+            post_decoder_layernorm.gamma  = nullptr;
             post_decoder_embedding.kernel = nullptr;
-            post_decoder_embedding.bias = nullptr;
-            is_maintain_buffer = false;
+            post_decoder_embedding.bias   = nullptr;
+            is_maintain_buffer            = false;
         }
     }
 
@@ -90,11 +90,11 @@ struct DecodingWeight {
 
     DecodingWeight& operator=(const DecodingWeight& other)
     {
-        hidden_units_ = other.hidden_units_;
-        inter_size_ = other.inter_size_;
-        num_layer_ = other.num_layer_;
-        vocab_size_ = other.vocab_size_;
-        max_seq_len_ = other.max_seq_len_;
+        hidden_units_     = other.hidden_units_;
+        inter_size_       = other.inter_size_;
+        num_layer_        = other.num_layer_;
+        vocab_size_       = other.vocab_size_;
+        max_seq_len_      = other.max_seq_len_;
         mem_hidden_units_ = other.mem_hidden_units_;
 
         mallocWeights();
@@ -125,30 +125,30 @@ struct DecodingWeight {
     }
 
     std::vector<DecoderLayerWeight<T>> decoder_layer_weights;
-    const T* position_encoding_table = nullptr;
-    const T* pre_decoder_embedding_table = nullptr;
-    LayerNormWeight<T> post_decoder_layernorm;
-    DenseWeight<T> post_decoder_embedding;
+    const T*                           position_encoding_table     = nullptr;
+    const T*                           pre_decoder_embedding_table = nullptr;
+    LayerNormWeight<T>                 post_decoder_layernorm;
+    DenseWeight<T>                     post_decoder_embedding;
 
 private:
     void setWeightPtr()
     {
-        position_encoding_table = weights_ptr[0];
-        pre_decoder_embedding_table = weights_ptr[1];
-        post_decoder_layernorm.beta = weights_ptr[2];
-        post_decoder_layernorm.gamma = weights_ptr[3];
+        position_encoding_table       = weights_ptr[0];
+        pre_decoder_embedding_table   = weights_ptr[1];
+        post_decoder_layernorm.beta   = weights_ptr[2];
+        post_decoder_layernorm.gamma  = weights_ptr[3];
         post_decoder_embedding.kernel = weights_ptr[4];
-        post_decoder_embedding.bias = weights_ptr[5];
+        post_decoder_embedding.bias   = weights_ptr[5];
     }
 
-    int hidden_units_;
-    int inter_size_;
-    int vocab_size_;
-    int num_layer_;
-    int max_seq_len_;
-    int mem_hidden_units_;
+    int  hidden_units_;
+    int  inter_size_;
+    int  vocab_size_;
+    int  num_layer_;
+    int  max_seq_len_;
+    int  mem_hidden_units_;
     bool is_maintain_buffer = false;
-    T* weights_ptr[6];
+    T*   weights_ptr[6];
 };
 
 }  // namespace fastertransformer

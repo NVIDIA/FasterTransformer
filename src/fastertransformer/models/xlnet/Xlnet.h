@@ -34,16 +34,17 @@ class Xlnet: public BaseLayer {
 private:
     // buffer handling
     size_t max_batch_size_ = 0;
-    size_t max_seq_len_ = 0;
+    size_t max_seq_len_    = 0;
     // meta data
-    size_t head_num_;
-    size_t size_per_head_;
-    size_t inter_size_;
-    size_t hidden_units_;
-    size_t num_layer_;
-    float q_scaling_;
+    size_t                 head_num_;
+    size_t                 size_per_head_;
+    size_t                 inter_size_;
+    size_t                 hidden_units_;
+    size_t                 num_layer_;
+    float                  q_scaling_;
+    constexpr static float layernorm_eps_ = 1e-6f;
 
-    bool is_allocate_buffer_ = false;
+    bool         is_allocate_buffer_ = false;
     FfnLayer<T>* ffn_layer_;
 
     void allocateBuffer();
@@ -66,24 +67,24 @@ protected:
     XlnetAttentionLayer<T>* attention_layer_;
 
 public:
-    Xlnet(size_t max_batch_size,
-          size_t max_seq_len,
-          size_t head_num,
-          size_t size_per_head,
-          size_t inter_size,
-          size_t num_layer,
-          float q_scaling,
-          cudaStream_t stream,
+    Xlnet(size_t           max_batch_size,
+          size_t           max_seq_len,
+          size_t           head_num,
+          size_t           size_per_head,
+          size_t           inter_size,
+          size_t           num_layer,
+          float            q_scaling,
+          cudaStream_t     stream,
           cublasMMWrapper* cublas_wrapper,
-          IAllocator* allocator,
-          bool is_free_buffer_after_forward);
+          IAllocator*      allocator,
+          bool             is_free_buffer_after_forward);
 
     Xlnet(Xlnet<T> const& xlnet_layer);
 
     ~Xlnet();
 
-    void forward(std::vector<Tensor>* output_tensors,
-                 const std::vector<Tensor>* input_tensors,
+    void forward(std::vector<Tensor>*                    output_tensors,
+                 const std::vector<Tensor>*              input_tensors,
                  const std::vector<XlnetLayerWeight<T>>* bert_layer_weights);
 };
 

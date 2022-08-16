@@ -73,7 +73,7 @@ struct Serializer<const char*> {
     }
     static void deserialize(void const** buffer, size_t* buffer_size, const char** value)
     {
-        *value = static_cast<char const*>(*buffer);
+        *value           = static_cast<char const*>(*buffer);
         size_t data_size = strnlen(*value, *buffer_size) + 1;
         assert(*buffer_size >= data_size);
         reinterpret_cast<char const*&>(*buffer) += data_size;

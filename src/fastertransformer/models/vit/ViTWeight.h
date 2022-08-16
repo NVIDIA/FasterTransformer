@@ -32,12 +32,12 @@ template<typename T>
 struct ViTWeight {
 
     ViTWeight() = delete;
-    ViTWeight(const int embed_dim,
-              const int inter_size,
-              const int num_layer,
-              const int img_size,
-              const int patch_size,
-              const int chn_num,
+    ViTWeight(const int  embed_dim,
+              const int  inter_size,
+              const int  num_layer,
+              const int  img_size,
+              const int  patch_size,
+              const int  chn_num,
               const bool with_cls_token,
               const bool hold_buffer = true):
         with_cls_token_(with_cls_token),
@@ -85,12 +85,12 @@ struct ViTWeight {
             }
 
             post_transformer_layernorm_weights.gamma = nullptr;
-            post_transformer_layernorm_weights.beta = nullptr;
-            pre_transform_embeds.class_embed = nullptr;
-            pre_transform_embeds.position_embed = nullptr;
-            pre_encoder_conv_weights.kernel = nullptr;
-            pre_encoder_conv_weights.bias = nullptr;
-            is_maintain_buffer = false;
+            post_transformer_layernorm_weights.beta  = nullptr;
+            pre_transform_embeds.class_embed         = nullptr;
+            pre_transform_embeds.position_embed      = nullptr;
+            pre_encoder_conv_weights.kernel          = nullptr;
+            pre_encoder_conv_weights.bias            = nullptr;
+            is_maintain_buffer                       = false;
         }
     }
 
@@ -124,13 +124,13 @@ struct ViTWeight {
 
     ViTWeight& operator=(const ViTWeight& other)
     {
-        embed_dim_ = other.embed_dim_;
-        inter_size_ = other.inter_size_;
-        num_layer_ = other.num_layer_;
-        img_size_ = other.img_size_;
-        patch_size_ = other.patch_size_;
-        chn_num_ = other.chn_num_;
-        seq_len_ = other.seq_len_;
+        embed_dim_      = other.embed_dim_;
+        inter_size_     = other.inter_size_;
+        num_layer_      = other.num_layer_;
+        img_size_       = other.img_size_;
+        patch_size_     = other.patch_size_;
+        chn_num_        = other.chn_num_;
+        seq_len_        = other.seq_len_;
         with_cls_token_ = other.with_cls_token_;
         memcpy(weights_size, other.weights_size, sizeof(size_t) * WEIGHT_N);
 
@@ -255,20 +255,20 @@ struct ViTWeight {
                            dtype,
                            std::vector<size_t>{embed_dim_, chn_num_, patch_size_, patch_size_},
                            pre_encoder_conv_weights.kernel};  // OIHW
-        conv_kernel.save<T>("./weights/conv_kernel.npy");
+        conv_kernel.saveNpy("./weights/conv_kernel.npy");
         Tensor conv_bias{MEMORY_GPU, dtype, std::vector<size_t>{embed_dim_}, pre_encoder_conv_weights.bias};  // OIHW
-        conv_bias.save<T>("./weights/conv_bias.npy");
+        conv_bias.saveNpy("./weights/conv_bias.npy");
         Tensor cls_token{MEMORY_GPU, dtype, std::vector<size_t>{embed_dim_}, pre_transform_embeds.class_embed};
         if (with_cls_token_) {
-            cls_token.save<T>("./weights/cls_token.npy");
+            cls_token.saveNpy("./weights/cls_token.npy");
         }
         Tensor pos_embed{
             MEMORY_GPU, dtype, std::vector<size_t>{1, seq_len_, embed_dim_}, pre_transform_embeds.position_embed};
-        pos_embed.save<T>("./weights/pos_embed.npy");
+        pos_embed.saveNpy("./weights/pos_embed.npy");
         Tensor ln_gamma{MEMORY_GPU, dtype, std::vector<size_t>{embed_dim_}, post_transformer_layernorm_weights.gamma};
-        ln_gamma.save<T>("./weights/enc_ln_scale.npy");
+        ln_gamma.saveNpy("./weights/enc_ln_scale.npy");
         Tensor ln_beta{MEMORY_GPU, dtype, std::vector<size_t>{embed_dim_}, post_transformer_layernorm_weights.beta};
-        ln_beta.save<T>("./weights/enc_ln_bias.npy");
+        ln_beta.saveNpy("./weights/enc_ln_bias.npy");
 
         for (int i = 0; i < num_layer_; i++) {
             vit_layer_weights[i].ExportWeights(i);
@@ -276,32 +276,32 @@ struct ViTWeight {
     }
 
     std::vector<ViTLayerWeight<T>> vit_layer_weights;
-    LayerNormWeight<T> post_transformer_layernorm_weights;
-    ViTEmbeds<T> pre_transform_embeds;
-    DenseWeight<T> pre_encoder_conv_weights;
-    bool with_cls_token_;
+    LayerNormWeight<T>             post_transformer_layernorm_weights;
+    ViTEmbeds<T>                   pre_transform_embeds;
+    DenseWeight<T>                 pre_encoder_conv_weights;
+    bool                           with_cls_token_;
 
 private:
     void setWeightPtr()
     {
-        pre_encoder_conv_weights.kernel = weights_ptr[0];
-        pre_encoder_conv_weights.bias = weights_ptr[1];
-        pre_transform_embeds.class_embed = weights_ptr[2];
-        pre_transform_embeds.position_embed = weights_ptr[3];
+        pre_encoder_conv_weights.kernel          = weights_ptr[0];
+        pre_encoder_conv_weights.bias            = weights_ptr[1];
+        pre_transform_embeds.class_embed         = weights_ptr[2];
+        pre_transform_embeds.position_embed      = weights_ptr[3];
         post_transformer_layernorm_weights.gamma = weights_ptr[4];
-        post_transformer_layernorm_weights.beta = weights_ptr[5];
+        post_transformer_layernorm_weights.beta  = weights_ptr[5];
 
         is_maintain_buffer = true;
     }
-    int embed_dim_;
-    int inter_size_;
-    int num_layer_;
-    int img_size_;
-    int patch_size_;
-    int chn_num_;
-    int seq_len_;
-    bool is_maintain_buffer = false;
-    T* weights_ptr[WEIGHT_N]{nullptr};
+    int    embed_dim_;
+    int    inter_size_;
+    int    num_layer_;
+    int    img_size_;
+    int    patch_size_;
+    int    chn_num_;
+    int    seq_len_;
+    bool   is_maintain_buffer = false;
+    T*     weights_ptr[WEIGHT_N]{nullptr};
     size_t weights_size[WEIGHT_N];
 };
 

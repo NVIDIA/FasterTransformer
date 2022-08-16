@@ -78,7 +78,7 @@ class ViTWeightLoader(object):
 
             for name in pre_layer_weight_names:
                 if name not in weight_dict.files:
-                    print("Unsupport weight file: Missing weights %s" % name)
+                    print("Unsupported weight file: Missing weights %s" % name)
                 is_conv = name == 'embedding/kernel'
 
                 if classifier != 'token' and name == 'cls':
@@ -114,20 +114,20 @@ class ViTWeightLoader(object):
                 for name in layer_weight_names:
                     w_name = name.format(layer_idx)
                     if w_name not in weight_dict.files:
-                        print("Unsupport weight file: Missing weights %s" % w_name)
+                        print("Unsupported weight file: Missing weights %s" % w_name)
                     th_weight = np2th(weight_dict[w_name])
                     self.weights.append(th_weight)
 
             for name in post_layer_weight_names:
                 if name not in weight_dict.files:
-                    print("Unsupport weight file: Missing weights %s" % name)
+                    print("Unsupported weight file: Missing weights %s" % name)
                 th_weight = np2th(weight_dict[name])
                 self.weights.append(th_weight)
     
     def load_weights(self, weight_path:str):
         suffix = weight_path.split('.')[-1]
         if suffix != 'npz':
-            print("Unsupport weight file: Unrecognized format %s " % suffix)
+            print("Unsupported weight file: Unrecognized format %s " % suffix)
             exit(-1)
         return np.load(weight_path)
 

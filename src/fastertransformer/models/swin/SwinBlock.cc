@@ -22,15 +22,15 @@ template<typename T>
 void SwinTransformerBlock<T>::allocateBuffer()
 {
     if (is_allocate_buffer_ == false) {
-        attention_output_ =
-            (T*)allocator_->malloc(max_batch_ * window_num_ * window_len_ * embed_dim_ * sizeof(T), false);
-        normed_attn_out_buf_ =
-            (T*)allocator_->malloc(max_batch_ * window_num_ * window_len_ * embed_dim_ * sizeof(T), false);
-        mlp_buf_ = (T*)allocator_->malloc(
-            max_batch_ * window_num_ * window_len_ * int(embed_dim_ * mlp_ratio_) * sizeof(T), false);
+        attention_output_ = (T*)allocator_->reMalloc(
+            attention_output_, max_batch_ * window_num_ * window_len_ * embed_dim_ * sizeof(T), false);
+        normed_attn_out_buf_ = (T*)allocator_->reMalloc(
+            normed_attn_out_buf_, max_batch_ * window_num_ * window_len_ * embed_dim_ * sizeof(T), false);
+        mlp_buf_ = (T*)allocator_->reMalloc(
+            mlp_buf_, max_batch_ * window_num_ * window_len_ * int(embed_dim_ * mlp_ratio_) * sizeof(T), false);
 
         normed_shifted_input_ = mlp_buf_;
-        is_allocate_buffer_ = true;
+        is_allocate_buffer_   = true;
     }
 }
 
@@ -38,32 +38,34 @@ template<typename T>
 void SwinTransformerBlock<T>::freeBuffer()
 {
     if (is_allocate_buffer_ == true) {
-        allocator_->free(attention_output_);
-        allocator_->free(normed_attn_out_buf_);
-        allocator_->free(mlp_buf_);
+        allocator_->free((void**)(&attention_output_));
+        allocator_->free((void**)(&normed_attn_out_buf_));
+        allocator_->free((void**)(&mlp_buf_));
         is_allocate_buffer_ = false;
     }
 }
 
 template<typename T>
-SwinTransformerBlock<T>::SwinTransformerBlock(int max_batch,
-                                              int window_size,
-                                              float mlp_ratio,
-                                              cudaStream_t stream,
+SwinTransformerBlock<T>::SwinTransformerBlock(int              max_batch,
+                                              int              window_size,
+                                              float            mlp_ratio,
+                                              float            layernorm_eps,
+                                              cudaStream_t     stream,
                                               cublasMMWrapper* cublas_wrapper,
-                                              IAllocator* allocator,
-                                              bool is_free_buffer_after_forward,
-                                              bool qkv_bias,
-                                              float qk_scale):
+                                              IAllocator*      allocator,
+                                              bool             is_free_buffer_after_forward,
+                                              bool             qkv_bias,
+                                              float            qk_scale):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     max_batch_(max_batch),
     window_size_(window_size),
     mlp_ratio_(mlp_ratio),
+    layernorm_eps_(layernorm_eps),
     qkv_bias_(qkv_bias),
     qk_scale_(qk_scale)
 {
     window_len_ = window_size_ * window_size_;
-    atten_ = new WindowAttention<T>(max_batch_,
+    atten_      = new WindowAttention<T>(max_batch_,
                                     window_size_,
                                     stream,
                                     cublas_wrapper,
@@ -83,8 +85,8 @@ SwinTransformerBlock<T>::~SwinTransformerBlock()
 }
 
 template<typename T>
-void SwinTransformerBlock<T>::forward(std::vector<Tensor>* output_tensors,
-                                      const std::vector<Tensor>* input_tensors,
+void SwinTransformerBlock<T>::forward(std::vector<Tensor>*           output_tensors,
+                                      const std::vector<Tensor>*     input_tensors,
                                       SwinTransformerBlockWeight<T>& swin_block_weights)
 {
     // input_tensors:
@@ -94,28 +96,29 @@ void SwinTransformerBlock<T>::forward(std::vector<Tensor>* output_tensors,
     // output_tensors:
     //      output [batch, input_resolution, input_resolution, dim]
 
-    T* input = (T*)input_tensors->at(0).data;
-    T* output = (T*)(output_tensors->at(0).data);
-    const int batch = input_tensors->at(0).shape[0];
+    T*        input            = (T*)input_tensors->at(0).data;
+    T*        output           = (T*)(output_tensors->at(0).data);
+    const int batch            = input_tensors->at(0).shape[0];
     const int input_resolution = input_tensors->at(0).shape[1];
     assert(input_resolution == input_tensors->at(0).shape[2]);
-    const int dim = input_tensors->at(0).shape[3];
+    const int  dim              = input_tensors->at(0).shape[3];
     const int* input_parameters = (const int*)input_tensors->at(2).data;
-    const int num_head = input_parameters[0];
-    int shift_size = input_parameters[1];
-    const int sm = input_parameters[2];
+    const int  num_head         = input_parameters[0];
+    int        shift_size       = input_parameters[1];
+    const int  sm               = input_parameters[2];
 
-    shift_size = (input_resolution <= window_size_) ? 0 : shift_size;
+    shift_size     = (input_resolution <= window_size_) ? 0 : shift_size;
     int window_num = (input_resolution / window_size_) * (input_resolution / window_size_);
-    window_num_ = window_num;
-    embed_dim_ = dim;
-    int mlp_dim = int(mlp_ratio_ * dim);
+    window_num_    = window_num;
+    embed_dim_     = dim;
+    int mlp_dim    = int(mlp_ratio_ * dim);
     allocateBuffer();
 
     invokeLayernormShiftPartition(normed_shifted_input_,
                                   input,
                                   swin_block_weights.attn_layernorm_weights.gamma,
                                   swin_block_weights.attn_layernorm_weights.beta,
+                                  layernorm_eps_,
                                   batch,
                                   input_resolution,
                                   input_resolution,
@@ -124,10 +127,10 @@ void SwinTransformerBlock<T>::forward(std::vector<Tensor>* output_tensors,
                                   window_size_,
                                   stream_);
 
-    const size_t m = batch * input_resolution * input_resolution;
-    const size_t n = dim;
-    DataType data_type = getTensorType<T>();
-    int additional_parameters[6] = {batch, dim, input_resolution, num_head, shift_size, sm};
+    const size_t        m                        = batch * input_resolution * input_resolution;
+    const size_t        n                        = dim;
+    DataType            data_type                = getTensorType<T>();
+    int                 additional_parameters[6] = {batch, dim, input_resolution, num_head, shift_size, sm};
     std::vector<Tensor> attn_output_tensors{
         Tensor{MEMORY_GPU, data_type, std::vector<size_t>{m, n}, attention_output_}};
     std::vector<Tensor> attn_input_tensors{
@@ -147,6 +150,7 @@ void SwinTransformerBlock<T>::forward(std::vector<Tensor>* output_tensors,
                                              swin_block_weights.ffn_layernorm_weights.gamma,
                                              swin_block_weights.ffn_layernorm_weights.beta,
                                              swin_block_weights.attention_weights.attention_output_weight.bias,
+                                             layernorm_eps_,
                                              batch * input_resolution * input_resolution,
                                              dim,
                                              stream_);
@@ -164,11 +168,11 @@ void SwinTransformerBlock<T>::forward(std::vector<Tensor>* output_tensors,
                           mlp_buf_,
                           mlp_dim);
 
-    invokeAddBiasGelu(mlp_buf_,
-                      swin_block_weights.ffn_weights.intermediate_weight.bias,
-                      batch * input_resolution * input_resolution,
-                      mlp_dim,
-                      stream_);
+    invokeAddBiasGeluV2(mlp_buf_,
+                        swin_block_weights.ffn_weights.intermediate_weight.bias,
+                        batch * input_resolution * input_resolution,
+                        mlp_dim,
+                        stream_);
 
     cublas_wrapper_->Gemm(CUBLAS_OP_T,
                           CUBLAS_OP_N,
@@ -196,5 +200,8 @@ void SwinTransformerBlock<T>::forward(std::vector<Tensor>* output_tensors,
 
 template class SwinTransformerBlock<float>;
 template class SwinTransformerBlock<half>;
+#ifdef ENABLE_BF16
+template class SwinTransformerBlock<__nv_bfloat16>;
+#endif
 
 }  // namespace fastertransformer

@@ -64,10 +64,10 @@ struct NpyArray {
     }
 
     std::shared_ptr<std::vector<char>> data_holder;
-    std::vector<size_t> shape;
-    size_t word_size;
-    bool fortran_order;
-    size_t num_vals;
+    std::vector<size_t>                shape;
+    size_t                             word_size;
+    bool                               fortran_order;
+    size_t                             num_vals;
 };
 
 using npz_t = std::map<std::string, NpyArray>;
@@ -76,10 +76,10 @@ char BigEndianTest();
 char map_type(const std::type_info& t);
 template<typename T>
 std::vector<char> create_npy_header(const std::vector<size_t>& shape);
-void parse_npy_header(FILE* fp, size_t& word_size, std::vector<size_t>& shape, bool& fortran_order);
-void parse_npy_header(unsigned char* buffer, size_t& word_size, std::vector<size_t>& shape, bool& fortran_order);
-void parse_zip_footer(FILE* fp, uint16_t& nrecs, size_t& global_header_size, size_t& global_header_offset);
-npz_t npz_load(std::string fname);
+void              parse_npy_header(FILE* fp, size_t& word_size, std::vector<size_t>& shape, bool& fortran_order);
+void     parse_npy_header(unsigned char* buffer, size_t& word_size, std::vector<size_t>& shape, bool& fortran_order);
+void     parse_zip_footer(FILE* fp, uint16_t& nrecs, size_t& global_header_size, size_t& global_header_offset);
+npz_t    npz_load(std::string fname);
 NpyArray npz_load(std::string fname, std::string varname);
 NpyArray npy_load(std::string fname);
 
@@ -102,7 +102,7 @@ std::vector<char>& operator+=(std::vector<char>& lhs, const char* rhs);
 template<typename T>
 void npy_save(std::string fname, const T* data, const std::vector<size_t> shape, std::string mode = "w")
 {
-    FILE* fp = NULL;
+    FILE*               fp = NULL;
     std::vector<size_t> true_data_shape;  // if appending, the shape of existing + new data
 
     if (mode == "a")
@@ -112,7 +112,7 @@ void npy_save(std::string fname, const T* data, const std::vector<size_t> shape,
         // file exists. we need to append to it. read the header, modify the array
         // size
         size_t word_size;
-        bool fortran_order;
+        bool   fortran_order;
         parse_npy_header(fp, word_size, true_data_shape, fortran_order);
         assert(!fortran_order);
 
@@ -137,12 +137,12 @@ void npy_save(std::string fname, const T* data, const std::vector<size_t> shape,
         true_data_shape[0] += shape[0];
     }
     else {
-        fp = fopen(fname.c_str(), "wb");
+        fp              = fopen(fname.c_str(), "wb");
         true_data_shape = shape;
     }
 
     std::vector<char> header = create_npy_header<T>(true_data_shape);
-    size_t nels = std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<size_t>());
+    size_t            nels   = std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<size_t>());
 
     fseek(fp, 0, SEEK_SET);
     fwrite(&header[0], sizeof(char), header.size(), fp);
@@ -159,9 +159,9 @@ void npz_save(
     fname += ".npy";
 
     // now, on with the show
-    FILE* fp = NULL;
-    uint16_t nrecs = 0;
-    size_t global_header_offset = 0;
+    FILE*             fp                   = NULL;
+    uint16_t          nrecs                = 0;
+    size_t            global_header_offset = 0;
     std::vector<char> global_header;
 
     if (mode == "a")
@@ -190,12 +190,12 @@ void npz_save(
 
     std::vector<char> npy_header = create_npy_header<T>(shape);
 
-    size_t nels = std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<size_t>());
+    size_t nels   = std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<size_t>());
     size_t nbytes = nels * sizeof(T) + npy_header.size();
 
     // get the CRC of the data to be added
     uint32_t crc = crc32(0L, (uint8_t*)&npy_header[0], npy_header.size());
-    crc = crc32(crc, (uint8_t*)data, nels * sizeof(T));
+    crc          = crc32(crc, (uint8_t*)data, nels * sizeof(T));
 
     // build the local header
     std::vector<char> local_header;

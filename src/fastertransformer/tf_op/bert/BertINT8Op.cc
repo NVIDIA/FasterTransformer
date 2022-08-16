@@ -91,9 +91,9 @@ public:
             OP_REQUIRES_OK(context, context->GetAttr("int8_mode", &int8_mode_));
             OP_REQUIRES_OK(context, context->GetAttr("remove_padding", &remove_padding_));
             OP_REQUIRES_OK(context, context->GetAttr("q_scaling", &q_scaling_));
-            sm_ = ft::getSMVersion();
-            cublas_algo_map_ = new ft::cublasAlgoMap("igemm_config.in");
-            set_weight_ = false;
+            sm_                     = ft::getSMVersion();
+            cublas_algo_map_        = new ft::cublasAlgoMap("igemm_config.in");
+            set_weight_             = false;
             use_ORDER_COL32_2R_4R4_ = false;
 #if (CUDART_VERSION >= 11000)
             if (sm_ >= 80) {
@@ -112,7 +112,7 @@ public:
         if (set_weight_ && h_scale_list_) {
             free(h_scale_list_);
             h_scale_list_ = nullptr;
-            set_weight_ = false;
+            set_weight_   = false;
         }
     }
 
@@ -122,15 +122,15 @@ public:
                     context->num_inputs() == (num_layer_ * 17) + 3,
                     tf::errors::InvalidArgument("[ERROR] More or Less input arguments"));
 
-        const size_t batch_size_ = (size_t)context->input(0).dim_size(0);
+        const size_t batch_size_   = (size_t)context->input(0).dim_size(0);
         const size_t from_seq_len_ = (size_t)context->input(0).dim_size(1);
 
         OP_REQUIRES(context,
                     batch_size_ == (size_t)context->input(2).dim_size(0),
                     tf::errors::InvalidArgument("[ERROR] invalid shape"));
 
-        const cudaStream_t& stream = context->eigen_device<Device>().stream();
-        cublasLtHandle_t cublaslt_handle = this->get_cublaslt_handler();
+        const cudaStream_t& stream          = context->eigen_device<Device>().stream();
+        cublasLtHandle_t    cublaslt_handle = this->get_cublaslt_handler();
 
         ft::cublasINT8MMWrapper cublas_wrapper = ft::cublasINT8MMWrapper(
             cublaslt_handle, stream, cublas_algo_map_, this->get_cublas_wrapper_mutex(), use_ORDER_COL32_2R_4R4_);
@@ -177,12 +177,12 @@ public:
                 // deal with scale list
                 bert_layer_weights_[i].scale_list_.d_scale_list_ =
                     reinterpret_cast<const float*>(context->input(3 + num_layer_ * 16 + i).flat<float>().data());
-                bert_layer_weights_[i].scale_list_.size_ = scale_list_size;
+                bert_layer_weights_[i].scale_list_.size_      = scale_list_size;
                 bert_layer_weights_[i].scale_list_.p3_offset_ = ACTIVATION_AMAX_NUM + 9 * head_num_ * size_per_head_;
                 bert_layer_weights_[i].scale_list_.p4_offset_ =
                     ACTIVATION_AMAX_NUM + 9 * head_num_ * size_per_head_ + INT8O_GEMM_NUM;
                 bert_layer_weights_[i].attention_weights.scale_list_ptr = &(bert_layer_weights_[i].scale_list_);
-                bert_layer_weights_[i].ffn_weights.scale_list_ptr = &(bert_layer_weights_[i].scale_list_);
+                bert_layer_weights_[i].ffn_weights.scale_list_ptr       = &(bert_layer_weights_[i].scale_list_);
                 // copy h_scale_list
                 cudaMemcpy(h_scale_list_ + i * scale_list_size,
                            bert_layer_weights_[i].scale_list_.d_scale_list_,
@@ -214,7 +214,7 @@ public:
         OP_REQUIRES_OK(context, context->allocate_output(0, context->input(0).shape(), &output));
         DataType* out_tensor = reinterpret_cast<DataType*>(output->flat<T>().data());
 
-        ft::DataType data_type = ft::getTensorType<DataType>();
+        ft::DataType            data_type     = ft::getTensorType<DataType>();
         std::vector<ft::Tensor> input_tensors = std::vector<ft::Tensor>{this->convert_tensor(context->input(0)),
                                                                         this->convert_int_tensor(context->input(2))};
 
@@ -238,16 +238,16 @@ public:
     }
 
 private:
-    int head_num_ = 0, size_per_head_ = 0, num_layer_ = 0, inter_size_ = 0, int8_mode_ = 1;
-    bool remove_padding_;
-    bool use_ORDER_COL32_2R_4R4_;
-    int sm_;
-    float q_scaling_ = 1.0f;
-    ft::cublasAlgoMap* cublas_algo_map_;
-    float* h_scale_list_ = nullptr;
-    bool set_weight_ = false;
+    int                 head_num_ = 0, size_per_head_ = 0, num_layer_ = 0, inter_size_ = 0, int8_mode_ = 1;
+    bool                remove_padding_;
+    bool                use_ORDER_COL32_2R_4R4_;
+    int                 sm_;
+    float               q_scaling_ = 1.0f;
+    ft::cublasAlgoMap*  cublas_algo_map_;
+    float*              h_scale_list_ = nullptr;
+    bool                set_weight_   = false;
     typedef TFTraits<T> traits_;
-    typedef typename traits_::DataType DataType;
+    typedef typename traits_::DataType             DataType;
     std::vector<ft::BertLayerINT8Weight<DataType>> bert_layer_weights_;
 };
 

@@ -27,17 +27,17 @@
 namespace fastertransformer {
 
 template<typename T>
-LongformerAttentionLayer<T>::LongformerAttentionLayer(size_t head_num,
-                                                      size_t size_per_head,
-                                                      size_t local_attn_window_size,
-                                                      size_t max_global_token_num,
-                                                      size_t max_batch_size,
-                                                      size_t max_seq_len,
-                                                      float attn_scaler,
-                                                      cudaStream_t stream,
+LongformerAttentionLayer<T>::LongformerAttentionLayer(size_t           head_num,
+                                                      size_t           size_per_head,
+                                                      size_t           local_attn_window_size,
+                                                      size_t           max_global_token_num,
+                                                      size_t           max_batch_size,
+                                                      size_t           max_seq_len,
+                                                      float            attn_scaler,
+                                                      cudaStream_t     stream,
                                                       cublasMMWrapper* cublas_wrapper,
-                                                      IAllocator* allocator,
-                                                      bool is_free_buffer_after_forward):
+                                                      IAllocator*      allocator,
+                                                      bool             is_free_buffer_after_forward):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     head_num_(head_num),
     size_per_head_(size_per_head),
@@ -64,27 +64,27 @@ void LongformerAttentionLayer<T>::forward(std::vector<Tensor>* output_tensors, c
     allocateBuffer();
 
     const int batch_size = input_tensors->at(0).shape[0];
-    const int seq_len = input_tensors->at(0).shape[2];
+    const int seq_len    = input_tensors->at(0).shape[2];
     FT_CHECK(seq_len % local_attn_window_size_ == 0);
     FT_CHECK(size_per_head_ == 64);
 
-    const int batch_stride = head_num_ * seq_len * size_per_head_;
-    const int global_batch_stride = head_num_ * max_global_token_num_ * size_per_head_;
-    const int attn_head_stride = seq_len * size_per_head_;
-    const int attn_window_stride = local_attn_window_size_ * size_per_head_;
+    const int batch_stride                            = head_num_ * seq_len * size_per_head_;
+    const int global_batch_stride                     = head_num_ * max_global_token_num_ * size_per_head_;
+    const int attn_head_stride                        = seq_len * size_per_head_;
+    const int attn_window_stride                      = local_attn_window_size_ * size_per_head_;
     const int local_attn_head_tail_gemm_strides_count = batch_size * head_num_;
-    const int local_attn_middle_gemm_strides_count = (seq_len / local_attn_window_size_) - 2;
+    const int local_attn_middle_gemm_strides_count    = (seq_len / local_attn_window_size_) - 2;
 
-    const void* q = input_tensors->at(0).data;
-    const void* k = input_tensors->at(1).data;
-    const void* v = input_tensors->at(2).data;
-    const void* qg = input_tensors->at(3).data;
-    const void* kg = input_tensors->at(4).data;
-    const void* vg = input_tensors->at(5).data;
-    const void* local_attn_mask = (const T*)input_tensors->at(6).data;
-    const void* global_attn_mask = (const T*)input_tensors->at(7).data;
-    const int* global_idx = (const int*)input_tensors->at(8).data;
-    const int* global_token_nums = (const int*)input_tensors->at(9).data;
+    const void* q                 = input_tensors->at(0).data;
+    const void* k                 = input_tensors->at(1).data;
+    const void* v                 = input_tensors->at(2).data;
+    const void* qg                = input_tensors->at(3).data;
+    const void* kg                = input_tensors->at(4).data;
+    const void* vg                = input_tensors->at(5).data;
+    const void* local_attn_mask   = (const T*)input_tensors->at(6).data;
+    const void* global_attn_mask  = (const T*)input_tensors->at(7).data;
+    const int*  global_idx        = (const int*)input_tensors->at(8).data;
+    const int*  global_token_nums = (const int*)input_tensors->at(9).data;
 
     void* output = (void*)output_tensors->at(0).data;
 
@@ -101,8 +101,8 @@ void LongformerAttentionLayer<T>::forward(std::vector<Tensor>* output_tensors, c
       10 - 14: store buf_strides per head for each buffer. size: 5 * size_t
     */
     size_t* internal_var[15];
-    void** buf_ptrs = (void**)&internal_var[0];
-    size_t* buf_sizes = (size_t*)(&internal_var[5]);
+    void**  buf_ptrs    = (void**)&internal_var[0];
+    size_t* buf_sizes   = (size_t*)(&internal_var[5]);
     size_t* buf_strides = (size_t*)(&internal_var[10]);
 
     buf_sizes[0] = (size_t)local_attn_window_size_ * 2 * local_attn_window_size_;
@@ -162,7 +162,7 @@ void LongformerAttentionLayer<T>::forward(std::vector<Tensor>* output_tensors, c
                 (char*)q
                 + (i * batch_stride + j * size_per_head_ * seq_len + local_attn_window_size_ * size_per_head_)
                       * sizeof(T);
-            void* k_middle = (char*)k + (i * batch_stride + j * size_per_head_ * seq_len) * sizeof(T);
+            void* k_middle  = (char*)k + (i * batch_stride + j * size_per_head_ * seq_len) * sizeof(T);
             void* qk_middle = (char*)buf_ptrs[1] + (i * head_num_ + j) * buf_sizes[1] * sizeof(T);
 
             cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_T,
@@ -184,10 +184,10 @@ void LongformerAttentionLayer<T>::forward(std::vector<Tensor>* output_tensors, c
     }
 
     // local attn per head - tail
-    int tail_blk_q = (seq_len / local_attn_window_size_) - 1;
-    int tail_blk_k = (seq_len / local_attn_window_size_) - 2;
-    void* q_tail = (char*)q + tail_blk_q * local_attn_window_size_ * size_per_head_ * sizeof(T);
-    void* k_tail = (char*)k + tail_blk_k * local_attn_window_size_ * size_per_head_ * sizeof(T);
+    int   tail_blk_q = (seq_len / local_attn_window_size_) - 1;
+    int   tail_blk_k = (seq_len / local_attn_window_size_) - 2;
+    void* q_tail     = (char*)q + tail_blk_q * local_attn_window_size_ * size_per_head_ * sizeof(T);
+    void* k_tail     = (char*)k + tail_blk_k * local_attn_window_size_ * size_per_head_ * sizeof(T);
 
     cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_T,
                                         CUBLAS_OP_N,
@@ -214,8 +214,8 @@ void LongformerAttentionLayer<T>::forward(std::vector<Tensor>* output_tensors, c
         }
         if (global_token_nums_cpu[i] > 0) {
             // local tokens attending global tokens
-            void* q_local = (char*)q + (i * batch_stride + local_attn_window_size_ * size_per_head_) * sizeof(T);
-            void* k_local = (char*)k + i * batch_stride * sizeof(T);
+            void* q_local  = (char*)q + (i * batch_stride + local_attn_window_size_ * size_per_head_) * sizeof(T);
+            void* k_local  = (char*)k + i * batch_stride * sizeof(T);
             void* qk_local = (char*)buf_ptrs[3] + i * buf_sizes[3] * head_num_ * sizeof(T);
 
             cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_T,
@@ -235,8 +235,8 @@ void LongformerAttentionLayer<T>::forward(std::vector<Tensor>* output_tensors, c
                                                 head_num_);
 
             // global token attending everything
-            void* q_global = (char*)qg + (i * global_batch_stride) * sizeof(T);
-            void* k_global = (char*)kg + (i * batch_stride) * sizeof(T);
+            void* q_global  = (char*)qg + (i * global_batch_stride) * sizeof(T);
+            void* k_global  = (char*)kg + (i * batch_stride) * sizeof(T);
             void* qk_global = (char*)buf_ptrs[4] + (i * buf_sizes[4] * head_num_) * sizeof(T);
             cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_T,
                                                 CUBLAS_OP_N,
@@ -291,8 +291,8 @@ void LongformerAttentionLayer<T>::forward(std::vector<Tensor>* output_tensors, c
     for (int i = 0; i < batch_size; ++i) {
         for (int j = 0; j < (int)head_num_; ++j) {
             void* v_local = (char*)v + (i * batch_stride + j * size_per_head_ * seq_len) * sizeof(T);
-            void* prob = (char*)buf_ptrs[1] + (i * head_num_ + j) * buf_sizes[1] * sizeof(T);
-            void* out = (char*)output
+            void* prob    = (char*)buf_ptrs[1] + (i * head_num_ + j) * buf_sizes[1] * sizeof(T);
+            void* out     = (char*)output
                         + (i * batch_stride + j * size_per_head_ * seq_len + local_attn_window_size_ * size_per_head_)
                               * sizeof(T);
             cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_N,
@@ -314,10 +314,10 @@ void LongformerAttentionLayer<T>::forward(std::vector<Tensor>* output_tensors, c
     }
 
     // local attn per head - tail
-    int tail_blk_v = (seq_len / local_attn_window_size_) - 2;
-    int tail_blk_out = (seq_len / local_attn_window_size_) - 1;
-    void* tail_v = (char*)v + tail_blk_v * local_attn_window_size_ * size_per_head_ * sizeof(T);
-    void* tail_out = (char*)output + tail_blk_out * local_attn_window_size_ * size_per_head_ * sizeof(T);
+    int   tail_blk_v   = (seq_len / local_attn_window_size_) - 2;
+    int   tail_blk_out = (seq_len / local_attn_window_size_) - 1;
+    void* tail_v       = (char*)v + tail_blk_v * local_attn_window_size_ * size_per_head_ * sizeof(T);
+    void* tail_out     = (char*)output + tail_blk_out * local_attn_window_size_ * size_per_head_ * sizeof(T);
     cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_N,
                                         CUBLAS_OP_N,
                                         size_per_head_,
@@ -340,7 +340,7 @@ void LongformerAttentionLayer<T>::forward(std::vector<Tensor>* output_tensors, c
             int glob_longdim_mm = seq_len - 2 * local_attn_window_size_;
 
             void* v_local = (char*)v + (i * batch_stride) * sizeof(T);
-            void* prob = (char*)buf_ptrs[3]
+            void* prob    = (char*)buf_ptrs[3]
                          + (i * buf_sizes[3] * head_num_ + local_attn_window_size_ * buf_strides[3]) * sizeof(T);
             void* out = (char*)output + (i * batch_stride + 2 * local_attn_window_size_ * size_per_head_) * sizeof(T);
 
@@ -364,8 +364,8 @@ void LongformerAttentionLayer<T>::forward(std::vector<Tensor>* output_tensors, c
 
             // global tokens
             void* v_global = (char*)vg + (i * batch_stride) * sizeof(T);
-            prob = (char*)buf_ptrs[4] + (i * buf_sizes[4] * head_num_) * sizeof(T);
-            out = (char*)output + (i * batch_stride) * sizeof(T);
+            prob           = (char*)buf_ptrs[4] + (i * buf_sizes[4] * head_num_) * sizeof(T);
+            out            = (char*)output + (i * batch_stride) * sizeof(T);
 
             cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_N,
                                                 CUBLAS_OP_N,
@@ -396,17 +396,18 @@ void LongformerAttentionLayer<T>::allocateBuffer()
 {
     if (!is_allocate_buffer_) {
 
-        internal_vars_device_ = (void*)allocator_->malloc(sizeof(size_t) * 15);
+        internal_vars_device_ = (void*)allocator_->reMalloc(internal_vars_device_, sizeof(size_t) * 15);
 
         attn_buffer_ =
-            (T*)allocator_->malloc(sizeof(T) * head_num_ * max_batch_size_
-                                       * (2 * local_attn_window_size_ * local_attn_window_size_
-                                          + 3 * local_attn_window_size_ * local_attn_window_size_
-                                                * (max_seq_len_ / local_attn_window_size_ - 2)
-                                          + 2 * local_attn_window_size_ * local_attn_window_size_
-                                          + local_attn_window_size_ * (max_seq_len_ - local_attn_window_size_)
-                                          + local_attn_window_size_ * max_seq_len_),
-                                   false);
+            (T*)allocator_->reMalloc(attn_buffer_,
+                                     sizeof(T) * head_num_ * max_batch_size_
+                                         * (2 * local_attn_window_size_ * local_attn_window_size_
+                                            + 3 * local_attn_window_size_ * local_attn_window_size_
+                                                  * (max_seq_len_ / local_attn_window_size_ - 2)
+                                            + 2 * local_attn_window_size_ * local_attn_window_size_
+                                            + local_attn_window_size_ * (max_seq_len_ - local_attn_window_size_)
+                                            + local_attn_window_size_ * max_seq_len_),
+                                     false);
 
         is_allocate_buffer_ = true;
     }
@@ -416,8 +417,8 @@ template<typename T>
 void LongformerAttentionLayer<T>::freeBuffer()
 {
     if (is_allocate_buffer_) {
-        allocator_->free(internal_vars_device_);
-        allocator_->free(attn_buffer_);
+        allocator_->free((void**)(&internal_vars_device_));
+        allocator_->free((void**)(&attn_buffer_));
 
         is_allocate_buffer_ = false;
     }
@@ -425,5 +426,8 @@ void LongformerAttentionLayer<T>::freeBuffer()
 
 template class LongformerAttentionLayer<float>;
 template class LongformerAttentionLayer<half>;
+#ifdef ENABLE_BF16
+template class LongformerAttentionLayer<__nv_bfloat16>;
+#endif
 
 }  // namespace fastertransformer

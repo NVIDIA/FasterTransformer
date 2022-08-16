@@ -20,19 +20,19 @@
 namespace fastertransformer {
 
 template<typename T>
-__global__ void logProbAddCumLogProb(float* log_probs,
-                                     const T* logits,
+__global__ void logProbAddCumLogProb(float*       log_probs,
+                                     const T*     logits,
                                      const float* cum_log_probs,
-                                     const int* end_ids,
-                                     const bool* finished,
-                                     const int beam_width,
-                                     const int n)
+                                     const int*   end_ids,
+                                     const bool*  finished,
+                                     const int    beam_width,
+                                     const int    n)
 {
-    int bid = blockIdx.x;
-    bool finish = finished[bid];
-    int offset = bid * n;
+    int  bid    = blockIdx.x;
+    bool finish = finished != nullptr ? finished[bid] : false;
+    int  offset = bid * n;
 
-    float max_val = -1 * FLT_MAX;
+    float            max_val = -1 * FLT_MAX;
     __shared__ float s_max_val;
     __shared__ float s_sum_val;
 
@@ -44,7 +44,7 @@ __global__ void logProbAddCumLogProb(float* log_probs,
     else {
         for (int tid = threadIdx.x; tid < n; tid += blockDim.x) {
             log_probs[offset + tid] = (float)(logits[offset + tid]);
-            max_val = max(max_val, log_probs[offset + tid]);
+            max_val                 = max(max_val, log_probs[offset + tid]);
         }
 
         max_val = blockReduceMax(max_val);
@@ -72,14 +72,14 @@ __global__ void logProbAddCumLogProb(float* log_probs,
 }
 
 template<typename T>
-void invokeLogProbAddCumLogProb(float* log_probs,
-                                const T* logits,
+void invokeLogProbAddCumLogProb(float*       log_probs,
+                                const T*     logits,
                                 const float* cum_log_probs,
-                                const int* end_ids,
-                                const bool* finished,
-                                const int m,
-                                const int beam_width,
-                                const int n,
+                                const int*   end_ids,
+                                const bool*  finished,
+                                const int    m,
+                                const int    beam_width,
+                                const int    n,
                                 cudaStream_t stream)
 {
     dim3 grid(m);
@@ -90,23 +90,23 @@ void invokeLogProbAddCumLogProb(float* log_probs,
 }
 
 template<typename T>
-__global__ void updateStatesKernel(T* log_probs,
-                                   T* cum_log_probs,
-                                   float* output_log_probs,
-                                   bool* finished,
-                                   int* parent_ids,
-                                   int* sequence_length,
-                                   int* word_ids,
-                                   int* output_ids,
-                                   const int local_batch_size,
-                                   const int beam_width,
-                                   const int vocab_size,
+__global__ void updateStatesKernel(T*         log_probs,
+                                   T*         cum_log_probs,
+                                   float*     output_log_probs,
+                                   bool*      finished,
+                                   int*       parent_ids,
+                                   int*       sequence_length,
+                                   int*       word_ids,
+                                   int*       output_ids,
+                                   const int  local_batch_size,
+                                   const int  beam_width,
+                                   const int  vocab_size,
                                    const int* end_ids)
 {
     for (int index = blockIdx.x * blockDim.x + threadIdx.x; index < local_batch_size * beam_width;
          index += blockDim.x * gridDim.x) {
 
-        int batch_id = index / beam_width;
+        int batch_id           = index / beam_width;
         sequence_length[index] = finished[index] ? sequence_length[index] : sequence_length[index] + 1;
 
         int beam_id = (word_ids[index] / vocab_size) % beam_width;
@@ -117,27 +117,27 @@ __global__ void updateStatesKernel(T* log_probs,
             output_log_probs[index] = log_probs[batch_id * beam_width * vocab_size + beam_id * vocab_size + word_id]
                                       - cum_log_probs[batch_id * beam_width + beam_id];
         }
-        cum_log_probs[index] = log_probs[batch_id * beam_width * vocab_size + beam_id * vocab_size + word_id];
+        cum_log_probs[index]   = log_probs[batch_id * beam_width * vocab_size + beam_id * vocab_size + word_id];
         sequence_length[index] = sequence_length[batch_id * beam_width + beam_id];
-        finished[index] = word_id == end_ids[batch_id] ? 1 : 0;
-        parent_ids[index] = beam_id;
-        word_ids[index] = word_id;
-        output_ids[index] = word_id;
+        finished[index]        = word_id == end_ids[batch_id] ? 1 : 0;
+        parent_ids[index]      = beam_id;
+        word_ids[index]        = word_id;
+        output_ids[index]      = word_id;
     }
 }
 
-void invokeUpdateStates(float* log_probs,
-                        float* cum_log_probs,
-                        float* output_log_probs,
-                        bool* finished,
-                        int* parent_ids,
-                        int* sequence_length,
-                        int* word_ids,
-                        int* output_ids,
-                        const int local_batch_size,
-                        const int beam_width,
-                        const int vocab_size,
-                        const int* end_ids,
+void invokeUpdateStates(float*       log_probs,
+                        float*       cum_log_probs,
+                        float*       output_log_probs,
+                        bool*        finished,
+                        int*         parent_ids,
+                        int*         sequence_length,
+                        int*         word_ids,
+                        int*         output_ids,
+                        const int    local_batch_size,
+                        const int    beam_width,
+                        const int    vocab_size,
+                        const int*   end_ids,
                         cudaStream_t stream)
 {
     dim3 grid((int)ceil(local_batch_size * beam_width * 1.0 / 256));
@@ -195,7 +195,7 @@ void BeamSearchLayer<T>::invokeSoftMax(std::vector<Tensor>* output_tensors, cons
 }
 
 template<typename T>
-void BeamSearchLayer<T>::invokeSoftMax(std::unordered_map<std::string, Tensor>* output_tensors,
+void BeamSearchLayer<T>::invokeSoftMax(std::unordered_map<std::string, Tensor>*       output_tensors,
                                        const std::unordered_map<std::string, Tensor>* input_tensors)
 {
     // input_tensors:
@@ -223,14 +223,16 @@ void BeamSearchLayer<T>::invokeSoftMax(std::unordered_map<std::string, Tensor>* 
     FT_CHECK(input_tensors->size() >= 7);
     FT_CHECK(output_tensors->size() >= 6);
 
-    const int batch_size = output_tensors->at("output_ids").shape[1];
-    const int beam_width = output_tensors->at("output_ids").shape[2];
-    const int step = *((int*)input_tensors->at("step").data);
-    const int ite = *((int*)input_tensors->at("ite").data);
-    const int local_batch_size = input_tensors->at("logits").shape[0];
-    const float diversity_rate = input_tensors->count("beam_search_diversity_rate") ?
-                                     input_tensors->at("beam_search_diversity_rate").getVal<float>() :
-                                     0.0f;
+    const int   batch_size       = output_tensors->at("output_ids").shape[1];
+    const int   beam_width       = output_tensors->at("output_ids").shape[2];
+    const int   step             = *((int*)input_tensors->at("step").data);
+    const int   ite              = *((int*)input_tensors->at("ite").data);
+    const int   local_batch_size = input_tensors->at("logits").shape[0];
+    const float diversity_rate   = input_tensors->count("beam_search_diversity_rate") ?
+                                       input_tensors->at("beam_search_diversity_rate").getVal<float>() :
+                                       0.0f;
+    const float length_penalty =
+        input_tensors->count("len_penalty") ? input_tensors->at("len_penalty").getVal<float>() : 0.0f;
 
     const int id_offset = step * batch_size * beam_width + ite * local_batch_size * beam_width;
     invokeLogProbAddCumLogProb(float_log_prob_buf_,
@@ -244,17 +246,20 @@ void BeamSearchLayer<T>::invokeSoftMax(std::unordered_map<std::string, Tensor>* 
                                stream_);
     sync_check_cuda_error();
 
-    invokeTopkBeamSearch<float>(topk_softmax_workspace_,
-                                topk_softmax_workspace_size_,
-                                float_log_prob_buf_,
-                                ((int*)output_tensors->at("output_ids").data) + id_offset,
-                                (bool*)output_tensors->at("finished").data,
-                                local_batch_size,
-                                beam_width,
-                                vocab_size_padded_,
-                                diversity_rate,
-                                (const int*)input_tensors->at("end_id").data,
-                                stream_);
+    invokeTopkBeamSearch<float>(
+        topk_softmax_workspace_,
+        topk_softmax_workspace_size_,
+        float_log_prob_buf_,
+        output_tensors->at("output_ids").getPtrWithOffset<int>(id_offset),
+        output_tensors->at("finished").getPtr<bool>(),
+        output_tensors->count("sequence_length") ? output_tensors->at("sequence_length").getPtr<int>() : (int*)nullptr,
+        local_batch_size,
+        beam_width,
+        vocab_size_padded_,
+        diversity_rate,
+        length_penalty,
+        (const int*)input_tensors->at("end_id").data,
+        stream_);
     sync_check_cuda_error();
 
     float* output_log_probs =
@@ -291,36 +296,38 @@ void BeamSearchLayer<T>::allocateBuffer(size_t batch_size, size_t beam_width)
                                 nullptr,
                                 nullptr,
                                 nullptr,
+                                nullptr,
                                 batch_size,
                                 beam_width,
                                 vocab_size_padded_,
-                                0.0f,
+                                0.0f,  // diversity rate
+                                0.0f,  // length penalty
                                 nullptr,
                                 stream_);
     topk_softmax_workspace_ = reinterpret_cast<float*>(allocator_->reMalloc(
         topk_softmax_workspace_,
         topk_softmax_workspace_size_ + sizeof(float) * batch_size * beam_width * vocab_size_padded_,
         false));
-    float_log_prob_buf_ = (float*)((char*)topk_softmax_workspace_ + topk_softmax_workspace_size_);
-    is_allocate_buffer_ = true;
+    float_log_prob_buf_     = (float*)((char*)topk_softmax_workspace_ + topk_softmax_workspace_size_);
+    is_allocate_buffer_     = true;
 }
 
 template<typename T>
-BeamSearchLayer<T>::BeamSearchLayer(size_t max_batch_size,
-                                    size_t head_num,
-                                    size_t size_per_head,
-                                    size_t beam_width,
-                                    size_t vocab_size,
-                                    size_t vocab_size_padded,
-                                    int end_id,
-                                    float diversity_rate,
-                                    float temperature,
-                                    float len_penalty,
-                                    float repetition_penalty,
-                                    cudaStream_t stream,
+BeamSearchLayer<T>::BeamSearchLayer(size_t           max_batch_size,
+                                    size_t           head_num,
+                                    size_t           size_per_head,
+                                    size_t           beam_width,
+                                    size_t           vocab_size,
+                                    size_t           vocab_size_padded,
+                                    int              end_id,
+                                    float            diversity_rate,
+                                    float            temperature,
+                                    float            len_penalty,
+                                    float            repetition_penalty,
+                                    cudaStream_t     stream,
                                     cublasMMWrapper* cublas_wrapper,
-                                    IAllocator* allocator,
-                                    bool is_free_buffer_after_forward):
+                                    IAllocator*      allocator,
+                                    bool             is_free_buffer_after_forward):
     BaseBeamSearchLayer<T>(max_batch_size,
                            head_num,
                            size_per_head,
@@ -348,6 +355,7 @@ BeamSearchLayer<T>::BeamSearchLayer(BeamSearchLayer<T> const& beam_search_layer)
 template<typename T>
 BeamSearchLayer<T>::~BeamSearchLayer()
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
 }
 
 template class BeamSearchLayer<float>;

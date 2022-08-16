@@ -29,28 +29,28 @@ template<typename T>
 class SwinTransformerINT8BlockWeight {
 public:
     AttentionINT8Weight<T> attention_weights;
-    FfnINT8Weight<T> ffn_weights;
-    LayerNormWeight<T> attn_layernorm_weights;
-    LayerNormWeight<T> ffn_layernorm_weights;
-    const T* attention_relative_pos_bias = nullptr;
-    ScaleList scalelist;
+    FfnINT8Weight<T>       ffn_weights;
+    LayerNormWeight<T>     attn_layernorm_weights;
+    LayerNormWeight<T>     ffn_layernorm_weights;
+    const T*               attention_relative_pos_bias = nullptr;
+    ScaleList              scalelist;
 };  // SwinTransformerINT8BlockWeight
 
 template<typename T>
 class SwinTransformerINT8BasicLayerWeight {
 public:
-    LayerNormWeight<T> merge_layernorm_weights;
-    DenseWeight<T> merge_linear_weights;
-    const T* attn_mask = nullptr;
+    LayerNormWeight<T>                        merge_layernorm_weights;
+    DenseWeight<T>                            merge_linear_weights;
+    const T*                                  attn_mask = nullptr;
     vector<SwinTransformerINT8BlockWeight<T>> block_weight_list;
 };  // SwinTransformerINT8BasicLayerWeight
 
 template<typename T>
 class SwinTransformerINT8Weight {
 public:
-    DenseWeight<T> patchEmbed_linear_weights;
-    LayerNormWeight<T> patchEmbed_norm_weights;
-    LayerNormWeight<T> norm_weights;
+    DenseWeight<T>                                 patchEmbed_linear_weights;
+    LayerNormWeight<T>                             patchEmbed_norm_weights;
+    LayerNormWeight<T>                             norm_weights;
     vector<SwinTransformerINT8BasicLayerWeight<T>> basic_layer_weight_list;
 };  // class SwinTransformerINT8Weight
 

@@ -91,6 +91,14 @@ public:
     typedef half DataType;
 };
 
+#ifdef ENABLE_BF16
+template<>
+class TFTraits<Eigen::bfloat16> {
+public:
+    typedef __nv_bfloat16 DataType;
+};
+#endif
+
 template<typename Device, typename T>
 class DecoderOp: public BaseOp<T> {
 public:
@@ -122,11 +130,11 @@ public:
 
         const size_t batch_size = (size_t)(context->input(0).dim_size(0));
 
-        const cudaStream_t& stream = context->eigen_device<Device>().stream();
-        cublasHandle_t cublas_handle = this->get_cublas_handler();
+        const cudaStream_t& stream        = context->eigen_device<Device>().stream();
+        cublasHandle_t      cublas_handle = this->get_cublas_handler();
         cublasSetStream(cublas_handle, stream);
         ft::Allocator<ft::AllocatorType::TF> allocator(context, stream);
-        ft::cublasMMWrapper cublas_wrapper = ft::cublasMMWrapper(cublas_handle,
+        ft::cublasMMWrapper                  cublas_wrapper = ft::cublasMMWrapper(cublas_handle,
                                                                  this->get_cublaslt_handler(),
                                                                  stream,
                                                                  cublas_algo_map_,
@@ -136,6 +144,11 @@ public:
         if (std::is_same<T, Eigen::half>::value) {
             cublas_wrapper.setFP16GemmConfig();
         }
+#ifdef ENABLE_BF16
+        else if (std::is_same<T, Eigen::bfloat16>::value) {
+            cublas_wrapper.setBF16GemmConfig();
+        }
+#endif
         else if (std::is_same<T, float>::value) {
             cublas_wrapper.setFP32GemmConfig();
         }
@@ -195,11 +208,11 @@ public:
                 context, 7 + num_layer_ * 21 + i, &decoder_layer_weights[i].ffn_weights.output_weight.bias);
         }
 
-        tf::Tensor self_cache_keys_tensor = context->input(3);
-        tf::Tensor self_cache_values_tensor = context->input(4);
-        tf::Tensor memory_cache_keys_tensor = context->input(5);
-        tf::Tensor memory_cache_values_tensor = context->input(6);
-        tf::Tensor* output = nullptr;
+        tf::Tensor  self_cache_keys_tensor     = context->input(3);
+        tf::Tensor  self_cache_values_tensor   = context->input(4);
+        tf::Tensor  memory_cache_keys_tensor   = context->input(5);
+        tf::Tensor  memory_cache_values_tensor = context->input(6);
+        tf::Tensor* output                     = nullptr;
 
         OP_REQUIRES_OK(context, context->allocate_output(0, context->input(0).shape(), &output));
         DataType* out_tensor = (DataType*)(output->flat<T>().data());
@@ -209,7 +222,7 @@ public:
         context->set_output(4, memory_cache_values_tensor);
 
         const int* d_step = reinterpret_cast<const int*>(context->input(7 + num_layer_ * 22).flat<int>().data());
-        int step;
+        int        step;
         cudaMemcpyAsync(&step, d_step, sizeof(int), cudaMemcpyDeviceToHost, stream);
         step += 1;
         tf::Tensor sequence_length_tensor = context->input(8 + num_layer_ * 22);
@@ -219,7 +232,7 @@ public:
 
         size_t hidden_units = (size_t)(head_num_ * size_per_head_);
 
-        ft::DataType data_type = ft::getTensorType<DataType>();
+        ft::DataType            data_type     = ft::getTensorType<DataType>();
         std::vector<ft::Tensor> input_tensors = std::vector<ft::Tensor>{
             this->convert_tensor(context->input(0)),
             this->convert_tensor(context->input(1)),
@@ -229,7 +242,7 @@ public:
             this->convert_int_tensor(sequence_length_tensor),
             ft::Tensor{ft::MEMORY_GPU,
                        ft::TYPE_INT32,
-                       {batch_size, 1, step},
+                       {batch_size, 1, (size_t)step},
                        nullptr}};  // Since we do gather in the Framework, we don't need id of indirection buffer
 
         std::vector<ft::Tensor> output_tensors =
@@ -253,9 +266,9 @@ public:
     }
 
 private:
-    int head_num_ = 0, size_per_head_ = 0, inter_size_ = 0, num_layer_ = 0;
-    ft::cublasAlgoMap* cublas_algo_map_;
-    typedef TFTraits<T> traits_;
+    int                                head_num_ = 0, size_per_head_ = 0, inter_size_ = 0, num_layer_ = 0;
+    ft::cublasAlgoMap*                 cublas_algo_map_;
+    typedef TFTraits<T>                traits_;
     typedef typename traits_::DataType DataType;
 };
 

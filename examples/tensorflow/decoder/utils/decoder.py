@@ -90,7 +90,7 @@ def tf_decoder(decoder_args,
                 The results of encoder transformer layer. The rank must be 3. 
                 Note that it must be extended by beam_width times
         memory_sequence_length: A tf.Tensor with shape [batch_size * beam_width], type tf.int. 
-                                The lenght of each sentence of results of encoder. 
+                                The length of each sentence of results of encoder. 
                                 Note that it must be extended by beam_width times
         step: A tf.Tensor with tf.int type. The current step in the translation process.
         cache: A dict. The cache space to store the keys and values of attention layers.
@@ -132,7 +132,7 @@ def tf_decoder(decoder_args,
                 else:
                     '''
                     This progress wants to prevent a addictional tf.concat to concat the q, k, v kernels for decoder op 
-                    becuase the concat bring large overhead for small batch size.
+                    because the concat bring large overhead for small batch size.
                     '''
                     queries = tf.layers.conv1d(norm_inputs, decoder_args.hidden_dim, 1, 
                                                 bias_initializer=create_initializer(b_init_range, data_type),
@@ -346,7 +346,7 @@ def op_decoder(inputs,
                        The results of encoder transformer layer. The rank must be 3. 
                        Note that it must be extended by beam_width times
         memory_sequence_length: A tf.Tensor with shape [batch_size * beam_width], type tf.int. 
-                                The lenght of each sentence of results of encoder. 
+                                The length of each sentence of results of encoder. 
                                 Note that it must be extended by beam_width times
         op_self_cache: A tf.Tensor with shape [num_layer, 2, None, batch_size * beam_width, hidden_dimension]. 
                        The cache space to store the keys and values of first attention layer in each step.
@@ -367,7 +367,7 @@ def op_decoder(inputs,
     '''
     
     '''
-    If fuse_qkv == Ture, this means that the computation of q, k, v in decoder are fused in one convolution. 
+    If fuse_qkv == True, this means that the computation of q, k, v in decoder are fused in one convolution. 
     
     Therefore, we need to split them and then passing into the decoder op. The split will bring additional overhead, 
     especially when the batch size is small because the computation time is short. 

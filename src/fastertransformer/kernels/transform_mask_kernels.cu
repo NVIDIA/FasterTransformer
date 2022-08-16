@@ -27,8 +27,8 @@ namespace fastertransformer {
 // in transformed_mask, the masks of one warp are stored in 4 continuous rows ([4, 64]), with two elements of one thread
 // stored in 2 continuous halfs. one cta calculates warps_m*warps_n mma == 16*warps_m*16*warps_n elements grid(B,
 // S2*S2/64) block(32)
-__global__ void transform_mask_kernel(half2* tranformed_mask,
-                                      const half2* mask,
+__global__ void transform_mask_kernel(half2*         tranformed_mask,
+                                      const half2*   mask,
                                       const uint32_t warps_m,
                                       const uint32_t warps_n,
                                       const uint32_t B,
@@ -36,31 +36,31 @@ __global__ void transform_mask_kernel(half2* tranformed_mask,
                                       const uint32_t S2)
 {
     const int bi = blockIdx.x;
-    const int r = blockIdx.y;
+    const int r  = blockIdx.y;
 
-    const int N_per_XMMAS = warps_n << 4;
-    const int M_per_XMMAS = warps_m << 4;
-    const int N_XMMAS = (S2 + N_per_XMMAS - 1) / (N_per_XMMAS);
-    const int warps_in_XMMAS = warps_m * warps_n;
-    const half2* mask_b = mask + ((bi * S * S) >> 1);
-    half2* tranformed_mask_b = tranformed_mask + (bi * gridDim.y << 5);  //((bi * gridDim.y << 6) >> 1);
+    const int    N_per_XMMAS       = warps_n << 4;
+    const int    M_per_XMMAS       = warps_m << 4;
+    const int    N_XMMAS           = (S2 + N_per_XMMAS - 1) / (N_per_XMMAS);
+    const int    warps_in_XMMAS    = warps_m * warps_n;
+    const half2* mask_b            = mask + ((bi * S * S) >> 1);
+    half2*       tranformed_mask_b = tranformed_mask + (bi * gridDim.y << 5);  //((bi * gridDim.y << 6) >> 1);
 
     half2 tmp = {half(-30000.0f), half(-30000.0f)};
 
-    int c = threadIdx.x * 2;
-    int elt_offset = c % 2;
-    int warp_id = r / 4;
-    int elt_in_thread = (r % 4) * 2 + elt_offset;
+    int c               = threadIdx.x * 2;
+    int elt_offset      = c % 2;
+    int warp_id         = r / 4;
+    int elt_in_thread   = (r % 4) * 2 + elt_offset;
     int noffset_in_warp = (((elt_in_thread & 3) >> 1) << 3) + (elt_in_thread & 1);
     int moffset_in_warp = ((elt_in_thread >> 2) & 1) << 3;
 
-    int XMMAS_mi = warp_id / (N_XMMAS * warps_in_XMMAS);
-    int XMMAS_ni = warp_id % (N_XMMAS * warps_in_XMMAS) / warps_in_XMMAS;
+    int XMMAS_mi         = warp_id / (N_XMMAS * warps_in_XMMAS);
+    int XMMAS_ni         = warp_id % (N_XMMAS * warps_in_XMMAS) / warps_in_XMMAS;
     int warp_id_in_XMMAS = warp_id - (XMMAS_mi * N_XMMAS + XMMAS_ni) * warps_in_XMMAS;
-    int warp_mi = warp_id_in_XMMAS % warps_m;
-    int warp_ni = warp_id_in_XMMAS / warps_m;
-    int noffset = XMMAS_ni * N_per_XMMAS + (warp_ni << 4) + noffset_in_warp;
-    int moffset = XMMAS_mi * M_per_XMMAS + (warp_mi << 4) + moffset_in_warp;
+    int warp_mi          = warp_id_in_XMMAS % warps_m;
+    int warp_ni          = warp_id_in_XMMAS / warps_m;
+    int noffset          = XMMAS_ni * N_per_XMMAS + (warp_ni << 4) + noffset_in_warp;
+    int moffset          = XMMAS_mi * M_per_XMMAS + (warp_mi << 4) + moffset_in_warp;
 
     int mi = moffset + (c >> 3);
     int ni = noffset + (((c >> 1) & 3) << 1);
@@ -78,8 +78,8 @@ __global__ void transform_mask_kernel(half2* tranformed_mask,
 // in transformed_mask, the masks of one warp are stored in 4 continuous rows ([4, 64]), with two elements of one thread
 // stored in 2 continuous halfs. one cta calculates warps_m*warps_n mma == 16*warps_m*16*warps_n elements grid(B,
 // S2*S2/64) block(32)
-__global__ void transform_mask_kernel(half* tranformed_mask,
-                                      const half* mask,
+__global__ void transform_mask_kernel(half*          tranformed_mask,
+                                      const half*    mask,
                                       const uint32_t warps_m,
                                       const uint32_t warps_n,
                                       const uint32_t B,
@@ -87,30 +87,30 @@ __global__ void transform_mask_kernel(half* tranformed_mask,
                                       const uint32_t S2)
 {
     const int bi = blockIdx.x;
-    const int r = blockIdx.y;
+    const int r  = blockIdx.y;
 
-    const int N_per_XMMAS = warps_n << 4;
-    const int M_per_XMMAS = warps_m << 4;
-    const int N_XMMAS = (S2 + N_per_XMMAS - 1) / (N_per_XMMAS);
-    const int warps_in_XMMAS = warps_m * warps_n;
-    half2* tranformed_mask_b = (half2*)(tranformed_mask + (bi * gridDim.y << 6));
+    const int N_per_XMMAS       = warps_n << 4;
+    const int M_per_XMMAS       = warps_m << 4;
+    const int N_XMMAS           = (S2 + N_per_XMMAS - 1) / (N_per_XMMAS);
+    const int warps_in_XMMAS    = warps_m * warps_n;
+    half2*    tranformed_mask_b = (half2*)(tranformed_mask + (bi * gridDim.y << 6));
 
     half2 tmp = {half(-30000.0f), half(-30000.0f)};
 
-    int c = threadIdx.x * 2;
-    int elt_offset = c % 2;
-    int warp_id = r / 4;
-    int elt_in_thread = (r % 4) * 2 + elt_offset;
+    int c               = threadIdx.x * 2;
+    int elt_offset      = c % 2;
+    int warp_id         = r / 4;
+    int elt_in_thread   = (r % 4) * 2 + elt_offset;
     int noffset_in_warp = (((elt_in_thread & 3) >> 1) << 3) + (elt_in_thread & 1);
     int moffset_in_warp = ((elt_in_thread >> 2) & 1) << 3;
 
-    int XMMAS_mi = warp_id / (N_XMMAS * warps_in_XMMAS);
-    int XMMAS_ni = warp_id % (N_XMMAS * warps_in_XMMAS) / warps_in_XMMAS;
+    int XMMAS_mi         = warp_id / (N_XMMAS * warps_in_XMMAS);
+    int XMMAS_ni         = warp_id % (N_XMMAS * warps_in_XMMAS) / warps_in_XMMAS;
     int warp_id_in_XMMAS = warp_id - (XMMAS_mi * N_XMMAS + XMMAS_ni) * warps_in_XMMAS;
-    int warp_mi = warp_id_in_XMMAS % warps_m;
-    int warp_ni = warp_id_in_XMMAS / warps_m;
-    int noffset = XMMAS_ni * N_per_XMMAS + (warp_ni << 4) + noffset_in_warp;
-    int moffset = XMMAS_mi * M_per_XMMAS + (warp_mi << 4) + moffset_in_warp;
+    int warp_mi          = warp_id_in_XMMAS % warps_m;
+    int warp_ni          = warp_id_in_XMMAS / warps_m;
+    int noffset          = XMMAS_ni * N_per_XMMAS + (warp_ni << 4) + noffset_in_warp;
+    int moffset          = XMMAS_mi * M_per_XMMAS + (warp_mi << 4) + moffset_in_warp;
 
     int mi = moffset + (c >> 3);
     int ni = noffset + (((c >> 1) & 3) << 1);
@@ -141,17 +141,17 @@ void invokeTransformMask(
         S2 = 128;
     }
     else if (S <= 256) {
-        S2 = 256;
+        S2      = 256;
         warps_m = 1;
         warps_n = 4;
     }
     else if (S <= 384) {
-        S2 = 384;
+        S2      = 384;
         warps_m = 1;
         warps_n = 8;
     }
     else {
-        printf("[ERROR][invokeTransformMask]unsupport seq_len %d\n", S);
+        printf("[ERROR][invokeTransformMask]unsupported seq_len %d\n", S);
         exit(-1);
     }
     assert(S2 * S2 % 64 == 0);

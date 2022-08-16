@@ -313,8 +313,15 @@ public:
 
     static TFusedMHAKernelFactory<TFusedMHAKernelList>& Get()
     {
-        static TFusedMHAKernelFactory<TFusedMHAKernelList> s_factory;
-        return s_factory;
+        int device_id;
+        cudaGetDevice(&device_id);
+        static std::unique_ptr<TFusedMHAKernelFactory<TFusedMHAKernelList>> s_factory[32] = {nullptr};
+        if (s_factory[device_id] == nullptr) {
+            assert(device_id <= 32);
+            s_factory[device_id] = std::make_unique<TFusedMHAKernelFactory<TFusedMHAKernelList>>(TFusedMHAKernelFactory<TFusedMHAKernelList>());
+        }
+
+        return *(s_factory[device_id]);
     }
 
 private:

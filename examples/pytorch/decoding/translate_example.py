@@ -33,7 +33,7 @@ parser.add_argument("--beam_size", type=int, default=4, help="beam size")
 parser.add_argument("--max_seq_len", type=int, default=100, help="max_seq_len")
 parser.add_argument("--model_type", type=str, help="decoding_ext, torch_decoding, torch_decoding_with_decoder_ext",
                     choices=['decoding_ext', 'torch_decoding', 'torch_decoding_with_decoder_ext'], required=True)
-parser.add_argument("--data_type", type=str, help="fp32, fp16")
+parser.add_argument('--data_type', type=str, choices=['fp32', 'fp16', 'bf16'], default='fp32')
 parser.add_argument('--model_path', type=str, default='./pytorch/translation/models/averaged-10-epoch.pt',
                     help='path for model checkpoint')
 parser.add_argument('--decoding_ths_path', type=str, default='./lib/libth_decoding.so',

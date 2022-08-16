@@ -19,9 +19,9 @@
 namespace fastertransformer {
 
 template<typename T>
-void FfnLayer<T>::forward(std::vector<fastertransformer::Tensor>* output_tensors,
+void FfnLayer<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                           const std::vector<fastertransformer::Tensor>* input_tensors,
-                          const FfnWeight<T>* ffn_weights)
+                          const FfnWeight<T>*                           ffn_weights)
 {
     // input tensors:
     //      ffn_input [token_num, hidden_dimension],
@@ -35,9 +35,12 @@ void FfnLayer<T>::forward(std::vector<fastertransformer::Tensor>* output_tensors
     // FT_CHECK(isValidTokenNum(input_tensors->at(0).shape[0]));
     allocateBuffer(input_tensors->at(0).shape[0]);
 
-    const int m = input_tensors->at(0).shape[0];
-    T* output_tensor = (T*)output_tensors->at(0).data;
-    const T* input_tensor = (const T*)input_tensors->at(0).data;
+    const int m             = input_tensors->at(0).shape[0];
+    T*        output_tensor = (T*)output_tensors->at(0).data;
+    const T*  input_tensor  = (const T*)input_tensors->at(0).data;
+
+    // TODO: INT8 and Sparsity are currently not implemented (geglu or reglu)
+    const bool use_gated_activation = use_gated_activation_ && ffn_weights->intermediate_weight2.kernel != nullptr;
 
 #ifdef SPARSITY_ENABLED
     int m_tmp = input_tensors->at(0).shape[0];
@@ -46,6 +49,7 @@ void FfnLayer<T>::forward(std::vector<fastertransformer::Tensor>* output_tensors
     }
     const int m_padded = m_tmp;
     if (sparse_ && cublas_wrapper_->isUseSparse(1, inter_size_, m, hidden_units_)) {
+        FT_CHECK(!use_gated_activation);
         cublas_wrapper_->SpGemm(CUBLAS_OP_N,
                                 CUBLAS_OP_N,
                                 inter_size_,
@@ -58,6 +62,7 @@ void FfnLayer<T>::forward(std::vector<fastertransformer::Tensor>* output_tensors
     else {
 #endif
         if (int8_mode_ == 1 && m <= 2) {
+            FT_CHECK(!use_gated_activation);
             FT_CHECK(ffn_weights->intermediate_weight.int8_kernel != NULL
                      && ffn_weights->intermediate_weight.scale != NULL);
             int8WeightPerChannelLdkMultiplicationLauncher(ffn_weights->intermediate_weight.int8_kernel,
@@ -84,12 +89,30 @@ void FfnLayer<T>::forward(std::vector<fastertransformer::Tensor>* output_tensors
                                   hidden_units_,
                                   inter_buf_,
                                   inter_size_);
+            if (use_gated_activation) {
+                cublas_wrapper_->Gemm(CUBLAS_OP_N,
+                                      CUBLAS_OP_N,
+                                      inter_size_,
+                                      m,
+                                      hidden_units_,
+                                      ffn_weights->intermediate_weight2.kernel,
+                                      inter_size_,
+                                      input_tensor,
+                                      hidden_units_,
+                                      inter_buf_2_,
+                                      inter_size_);
+            }
         }
 #ifdef SPARSITY_ENABLED
     }
 #endif
 
-    invokeAddBiasActivation(m, ffn_weights->intermediate_weight.bias);
+    if (use_gated_activation) {
+        invokeAddBiasGatedActivation(m, ffn_weights->intermediate_weight.bias, ffn_weights->intermediate_weight2.bias);
+    }
+    else {
+        invokeAddBiasActivation(m, ffn_weights->intermediate_weight.bias);
+    }
     sync_check_cuda_error();
 
 #ifdef SPARSITY_ENABLED
@@ -140,24 +163,27 @@ void FfnLayer<T>::forward(std::vector<fastertransformer::Tensor>* output_tensors
 }
 
 template<typename T>
-FfnLayer<T>::FfnLayer(size_t max_batch_size,
-                      size_t max_seq_len,
-                      size_t head_num,
-                      size_t size_per_head,
-                      size_t inter_size,
-                      cudaStream_t stream,
+FfnLayer<T>::FfnLayer(size_t           max_batch_size,
+                      size_t           max_seq_len,
+                      size_t           head_num,
+                      size_t           size_per_head,
+                      size_t           inter_size,
+                      cudaStream_t     stream,
                       cublasMMWrapper* cublas_wrapper,
-                      IAllocator* allocator,
-                      bool is_free_buffer_after_forward,
-                      bool sparse,
-                      int int8_mode):
+                      IAllocator*      allocator,
+                      bool             is_free_buffer_after_forward,
+                      bool             sparse,
+                      int              int8_mode,
+                      bool             use_gated_activation):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, nullptr, sparse),
     max_token_num_(max_batch_size * max_seq_len),
     head_num_(head_num),
     size_per_head_(size_per_head),
     hidden_units_(head_num * size_per_head),
+    max_inter_size_(inter_size),
     inter_size_(inter_size),
-    int8_mode_(int8_mode)
+    int8_mode_(int8_mode),
+    use_gated_activation_(use_gated_activation)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
 }
@@ -174,8 +200,10 @@ FfnLayer<T>::FfnLayer(FfnLayer<T> const& ffn_layer):
     head_num_(ffn_layer.head_num_),
     size_per_head_(ffn_layer.size_per_head_),
     hidden_units_(ffn_layer.hidden_units_),
+    max_inter_size_(ffn_layer.max_inter_size_),
     inter_size_(ffn_layer.inter_size_),
-    int8_mode_(ffn_layer.int8_mode_)
+    int8_mode_(ffn_layer.int8_mode_),
+    use_gated_activation_(ffn_layer.use_gated_activation_)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
 }
@@ -193,7 +221,10 @@ void FfnLayer<T>::allocateBuffer()
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_ == false) {
-        inter_buf_ = (T*)allocator_->malloc(sizeof(T) * max_token_num_ * inter_size_, false);
+        inter_buf_ = (T*)allocator_->reMalloc(inter_buf_, sizeof(T) * max_token_num_ * max_inter_size_, false);
+        if (use_gated_activation_) {
+            inter_buf_2_ = (T*)allocator_->reMalloc(inter_buf_2_, sizeof(T) * max_token_num_ * max_inter_size_, false);
+        }
         is_allocate_buffer_ = true;
     }
 }
@@ -202,7 +233,10 @@ template<typename T>
 void FfnLayer<T>::allocateBuffer(size_t token_num)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    inter_buf_ = (T*)allocator_->reMalloc(inter_buf_, sizeof(T) * token_num * inter_size_, false);
+    inter_buf_ = (T*)allocator_->reMalloc(inter_buf_, sizeof(T) * token_num * max_inter_size_, false);
+    if (use_gated_activation_) {
+        inter_buf_2_ = (T*)allocator_->reMalloc(inter_buf_2_, sizeof(T) * token_num * max_inter_size_, false);
+    }
     is_allocate_buffer_ = true;
 }
 
@@ -211,7 +245,10 @@ void FfnLayer<T>::freeBuffer()
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_) {
-        allocator_->free(inter_buf_);
+        allocator_->free((void**)(&inter_buf_));
+        if (use_gated_activation_) {
+            allocator_->free((void**)(&inter_buf_2_));
+        }
         is_allocate_buffer_ = false;
     }
 }
@@ -232,17 +269,18 @@ template class FfnLayer<__nv_bfloat16>;
 #endif
 
 template<typename T>
-GeluFfnLayer<T>::GeluFfnLayer(size_t max_batch_size,
-                              size_t max_seq_len,
-                              size_t head_num,
-                              size_t size_per_head,
-                              size_t inter_size,
-                              cudaStream_t stream,
+GeluFfnLayer<T>::GeluFfnLayer(size_t           max_batch_size,
+                              size_t           max_seq_len,
+                              size_t           head_num,
+                              size_t           size_per_head,
+                              size_t           inter_size,
+                              cudaStream_t     stream,
                               cublasMMWrapper* cublas_wrapper,
-                              IAllocator* allocator,
-                              bool is_free_buffer_after_forward,
-                              bool sparse,
-                              int int8_mode):
+                              IAllocator*      allocator,
+                              bool             is_free_buffer_after_forward,
+                              bool             sparse,
+                              int              int8_mode,
+                              bool             use_gated_activation):
     FfnLayer<T>(max_batch_size,
                 max_seq_len,
                 head_num,
@@ -253,7 +291,8 @@ GeluFfnLayer<T>::GeluFfnLayer(size_t max_batch_size,
                 allocator,
                 is_free_buffer_after_forward,
                 sparse,
-                int8_mode)
+                int8_mode,
+                use_gated_activation)
 {
 }
 
@@ -265,7 +304,13 @@ GeluFfnLayer<T>::GeluFfnLayer(GeluFfnLayer<T> const& gelu_ffn_layer): FfnLayer<T
 template<typename T>
 void GeluFfnLayer<T>::invokeAddBiasActivation(const int m, const T* bias)
 {
-    invokeAddBiasGelu<T>(inter_buf_, bias, m, inter_size_, stream_);
+    invokeAddBiasGeluV2<T>(inter_buf_, bias, m, inter_size_, stream_);
+}
+
+template<typename T>
+void GeluFfnLayer<T>::invokeAddBiasGatedActivation(const int m, const T* bias1, const T* bias2)
+{
+    invokeAddBiasGatedGelu<T>(inter_buf_, inter_buf_2_, bias1, bias2, m, inter_size_, stream_);
 }
 
 template class GeluFfnLayer<float>;
@@ -275,16 +320,17 @@ template class GeluFfnLayer<__nv_bfloat16>;
 #endif
 
 template<typename T>
-ReluFfnLayer<T>::ReluFfnLayer(size_t max_batch_size,
-                              size_t max_seq_len,
-                              size_t head_num,
-                              size_t size_per_head,
-                              size_t inter_size,
-                              cudaStream_t stream,
+ReluFfnLayer<T>::ReluFfnLayer(size_t           max_batch_size,
+                              size_t           max_seq_len,
+                              size_t           head_num,
+                              size_t           size_per_head,
+                              size_t           inter_size,
+                              cudaStream_t     stream,
                               cublasMMWrapper* cublas_wrapper,
-                              IAllocator* allocator,
-                              bool is_free_buffer_after_forward,
-                              bool sparse):
+                              IAllocator*      allocator,
+                              bool             is_free_buffer_after_forward,
+                              bool             sparse,
+                              bool             use_gated_activation):
     FfnLayer<T>(max_batch_size,
                 max_seq_len,
                 head_num,
@@ -294,7 +340,9 @@ ReluFfnLayer<T>::ReluFfnLayer(size_t max_batch_size,
                 cublas_wrapper,
                 allocator,
                 is_free_buffer_after_forward,
-                sparse)
+                sparse,
+                0,
+                use_gated_activation)
 {
 }
 
@@ -309,10 +357,66 @@ void ReluFfnLayer<T>::invokeAddBiasActivation(const int m, const T* bias)
     invokeAddBiasRelu<T>(inter_buf_, bias, m, inter_size_, stream_);
 }
 
+template<typename T>
+void ReluFfnLayer<T>::invokeAddBiasGatedActivation(const int m, const T* bias1, const T* bias2)
+{
+    invokeAddBiasGatedRelu<T>(inter_buf_, inter_buf_2_, bias1, bias2, m, inter_size_, stream_);
+}
+
 template class ReluFfnLayer<float>;
 template class ReluFfnLayer<half>;
 #ifdef ENABLE_BF16
 template class ReluFfnLayer<__nv_bfloat16>;
+#endif
+
+template<typename T>
+SiluFfnLayer<T>::SiluFfnLayer(size_t           max_batch_size,
+                              size_t           max_seq_len,
+                              size_t           head_num,
+                              size_t           size_per_head,
+                              size_t           inter_size,
+                              cudaStream_t     stream,
+                              cublasMMWrapper* cublas_wrapper,
+                              IAllocator*      allocator,
+                              bool             is_free_buffer_after_forward,
+                              bool             sparse,
+                              bool             use_gated_activation):
+    FfnLayer<T>(max_batch_size,
+                max_seq_len,
+                head_num,
+                size_per_head,
+                inter_size,
+                stream,
+                cublas_wrapper,
+                allocator,
+                is_free_buffer_after_forward,
+                sparse,
+                0,
+                use_gated_activation)
+{
+}
+
+template<typename T>
+SiluFfnLayer<T>::SiluFfnLayer(SiluFfnLayer<T> const& gelu_ffn_layer): FfnLayer<T>(gelu_ffn_layer)
+{
+}
+
+template<typename T>
+void SiluFfnLayer<T>::invokeAddBiasActivation(const int m, const T* bias)
+{
+    invokeAddBiasSilu<T>(inter_buf_, bias, m, inter_size_, stream_);
+}
+
+template<typename T>
+void SiluFfnLayer<T>::invokeAddBiasGatedActivation(const int m, const T* bias1, const T* bias2)
+{
+    invokeAddBiasGatedSilu<T>(inter_buf_, inter_buf_2_, bias1, bias2, m, inter_size_, stream_);
+}
+
+template class SiluFfnLayer<float>;
+template class SiluFfnLayer<half>;
+#ifdef ENABLE_BF16
+template class SiluFfnLayer<__nv_bfloat16>;
 #endif
 
 }  // namespace fastertransformer

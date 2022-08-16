@@ -18,7 +18,7 @@ add_library(Xlnet STATIC Xlnet.cc)
 set_property(TARGET Xlnet PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET Xlnet PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(Xlnet PUBLIC -lcudart xlnet_preprocess_kernels cublasMMWrapper 
-                        XlnetAttentionLayer FfnLayer layernorm_kernels)
+                        XlnetAttentionLayer FfnLayer layernorm_kernels tensor)
 
 add_executable(xlnet_gemm xlnet_gemm.cc)
-target_link_libraries(xlnet_gemm PUBLIC -lcublas -lcublasLt -lcudart xlnet_gemm_func xlnet_gemm_func memory_utils)
+target_link_libraries(xlnet_gemm PUBLIC -lcublas -lcublasLt -lcudart xlnet_gemm_func xlnet_gemm_func memory_utils tensor)

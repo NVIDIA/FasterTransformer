@@ -17,6 +17,7 @@
 #include "src/fastertransformer/kernels/int8_utils.cuh"
 #include "src/fastertransformer/kernels/layout_transformer_int8_kernels.h"
 #include "src/fastertransformer/layers/attention_layers_int8/FusedAttentionLayerINT8.h"
+#include "src/fastertransformer/utils/nvtx_utils.h"
 
 namespace fastertransformer {
 
@@ -29,32 +30,32 @@ namespace fastertransformer {
 // size should be a multiple of 4
 // using char4 as output, int4 as input
 template<typename T>
-__global__ void trt_add_QKV_bias_COL32_int32IInt8O(char4* output,
-                                                   const int4* QKV,
-                                                   const T* bias_Q,
-                                                   const T* bias_K,
-                                                   const T* bias_V,
+__global__ void trt_add_QKV_bias_COL32_int32IInt8O(char4*       output,
+                                                   const int4*  QKV,
+                                                   const T*     bias_Q,
+                                                   const T*     bias_K,
+                                                   const T*     bias_V,
                                                    const float* input_deQFactor_div127_ptr,
                                                    const float* q_weight_amax,
                                                    const float* k_weight_amax,
                                                    const float* v_weight_amax,
-                                                   const float qkv_output_scale,
-                                                   const int valid_word_num,
-                                                   const int head_num,
-                                                   const int size_per_head,
-                                                   const int head_num_x_size_per_head)
+                                                   const float  qkv_output_scale,
+                                                   const int    valid_word_num,
+                                                   const int    head_num,
+                                                   const int    size_per_head,
+                                                   const int    head_num_x_size_per_head)
 {
-    const int qkv_id = blockIdx.z;
-    const int seq_id = (blockIdx.y << 5) + threadIdx.y;
+    const int qkv_id     = blockIdx.z;
+    const int seq_id     = (blockIdx.y << 5) + threadIdx.y;
     const int threadIdx4 = threadIdx.x << 2;
-    int hidden_id = (blockIdx.x << 5) + threadIdx4;
-    const int size_id = hidden_id % size_per_head;
-    const int head_id = hidden_id / size_per_head;
+    int       hidden_id  = (blockIdx.x << 5) + threadIdx4;
+    const int size_id    = hidden_id % size_per_head;
+    const int head_id    = hidden_id / size_per_head;
 
     const bool qual = (seq_id < valid_word_num) && (hidden_id < head_num_x_size_per_head);
     if (qual) {
         const float* weight_amax = qkv_id == 0 ? q_weight_amax : (qkv_id == 1 ? k_weight_amax : v_weight_amax);
-        const float input_deQFactor_div127 = __ldg(input_deQFactor_div127_ptr);
+        const float  input_deQFactor_div127 = __ldg(input_deQFactor_div127_ptr);
 
         const T* bias_ptr = (qkv_id == 0) ? bias_Q : ((qkv_id == 1) ? bias_K : bias_V);
 
@@ -62,7 +63,7 @@ __global__ void trt_add_QKV_bias_COL32_int32IInt8O(char4* output,
                               + ((hidden_id & 0xffffffe0) * valid_word_num + (seq_id << 5) + (hidden_id & 31)))
                              >> 2;
 
-        char4 tmp;
+        char4      tmp;
         const int4 tmp_int4 = __ldg(QKV + input_id);
 
         tmp.x =
@@ -98,23 +99,23 @@ __global__ void trt_add_QKV_bias_COL32_int32IInt8O(char4* output,
 }
 
 template<typename T>
-void invokeTrtAddQkvBiasInt32Iint8O(int8_t* output,
-                                    const int32_t* Q,
-                                    const T* bias_Q,
-                                    const T* bias_K,
-                                    const T* bias_V,
-                                    const size_t token_num,
-                                    const size_t head_num,
-                                    const size_t size_per_head,
-                                    const float* input_deQFactor_div127_ptr,
-                                    const float* q_weight_amax,
-                                    const float* k_weight_amax,
-                                    const float* v_weight_amax,
-                                    const float mScaleQkv,
+void invokeTrtAddQkvBiasInt32Iint8O(int8_t*            output,
+                                    const int32_t*     Q,
+                                    const T*           bias_Q,
+                                    const T*           bias_K,
+                                    const T*           bias_V,
+                                    const size_t       token_num,
+                                    const size_t       head_num,
+                                    const size_t       size_per_head,
+                                    const float*       input_deQFactor_div127_ptr,
+                                    const float*       q_weight_amax,
+                                    const float*       k_weight_amax,
+                                    const float*       v_weight_amax,
+                                    const float        mScaleQkv,
                                     const cudaStream_t stream)
 {
 
-    int head_num_x_size_per_head = head_num * size_per_head;
+    int  head_num_x_size_per_head = head_num * size_per_head;
     dim3 grid((head_num_x_size_per_head + 31) / 32, (token_num + 31) / 32, 3);
     dim3 block(8, 32);
 
@@ -142,26 +143,26 @@ void invokeTrtAddQkvBiasInt32Iint8O(int8_t* output,
 // block(8, 32)
 // size should be a multiple of 4
 template<typename T>
-__global__ void trt_add_QKV_bias_COL32_int8IO(char4* output,
+__global__ void trt_add_QKV_bias_COL32_int8IO(char4*       output,
                                               const char4* QKV,
-                                              const T* bias_Q,
-                                              const T* bias_K,
-                                              const T* bias_V,
+                                              const T*     bias_Q,
+                                              const T*     bias_K,
+                                              const T*     bias_V,
                                               const float* q_input_deQFactor_ptr,
                                               const float* k_input_deQFactor_ptr,
                                               const float* v_input_deQFactor_ptr,
-                                              const float qkv_output_scale,
-                                              const int valid_word_num,
-                                              const int head_num,
-                                              const int size_per_head,
-                                              const int head_num_x_size_per_head)
+                                              const float  qkv_output_scale,
+                                              const int    valid_word_num,
+                                              const int    head_num,
+                                              const int    size_per_head,
+                                              const int    head_num_x_size_per_head)
 {
-    const int qkv_id = blockIdx.z;
-    const int seq_id = (blockIdx.y << 5) + threadIdx.y;
+    const int qkv_id     = blockIdx.z;
+    const int seq_id     = (blockIdx.y << 5) + threadIdx.y;
     const int threadIdx4 = threadIdx.x << 2;
-    const int hidden_id = (blockIdx.x << 5) + threadIdx4;
-    const int size_id = hidden_id % size_per_head;
-    const int head_id = hidden_id / size_per_head;
+    const int hidden_id  = (blockIdx.x << 5) + threadIdx4;
+    const int size_id    = hidden_id % size_per_head;
+    const int head_id    = hidden_id / size_per_head;
 
     const bool qual = (seq_id < valid_word_num) && (hidden_id < head_num_x_size_per_head);
     if (qual) {
@@ -203,22 +204,22 @@ __global__ void trt_add_QKV_bias_COL32_int8IO(char4* output,
 }
 
 template<typename T>
-void invokeTrtAddQkvBiasInt8IO(int8_t* output,
-                               const int8_t* Q,
-                               const T* bias_Q,
-                               const T* bias_K,
-                               const T* bias_V,
-                               const size_t token_num,
-                               const size_t head_num,
-                               const size_t size_per_head,
-                               const float* q_input_deQFactor_ptr,
-                               const float* k_input_deQFactor_ptr,
-                               const float* v_input_deQFactor_ptr,
-                               const float mScaleQkv,
+void invokeTrtAddQkvBiasInt8IO(int8_t*            output,
+                               const int8_t*      Q,
+                               const T*           bias_Q,
+                               const T*           bias_K,
+                               const T*           bias_V,
+                               const size_t       token_num,
+                               const size_t       head_num,
+                               const size_t       size_per_head,
+                               const float*       q_input_deQFactor_ptr,
+                               const float*       k_input_deQFactor_ptr,
+                               const float*       v_input_deQFactor_ptr,
+                               const float        mScaleQkv,
                                const cudaStream_t stream)
 {
 
-    int head_num_x_size_per_head = head_num * size_per_head;
+    int  head_num_x_size_per_head = head_num * size_per_head;
     dim3 grid((head_num_x_size_per_head + 31) / 32, (token_num + 31) / 32, 3);
     dim3 block(8, 32);
 
@@ -245,26 +246,26 @@ void invokeTrtAddQkvBiasInt8IO(int8_t* output,
 // block(8, 32)
 // size should be a multiple of 4
 template<typename T>
-__global__ void trt_add_QKV_bias_ROW_int8IO(char4* output,
+__global__ void trt_add_QKV_bias_ROW_int8IO(char4*       output,
                                             const char4* QKV,
-                                            const T* bias_Q,
-                                            const T* bias_K,
-                                            const T* bias_V,
+                                            const T*     bias_Q,
+                                            const T*     bias_K,
+                                            const T*     bias_V,
                                             const float* q_input_deQFactor_ptr,
                                             const float* k_input_deQFactor_ptr,
                                             const float* v_input_deQFactor_ptr,
-                                            const float qkv_output_scale,
-                                            const int valid_word_num,
-                                            const int head_num,
-                                            const int size_per_head,
-                                            const int head_num_x_size_per_head)
+                                            const float  qkv_output_scale,
+                                            const int    valid_word_num,
+                                            const int    head_num,
+                                            const int    size_per_head,
+                                            const int    head_num_x_size_per_head)
 {
-    const int qkv_id = blockIdx.z;
-    const int seq_id = (blockIdx.y << 5) + threadIdx.y;
+    const int qkv_id     = blockIdx.z;
+    const int seq_id     = (blockIdx.y << 5) + threadIdx.y;
     const int threadIdx4 = threadIdx.x << 2;
-    const int hidden_id = (blockIdx.x << 5) + threadIdx4;
-    const int size_id = hidden_id % size_per_head;
-    const int head_id = hidden_id / size_per_head;
+    const int hidden_id  = (blockIdx.x << 5) + threadIdx4;
+    const int size_id    = hidden_id % size_per_head;
+    const int head_id    = hidden_id / size_per_head;
 
     const bool qual = (seq_id < valid_word_num) && (hidden_id < head_num_x_size_per_head);
     if (qual) {
@@ -303,22 +304,22 @@ __global__ void trt_add_QKV_bias_ROW_int8IO(char4* output,
 }
 
 template<typename T>
-void invokeTrtAddQkvBiasInt8IORow(int8_t* output,
-                                  const int8_t* Q,
-                                  const T* bias_Q,
-                                  const T* bias_K,
-                                  const T* bias_V,
-                                  const size_t token_num,
-                                  const size_t head_num,
-                                  const size_t size_per_head,
-                                  const float* q_input_deQFactor_ptr,
-                                  const float* k_input_deQFactor_ptr,
-                                  const float* v_input_deQFactor_ptr,
-                                  const float mScaleQkv,
+void invokeTrtAddQkvBiasInt8IORow(int8_t*            output,
+                                  const int8_t*      Q,
+                                  const T*           bias_Q,
+                                  const T*           bias_K,
+                                  const T*           bias_V,
+                                  const size_t       token_num,
+                                  const size_t       head_num,
+                                  const size_t       size_per_head,
+                                  const float*       q_input_deQFactor_ptr,
+                                  const float*       k_input_deQFactor_ptr,
+                                  const float*       v_input_deQFactor_ptr,
+                                  const float        mScaleQkv,
                                   const cudaStream_t stream)
 {
 
-    int head_num_x_size_per_head = head_num * size_per_head;
+    int  head_num_x_size_per_head = head_num * size_per_head;
     dim3 grid((head_num_x_size_per_head + 31) / 32, (token_num + 31) / 32, 3);
     dim3 block(8, 32);
 
@@ -340,9 +341,9 @@ void invokeTrtAddQkvBiasInt8IORow(int8_t* output,
 }
 
 template<typename T>
-void FusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>* output_tensors,
+void FusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                                          const std::vector<fastertransformer::Tensor>* input_tensors,
-                                         const AttentionWeight<T>* attention_weights)
+                                         const AttentionWeight<T>*                     attention_weights)
 {
     // input_tensors: [input (token_num, hidden_dimension),
     //                 attention_mask (batch, 1, seqlen, seqlen),
@@ -350,7 +351,7 @@ void FusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>*
     // output_tensors: [output (token_num, hidden_dimension)]
     // If padding_offset.data is nullptr, then not remove padding
 
-    const ScaleList* scale_list = ((const AttentionINT8Weight<T>*)attention_weights)->scale_list_ptr;
+    const ScaleList*     scale_list     = ((const AttentionINT8Weight<T>*)attention_weights)->scale_list_ptr;
     cublasINT8MMWrapper* cublas_wrapper = (cublasINT8MMWrapper*)cublas_wrapper_;
 
     // input_tensors: [input_query (token_num, hidden_dimension),
@@ -362,16 +363,16 @@ void FusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>*
     FT_CHECK(isValidSeqLen(input_tensors->at(1).shape[2]));
     allocateBuffer();
 
-    int32_t* attention_out = (int32_t*)output_tensors->at(0).data;
-    const int8_t* from_tensor = (const int8_t*)input_tensors->at(0).data;
-    const T* attention_mask = (const T*)input_tensors->at(1).data;
-    const int* padding_offset = (const int*)input_tensors->at(2).data;
+    int32_t*      attention_out  = (int32_t*)output_tensors->at(0).data;
+    const int8_t* from_tensor    = (const int8_t*)input_tensors->at(0).data;
+    const T*      attention_mask = (const T*)input_tensors->at(1).data;
+    const int*    padding_offset = (const int*)input_tensors->at(2).data;
 
     const int request_batch_size = input_tensors->at(1).shape[0];
-    const int request_seq_len = input_tensors->at(1).shape[2];
-    const int m = input_tensors->at(0).shape[0];
-    const int k = hidden_units_;
-    const int n = hidden_units_;
+    const int request_seq_len    = input_tensors->at(1).shape[2];
+    const int m                  = input_tensors->at(0).shape[0];
+    const int k                  = hidden_units_;
+    const int n                  = hidden_units_;
 #ifdef SPARSITY_ENABLED
     int m_tmp = m;
     if (m_tmp % 16 != 0) {
@@ -379,12 +380,12 @@ void FusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>*
     }
     const int m_padded = m_tmp;
 #endif
-
     const int fusedINT8QKV_type = cublas_wrapper->getFusedINT8QKVType(k, n, attention_weights);
     if (int8_mode_ == 1) {
         // K_int_buf_ V_int_buf_ should point to correct buffer according to m
         K_int_buf_ = (int*)Q_int_buf_ + m * head_num_ * size_per_head_;
         V_int_buf_ = (int*)K_int_buf_ + m * head_num_ * size_per_head_;
+        PUSH_RANGE("qkv_gemm");
         if (fusedINT8QKV_type == 0) {
             cublas_wrapper->Gemm(
                 Q_int_buf_, 1, m, n, k, 0, 0, 0, from_tensor, (int8_t*)(attention_weights->query_weight.kernel));
@@ -406,6 +407,9 @@ void FusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>*
                                  from_tensor,
                                  (int8_t*)(attention_weights->query_weight.kernel));
         }
+        POP_RANGE;
+
+        PUSH_RANGE("invokeTrtAddQkvBiasInt32Iint8O");
         invokeTrtAddQkvBiasInt32Iint8O(qkv_buf_,
                                        Q_int_buf_,
                                        attention_weights->query_weight.bias,
@@ -420,6 +424,7 @@ void FusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>*
                                        &(scale_list->d_scale_list_[scale_list->p2_offset_ + 2 * hidden_units_]),
                                        scale_list->h_scale_list_[scale_list->p4_offset_] / 127.0f,
                                        stream_);
+        POP_RANGE;
     }
     else if (int8_mode_ == 2 || int8_mode_ == 3) {
         // K_int_buf_ V_int_buf_ should point to correct buffer according to m
@@ -428,6 +433,7 @@ void FusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>*
 
 #ifdef SPARSITY_ENABLED
         if (sparse_) {
+            PUSH_RANGE("qkv_gemm");
             cublas_wrapper->SpGemm(n,
                                    m_padded,
                                    k,
@@ -449,9 +455,11 @@ void FusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>*
                                    (int8_t*)(attention_weights->value_weight.sp_kernel),
                                    from_tensor,
                                    (int8_t*)V_int_buf_);
+            POP_RANGE;
         }
         else {
 #endif
+            PUSH_RANGE("qkv_gemm");
             if (fusedINT8QKV_type == 0) {
                 cublas_wrapper->Gemm((int8_t*)Q_int_buf_,
                                      1,
@@ -501,9 +509,11 @@ void FusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>*
                                      from_tensor,
                                      (int8_t*)(attention_weights->query_weight.kernel));
             }
+            POP_RANGE;
 #ifdef SPARSITY_ENABLED
         }
         if (sparse_) {
+            PUSH_RANGE("invokeTrtAddQkvBiasInt8IO");
             invokeTrtAddQkvBiasInt8IORow(qkv_buf_,
                                          (int8_t*)Q_int_buf_,
                                          attention_weights->query_weight.bias,
@@ -517,9 +527,11 @@ void FusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>*
                                          &(scale_list->d_scale_list_[20 + 1]),
                                          scale_list->h_scale_list_[scale_list->p4_offset_] / 127.0f,
                                          stream_);
+            POP_RANGE;
         }
         else {
 #endif
+            PUSH_RANGE("invokeTrtAddQkvBiasInt8IO");
             invokeTrtAddQkvBiasInt8IO(qkv_buf_,
                                       (int8_t*)Q_int_buf_,
                                       attention_weights->query_weight.bias,
@@ -533,6 +545,7 @@ void FusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>*
                                       &(scale_list->d_scale_list_[20 + 1]),
                                       scale_list->h_scale_list_[scale_list->p4_offset_] / 127.0f,
                                       stream_);
+            POP_RANGE;
 #ifdef SPARSITY_ENABLED
         }
 #endif
@@ -546,7 +559,9 @@ void FusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>*
                                    scale_list->h_scale_list_[scale_list->p4_offset_ + 1] / 127.0f,
                                    scale_list->h_scale_list_[scale_list->p4_offset_ + 2] / 127.0f);
     dispatcher_int8_->setup(S, B);
+    PUSH_RANGE("fused mha");
     dispatcher_int8_->run(qkv_buf_, nullptr, (int*)input_tensors->at(2).data, attn_workspace_, qkv_buf_2_, stream_);
+    POP_RANGE;
     sync_check_cuda_error();
 
 #ifdef SPARSITY_ENABLED
@@ -558,6 +573,7 @@ void FusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>*
     }
 #endif
 
+    PUSH_RANGE("proj gemm");
     if (int8_mode_ == 1) {
         cublas_wrapper->Gemm(
             attention_out, 1, m, n, k, 0, 0, 0, qkv_buf_, (int8_t*)(attention_weights->attention_output_weight.kernel));
@@ -590,24 +606,25 @@ void FusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>*
         }
 #endif
     }
+    POP_RANGE;
     if (is_free_buffer_after_forward_ == true) {
         freeBuffer();
     }
 }
 
 template<typename T>
-FusedAttentionLayerINT8<T>::FusedAttentionLayerINT8(size_t max_batch_size,
-                                                    size_t max_seq_len,
-                                                    size_t head_num,
-                                                    size_t size_per_head,
-                                                    int sm,
-                                                    float q_scaling,
-                                                    int int8_mode,
-                                                    cudaStream_t stream,
+FusedAttentionLayerINT8<T>::FusedAttentionLayerINT8(size_t           max_batch_size,
+                                                    size_t           max_seq_len,
+                                                    size_t           head_num,
+                                                    size_t           size_per_head,
+                                                    int              sm,
+                                                    float            q_scaling,
+                                                    int              int8_mode,
+                                                    cudaStream_t     stream,
                                                     cublasMMWrapper* cublas_wrapper,
-                                                    IAllocator* allocator,
-                                                    bool is_free_buffer_after_forward,
-                                                    bool sparse):
+                                                    IAllocator*      allocator,
+                                                    bool             is_free_buffer_after_forward,
+                                                    bool             sparse):
     BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     max_batch_size_(max_batch_size),
     max_seq_len_(max_seq_len),
@@ -662,15 +679,15 @@ template<typename T>
 void FusedAttentionLayerINT8<T>::allocateBuffer()
 {
     if (is_allocate_buffer_ == false) {
-        Q_int_buf_ =
-            (int32_t*)allocator_->malloc(sizeof(int32_t) * max_batch_size_ * max_seq_len_ * hidden_units_ * 3, false);
+        Q_int_buf_ = (int32_t*)allocator_->reMalloc(
+            Q_int_buf_, sizeof(int32_t) * max_batch_size_ * max_seq_len_ * hidden_units_ * 3, false);
         K_int_buf_ = Q_int_buf_ + max_batch_size_ * max_seq_len_ * hidden_units_;
         V_int_buf_ = K_int_buf_ + max_batch_size_ * max_seq_len_ * hidden_units_;
-        qkv_buf_ = (int8_t*)allocator_->malloc(
-            (sizeof(int8_t) * 3 * max_batch_size_ * max_seq_len_ * hidden_units_ + 3) / 4 * 4, false);
-        qkv_buf_2_ = (int8_t*)allocator_->malloc(
-            (sizeof(int8_t) * max_batch_size_ * max_seq_len_ * hidden_units_ + 3) / 4 * 4, false);
-        attn_workspace_ = (T*)allocator_->malloc(dispatcher_int8_->getWorkspaceSize(), false);
+        qkv_buf_   = (int8_t*)allocator_->reMalloc(
+            qkv_buf_, (sizeof(int8_t) * 3 * max_batch_size_ * max_seq_len_ * hidden_units_ + 3) / 4 * 4, false);
+        qkv_buf_2_ = (int8_t*)allocator_->reMalloc(
+            qkv_buf_2_, (sizeof(int8_t) * max_batch_size_ * max_seq_len_ * hidden_units_ + 3) / 4 * 4, false);
+        attn_workspace_ = (T*)allocator_->reMalloc(attn_workspace_, dispatcher_int8_->getWorkspaceSize(), false);
 
         is_allocate_buffer_ = true;
     }
@@ -680,10 +697,10 @@ template<typename T>
 void FusedAttentionLayerINT8<T>::freeBuffer()
 {
     if (is_allocate_buffer_ == true) {
-        allocator_->free(Q_int_buf_);
-        allocator_->free(qkv_buf_);
-        allocator_->free(qkv_buf_2_);
-        allocator_->free(attn_workspace_);
+        allocator_->free((void**)(&Q_int_buf_));
+        allocator_->free((void**)(&qkv_buf_));
+        allocator_->free((void**)(&qkv_buf_2_));
+        allocator_->free((void**)(&attn_workspace_));
 
         is_allocate_buffer_ = false;
         sync_check_cuda_error();

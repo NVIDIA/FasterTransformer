@@ -18,8 +18,12 @@ The FasterTransformer T5 implements the huggingface t5 model (https://huggingfac
       - [Build the project](#build-the-project)
   - [How to use](#how-to-use)
     - [Translation process](#translation-process)
+    - [Running UL2 on FasterTransformer Pytorch op](#running-ul2-on-fastertransformer-pytorch-op)
+    - [Running t5-v1.1](#running-t5-v11)
+    - [Running mt5](#running-mt5)
   - [Performance](#performance)
     - [End-to-end translation performance on PyTorch](#end-to-end-translation-performance-on-pytorch)
+      - [T5-3B on A100-80GB](#t5-3b-on-a100-80gb)
       - [T5-base on A100-40GB](#t5-base-on-a100-40gb)
       - [T5-base on V100-16GB](#t5-base-on-v100-16gb)
       - [T5-small on V100-16GB](#t5-small-on-v100-16gb)
@@ -37,6 +41,7 @@ This document describes what FasterTransformer provides for the `T5` model, expl
 * Data type
   * FP32
   * FP16
+  * BF16
 * Feature
   * Multi-GPU multi-node inference
   * Dynamic random seed
@@ -50,17 +55,115 @@ This document describes what FasterTransformer provides for the `T5` model, expl
 ## Model architecture
 
 ### Workflow
-<!-- 
-Fig 1 demonstrates the workflow of FasterTransformer Decoder and Decoding. They receive some results from encoder as the inputs of CrossAttention, using the start ids or the generated ids of previous step as the inputs of Decoding and generates the respective output ids as response.
-
-<div align=center><img  width='600' src ="images/decoding/decoding.png "/></div>
-<div align=center>Fig. 1 Flowchart of Decoding and GPT.</div>
-
-The following examples demonstrating how to run multi-GPU and multi-node GPT model.
-1. `examples/cpp/decoding.cc`: An example to run the Decoding with random weights and inputs in C++.
-2. `examples/tensorflow/decoding/translate_example.py`: An example to run the end-to-end translation task with FasterTransformer Decoder/Decoding in TensorFlow. We also use the FasterTransformer encoder op in this example.  -->
 
 The source codes are put in `src/fastertransformer/models/t5`.
+
+* Constructor of T5 Encoder
+
+| Classification |             Name             |     Data Type      |                                                                                                            Description                                                                                                            |
+| :------------: | :--------------------------: | :----------------: | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
+|      [0]       |        max_batch_size        |       size_t       |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [1]       |         max_seq_len          |       size_t       |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [2]       |           head_num           |       size_t       |                                                                                                Head number for model configuration                                                                                                |
+|      [3]       |        size_per_head         |       size_t       |                                                                                               Size per head for model configuration                                                                                               |
+|      [4]       |          inter_size          |       size_t       |                                                                     The inter size of feed forward network. It is often set to 4 * head_num * size_per_head.                                                                      |
+|      [5]       |           d_model            |       size_t       |                                                                                         The dimension of embedding of transformer input.                                                                                          |
+|      [6]       |          num_layer           |       size_t       |                                                                                       Number of transformer layers for model configuration                                                                                        |
+|      [7]       |  num_bucket_or_max_seq_len   |       size_t       |                                                              Number of bucket in relative position embedding, or max sequence length for absolute position embedding                                                              |
+|      [8]       |         max_distance         |       size_t       |                                                                                           Max distance for relative position embedding                                                                                            |
+|      [9]       |              sm              |        int         |                                                                                                    The compute capacity of GPU                                                                                                    |
+|      [10]      |          q_scaling           |       float        |                                                                          It is used to scale the query before the batch multiplication of query and key                                                                           |
+|      [11]      |            stream            |    cudaStream_t    |                                                                                                            CUDA stream                                                                                                            |
+|      [12]      |        cublas_wrapper        |  cublasMMWrapper*  |                                                                  Pointer of cuBLAS wrapper, which is declared in `src/fastertransformer/utils/cublasMMWrapper.h`                                                                  |
+|      [13]      |          allocator           |    IAllocator*     |                                                                    Pointer of memory allocator, which is declared in `src/fastertransformer/utils/allocator.h`                                                                    |
+|      [14]      | is_free_buffer_after_forward |        bool        | If setting to be `true`, FasterTransformer will allocate buffer before forward, and free buffer after forward. When the allocator is based on memory pool, setting to `true` may help reducing the memory usage during inference. |
+|      [15]      |        attention_type        |   AttentionType    |                                      Determine fusing the attention or not, remove padding or not, which is declared in `src/fastertransformer/layers/attention_layers/BaseAttentionLayer.h`                                      |
+|      [16]      |            sparse            |        bool        |                                                                                            Is using sparsity. **Experimental feature**                                                                                            |
+|      [17]      |       activation_type        |   ActivationType   |                                                         Determine the activation in FFN, which is declared in `src/fastertransformer/layers/attention_layers/FfnLayer.h`                                                          |
+|      [18]      |        layernorm_type        |   LayerNormType    |                                                     Determine using pre-layernorm or post-layernorm, which is declared in `src/fastertransformer/kernels/layernorm_kernels.h`                                                     |
+|      [19]      |         tensor_para          |     NcclParam      |                                                                   Tensor Parallel information, which is declared in `src/fastertransformer/utils/nccl_utils.h`                                                                    |
+|      [20]      |        pipeline_para         |     NcclParam      |                                                                  Pipeline Parallel information, which is declared in `src/fastertransformer/utils/nccl_utils.h`                                                                   |
+|      [21]      |    custom_all_reduce_comm    | AbstractCustomComm |                                                Custom all reduction communication for custom all reduction in model parallelism. It is only supported in 8-way tensor parallelism                                                 |
+|      [22]      |   enable_custom_all_reduce   |        int         |                                                                                           Flag of enabling custom all reduction or not                                                                                            |
+
+* Input of T5 Encoder
+
+|      Name       |     Tensor/Parameter Shape     | Location |   Data Type    |                                                         Description                                                         |
+| :-------------: | :----------------------------: | :------: | :------------: | :-------------------------------------------------------------------------------------------------------------------------: |
+|    input_ids    |     [batch_size, seq_len]      |   GPU    |      int       |                                                        The input ids                                                        |
+| sequence_length |          [batch_size]          |   GPU    |      int       |                                                  The lengths of input ids                                                   |
+|  inputs_embeds  | [batch_size, seq_len, d_model] |   GPU    | fp32/fp16/bf16 | **Optional**. The embedding after embedding lookup. If this input is not null, using this embedding as input of transformer |
+
+* Output of T5 Encoder
+
+|        Name         |         Tensor/Parameter Shape          | Location |   Data Type    |           Description           |
+| :-----------------: | :-------------------------------------: | :------: | :------------: | :-----------------------------: |
+| output_hidden_state | [batch_size, sequence_length, d_model_] |   GPU    | fp32/fp16/bf16 | The output of transformer layer |
+
+* Constructor of T5 Decoding
+
+| Classification |             Name             |     Data Type      |                                                                                                            Description                                                                                                            |
+| :------------: | :--------------------------: | :----------------: | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
+|      [0]       |        max_batch_size        |       size_t       |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [1]       |         max_seq_len          |       size_t       |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [2]       |       mem_max_seq_len        |       size_t       |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [3]       |          beam_width          |       size_t       |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [4]       |           head_num           |       size_t       |                                                                                                Head number for model configuration                                                                                                |
+|      [5]       |        size_per_head         |       size_t       |                                                                                               Size per head for model configuration                                                                                               |
+|      [6]       |          inter_size          |       size_t       |                                                                     The inter size of feed forward network. It is often set to 4 * head_num * size_per_head.                                                                      |
+|      [7]       |           d_model            |       size_t       |                                                                                         The dimension of embedding of transformer input.                                                                                          |
+|      [8]       |          num_layer           |       size_t       |                                                                                       Number of transformer layers for model configuration                                                                                        |
+|      [9]       |          vocab_size          |       size_t       |                                                                                              Vocabulary size for model configuration                                                                                              |
+|      [10]      |          num_bucket          |       size_t       |                                                              Number of bucket in relative position embedding, or max sequence length for absolute position embedding                                                              |
+|      [11]      |         max_distance         |       size_t       |                                                                                           Max distance for relative position embedding                                                                                            |
+|      [12]      |          q_scaling           |       float        |                                                                          It is used to scale the query before the batch multiplication of query and key                                                                           |
+|      [13]      |           start_id           |        int         |                                                                                                      Start id for vocabulary                                                                                                      |
+|      [14]      |            end_id            |        int         |                                                                                                       End id for vocabulary                                                                                                       |
+|      [15]      |  beam_search_diversity_rate  |       float        |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [16]      |            top_k             |       size_t       |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [17]      |            top_p             |       float        |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [18]      |         temperature          |       float        |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [19]      |         len_penalty          |       float        |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [20]      |      repetition_penalty      |       float        |                                                                                                   **Deprecated, move to input**                                                                                                   |
+|      [21]      |            stream            |    cudaStream_t    |                                                                                                            CUDA stream                                                                                                            |
+|      [22]      |        cublas_wrapper        |  cublasMMWrapper*  |                                                                  Pointer of cuBLAS wrapper, which is declared in `src/fastertransformer/utils/cublasMMWrapper.h`                                                                  |
+|      [23]      |          allocator           |    IAllocator*     |                                                                    Pointer of memory allocator, which is declared in `src/fastertransformer/utils/allocator.h`                                                                    |
+|      [24]      | is_free_buffer_after_forward |        bool        | If setting to be `true`, FasterTransformer will allocate buffer before forward, and free buffer after forward. When the allocator is based on memory pool, setting to `true` may help reducing the memory usage during inference. |
+|      [25]      |       cuda_device_prop       |  cudaDeviceProp*   |                                                           Pointer of CUDA device properties, which is used to get the properties of hardware like size of shared memory                                                           |
+|      [26]      |         tensor_para          |     NcclParam      |                                                                   Tensor Parallel information, which is declared in `src/fastertransformer/utils/nccl_utils.h`                                                                    |
+|      [27]      |        pipeline_para         |     NcclParam      |                                                                  Pipeline Parallel information, which is declared in `src/fastertransformer/utils/nccl_utils.h`                                                                   |
+|      [28]      |       activation_type        |   ActivationType   |                                                         Determine the activation in FFN, which is declared in `src/fastertransformer/layers/attention_layers/FfnLayer.h`                                                          |
+|      [29]      |     tie_word_embeddings      |        bool        |                                                                                        A flag controlling the scale of transformer output                                                                                         |
+|      [30]      |    custom_all_reduce_comm    | AbstractCustomComm |                                                Custom all reduction communication for custom all reduction in model parallelism. It is only supported in 8-way tensor parallelism                                                 |
+|      [31]      |   enable_custom_all_reduce   |        int         |                                                                                           Flag of enabling custom all reduction or not                                                                                            |
+
+* Input of T5 Decoding
+
+|            Name            |            Tensor/Parameter Shape             | Location |       Data Type        |                                                              Description                                                               |
+| :------------------------: | :-------------------------------------------: | :------: | :--------------------: | :------------------------------------------------------------------------------------------------------------------------------------: |
+|       encoder_output       | [batch_size, mem_max_seq_len, memory_d_model] |   GPU    |     fp32/fp16/bf16     |                                                        The output of T5 Encoder                                                        |
+|  encoder_sequence_length   |                 [batch_size]                  |   GPU    |          int           |                                              The sequence length of encoder input/output                                               |
+|      stop_words_list       |      [batch_size, 2, stop_words_length]       |   GPU    |          int           |                **Optional**. When FT generates words in this list, it will stop the generation. An extension of stop id                |
+|       bad_words_list       |       [batch_size, 2, bad_words_length]       |   GPU    |          int           | **Optional**. The words in the list will be When FT generates words in this list, it will stop the generation. An extension of stop id |
+|          start_id          |                 [batch_size]                  |   CPU    |          int           |                            **Optional**. If FT receives this input, FT will replace default start id by it                             |
+|           end_id           |                 [batch_size]                  |   CPU    |          int           |                             **Optional**. If FT receives this input, FT will replace default end id by it                              |
+|       runtime_top_k        |              [1] or [batch_size]              |   CPU    |          uint          |                                              **Optional**. top_k value for top k sampling                                              |
+|       runtime_top_p        |              [1] or [batch_size]              |   CPU    |         float          |                                              **Optional**. top_p value for top p sampling                                              |
+| beam_search_diversity_rate |              [1] or [batch_size]              |   CPU    |         float          |               **Optional**. A hyper hyper-parameter for [simple diverse decoding](https://arxiv.org/pdf/1611.08562.pdf)                |
+|        temperature         |              [1] or [batch_size]              |   CPU    |         float          |                             **Optional**. Temperature applied to logits for both beam search and sampling                              |
+|        len_penalty         |              [1] or [batch_size]              |   CPU    |         float          |                                  **Optional**. Length penalty applied to logits for only beam search                                   |
+|     repetition_penalty     |              [1] or [batch_size]              |   CPU    |         float          |                          **Optional**. Repetition penalty applied to logits for both beam search and sampling                          |
+|        random_seed         |              [1] or [batch_size]              |   CPU    | unsigned long long int |                                 **Optional**. Random seed to initialize the random table in sampling.                                  |
+
+* Output of T5 Decoding
+
+|       Name       |                                               Tensor/Parameter Shape                                                | Location | Data Type |                                    Description                                    |
+| :--------------: | :-----------------------------------------------------------------------------------------------------------------: | :------: | :-------: | :-------------------------------------------------------------------------------: |
+|    output_ids    |                                    [batch_size, beam_width, max_output_seq_len]                                     |   GPU    |    int    |            The output ids. It contains the input_ids and generated ids            |
+| sequence_length  |                                              [batch_size, beam_width]                                               |   GPU    |    int    |                             The lengths of output ids                             |
+| output_log_probs |                                  [batch_size, beam_width, request_output_seq_len]                                   |   GPU    |   float   | **Optional**. It records the log probability of logits at each step for sampling. |
+|  cum_log_probs   |                                              [batch_size, beam_width]                                               |   GPU    |   float   |          **Optional**. Cumulative log probability of generated sentences          |
+| cross_attentions | [num_layer / pipeline_para_size, batch_size, beam_width, head_num / tensor_para_size, max_seq_len, mem_max_seq_len] |   GPU    |   float   |               **Optional**. The attention scores of cross attention               |
 
 ### Optimization
 
@@ -75,10 +178,10 @@ The following section lists the requirements to use FasterTransformer.
 - CMake >= 3.13 for PyTorch
 - CUDA 11.0 or newer version
 - NCCL 2.10 or newer version
-- Python 3 is recommended because some features are not supported in python 2
+- Python: Only verify on Python 3.
 - PyTorch: Verify on 1.10.0, >= 1.5.0 should work.
 
-Recommend use nvcr image like `nvcr.io/nvidia/pytorch:21.11-py3`.
+Recommend use nvcr image like `nvcr.io/nvidia/pytorch:22.07-py3`.
 
 Ensure you have the following components:
 - [NVIDIA Docker](https://github.com/NVIDIA/nvidia-docker) and NGC container are recommended
@@ -96,10 +199,10 @@ For those unable to use the NGC container, to set up the required environment or
 
 #### Prepare
 
-You can choose the pytorch version and python version you want. Here, we suggest image `nvcr.io/nvidia/pytorch:21.11-py3`, which contains the PyTorch 1.8.0 and python 3.8.
+You can choose the pytorch version and python version you want. Here, we suggest image `nvcr.io/nvidia/pytorch:22.07-py3`, which contains the PyTorch 1.8.0 and python 3.8.
 
     ```bash
-    nvidia-docker run -ti --rm nvcr.io/nvidia/pytorch:21.11-py3 bash
+    nvidia-docker run -ti --rm nvcr.io/nvidia/pytorch:22.07-py3 bash
     git clone https://github.com/NVIDIA/FasterTransformer.git
     mkdir -p FasterTransformer/build
     cd FasterTransformer/build
@@ -108,7 +211,19 @@ You can choose the pytorch version and python version you want. Here, we suggest
 
 #### Build the project
 
-* Note: the `xx` of `-DSM=xx` in following scripts means the compute capability of your GPU. For example, 60 (P40) or 61 (P4) or 70 (V100) or 75(T4) or 80 (A100).  Default setting is including 70, 75, 80 and 86.
+* Note: the `xx` of `-DSM=xx` in following scripts means the compute capability of your GPU. The following table shows the compute capability of common GPUs.
+
+|  GPU  | compute capacity |
+| :---: | :--------------: |
+|  P40  |        60        |
+|  P4   |        61        |
+| V100  |        70        |
+|  T4   |        75        |
+| A100  |        80        |
+|  A30  |        80        |
+|  A10  |        86        |
+
+By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-DSM`, it requires longer time to compile. So, we suggest setting the `-DSM` for the device you use only. Here, we use `xx` as an example due to convenience.
 
 1. build with PyTorch
 
@@ -121,7 +236,7 @@ You can choose the pytorch version and python version you want. Here, we suggest
 
 2. build with TensorRT
   
-    Can use `nvcr.io/nvidia/pytorch:21.11-py3` docker image, too.
+    Can use `nvcr.io/nvidia/pytorch:22.07-py3` docker image, too.
 
     ```bash
     cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_TRT=ON -DBUILD_MULTI_GPU=ON ..
@@ -134,7 +249,8 @@ You can choose the pytorch version and python version you want. Here, we suggest
 
 1. Run FasterTransformer T5 on PyTorch
 
-    Please install transformers first before running the demos by
+    Please install utils first before running the demos by
+
     ```bash
     pip install -r ../examples/pytorch/t5/requirement.txt
     ```
@@ -179,6 +295,8 @@ You can choose the pytorch version and python version you want. Here, we suggest
             --model t5-small
     ```
 
+    Data Type can be `fp32`, `fp16` and `bf16`
+
     The outputs should be like to the following:
 
     ```bash
@@ -213,16 +331,18 @@ You can choose the pytorch version and python version you want. Here, we suggest
     ```
 
     ```bash
-    python ../examples/tensorrt/t5/createT5TestData.py # get T5PluginTestIO.npz for test
-
-    python ../examples/tensorrt/t5/extractT5ModelToBIN.py # get T5Model weight for test (need Internet)
+    # get T5Model weight for test (need Internet or pre-downloaded model)
+    # Note that the model is saved in ./ft_t5_small/1-gpu, but not ./ft_t5_small
+    python ../examples/tensorrt/t5/extractT5ModelToBIN.py \
+            -in_file t5-small \
+            -saved_dir ./ft_t5_small
 
     python ../examples/tensorrt/t5/testT5Plugin.py \
             --batch_size 32 \
             --beam_width 4 \
             --max_seq_len 128 \
-            --data_type fp32 \
-            --sampling_topk 4
+            --data_type fp16 \
+            --ckpt_path ./ft_t5_small/1-gpu
     ```
 * Input/Output Tensor/Parameter of T5Encoder Plugin
 
@@ -235,51 +355,189 @@ You can choose the pytorch version and python version you want. Here, we suggest
 |       [0]       |                []                |     int32      |             max_batch_size             |
 |       [1]       |                []                |     int32      |              max_seq_len               |
 |       [2]       |                []                |     int32      | beam_width (keep the same as decoding) |
-|       [3]       |                []                |     int32      |                head_num                |
-|       [4]       |                []                |     int32      |             size_per_head              |
-|       [5]       |                []                |     int32      |               inter_size               |
-|       [6]       |                []                |     int32      |                d_model                 |
-|       [7]       |                []                |     int32      |               num_layer                |
-|       [8]       |                []                |     int32      |               num_bucket               |
-|       [9]       |                []                |     int32      |              max_distance              |
-|      [10]       |                []                |     int32      |                   sm                   |
-|      [11]       |                []                |    float32     |               q_scaling                |
-|      [12]       |                []                |     int32      |                useFP16                 |
+|       [3]       |                []                |     int32      |                   sm                   |
+|       [4]       |                []                |     int32      |                useFP16                 |
+|       [5]       |                []                |     string     | checkpoint path of converted FT model  |
 |  output tensor  |                                  |                |                                        |
 |       [0]       | [batch_size,max_seq_len,d_model] | foat32/float16 |             encoder output             |
 
 * Input/Output Tensor/Parameter of T5Decoding Plugin
 
-| Classification  |       Tensor/Parameter Shape        |    Data Type    |             Description             |
-| :-------------: | :---------------------------------: | :-------------: | :---------------------------------: |
-|  input tensor   |                                     |                 |                                     |
-|       [0]       |  [batch_size,max_seq_len,d_model]   | foat32/float16  |           encoder output            |
-|       [1]       |            [batch_size]             |      int32      | real sequence length of each input  |
-| input parameter |                                     |                 |                                     |
-|       [0]       |                 []                  |      int32      |           max_batch_size            |
-|       [1]       |                 []                  |      int32      |             max_seq_len             |
-|       [2]       |                 []                  |      int32      |           mem_max_seq_len           |
-|       [3]       |                 []                  |      int32      |             beam_width              |
-|       [4]       |                 []                  |      int32      |              head_num               |
-|       [5]       |                 []                  |      int32      |            size_per_head            |
-|       [6]       |                 []                  |      int32      |             inter_size              |
-|       [7]       |                 []                  |      int32      |               d_model               |
-|       [8]       |                 []                  |      int32      |              num_layer              |
-|       [9]       |                 []                  |      int32      |             vocab_size              |
-|      [10]       |                 []                  |      int32      |             num_bucket              |
-|      [11]       |                 []                  |      int32      |            max_distance             |
-|      [12]       |                 []                  |      int32      |              start_id               |
-|      [13]       |                 []                  |      int32      |               end_id                |
-|      [14]       |                 []                  |     float32     |     beam_search_diversity_rate      |
-|      [15]       |                 []                  |      int32      |                top_k                |
-|      [16]       |                 []                  |     float32     |                top_p                |
-|      [17]       |                 []                  |     float32     |             temperature             |
-|      [18]       |                 []                  |     float32     |             len_penalty             |
-|      [19]       |                 []                  |     float32     |         repetition_penalty          |
-|      [20]       |                 []                  |      int32      |              usaeFP16               |
-|  output tensor  |                                     |                 |                                     |
-|       [0]       | [batch_size,beam_width,max_seq_len] | float32/float16 |           decoding output           |
-|       [1]       |       [batch_size,beam_width]       | float32/float16 | real sequence length of each output |
+| Classification  |       Tensor/Parameter Shape        |    Data Type    |              Description              |
+| :-------------: | :---------------------------------: | :-------------: | :-----------------------------------: |
+|  input tensor   |                                     |                 |                                       |
+|       [0]       |  [batch_size,max_seq_len,d_model]   | foat32/float16  |            encoder output             |
+|       [1]       |            [batch_size]             |      int32      |  real sequence length of each input   |
+|       [2]       |         [1] or [batch_size]         |      int32      |                 top_k                 |
+|       [3]       |         [1] or [batch_size]         |     float32     |                 top_p                 |
+|       [4]       |         [1] or [batch_size]         |     float32     |      beam_search_diversity_rate       |
+|       [5]       |         [1] or [batch_size]         |     float32     |              temperature              |
+|       [6]       |         [1] or [batch_size]         |     float32     |              len_penalty              |
+|       [7]       |         [1] or [batch_size]         |     float32     |          repetition_penalty           |
+| input parameter |                                     |                 |                                       |
+|       [0]       |                 []                  |      int32      |            max_batch_size             |
+|       [1]       |                 []                  |      int32      |              max_seq_len              |
+|       [2]       |                 []                  |      int32      |            mem_max_seq_len            |
+|       [3]       |                 []                  |      int32      |              beam_width               |
+|       [4]       |                 []                  |      int32      |               usaeFP16                |
+|       [5]       |                 []                  |     string      | checkpoint path of converted FT model |
+|  output tensor  |                                     |                 |                                       |
+|       [0]       | [batch_size,beam_width,max_seq_len] | float32/float16 |            decoding output            |
+|       [1]       |       [batch_size,beam_width]       | float32/float16 |  real sequence length of each output  |
+
+The model configuration are stored in `config.ini` of checkpoint path. For example, after running, 
+
+```
+python ../examples/tensorrt/t5/extractT5ModelToBIN.py \
+            -in_file t5-small \
+            -saved_dir ./ft_t5_small`
+```
+
+users can see the model configuration in `./ft_t5_small/1-gpu/config.ini`
+
+### Running UL2 on FasterTransformer Pytorch op
+
+[UL2](https://arxiv.org/pdf/2205.05131v1.pdf) (Unifying Language Learning Paradigms) is published by Google. The following is its introduction:
+
+> UL2 is a unified framework for pretraining models that are universally effective across datasets and setups. UL2 uses Mixture-of-Denoisers (MoD), apre-training objective that combines diverse pre-training paradigms together. UL2 introduces a notion of mode switching, wherein downstream fine-tuning is associated with specific pre-training schemes.
+
+We show how to sever UL2 by FasterTransformer PyTorch op on huggingface's model in this section.
+
+    3.1 Download model (It requires some time because the model size is about 40GBs)
+
+    ```
+    sudo apt-get install git-lfs
+    git lfs install
+    git lfs clone https://huggingface.co/google/ul2
+    ```
+
+    3.2 Convert the checkpoint to FT
+
+    Because loading UL2 model on pytorch and do prprocessing takes long time, and `summarization.py` only supports loading FT's model from binary files, we convert the pytorch checkpoint to FasterTransformer by converter `huggingface_t5_ckpt_convert.py`.
+
+    ```
+    python3 ../examples/pytorch/t5/utils/huggingface_t5_ckpt_convert.py \
+            -saved_dir ul2/c-models \
+            -in_file ul2/ \
+            -inference_tensor_para_size 2 \
+            -weight_data_type fp32
+    ```
+
+    3.3 Run UL2 on summarization task
+
+    ```
+    mpirun -n 2 python3 ../examples/pytorch/t5/summarization.py  \
+                          --ft_model_location ul2/c-models/ \
+                          --hf_model_location ul2/ \
+                          --test_ft \
+                          --data_type bf16 \
+                          --tensor_para_size 2
+    ```
+
+    The results would be like
+
+    ```
+    rouge1 : 23.673944166014593
+    rouge2 : 5.946485383012474
+    rougeL : 14.749827731626247
+    rougeLsum : 20.217932008044144
+    ```
+
+### Running t5-v1.1
+
+    3.1 Download model (It requires some time because the model size is about 40GBs)
+
+    ```
+    sudo apt-get install git-lfs
+    git lfs install
+    git lfs clone https://huggingface.co/google/t5-v1_1-base
+    ```
+
+
+    3.2 Convert the checkpoint to FT
+
+    ```
+    python3 ../examples/pytorch/t5/utils/huggingface_t5_ckpt_convert.py \
+            -saved_dir t5-v1_1-base/c-models \
+            -in_file t5-v1_1-base/ \
+            -inference_tensor_para_size 1 \
+            -weight_data_type fp32
+    ```
+
+    3.3 Run t5-v1.1 on summarization task
+
+    ```
+    python3 ../examples/pytorch/t5/summarization.py  \
+            --ft_model_location t5-v1_1-base/c-models/ \
+            --hf_model_location t5-v1_1-base/ \
+            --test_ft \
+            --test_hf
+    ```
+
+    The results would be like
+
+    ```
+    Hugging Face (total latency: 21.826529 sec)
+    rouge1 : 10.786476875527406
+    rouge2 : 1.8231246974441166
+    rougeL : 8.652689713627165
+    rougeLsum : 10.326607305635523
+    Faster Transformers (total latency: 7.036808000000001 sec)
+    rouge1 : 10.91735083630513
+    rouge2 : 1.8454654301092783
+    rougeL : 8.76872604148143
+    rougeLsum : 10.453229536094794
+    ```
+
+    * Note that these models are not fine-tuned, so running with FP16 or setting topk > 1 may lead to unstable results.
+
+### Running mt5
+
+    3.1 Download model (It requires some time because the model size is about 40GBs)
+
+    ```
+    sudo apt-get install git-lfs
+    git lfs install
+    git lfs clone https://huggingface.co/google/mt5-base
+    ```
+
+
+    3.2 Convert the checkpoint to FT
+
+    ```
+    python3 ../examples/pytorch/t5/utils/huggingface_t5_ckpt_convert.py \
+            -saved_dir mt5-base/c-models \
+            -in_file mt5-base/ \
+            -inference_tensor_para_size 1 \
+            -weight_data_type fp32
+    ```
+
+    3.3 Run mt5 on summarization task
+
+    ```
+    python3 ../examples/pytorch/t5/summarization.py  \
+            --ft_model_location mt5-base/c-models/ \
+            --hf_model_location mt5-base/ \
+            --test_ft \
+            --test_hf
+    ```
+
+    The results would be like
+
+    ```
+    Hugging Face (total latency: 3.143815 sec)
+    rouge1 : 4.636193727758547
+    rouge2 : 0.20661157024793395
+    rougeL : 3.7990194456844026
+    rougeLsum : 4.274724726798723
+    Faster Transformers (total latency: 1.3952859999999998 sec)
+    rouge1 : 4.726148174547172
+    rouge2 : 0.20818875780707846
+    rougeL : 3.8698557495145516
+    rougeLsum : 4.3507453221528
+    ```
+
+    * Note that these models are not fine-tuned, so running with FP16 or setting topk > 1 may lead to unstable results.
 
 ## Performance
 
@@ -287,6 +545,7 @@ Hardware settings:
 * CPU: Intel(R) Xeon(R) Gold 6132 CPU @ 2.60GHz
 * V100-16GB (with mclk 877MHz, pclk 1380MHz) with Intel(R) Xeon(R) CPU E5-2698 v4 @ 2.20GHz (dgx-1 server)
 * A100-40GB
+* A100-80GB (with mclk 1593, pclk 1410) with AMD EPYC 7742 64-Core Processor
 
 To run the following benchmark, we need to install the unix computing tool "bc" by
 
@@ -296,9 +555,39 @@ apt-get install bc
 
 ### End-to-end translation performance on PyTorch
 
-We demonstrate the throughput of huggingface and FT for end-to-end translation on V100. We also skip the BLEU score because the score of PyTorch, FT Decoder and FT Decoding are close.
+We demonstrate the throughput of huggingface and FT for end-to-end translation on V100 and A100. We also skip the BLEU score because the score of PyTorch, FT Decoder and FT Decoding are close.
 
 Although the bleu scores of all methods are close, the results may be little different, and the number of generated tokens may be also different. So, we use throughput but not latency to show the performance in this benchmark.
+
+#### T5-3B on A100-80GB
+
+* T5-3B on FP16 with beamsearch
+
+| Batch Size | beamsearch | Precision | FT Decoding <br/> Throughput (token/sec) |
+| :--------: | :--------: | :-------: | :--------------------------------------: |
+|     1      |     4      |   FP16    |                   192                    |
+|     1      |     32     |   FP16    |                   140                    |
+|     8      |     4      |   FP16    |                   787                    |
+|     8      |     32     |   FP16    |                   271                    |
+|     32     |     4      |   FP16    |                   1540                   |
+|     32     |     32     |   FP16    |                   OOM                    |
+|    128     |     4      |   FP16    |                   1907                   |
+|    128     |     32     |   FP16    |                   OOM                    |
+
+When batch size is 32, beam width is 32, the k/v caches require about 90GBs and lead to OOM.
+
+* T5-3B on FP16 with sampling
+
+| Batch Size | sampling | Precision | FT Decoding <br/> Throughput (token/sec) |
+| :--------: | :------: | :-------: | :--------------------------------------: |
+|     1      |    4     |   FP16    |                   218                    |
+|     1      |   0.5    |   FP16    |                   217                    |
+|     8      |    4     |   FP16    |                   932                    |
+|     8      |   0.5    |   FP16    |                   908                    |
+|     32     |    4     |   FP16    |                   2416                   |
+|     32     |   0.5    |   FP16    |                   2344                   |
+|    128     |    4     |   FP16    |                   5004                   |
+|    128     |   0.5    |   FP16    |                   4891                   |
 
 #### T5-base on A100-40GB
 

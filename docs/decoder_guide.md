@@ -245,8 +245,9 @@ For those unable to use the NGC container, to set up the required environment or
     `./bin/decoding_example` runs the decoding with beam search or sampling in the `C++`. The arguments of `decoding_example` is:
 
     ```bash
-    ./bin/decoding_example <batch_size> <beam_width> <head_num> <size_per_head> <inter_size> <vocab_size> <num_layers> <max_seq_len> <memory_max_seq_len> <memory_hidden_units> <top_k> <top_p> <is_fp16>
+    ./bin/decoding_example <batch_size> <beam_width> <head_num> <size_per_head> <inter_size> <vocab_size> <num_layers> <max_seq_len> <memory_max_seq_len> <memory_hidden_units> <top_k> <top_p> <data_type>
     ```
+    Data Type = 0 (FP32) or 1 (FP16) or 2 (BF16)
 
     Then the following scripts can run the decoding with beam search under the above settings. 
 
@@ -277,16 +278,18 @@ For those unable to use the NGC container, to set up the required environment or
     [INFO] batch_size 32 beam_width 1 head_num 8 size_per_head 64 max_seq_len 32 num_layers 6 vocab_size 30000, top_k 0, top_p 0.500, FT-CPP-decoding-time 75.91 ms
     ```
 
-    1.3 Run decoding under FP16 on C++
+    1.3 Run decoding under FP16/BF16 on C++
 
-    So far, we use the FP32 to run the FasterTransformer. If we use the volta or newer NVIDIA GPU, we can use tensor core to accelerate when we use the FP16. 
+    So far, we use the FP32 to run the FasterTransformer. If we use the volta or newer NVIDIA GPU, we can use tensor core to accelerate when we use the FP16. BF16 is only supported after Ampere NVIDIA GPU (SM 80).
 
-    To use the FP16, we only need to set the `<is_use_fp16>` flag to 1 like following:
+    To use the FP16, we only need to set the `<data_type>` flag to 1 like following:
 
     ```bash
     ./bin/decoding_gemm 32 4 8 64 2048 30000 32 512 1
     ./bin/decoding_example 32 4 8 64 2048 30000 6 32 32 512 0 0.0 1
     ```
+
+    To use the BF16, we only need to set the `<data_type>` flag to 2.
 
     Note that the configuration of FP32 and FP16 are different, so we need to generate the configuration again. 
 
@@ -565,18 +568,20 @@ For those unable to use the NGC container, to set up the required environment or
     3.1 Generate the `gemm_config.in` file:
 
     ```bash
-    ./bin/decoding_gemm <batch_size> <beam_size> <head_number> <size_per_head> <inter_size> <vocab_size> <seq_len> <memory_hidden_dim> <is_fp16>
+    ./bin/decoding_gemm <batch_size> <beam_size> <head_number> <size_per_head> <inter_size> <vocab_size> <seq_len> <memory_hidden_dim> <data_type>
     ./bin/decoding_gemm 8 4 8 64 2048 31538 32 512 1
     ```
+
+    Data Type = 0 (FP32) or 1 (FP16) or 2 (BF16)
+
     If you want to use the library in other directory, please generate this file according to your setting and copy it to your working directory.
 
     3.2 Run the PyTorch decoder sample: 
 
     ```bash
-    python ../examples/pytorch/decoder/decoder_example.py <batch_size> <layer_num> <sequence_length> <head_number> <size_per_head> <--fp16> <--time>
-    python ../examples/pytorch/decoder/decoder_example.py 8 6 32 8 64 --fp16 --time
+    python ../examples/pytorch/decoder/decoder_example.py <batch_size> <layer_num> <sequence_length> <head_number> <size_per_head> <--data_type fp32/fp16/bf16> <--time>
+    python ../examples/pytorch/decoder/decoder_example.py 8 6 32 8 64 --data_type fp16 --time
     ```
-    Remove `--fp16` for fp32 mode.
 
     The outputs should be like to the following:
 
@@ -592,10 +597,9 @@ For those unable to use the NGC container, to set up the required environment or
     3.3 Run the PyTorch decoding sample: 
 
     ```bash
-    python pytorch/decoding_sample.py <batch_size> <layer_num> <sequence_length> <head_number> <size_per_head> <beam_size> <vocab_size> <--fp16> <--time>
-    python ../examples/pytorch/decoding/decoding_example.py 8 6 32 8 64 4 31538 --fp16 --time
+    python pytorch/decoding_sample.py <batch_size> <layer_num> <sequence_length> <head_number> <size_per_head> <beam_size> <vocab_size> <--data_type fp32/fp16/bf16> <--time>
+    python ../examples/pytorch/decoding/decoding_example.py 8 6 32 8 64 4 31538 --data_type fp16 --time
     ```
-    Remove `--fp16` for fp32 mode.
 
     The outputs should be like to the following:
 
@@ -698,7 +702,7 @@ For those unable to use the NGC container, to set up the required environment or
     - `torch_decoding`: PyTorch version decoding with the method FasterTransformer decoding uses
     - `torch_decoding_with_decoder_ext`: PyTorch version decoding with the method FasterTransformer decoding uses but replace the decoder with the FasterTransformer decoder
 
-    the `<data_type>` can be `fp32` or `fp16`
+    the `<data_type>` can be `fp32` or `fp16` or `bf16`
 
     If you do not specify the output file, it only print to the standard output.
 

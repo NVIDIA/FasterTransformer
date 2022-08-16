@@ -32,27 +32,27 @@ using namespace std;
 namespace fastertransformer {
 
 // Static class fields initialization
-PluginFieldCollection SwinTransformerPluginCreator::mFC{};
+PluginFieldCollection    SwinTransformerPluginCreator::mFC{};
 std::vector<PluginField> SwinTransformerPluginCreator::mPluginAttributes;
 
 REGISTER_TENSORRT_PLUGIN(SwinTransformerPluginCreator);
 
 template<typename T>
-SwinTransformerPlugin<T>::SwinTransformerPlugin(const std::string& name,
-                                                const int max_batch_size,
-                                                const int img_size,
-                                                const int patch_size,
-                                                const int in_chans,
-                                                const int embed_dim,
-                                                const int window_size,
-                                                int* depths,
-                                                int* num_heads,
-                                                const bool ape,
-                                                const bool patch_norm,
-                                                const int layer_num,
-                                                const float mlp_ratio,
-                                                const bool qkv_bias,
-                                                const float qk_scale,
+SwinTransformerPlugin<T>::SwinTransformerPlugin(const std::string&     name,
+                                                const int              max_batch_size,
+                                                const int              img_size,
+                                                const int              patch_size,
+                                                const int              in_chans,
+                                                const int              embed_dim,
+                                                const int              window_size,
+                                                int*                   depths,
+                                                int*                   num_heads,
+                                                const bool             ape,
+                                                const bool             patch_norm,
+                                                const int              layer_num,
+                                                const float            mlp_ratio,
+                                                const bool             qkv_bias,
+                                                const float            qk_scale,
                                                 const std::vector<T*>& w):
     layer_name_(name),
     max_batch_size_(max_batch_size),
@@ -81,7 +81,7 @@ SwinTransformerPlugin<T>::SwinTransformerPlugin(const std::string& name,
         exit(-1);
     }
 
-    depths_ = (int*)malloc(layer_num * sizeof(int));
+    depths_    = (int*)malloc(layer_num * sizeof(int));
     num_heads_ = (int*)malloc(layer_num * sizeof(int));
     memcpy(depths_, depths, layer_num * sizeof(int));
     memcpy(num_heads_, num_heads, layer_num * sizeof(int));
@@ -154,9 +154,9 @@ SwinTransformerPlugin<T>::SwinTransformerPlugin(const std::string& name,
     params_.norm_weights.beta = cudaMallocAndCopy(weights_, w[weight_idx], weight_size_, weight_idx);
     weight_idx++;
 
-    cublasAlgoMap_ = new cublasAlgoMap(GEMM_CONFIG, "");
+    cublasAlgoMap_      = new cublasAlgoMap(GEMM_CONFIG, "");
     cublasWrapperMutex_ = new std::mutex();
-    allocator_ = new Allocator<AllocatorType::CUDA>(getDevice());
+    allocator_          = new Allocator<AllocatorType::CUDA>(getDevice());
 
     cublasMMWrapper* cublas_wrapper =
         new cublasMMWrapper(cublas_handle_, cublaslt_handle_, nullptr, cublasAlgoMap_, cublasWrapperMutex_, nullptr);
@@ -189,21 +189,21 @@ SwinTransformerPlugin<T>::SwinTransformerPlugin(const std::string& name,
 }
 
 template<typename T>
-SwinTransformerPlugin<T>::SwinTransformerPlugin(const std::string& name,
-                                                const int max_batch_size,
-                                                const int img_size,
-                                                const int patch_size,
-                                                const int in_chans,
-                                                const int embed_dim,
-                                                const int window_size,
-                                                int* depths,
-                                                int* num_heads,
-                                                const bool ape,
-                                                const bool patch_norm,
-                                                const int layer_num,
-                                                const float mlp_ratio,
-                                                const bool qkv_bias,
-                                                const float qk_scale,
+SwinTransformerPlugin<T>::SwinTransformerPlugin(const std::string&          name,
+                                                const int                   max_batch_size,
+                                                const int                   img_size,
+                                                const int                   patch_size,
+                                                const int                   in_chans,
+                                                const int                   embed_dim,
+                                                const int                   window_size,
+                                                int*                        depths,
+                                                int*                        num_heads,
+                                                const bool                  ape,
+                                                const bool                  patch_norm,
+                                                const int                   layer_num,
+                                                const float                 mlp_ratio,
+                                                const bool                  qkv_bias,
+                                                const float                 qk_scale,
                                                 const std::vector<Weights>& w):
     layer_name_(name),
     max_batch_size_(max_batch_size),
@@ -224,7 +224,7 @@ SwinTransformerPlugin<T>::SwinTransformerPlugin(const std::string& name,
     check_cuda_error(cublasLtCreate(&cublaslt_handle_));
     checkCUDNN(cudnnCreate(&cudnn_handle_));
 
-    sm_ = getSMVersion();
+    sm_         = getSMVersion();
     weight_num_ = getWeightNum(layer_num, depths);
     if (weight_num_ != w.size()) {
         printf("[ERROR][SwinTransformerPlugin] weights number %lu does not match expected number %d!\n",
@@ -233,7 +233,7 @@ SwinTransformerPlugin<T>::SwinTransformerPlugin(const std::string& name,
         exit(-1);
     }
 
-    depths_ = (int*)malloc(layer_num * sizeof(int));
+    depths_    = (int*)malloc(layer_num * sizeof(int));
     num_heads_ = (int*)malloc(layer_num * sizeof(int));
     memcpy(depths_, depths, layer_num * sizeof(int));
     memcpy(num_heads_, num_heads, layer_num * sizeof(int));
@@ -245,37 +245,37 @@ SwinTransformerPlugin<T>::SwinTransformerPlugin(const std::string& name,
         SwinTransformerBasicLayerWeight<T> bl;
         for (int di = 0; di < depths[l]; di++) {
             SwinTransformerBlockWeight<T> p;
-            p.attention_weights.query_weight.kernel = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.attention_weights.query_weight.bias = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.attention_weights.query_weight.kernel            = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.attention_weights.query_weight.bias              = cudaMallocAndCopy(weights_, w[weight_idx++]);
             p.attention_weights.attention_output_weight.kernel = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.attention_weights.attention_output_weight.bias = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.ffn_weights.intermediate_weight.kernel = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.ffn_weights.intermediate_weight.bias = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.ffn_weights.output_weight.kernel = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.ffn_weights.output_weight.bias = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.attn_layernorm_weights.gamma = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.attn_layernorm_weights.beta = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.ffn_layernorm_weights.gamma = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.ffn_layernorm_weights.beta = cudaMallocAndCopy(weights_, w[weight_idx++]);
-            p.attention_relative_pos_bias = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.attention_weights.attention_output_weight.bias   = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.ffn_weights.intermediate_weight.kernel           = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.ffn_weights.intermediate_weight.bias             = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.ffn_weights.output_weight.kernel                 = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.ffn_weights.output_weight.bias                   = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.attn_layernorm_weights.gamma                     = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.attn_layernorm_weights.beta                      = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.ffn_layernorm_weights.gamma                      = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.ffn_layernorm_weights.beta                       = cudaMallocAndCopy(weights_, w[weight_idx++]);
+            p.attention_relative_pos_bias                      = cudaMallocAndCopy(weights_, w[weight_idx++]);
             bl.block_weight_list.push_back(p);
         }
         bl.merge_layernorm_weights.gamma = cudaMallocAndCopy(weights_, w[weight_idx++]);
-        bl.merge_layernorm_weights.beta = cudaMallocAndCopy(weights_, w[weight_idx++]);
-        bl.merge_linear_weights.kernel = cudaMallocAndCopy(weights_, w[weight_idx++]);
-        bl.attn_mask = cudaMallocAndCopy(weights_, w[weight_idx++]);
+        bl.merge_layernorm_weights.beta  = cudaMallocAndCopy(weights_, w[weight_idx++]);
+        bl.merge_linear_weights.kernel   = cudaMallocAndCopy(weights_, w[weight_idx++]);
+        bl.attn_mask                     = cudaMallocAndCopy(weights_, w[weight_idx++]);
         params_.basic_layer_weight_list.push_back(bl);
     }
     params_.patchEmbed_linear_weights.kernel = cudaMallocAndCopy(weights_, w[weight_idx++]);
-    params_.patchEmbed_linear_weights.bias = cudaMallocAndCopy(weights_, w[weight_idx++]);
-    params_.patchEmbed_norm_weights.gamma = cudaMallocAndCopy(weights_, w[weight_idx++]);
-    params_.patchEmbed_norm_weights.beta = cudaMallocAndCopy(weights_, w[weight_idx++]);
-    params_.norm_weights.gamma = cudaMallocAndCopy(weights_, w[weight_idx++]);
-    params_.norm_weights.beta = cudaMallocAndCopy(weights_, w[weight_idx++]);
+    params_.patchEmbed_linear_weights.bias   = cudaMallocAndCopy(weights_, w[weight_idx++]);
+    params_.patchEmbed_norm_weights.gamma    = cudaMallocAndCopy(weights_, w[weight_idx++]);
+    params_.patchEmbed_norm_weights.beta     = cudaMallocAndCopy(weights_, w[weight_idx++]);
+    params_.norm_weights.gamma               = cudaMallocAndCopy(weights_, w[weight_idx++]);
+    params_.norm_weights.beta                = cudaMallocAndCopy(weights_, w[weight_idx++]);
 
-    cublasAlgoMap_ = new cublasAlgoMap("igemm.config", "");
+    cublasAlgoMap_      = new cublasAlgoMap("igemm.config", "");
     cublasWrapperMutex_ = new std::mutex();
-    allocator_ = new Allocator<AllocatorType::CUDA>(getDevice());
+    allocator_          = new Allocator<AllocatorType::CUDA>(getDevice());
 
     cublasMMWrapper* cublas_wrapper =
         new cublasMMWrapper(cublas_handle_, cublaslt_handle_, nullptr, cublasAlgoMap_, cublasWrapperMutex_, nullptr);
@@ -336,8 +336,8 @@ SwinTransformerPlugin<T>::SwinTransformerPlugin(const std::string& name, const v
         weight_size_.push_back(tmp);
     }
 
-    depths_ = (int*)malloc(layer_num_ * sizeof(int));
-    num_heads_ = (int*)malloc(layer_num_ * sizeof(int));
+    depths_       = (int*)malloc(layer_num_ * sizeof(int));
+    num_heads_    = (int*)malloc(layer_num_ * sizeof(int));
     const char* d = static_cast<const char*>(data);
     memcpy(depths_, d, layer_num_ * sizeof(int));
     d = d + layer_num_ * sizeof(int);
@@ -356,37 +356,37 @@ SwinTransformerPlugin<T>::SwinTransformerPlugin(const std::string& name, const v
         SwinTransformerBasicLayerWeight<T> bl;
         for (int di = 0; di < depths_[l]; di++) {
             SwinTransformerBlockWeight<T> p;
-            p.attention_weights.query_weight.kernel = weights_[weight_idx++];
-            p.attention_weights.query_weight.bias = weights_[weight_idx++];
+            p.attention_weights.query_weight.kernel            = weights_[weight_idx++];
+            p.attention_weights.query_weight.bias              = weights_[weight_idx++];
             p.attention_weights.attention_output_weight.kernel = weights_[weight_idx++];
-            p.attention_weights.attention_output_weight.bias = weights_[weight_idx++];
-            p.ffn_weights.intermediate_weight.kernel = weights_[weight_idx++];
-            p.ffn_weights.intermediate_weight.bias = weights_[weight_idx++];
-            p.ffn_weights.output_weight.kernel = weights_[weight_idx++];
-            p.ffn_weights.output_weight.bias = weights_[weight_idx++];
-            p.attn_layernorm_weights.gamma = weights_[weight_idx++];
-            p.attn_layernorm_weights.beta = weights_[weight_idx++];
-            p.ffn_layernorm_weights.gamma = weights_[weight_idx++];
-            p.ffn_layernorm_weights.beta = weights_[weight_idx++];
-            p.attention_relative_pos_bias = weights_[weight_idx++];
+            p.attention_weights.attention_output_weight.bias   = weights_[weight_idx++];
+            p.ffn_weights.intermediate_weight.kernel           = weights_[weight_idx++];
+            p.ffn_weights.intermediate_weight.bias             = weights_[weight_idx++];
+            p.ffn_weights.output_weight.kernel                 = weights_[weight_idx++];
+            p.ffn_weights.output_weight.bias                   = weights_[weight_idx++];
+            p.attn_layernorm_weights.gamma                     = weights_[weight_idx++];
+            p.attn_layernorm_weights.beta                      = weights_[weight_idx++];
+            p.ffn_layernorm_weights.gamma                      = weights_[weight_idx++];
+            p.ffn_layernorm_weights.beta                       = weights_[weight_idx++];
+            p.attention_relative_pos_bias                      = weights_[weight_idx++];
             bl.block_weight_list.push_back(p);
         }
         bl.merge_layernorm_weights.gamma = weights_[weight_idx++];
-        bl.merge_layernorm_weights.beta = weights_[weight_idx++];
-        bl.merge_linear_weights.kernel = weights_[weight_idx++];
-        bl.attn_mask = weights_[weight_idx++];
+        bl.merge_layernorm_weights.beta  = weights_[weight_idx++];
+        bl.merge_linear_weights.kernel   = weights_[weight_idx++];
+        bl.attn_mask                     = weights_[weight_idx++];
         params_.basic_layer_weight_list.push_back(bl);
     }
     params_.patchEmbed_linear_weights.kernel = weights_[weight_idx++];
-    params_.patchEmbed_linear_weights.bias = weights_[weight_idx++];
-    params_.patchEmbed_norm_weights.gamma = weights_[weight_idx++];
-    params_.patchEmbed_norm_weights.beta = weights_[weight_idx++];
-    params_.norm_weights.gamma = weights_[weight_idx++];
-    params_.norm_weights.beta = weights_[weight_idx++];
+    params_.patchEmbed_linear_weights.bias   = weights_[weight_idx++];
+    params_.patchEmbed_norm_weights.gamma    = weights_[weight_idx++];
+    params_.patchEmbed_norm_weights.beta     = weights_[weight_idx++];
+    params_.norm_weights.gamma               = weights_[weight_idx++];
+    params_.norm_weights.beta                = weights_[weight_idx++];
 
-    cublasAlgoMap_ = new cublasAlgoMap("igemm.config", "");
+    cublasAlgoMap_      = new cublasAlgoMap("igemm.config", "");
     cublasWrapperMutex_ = new std::mutex();
-    allocator_ = new Allocator<AllocatorType::CUDA>(getDevice());
+    allocator_          = new Allocator<AllocatorType::CUDA>(getDevice());
 
     cublasMMWrapper* cublas_wrapper =
         new cublasMMWrapper(cublas_handle_, cublaslt_handle_, nullptr, cublasAlgoMap_, cublasWrapperMutex_, nullptr);
@@ -462,41 +462,51 @@ nvinfer1::IPluginV2DynamicExt* SwinTransformerPlugin<T>::clone() const noexcept
 }
 
 template<typename T>
-DimsExprs SwinTransformerPlugin<T>::getOutputDimensions(int outputIndex,
+DimsExprs SwinTransformerPlugin<T>::getOutputDimensions(int              outputIndex,
                                                         const DimsExprs* inputs,
-                                                        int nbInputs,
-                                                        IExprBuilder& exprBuilder) noexcept
+                                                        int              nbInputs,
+                                                        IExprBuilder&    exprBuilder) noexcept
 {
     // Input is B*in_chans*H*W, output should be B*dim*1*1 for fc layer
     assert(outputIndex == 0);
     // Copy over everything
     DimsExprs output;
     output.nbDims = 4;
-    output.d[0] = inputs[0].d[0];
-    output.d[1] = exprBuilder.constant(output_dim_);
-    output.d[2] = exprBuilder.constant(1);
-    output.d[3] = exprBuilder.constant(1);
+    output.d[0]   = inputs[0].d[0];
+    output.d[1]   = exprBuilder.constant(output_dim_);
+    output.d[2]   = exprBuilder.constant(1);
+    output.d[3]   = exprBuilder.constant(1);
     return output;
 }
 
 template<typename T>
-bool SwinTransformerPlugin<T>::supportsFormatCombination(int pos,
+bool SwinTransformerPlugin<T>::supportsFormatCombination(int                     pos,
                                                          const PluginTensorDesc* inOut,
-                                                         int nbInputs,
-                                                         int nbOutputs) noexcept
+                                                         int                     nbInputs,
+                                                         int                     nbOutputs) noexcept
 {
-    assert(pos >= 0);
-    assert(pos < 2);
+    bool res = false;
+    assert(pos >= 0 && pos < 2);
     assert(nbInputs == 1);
+    switch (pos) {
+        case 0:  // input
+        case 1:  // output
+            res = (inOut[pos].type
+                   == (std::is_same<T, half>::value ? nvinfer1::DataType::kHALF : nvinfer1::DataType::kFLOAT))
+                  && (inOut[pos].format == nvinfer1::TensorFormat::kLINEAR);
+            break;
+        default:
+            break;
+    }
 
-    return true;
+    return res;
 }
 
 template<typename T>
 void SwinTransformerPlugin<T>::configurePlugin(const DynamicPluginTensorDesc* in,
-                                               int nbInputs,
+                                               int                            nbInputs,
                                                const DynamicPluginTensorDesc* out,
-                                               int nbOutputs) noexcept
+                                               int                            nbOutputs) noexcept
 {
     assert(nbInputs == 1);
     assert(nbOutputs == 1);
@@ -504,18 +514,18 @@ void SwinTransformerPlugin<T>::configurePlugin(const DynamicPluginTensorDesc* in
 
 template<typename T>
 size_t SwinTransformerPlugin<T>::getWorkspaceSize(const PluginTensorDesc* inputs,
-                                                  int nbInputs,
+                                                  int                     nbInputs,
                                                   const PluginTensorDesc* outputs,
-                                                  int nbOutputs) const noexcept
+                                                  int                     nbOutputs) const noexcept
 {
     return 0;
 }
 
 // IPluginV2Ext Methods
 template<typename T>
-nvinfer1::DataType SwinTransformerPlugin<T>::getOutputDataType(int index,
+nvinfer1::DataType SwinTransformerPlugin<T>::getOutputDataType(int                       index,
                                                                const nvinfer1::DataType* inputTypes,
-                                                               int nbInputs) const noexcept
+                                                               int                       nbInputs) const noexcept
 {
     assert(index == 0);
     assert(inputTypes[0] == nvinfer1::DataType::kFLOAT || inputTypes[0] == nvinfer1::DataType::kHALF);
@@ -624,10 +634,10 @@ const char* SwinTransformerPlugin<T>::getPluginNamespace() const noexcept
 template<typename T>
 int SwinTransformerPlugin<T>::enqueue(const PluginTensorDesc* inputDesc,
                                       const PluginTensorDesc* outputDesc,
-                                      const void* const* inputs,
-                                      void* const* outputs,
-                                      void* workspace,
-                                      cudaStream_t stream) noexcept
+                                      const void* const*      inputs,
+                                      void* const*            outputs,
+                                      void*                   workspace,
+                                      cudaStream_t            stream) noexcept
 {
     int batch_size = inputDesc->dims.d[0];
     assert(batch_size <= max_batch_size_);
@@ -635,7 +645,7 @@ int SwinTransformerPlugin<T>::enqueue(const PluginTensorDesc* inputDesc,
     assert(img_size_ == inputDesc->dims.d[2]);
     assert(img_size_ == inputDesc->dims.d[3]);
 
-    int sm_ptr[1] = {sm_};
+    int                 sm_ptr[1]     = {sm_};
     std::vector<Tensor> input_tensors = std::vector<Tensor>{
         Tensor{MEMORY_GPU,
                getTensorType<T>(),
@@ -656,7 +666,7 @@ int SwinTransformerPlugin<T>::enqueue(const PluginTensorDesc* inputDesc,
 SwinTransformerPluginCreator::SwinTransformerPluginCreator()
 {
     mFC.nbFields = mPluginAttributes.size();
-    mFC.fields = mPluginAttributes.data();
+    mFC.fields   = mPluginAttributes.data();
 }
 
 const char* SwinTransformerPluginCreator::getPluginName() const noexcept
@@ -676,20 +686,20 @@ const PluginFieldCollection* SwinTransformerPluginCreator::getFieldNames() noexc
 
 IPluginV2* SwinTransformerPluginCreator::createPlugin(const char* name, const PluginFieldCollection* fc) noexcept
 {
-    int max_batch_size;
-    int img_size;
-    int patch_size;
-    int in_chans;
-    int embed_dim;
-    int window_size;
-    int* depths = nullptr;
-    int* num_heads = nullptr;
-    bool ape;
-    bool patch_norm;
-    int layer_num;
-    float mlp_ratio;
-    bool qkv_bias;
-    float qk_scale;
+    int                  max_batch_size;
+    int                  img_size;
+    int                  patch_size;
+    int                  in_chans;
+    int                  embed_dim;
+    int                  window_size;
+    int*                 depths    = nullptr;
+    int*                 num_heads = nullptr;
+    bool                 ape;
+    bool                 patch_norm;
+    int                  layer_num;
+    float                mlp_ratio;
+    bool                 qkv_bias;
+    float                qk_scale;
     std::vector<Weights> w;
 
     for (int i = 0; i < fc->nbFields; i++) {
@@ -857,7 +867,7 @@ IPluginV2* SwinTransformerPluginCreator::createPlugin(const char* name, const Pl
         return p;
     }
     else {
-        printf("[ERROR][SwinTransformerPluginCreator::createPlugin] unsupport datatype.\n");
+        printf("[ERROR][SwinTransformerPluginCreator::createPlugin] unsupported datatype.\n");
         exit(-1);
     }
 }
@@ -865,7 +875,7 @@ IPluginV2* SwinTransformerPluginCreator::createPlugin(const char* name, const Pl
 IPluginV2*
 SwinTransformerPluginCreator::deserializePlugin(const char* name, const void* serialData, size_t serialLength) noexcept
 {
-    int type_id;
+    int    type_id;
     size_t int_length = sizeof(int);
     deserialize_value(&serialData, &int_length, &type_id);
     // This object will be deleted when the network is destroyed, which will
@@ -875,7 +885,7 @@ SwinTransformerPluginCreator::deserializePlugin(const char* name, const void* se
     else if (type_id == 1)
         return new SwinTransformerPlugin<half>(name, serialData, serialLength);
     else {
-        printf("[ERROR][SwinTransformerPluginCreator::deserializePlugin] unsupport data type %d\n", type_id);
+        printf("[ERROR][SwinTransformerPluginCreator::deserializePlugin] unsupported data type %d\n", type_id);
         exit(-1);
     }
 }

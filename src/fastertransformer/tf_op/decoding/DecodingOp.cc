@@ -84,8 +84,8 @@ REGISTER_OP("Decoding")
         // calculate batch size
         tf::shape_inference::DimensionOrConstant max_seq_dim(max_seq_len);
         tf::shape_inference::DimensionOrConstant beam_width_dim(beam_width);
-        tf::shape_inference::DimensionHandle batchxbeam_dim = c->Dim(c->input(0), 0);
-        tf::shape_inference::DimensionHandle batch_dim;
+        tf::shape_inference::DimensionHandle     batchxbeam_dim = c->Dim(c->input(0), 0);
+        tf::shape_inference::DimensionHandle     batch_dim;
         TF_RETURN_IF_ERROR(c->Divide(batchxbeam_dim, beam_width_dim, true, &batch_dim));
 
         if (beam_width > 1) {
@@ -116,6 +116,14 @@ class TFTraits<Eigen::half> {
 public:
     typedef half DataType;
 };
+
+#ifdef ENABLE_BF16
+template<>
+class TFTraits<Eigen::bfloat16> {
+public:
+    typedef __nv_bfloat16 DataType;
+};
+#endif
 
 template<typename Device, typename T>
 class DecodingOp: public BaseOp<T> {
@@ -157,15 +165,15 @@ public:
                     context->num_inputs() == (num_layer_ * 22) + 8,
                     tf::errors::InvalidArgument("[ERROR] More or Less input arguments"));
 
-        const size_t batch_size = (size_t)(context->input(0).dim_size(0) / beam_width_);
+        const size_t batch_size      = (size_t)(context->input(0).dim_size(0) / beam_width_);
         const size_t mem_max_seq_len = (size_t)(context->input(0).dim_size(1));
-        const size_t vocab_size = (size_t)(context->input(2 + num_layer_ * 22 + 3).dim_size(0));
+        const size_t vocab_size      = (size_t)(context->input(2 + num_layer_ * 22 + 3).dim_size(0));
 
-        const cudaStream_t& stream = context->eigen_device<Device>().stream();
-        cublasHandle_t cublas_handle = this->get_cublas_handler();
+        const cudaStream_t& stream        = context->eigen_device<Device>().stream();
+        cublasHandle_t      cublas_handle = this->get_cublas_handler();
         cublasSetStream(cublas_handle, stream);
         ft::Allocator<ft::AllocatorType::TF> allocator(context, stream);
-        ft::cublasMMWrapper cublas_wrapper = ft::cublasMMWrapper(cublas_handle,
+        ft::cublasMMWrapper                  cublas_wrapper = ft::cublasMMWrapper(cublas_handle,
                                                                  this->get_cublaslt_handler(),
                                                                  stream,
                                                                  cublas_algo_map_,
@@ -175,6 +183,11 @@ public:
         if (std::is_same<T, Eigen::half>::value) {
             cublas_wrapper.setFP16GemmConfig();
         }
+#ifdef ENABLE_BF16
+        else if (std::is_same<T, Eigen::bfloat16>::value) {
+            cublas_wrapper.setBF16GemmConfig();
+        }
+#endif
         else if (std::is_same<T, float>::value) {
             cublas_wrapper.setFP32GemmConfig();
         }
@@ -263,8 +276,8 @@ public:
         this->get_tensor(context, 2 + num_layer_ * 22 + 4, &decoding_weights.post_decoder_embedding.kernel);
         this->get_tensor(context, 2 + num_layer_ * 22 + 5, &decoding_weights.post_decoder_embedding.bias);
 
-        tf::Tensor* output_id_tensor = nullptr;
-        tf::Tensor* parent_id_tensor = nullptr;
+        tf::Tensor* output_id_tensor       = nullptr;
+        tf::Tensor* parent_id_tensor       = nullptr;
         tf::Tensor* sequence_length_tensor = nullptr;
         if (beam_width_ > 1) {
             OP_REQUIRES_OK(context,
@@ -290,8 +303,8 @@ public:
                                1, {(long long int)max_seq_len_, (long long int)batch_size}, &parent_id_tensor));
             OP_REQUIRES_OK(context, context->allocate_output(2, {(long long int)batch_size}, &sequence_length_tensor));
         }
-        int* output_ids = (int*)(output_id_tensor->flat<int>().data());
-        int* parent_ids = (int*)(parent_id_tensor->flat<int>().data());
+        int* output_ids      = (int*)(output_id_tensor->flat<int>().data());
+        int* parent_ids      = (int*)(parent_id_tensor->flat<int>().data());
         int* sequence_length = (int*)(sequence_length_tensor->flat<int>().data());
 
         ft::Decoding<DataType> decoding = ft::Decoding<DataType>(batch_size,
@@ -341,18 +354,18 @@ public:
     }
 
 private:
-    int max_seq_len_ = 0, beam_width_ = 1;
-    int head_num_ = 0, size_per_head_ = 0, inter_size_;
-    int num_layer_ = 0, start_id_ = -1, end_id_ = -1;
-    float beam_search_diversity_rate_ = 1.0;
-    float temperature_;
-    float len_penalty_;
-    float repetition_penalty_;
-    int top_k_ = 0;
-    float top_p_ = 0.0f;
-    ft::cublasAlgoMap* cublas_algo_map_;
-    cudaDeviceProp prop_;
-    typedef TFTraits<T> traits_;
+    int                                max_seq_len_ = 0, beam_width_ = 1;
+    int                                head_num_ = 0, size_per_head_ = 0, inter_size_;
+    int                                num_layer_ = 0, start_id_ = -1, end_id_ = -1;
+    float                              beam_search_diversity_rate_ = 1.0;
+    float                              temperature_;
+    float                              len_penalty_;
+    float                              repetition_penalty_;
+    int                                top_k_ = 0;
+    float                              top_p_ = 0.0f;
+    ft::cublasAlgoMap*                 cublas_algo_map_;
+    cudaDeviceProp                     prop_;
+    typedef TFTraits<T>                traits_;
     typedef typename traits_::DataType DataType;
 };
 

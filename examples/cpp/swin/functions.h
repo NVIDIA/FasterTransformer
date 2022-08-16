@@ -41,15 +41,15 @@ static int getWeightNum(const int layer_num, const int* depths)
 }
 
 static void generateWeightSize(std::vector<size_t>& weight_size,
-                               const int layer_num,
-                               const int embed_dim,
-                               const float mlp_ratio,
-                               const int window_size,
-                               const int img_size,
-                               const int patch_size,
-                               const int in_chans,
-                               const int* depths,
-                               const int* num_heads)
+                               const int            layer_num,
+                               const int            embed_dim,
+                               const float          mlp_ratio,
+                               const int            window_size,
+                               const int            img_size,
+                               const int            patch_size,
+                               const int            in_chans,
+                               const int*           depths,
+                               const int*           num_heads)
 {
     size_t l_pow2 = 1;
     for (int l = 0; l < layer_num; l++) {

@@ -26,14 +26,15 @@ namespace fastertransformer {
 template<typename T>
 class SwinTransformerBlock: public BaseLayer {
 private:
-    int max_batch_ = 1;
-    int window_size_ = 7;
-    int window_len_ = 49;
-    int window_num_ = 64;
-    int embed_dim_ = 96;
-    float mlp_ratio_ = 4.0f;
-    bool qkv_bias_ = true;
-    float qk_scale_ = 1.0f;
+    int   max_batch_   = 1;
+    int   window_size_ = 7;
+    int   window_len_  = 49;
+    int   window_num_  = 64;
+    int   embed_dim_   = 96;
+    float mlp_ratio_   = 4.0f;
+    bool  qkv_bias_    = true;
+    float qk_scale_    = 1.0f;
+    float layernorm_eps_;
 
     T* buf_ = nullptr;
 
@@ -63,20 +64,21 @@ public:
 
     void freeBuffer();
 
-    SwinTransformerBlock(int max_batch,
-                         int window_size,
-                         float mlp_ratio,
-                         cudaStream_t stream,
+    SwinTransformerBlock(int              max_batch,
+                         int              window_size,
+                         float            mlp_ratio,
+                         float            layernorm_eps_,
+                         cudaStream_t     stream,
                          cublasMMWrapper* cublas_wrapper,
-                         IAllocator* allocator,
-                         bool is_free_buffer_after_forward,
-                         bool qkv_bias,
-                         float qk_scale = 1.0f);
+                         IAllocator*      allocator,
+                         bool             is_free_buffer_after_forward,
+                         bool             qkv_bias,
+                         float            qk_scale = 1.0f);
 
     ~SwinTransformerBlock();
 
-    void forward(std::vector<Tensor>* output_tensors,
-                 const std::vector<Tensor>* input_tensors,
+    void forward(std::vector<Tensor>*           output_tensors,
+                 const std::vector<Tensor>*     input_tensors,
                  SwinTransformerBlockWeight<T>& swin_block_weights);
 
 };  // class SwinTransformerBlock

@@ -57,16 +57,18 @@ if [ "$MODEL_TYPE" != "ori" ] && [ "$MODEL_TYPE" != "ths" ] && [ "$MODEL_TYPE" !
     echo "wrong model type, need be one of [ori, ths, thsext]"
     exit 1
 fi
-if [ "$DATA_TYPE" != "fp32" ] && [ "$DATA_TYPE" != "fp16" ] && [ "$DATA_TYPE" != "int8_1" ] && [ "$DATA_TYPE" != "int8_2" ] && [ "$DATA_TYPE" != "int8_3" ]; then
+if [ "$DATA_TYPE" != "fp32" ] && [ "$DATA_TYPE" != "fp16" ] && [ "$DATA_TYPE" != "bf16" ] && [ "$DATA_TYPE" != "int8_1" ] && [ "$DATA_TYPE" != "int8_2" ] && [ "$DATA_TYPE" != "int8_3" ]; then
     echo "wrong data type, need be one of [fp32, fp16, int8_1, int8_2, int8_3]"
     exit 1
 fi
 
-if [ "$DATA_TYPE" == "fp32" ] || [ "$DATA_TYPE" == "fp16" ]; then
+if [ "$DATA_TYPE" == "fp32" ] || [ "$DATA_TYPE" == "fp16" ] || [ "$DATA_TYPE" == "bf16" ]; then
     if [ "$DATA_TYPE" == "fp32" ]; then
-        FP16_MODE=0
+        DATA_TYPE_ID=0
+    elif [ "$DATA_TYPE" == "fp16" ]; then
+        DATA_TYPE_ID=1
     else
-        FP16_MODE=1
+        DATA_TYPE_ID=2 ## bf16
     fi
     INT8_MODE=0
     if [ "$MODEL_PATH" == "" ]; then
@@ -90,7 +92,7 @@ if [ "$DATA_TYPE" == "fp32" ] || [ "$DATA_TYPE" == "fp16" ]; then
         HEAD_SIZE=64
     fi
 else
-    FP16_MODE=1
+    DATA_TYPE_ID=1
     if [ "$DATA_TYPE" == "int8_1" ]; then
         INT8_MODE=1
     elif [ "$DATA_TYPE" == "int8_2" ]; then
@@ -110,7 +112,7 @@ cd $MAIN_PATH/pytorch/bert_squad/squad_data
 wget -c https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v1.1.json
 
 if [ "$MODEL_TYPE" == "thsext" ]; then
-    $MAIN_PATH/bin/bert_gemm ${BATCH_SIZE} ${SEQ_LEN} ${HEAD_NUM} ${HEAD_SIZE} ${FP16_MODE} ${INT8_MODE}
+    $MAIN_PATH/bin/bert_gemm ${BATCH_SIZE} ${SEQ_LEN} ${HEAD_NUM} ${HEAD_SIZE} ${DATA_TYPE_ID} ${INT8_MODE}
 fi
 
 SPCMD=""

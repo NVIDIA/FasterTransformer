@@ -23,19 +23,19 @@
 namespace ft = fastertransformer;
 
 template<typename T>
-T5TritonModelInstance<T>::T5TritonModelInstance(std::unique_ptr<ft::T5Encoder<T>> t5_encoder,
-                                                std::unique_ptr<ft::T5Decoding<T>> t5_decoding,
-                                                std::unique_ptr<ft::T5EncoderWeight<T>> t5_encoder_weight,
-                                                std::unique_ptr<ft::T5DecodingWeight<T>> t5_decoding_weight,
+T5TritonModelInstance<T>::T5TritonModelInstance(std::unique_ptr<ft::T5Encoder<T>>        t5_encoder,
+                                                std::unique_ptr<ft::T5Decoding<T>>       t5_decoding,
+                                                std::shared_ptr<ft::T5EncoderWeight<T>>  t5_encoder_weight,
+                                                std::shared_ptr<ft::T5DecodingWeight<T>> t5_decoding_weight,
                                                 std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator,
-                                                std::unique_ptr<ft::cublasAlgoMap> cublas_algo_map,
-                                                std::unique_ptr<std::mutex> cublas_wrapper_mutex,
+                                                std::unique_ptr<ft::cublasAlgoMap>                      cublas_algo_map,
+                                                std::unique_ptr<std::mutex>          cublas_wrapper_mutex,
                                                 std::unique_ptr<ft::cublasMMWrapper> cublas_wrapper,
-                                                std::unique_ptr<cudaDeviceProp> cuda_device_prop_ptr):
+                                                std::unique_ptr<cudaDeviceProp>      cuda_device_prop_ptr):
     t5_encoder_(std::move(t5_encoder)),
     t5_decoding_(std::move(t5_decoding)),
-    t5_encoder_weight_(std::move(t5_encoder_weight)),
-    t5_decoding_weight_(std::move(t5_decoding_weight)),
+    t5_encoder_weight_(t5_encoder_weight),
+    t5_decoding_weight_(t5_decoding_weight),
     allocator_(std::move(allocator)),
     cublas_algo_map_(std::move(cublas_algo_map)),
     cublas_wrapper_mutex_(std::move(cublas_wrapper_mutex)),
@@ -48,8 +48,8 @@ template<typename T>
 std::unordered_map<std::string, ft::Tensor>
 T5TritonModelInstance<T>::convert_inputs(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors)
 {
-    move_tensor_H2D(input_tensors->at("input_ids"), d_input_ids_);
-    move_tensor_H2D(input_tensors->at("sequence_length"), d_input_lengths_);
+    move_tensor_H2D(input_tensors->at("input_ids"), d_input_ids_, &allocator_);
+    move_tensor_H2D(input_tensors->at("sequence_length"), d_input_lengths_, &allocator_);
 
     std::unordered_map<std::string, ft::Tensor> ft_input_tensors{
         {"input_ids", as_GPU_tensor(input_tensors->at("input_ids"), d_input_ids_)},
@@ -76,12 +76,11 @@ std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>
 T5TritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors)
 {
     const size_t request_batch_size = input_tensors->at("input_ids").shape[0];
-    const size_t mem_max_seq_len = input_tensors->at("input_ids").shape[1];
-    const size_t max_output_len = *((uint*)input_tensors->at("max_output_len").data);
+    const size_t mem_max_seq_len    = input_tensors->at("input_ids").shape[1];
+    const size_t max_output_len     = *((uint*)input_tensors->at("max_output_len").data);
     const size_t beam_width =
         input_tensors->count("beam_width") ? (size_t)(*(uint*)input_tensors->at("beam_width").data) : 1;
 
-    freeBuffer();  // free buffer of previous iteration
     allocateBuffer(request_batch_size, beam_width, max_output_len, mem_max_seq_len);
 
     std::unordered_map<std::string, ft::Tensor> encoder_input_tensors = convert_inputs(input_tensors);
@@ -105,13 +104,13 @@ T5TritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::string
     }
 
     if (input_tensors->find("bad_words_list") != input_tensors->end()) {
-        move_tensor_H2D(input_tensors->at("bad_words_list"), d_input_bad_words_);
+        move_tensor_H2D(input_tensors->at("bad_words_list"), d_input_bad_words_, &allocator_);
         decoding_input_tensors.insert(
             {"bad_words_list", as_GPU_tensor(input_tensors->at("bad_words_list"), d_input_bad_words_)});
     }
 
     if (input_tensors->find("stop_words_list") != input_tensors->end()) {
-        move_tensor_H2D(input_tensors->at("stop_words_list"), d_input_stop_words_);
+        move_tensor_H2D(input_tensors->at("stop_words_list"), d_input_stop_words_, &allocator_);
         decoding_input_tensors.insert(
             {"stop_words_list", as_GPU_tensor(input_tensors->at("stop_words_list"), d_input_stop_words_)});
     }
@@ -144,23 +143,6 @@ T5TritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::string
     t5_encoder_->forward(&encoder_output_tensors, &encoder_input_tensors, t5_encoder_weight_.get());
     t5_decoding_->forward(&decoding_output_tensors, &decoding_input_tensors, t5_decoding_weight_.get());
 
-    if (d_input_ids_ != nullptr) {
-        ft::check_cuda_error(cudaFree(d_input_ids_));
-        d_input_ids_ = nullptr;
-    }
-    if (d_input_lengths_ != nullptr) {
-        ft::check_cuda_error(cudaFree(d_input_lengths_));
-        d_input_lengths_ = nullptr;
-    }
-    if (d_input_bad_words_ != nullptr) {
-        ft::check_cuda_error(cudaFree(d_input_bad_words_));
-        d_input_bad_words_ = nullptr;
-    }
-    if (d_input_stop_words_ != nullptr) {
-        ft::check_cuda_error(cudaFree(d_input_stop_words_));
-        d_input_stop_words_ = nullptr;
-    }
-
     return convert_outputs(decoding_output_tensors);
 }
 
@@ -176,22 +158,30 @@ void T5TritonModelInstance<T>::allocateBuffer(const size_t request_batch_size,
                                               const size_t max_output_len,
                                               const size_t mem_max_seq_len)
 {
-    ft::deviceMalloc(&d_encoder_outputs_, request_batch_size * mem_max_seq_len * t5_encoder_->getDModel());
-    ft::deviceMalloc(&d_output_ids_, request_batch_size * beam_width * max_output_len);
-    ft::deviceMalloc(&d_sequence_lengths_, request_batch_size * beam_width);
-    ft::deviceMalloc(&d_output_log_probs_, request_batch_size * beam_width * max_output_len);
-    ft::deviceMalloc(&d_cum_log_probs_, request_batch_size * beam_width * max_output_len);
+    d_output_ids_      = (int*)(allocator_->reMalloc(
+        d_output_ids_, sizeof(int) * request_batch_size * beam_width * max_output_len, false));
+    d_encoder_outputs_ = (T*)(allocator_->reMalloc(
+        d_encoder_outputs_, sizeof(T) * request_batch_size * mem_max_seq_len * t5_encoder_->getDModel(), false));
+    d_sequence_lengths_ =
+        (int*)(allocator_->reMalloc(d_sequence_lengths_, sizeof(int) * request_batch_size * beam_width, false));
+    d_output_log_probs_ = (float*)(allocator_->reMalloc(
+        d_output_log_probs_, sizeof(float) * request_batch_size * beam_width * max_output_len, false));
+    d_cum_log_probs_    = (float*)(allocator_->reMalloc(
+        d_cum_log_probs_, sizeof(float) * request_batch_size * beam_width * max_output_len, false));
 }
 
 template<typename T>
 void T5TritonModelInstance<T>::freeBuffer()
 {
-    ft::deviceFree(d_encoder_outputs_);
-    ft::deviceFree(d_output_ids_);
-    ft::deviceFree(d_sequence_lengths_);
-    ft::deviceFree(d_output_log_probs_);
-    ft::deviceFree(d_cum_log_probs_);
+    allocator_->free((void**)(&d_encoder_outputs_));
+    allocator_->free((void**)(&d_output_ids_));
+    allocator_->free((void**)(&d_sequence_lengths_));
+    allocator_->free((void**)(&d_output_log_probs_));
+    allocator_->free((void**)(&d_cum_log_probs_));
 }
 
 template struct T5TritonModelInstance<float>;
 template struct T5TritonModelInstance<half>;
+#ifdef ENABLE_BF16
+template struct T5TritonModelInstance<__nv_bfloat16>;
+#endif

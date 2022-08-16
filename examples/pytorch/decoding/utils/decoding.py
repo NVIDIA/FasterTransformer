@@ -35,8 +35,10 @@ from examples.pytorch.decoder.utils.ft_decoder import FTDecoder, FtDecoderWeight
 
 USE_CACHE_BATCH_MAJOR_ATTENTION = True
 
-def get_op_cache_config(size_per_head, is_fp16):
-    x = 8 if is_fp16 else 4
+to_torch_type = {'fp32' : torch.float32, 'fp16' : torch.float16, 'bf16' : torch.bfloat16}
+
+def get_op_cache_config(size_per_head, is_fp32):
+    x = 4 if is_fp32 else 8
     use_batch_major_op_cache = True if USE_CACHE_BATCH_MAJOR_ATTENTION == True and \
                                        size_per_head % x == 0 \
                                     else False
@@ -117,6 +119,14 @@ class DecodingWeights(object):
                     self.w[key][next_key] = self.w[key][next_key].half()
             else:
                 self.w[key] = self.w[key].half()
+        
+    def to_bfloat16(self):
+        for key in self.w:
+            if isinstance(self.w[key], dict):
+                for next_key in self.w[key]:
+                    self.w[key][next_key] = self.w[key][next_key].bfloat16()
+            else:
+                self.w[key] = self.w[key].bfloat16()
 
     def _get_position_encoding(self):
         pe = torch.zeros(self.max_step_for_pe, self.hidden_dim)
@@ -233,8 +243,8 @@ class TransformerDecoder(DecoderBase):
         # relevant to custom cache config
         # self.use_batch_major_op_cache = False
         # self.op_cache_dim_x = 1
-        self.is_fp16 = True if self.args.data_type == 'fp16' else False
-        self.use_batch_major_op_cache, self.op_cache_dim_x = get_op_cache_config(head_size, self.is_fp16)
+        self.is_fp32 = True if self.args.data_type == 'fp32' else False
+        self.use_batch_major_op_cache, self.op_cache_dim_x = get_op_cache_config(head_size, self.is_fp32)
         self.head_num = heads
         self.size_per_head = head_size
 
@@ -388,7 +398,7 @@ class TransformerDecoder(DecoderBase):
                 self.state["cache"]["layer_{}".format(i)] = layer_cache
         elif self.args.model_type == 'decoder_ext' or self.args.model_type == 'torch_decoding_with_decoder_ext':
             max_seq_len = memory_bank.size(0)
-            dtype = torch.half if self.args.data_type == 'fp16' else torch.float32
+            dtype = to_torch_type[self.args.data_type]
             self.state['cache']['mem'] = [torch.zeros(self.transformer_layers[0].layer_num, batch_size, max_seq_len, depth, dtype=dtype, device='cuda'),
                                            torch.zeros(self.transformer_layers[0].layer_num, batch_size, max_seq_len, depth, dtype=dtype, device='cuda')]
             self.state['cache']['self'] = [ torch.zeros(self.transformer_layers[0].layer_num, batch_size, self.head_num, self.size_per_head // self.op_cache_dim_x, 
@@ -461,6 +471,8 @@ class TorchDecoding(nn.Module):
             ft_decoder_weights.to_cuda()
             if args.data_type == 'fp16':
                 ft_decoder_weights.to_half()
+            elif args.data_type == 'bf16':
+                ft_decoder_weights.to_bfloat16()
             self.decoder.transformer_layers = nn.ModuleList(
                 [FTDecoder(head_num, head_size, head_num * head_size, layer_num, ft_decoder_weights, args)])
         else:

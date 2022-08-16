@@ -47,7 +47,7 @@ In this demo, you can run the longformer as a Pytorch OP.
 
 - CMake >= 3.13 for PyTorch
 - CUDA 11.0 or newer version
-- Python 3 is recommended because some features are not supported in python 2
+- Python: Only verify on python 3
 - PyTorch: Verify on 1.8.0, >= 1.5.0 should work.
 
 These components are readily available within the NGC PyTorch Docker image below.
@@ -112,7 +112,7 @@ The script will first compare the performance between HuggingFace Longformer enc
 
 #### Args
 
-1. Use `--fp16` to run in FP16 mode, that's too say use FP16 input and yield FP16 output for FT longformer. Also HuggingFace's longformer will use FP16 too.
+1. Use `--data_type fp16/bf16` to run in FP16 or BF16 mode, that's too say use FP16/BF16 input and yield FP16/BF16 output for FT longformer. Also HuggingFace's longformer will use FP16/BF16 too.
 2. Use `--sequence-length` to select sequence length. `sequence_length` should >= 2 * `local_attention_window_size` and `sequence-length` % `local_attention_window_size` = 0
 3. Use `-max-global-attention-num` to choose maximum of global token nums. That's too say your global token nums should not exceed this limit. And note that FT's longformer only support to place global tokens at the beginning of the sequence. In QA example, all the question tokens will be placed at the beginning of the sequence and marked as global tokens.
 4. Use `--batch-size` to select batch size. Note in QA example, it will just duplicate the same question and passage sequence `batch_size` times and stack them together.
@@ -124,7 +124,7 @@ The script will first compare the performance between HuggingFace Longformer enc
 
 #### Building the FT Longformer encoder
 ```python
-# Pass the neccessary config and args
+# Pass the necessary config and args
 weights_file = os.path.join(hf_model_dir, 'pytorch_model.bin')
 ft_encoder = FTLongformerEncoder(weights_file, layer_num, head_num, size_per_head,
                                  intermediate_size, local_attn_window_size,

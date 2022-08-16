@@ -15,6 +15,7 @@
  */
 
 #include "BertLayerINT8.h"
+#include "src/fastertransformer/utils/nvtx_utils.h"
 
 namespace fastertransformer {
 
@@ -66,20 +67,20 @@ void BertLayerINT8<T>::initialize()
 }
 
 template<typename T>
-BertLayerINT8<T>::BertLayerINT8(size_t max_batch_size,
-                                size_t max_seq_len,
-                                size_t head_num,
-                                size_t size_per_head,
-                                size_t inter_size,
-                                int sm,
-                                float q_scaling,
-                                int int8_mode,
-                                cudaStream_t stream,
+BertLayerINT8<T>::BertLayerINT8(size_t           max_batch_size,
+                                size_t           max_seq_len,
+                                size_t           head_num,
+                                size_t           size_per_head,
+                                size_t           inter_size,
+                                int              sm,
+                                float            q_scaling,
+                                int              int8_mode,
+                                cudaStream_t     stream,
                                 cublasMMWrapper* cublas_wrapper,
-                                IAllocator* allocator,
-                                bool is_free_buffer_after_forward,
-                                AttentionType attention_type,
-                                bool sparse):
+                                IAllocator*      allocator,
+                                bool             is_free_buffer_after_forward,
+                                AttentionType    attention_type,
+                                bool             sparse):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     max_batch_size_(max_batch_size),
     max_seq_len_(max_seq_len),
@@ -129,20 +130,20 @@ template<typename T>
 void BertLayerINT8<T>::allocateBuffer()
 {
     if (is_allocate_buffer_ == false) {
-        attn_out_buf_ = reinterpret_cast<int32_t*>(
-            allocator_->malloc(sizeof(int32_t) * max_batch_size_ * max_seq_len_ * hidden_units_, false));
+        attn_out_buf_ = reinterpret_cast<int32_t*>(allocator_->reMalloc(
+            attn_out_buf_, sizeof(int32_t) * max_batch_size_ * max_seq_len_ * hidden_units_, false));
 
         int8_buf_ = reinterpret_cast<int8_t*>(
-            allocator_->malloc(sizeof(int8_t) * max_batch_size_ * max_seq_len_ * hidden_units_, false));
+            allocator_->reMalloc(int8_buf_, sizeof(int8_t) * max_batch_size_ * max_seq_len_ * hidden_units_, false));
 
-        layer_norm_tmp_buf_ =
-            reinterpret_cast<T*>(allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false));
+        layer_norm_tmp_buf_ = reinterpret_cast<T*>(allocator_->reMalloc(
+            layer_norm_tmp_buf_, sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false));
 
-        transformer_out_tmp_DataType_ =
-            reinterpret_cast<T*>(allocator_->malloc(sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false));
+        transformer_out_tmp_DataType_ = reinterpret_cast<T*>(allocator_->reMalloc(
+            transformer_out_tmp_DataType_, sizeof(T) * max_batch_size_ * max_seq_len_ * hidden_units_, false));
 
         // re-use transformer_out_tmp_DataType_ as col32_from_tensor_
-        col32_from_tensor_ = transformer_out_tmp_DataType_;
+        col32_from_tensor_  = transformer_out_tmp_DataType_;
         is_allocate_buffer_ = true;
     }
 }
@@ -151,10 +152,10 @@ template<typename T>
 void BertLayerINT8<T>::freeBuffer()
 {
     if (is_allocate_buffer_ == true) {
-        allocator_->free(attn_out_buf_);
-        allocator_->free(int8_buf_);
-        allocator_->free(layer_norm_tmp_buf_);
-        allocator_->free(transformer_out_tmp_DataType_);
+        allocator_->free((void**)(&attn_out_buf_));
+        allocator_->free((void**)(&int8_buf_));
+        allocator_->free((void**)(&layer_norm_tmp_buf_));
+        allocator_->free((void**)(&transformer_out_tmp_DataType_));
         is_allocate_buffer_ = false;
     }
 }
@@ -165,12 +166,12 @@ void BertLayerINT8<T>::freeBuffer()
 // quantize for int8_mode=1); for layer_idx != 0, the layout of input should be COL32.
 
 template<typename T>
-void BertLayerINT8<T>::forward(std::vector<Tensor>* output_tensors,
+void BertLayerINT8<T>::forward(std::vector<Tensor>*       output_tensors,
                                const std::vector<Tensor>* input_tensors,
-                               const BertLayerWeight<T>* bert_layer_weight)
+                               const BertLayerWeight<T>*  bert_layer_weight)
 {
     const BertLayerINT8Weight<T>* bert_layer_int8_weight = (const BertLayerINT8Weight<T>*)bert_layer_weight;
-    const ScaleList* scale_list = &(bert_layer_int8_weight->scale_list_);
+    const ScaleList*              scale_list             = &(bert_layer_int8_weight->scale_list_);
 
     // input_tensors: [input_query (token_num, hidden_dimension),
     //                 attention_mask (batch, 1, seqlen, seqlen),
@@ -189,7 +190,7 @@ void BertLayerINT8<T>::forward(std::vector<Tensor>* output_tensors,
     allocateBuffer();
 
     T* from_tensor = (T*)input_tensors->at(0).data;
-    T* out_tensor = (T*)(output_tensors->at(0).data);
+    T* out_tensor  = (T*)(output_tensors->at(0).data);
 
     const size_t m = input_tensors->at(0).shape[0];
     const size_t n = hidden_units_;
@@ -215,6 +216,7 @@ void BertLayerINT8<T>::forward(std::vector<Tensor>* output_tensors,
             &attn_output_tensors, &int8_input_tensors, &bert_layer_int8_weight->attention_weights);
         // int32 I ; DataType O
 
+        PUSH_RANGE("post layernorm 1");
         invokeAddBiasResidualLayerNormCol32(layer_norm_tmp_buf_,
                                             attn_out_buf_,
                                             from_tensor,
@@ -226,10 +228,12 @@ void BertLayerINT8<T>::forward(std::vector<Tensor>* output_tensors,
                                             stream_,
                                             &(scale_list->d_scale_list_[scale_list->p2_offset_ + 3 * hidden_units_]),
                                             &(scale_list->d_scale_list_[36]));
+        POP_RANGE;
         invokeQuantization(int8_buf_, layer_norm_tmp_buf_, m * n, &(scale_list->d_scale_list_[44 + 3]), stream_);
         std::vector<Tensor> ffn_input_tensors{Tensor{MEMORY_GPU, TYPE_INT8, std::vector<size_t>{m, n}, int8_buf_}};
         // reuse attn_output_tensors as ffn_output_tensors
         ffn_layer_->forward(&attn_output_tensors, &ffn_input_tensors, &bert_layer_int8_weight->ffn_weights);
+        PUSH_RANGE("post layernorm 2");
         if (layer_idx != num_layer - 1) {
             // int32 I ; DataType O
             invokeAddBiasResidualLayerNormCol32(
@@ -262,6 +266,7 @@ void BertLayerINT8<T>::forward(std::vector<Tensor>* output_tensors,
 
             invokeTransposeMatrixCOL32ToColMajor(out_tensor, transformer_out_tmp_DataType_, m, n, stream_);
         }
+        POP_RANGE;
     }
     else if (int8_mode_ == 2 || int8_mode_ == 3) {
 
@@ -286,7 +291,7 @@ void BertLayerINT8<T>::forward(std::vector<Tensor>* output_tensors,
         else {
             attention_layer_->forward(&attn_output_tensors, input_tensors, &bert_layer_int8_weight->attention_weights);
         }
-
+        PUSH_RANGE("post layernorm 1");
         const int8_t* residual = layer_idx == 0 ? int8_buf_ : (const int8_t*)from_tensor;
         // int8 IO
 #ifdef SPARSITY_ENABLED
@@ -321,6 +326,7 @@ void BertLayerINT8<T>::forward(std::vector<Tensor>* output_tensors,
 #ifdef SPARSITY_ENABLED
         }
 #endif
+        POP_RANGE;
         std::vector<Tensor> ffn_input_tensors{
             Tensor{MEMORY_GPU, TYPE_INT8, std::vector<size_t>{m, n}, layer_norm_tmp_buf_}};
         // reuse attn_output_tensors as ffn_output_tensors
@@ -329,6 +335,7 @@ void BertLayerINT8<T>::forward(std::vector<Tensor>* output_tensors,
             // int8 IO
 #ifdef SPARSITY_ENABLED
             if (sparse_) {
+                PUSH_RANGE("post layernorm 2");
                 invokeAddBiasResidualLayerNormRow((int8_t*)out_tensor,
                                                   (int8_t*)attn_out_buf_,
                                                   (int8_t*)layer_norm_tmp_buf_,
@@ -341,9 +348,11 @@ void BertLayerINT8<T>::forward(std::vector<Tensor>* output_tensors,
                                                   &(scale_list->d_scale_list_[56 + 1]),
                                                   &(scale_list->d_scale_list_[44 + 1]),
                                                   &(scale_list->d_scale_list_[60 + 3]));
+                POP_RANGE;
             }
             else {
 #endif
+                PUSH_RANGE("post layernorm 2");
                 invokeAddBiasResidualLayerNormCol32((int8_t*)out_tensor,
                                                     (int8_t*)attn_out_buf_,
                                                     (int8_t*)layer_norm_tmp_buf_,
@@ -356,6 +365,7 @@ void BertLayerINT8<T>::forward(std::vector<Tensor>* output_tensors,
                                                     &(scale_list->d_scale_list_[56 + 1]),
                                                     &(scale_list->d_scale_list_[44 + 1]),
                                                     &(scale_list->d_scale_list_[60 + 3]));
+                POP_RANGE;
 #ifdef SPARSITY_ENABLED
             }
 #endif
@@ -363,6 +373,7 @@ void BertLayerINT8<T>::forward(std::vector<Tensor>* output_tensors,
         else {
 #ifdef SPARSITY_ENABLED
             if (sparse_) {
+                PUSH_RANGE("post layernorm 2");
                 invokeAddBiasResidualLayerNormRow(out_tensor,
                                                   (int8_t*)attn_out_buf_,
                                                   (int8_t*)layer_norm_tmp_buf_,
@@ -374,10 +385,12 @@ void BertLayerINT8<T>::forward(std::vector<Tensor>* output_tensors,
                                                   stream_,
                                                   &(scale_list->d_scale_list_[56 + 1]),
                                                   &(scale_list->d_scale_list_[44 + 1]));
+                POP_RANGE;
             }
             else {
 #endif
                 // int8 I ; DataType O
+                PUSH_RANGE("post layernorm 2");
                 invokeAddBiasResidualLayerNormCol32(transformer_out_tmp_DataType_,
                                                     (int8_t*)attn_out_buf_,
                                                     (int8_t*)layer_norm_tmp_buf_,
@@ -391,6 +404,7 @@ void BertLayerINT8<T>::forward(std::vector<Tensor>* output_tensors,
                                                     &(scale_list->d_scale_list_[44 + 1]));
 
                 invokeTransposeMatrixCOL32ToColMajor(out_tensor, transformer_out_tmp_DataType_, m, n, stream_);
+                POP_RANGE;
 #ifdef SPARSITY_ENABLED
             }
 #endif

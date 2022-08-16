@@ -21,14 +21,14 @@ __global__ void quantized_kernel(char4* dst, const float4* src, const int size_d
 {
     int tid = (blockIdx.x * blockDim.x + threadIdx.x);
     if (tid < size_div_4) {
-        const float scale = __ldg(scale_ptr);
-        char4 tmp;
+        const float  scale = __ldg(scale_ptr);
+        char4        tmp;
         const float4 floatTmp = __ldg(src + tid);
-        tmp.x = float_to_int8_rn(floatTmp.x * scale);
-        tmp.y = float_to_int8_rn(floatTmp.y * scale);
-        tmp.z = float_to_int8_rn(floatTmp.z * scale);
-        tmp.w = float_to_int8_rn(floatTmp.w * scale);
-        dst[tid] = tmp;
+        tmp.x                 = float_to_int8_rn(floatTmp.x * scale);
+        tmp.y                 = float_to_int8_rn(floatTmp.y * scale);
+        tmp.z                 = float_to_int8_rn(floatTmp.z * scale);
+        tmp.w                 = float_to_int8_rn(floatTmp.w * scale);
+        dst[tid]              = tmp;
     }
 }
 
@@ -37,17 +37,17 @@ __global__ void quantized_kernel(char4* dst, const half2* src, const int size_di
     int tid = (blockIdx.x * blockDim.x + threadIdx.x);
     if (tid < size_div_4) {
         const float scale = __ldg(scale_ptr);
-        char4 tmp;
-        int src_id = tid << 1;
+        char4       tmp;
+        int         src_id = tid << 1;
 
         const half2 half2Tmp = __ldg(src + src_id);
-        tmp.x = float_to_int8_rn(static_cast<float>(half2Tmp.x) * scale);
-        tmp.y = float_to_int8_rn(static_cast<float>(half2Tmp.y) * scale);
+        tmp.x                = float_to_int8_rn(static_cast<float>(half2Tmp.x) * scale);
+        tmp.y                = float_to_int8_rn(static_cast<float>(half2Tmp.y) * scale);
 
         const half2 half2Tmp2 = __ldg(src + src_id + 1);
-        tmp.z = float_to_int8_rn(static_cast<float>(half2Tmp2.x) * scale);
-        tmp.w = float_to_int8_rn(static_cast<float>(half2Tmp2.y) * scale);
-        dst[tid] = tmp;
+        tmp.z                 = float_to_int8_rn(static_cast<float>(half2Tmp2.x) * scale);
+        tmp.w                 = float_to_int8_rn(static_cast<float>(half2Tmp2.y) * scale);
+        dst[tid]              = tmp;
     }
 }
 

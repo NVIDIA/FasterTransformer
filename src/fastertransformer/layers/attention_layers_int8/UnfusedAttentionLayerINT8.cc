@@ -18,13 +18,14 @@
 #include "src/fastertransformer/kernels/softmax_int8_kernels.h"
 #include "src/fastertransformer/kernels/transpose_int8_kernels.h"
 #include "src/fastertransformer/kernels/unfused_attention_int8_kernels.h"
+#include "src/fastertransformer/utils/nvtx_utils.h"
 
 namespace fastertransformer {
 
 template<typename T>
-void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>* output_tensors,
+void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                                            const std::vector<fastertransformer::Tensor>* input_tensors,
-                                           const AttentionWeight<T>* attention_weights)
+                                           const AttentionWeight<T>*                     attention_weights)
 {
 
     // input_tensors: [input (token_num, hidden_dimension),
@@ -33,24 +34,24 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
     // output_tensors: [output (token_num, hidden_dimension)]
     // If padding_offset.data is nullptr, then not remove padding
 
-    const ScaleList* scale_list = ((const AttentionINT8Weight<T>*)attention_weights)->scale_list_ptr;
+    const ScaleList*     scale_list     = ((const AttentionINT8Weight<T>*)attention_weights)->scale_list_ptr;
     cublasINT8MMWrapper* cublas_wrapper = (cublasINT8MMWrapper*)cublas_wrapper_;
 
     FT_CHECK(isValidBatchSize(input_tensors->at(1).shape[0]));
     FT_CHECK(isValidSeqLen(input_tensors->at(1).shape[2]));
     allocateBuffer();
 
-    int32_t* attention_out = (int32_t*)output_tensors->at(0).data;
-    const int8_t* from_tensor = (const int8_t*)input_tensors->at(0).data;
-    const T* attention_mask = (const T*)input_tensors->at(1).data;
-    const int* padding_offset = (const int*)input_tensors->at(2).data;
+    int32_t*      attention_out  = (int32_t*)output_tensors->at(0).data;
+    const int8_t* from_tensor    = (const int8_t*)input_tensors->at(0).data;
+    const T*      attention_mask = (const T*)input_tensors->at(1).data;
+    const int*    padding_offset = (const int*)input_tensors->at(2).data;
 
     const int request_batch_size = input_tensors->at(1).shape[0];
-    const int request_seq_len = input_tensors->at(1).shape[2];
-    const int m = input_tensors->at(0).shape[0];
-    const int k = hidden_units_;
-    const int n = hidden_units_;
-    int m_tmp = m;
+    const int request_seq_len    = input_tensors->at(1).shape[2];
+    const int m                  = input_tensors->at(0).shape[0];
+    const int k                  = hidden_units_;
+    const int n                  = hidden_units_;
+    int       m_tmp              = m;
     if (m_tmp % 16 != 0) {
         m_tmp = (m_tmp / 16 + 1) * 16;
     }
@@ -70,6 +71,7 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
         K_int_buf_ = (int*)Q_int_buf_ + m * head_num_ * size_per_head_;
         V_int_buf_ = (int*)K_int_buf_ + m * head_num_ * size_per_head_;
 
+        PUSH_RANGE("qkv_gemm");
         if (fusedINT8QKV_type == 0) {
             cublas_wrapper->Gemm(
                 Q_int_buf_, 1, m, n, k, 0, 0, 0, from_tensor, (int8_t*)(attention_weights->query_weight.kernel));
@@ -91,6 +93,7 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
                                  from_tensor,
                                  (int8_t*)(attention_weights->query_weight.kernel));
         }
+        POP_RANGE;
     }
     else if (int8_mode_ == 2 || int8_mode_ == 3) {
         // K_int_buf_ V_int_buf_ should point to correct buffer according to m
@@ -99,6 +102,7 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
 
 #ifdef SPARSITY_ENABLED
         if (sparse_) {
+            PUSH_RANGE("qkv_gemm");
             cublas_wrapper->SpGemm(n,
                                    m_padded,
                                    k,
@@ -120,10 +124,12 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
                                    (int8_t*)(attention_weights->value_weight.sp_kernel),
                                    from_tensor,
                                    (int8_t*)V_int_buf_);
+            POP_RANGE;
         }
         else {
 #endif
             if (fusedINT8QKV_type == 0) {
+                PUSH_RANGE("qkv_gemm");
                 cublas_wrapper->Gemm((int8_t*)Q_int_buf_,
                                      1,
                                      m,
@@ -157,9 +163,11 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
                                      scale_list->h_scale_list_[scale_list->p3_offset_ + 2],
                                      from_tensor,
                                      (int8_t*)(attention_weights->value_weight.kernel));
+                POP_RANGE;
             }
             else {
                 int strideFactor = (fusedINT8QKV_type == 1) ? (sizeof(T) / sizeof(int8_t)) : 1;
+                PUSH_RANGE("qkv_gemm");
                 cublas_wrapper->Gemm((int8_t*)Q_int_buf_,
                                      3,
                                      m,
@@ -171,6 +179,7 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
                                      scale_list->h_scale_list_[scale_list->p3_offset_ + 0],
                                      from_tensor,
                                      (int8_t*)(attention_weights->query_weight.kernel));
+                POP_RANGE;
             }
 #ifdef SPARSITY_ENABLED
         }
@@ -180,6 +189,7 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
     const int seq_len_padded = (request_seq_len + 31) / 32 * 32;
     if (padding_offset == nullptr) {
         if (int8_mode_ == 1) {
+            PUSH_RANGE("addQKVBiasTransformer");
             invokeAddQKBiasTransform(q_buf_,
                                      k_buf_,
                                      Q_int_buf_,
@@ -210,10 +220,12 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
                                     &(scale_list->d_scale_list_[24 + 3]),
                                     cublas_wrapper->getUseOrderCol322R4R4(),
                                     stream_);
+            POP_RANGE;
         }
         else if (int8_mode_ == 2 || int8_mode_ == 3) {
 #ifdef SPARSITY_ENABLED
             if (sparse_) {
+                PUSH_RANGE("addQKVBiasTransformer");
                 invokeAddQKBiasTransformRow(q_buf_,
                                             k_buf_,
                                             (const int8_t*)Q_int_buf_,
@@ -241,9 +253,11 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
                                            &(scale_list->d_scale_list_[24 + 3]),
                                            cublas_wrapper->getUseOrderCol322R4R4(),
                                            stream_);
+                POP_RANGE;
             }
             else {
 #endif
+                PUSH_RANGE("addQKVBiasTransformer");
                 invokeAddQKBiasTransform(q_buf_,
                                          k_buf_,
                                          (const int8_t*)Q_int_buf_,
@@ -271,6 +285,7 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
                                         &(scale_list->d_scale_list_[24 + 3]),
                                         cublas_wrapper->getUseOrderCol322R4R4(),
                                         stream_);
+                POP_RANGE;
 #ifdef SPARSITY_ENABLED
             }
 #endif
@@ -285,7 +300,7 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
         cudaMemsetAsync(
             q_buf_, 0, 2 * request_batch_size * seq_len_padded * head_num_ * size_per_head_ * sizeof(int8_t), stream_);
         if (int8_mode_ == 1) {
-
+            PUSH_RANGE("addQKVBiasTransformerRebuildPadding");
             invokeAddQKBiasTransformRebuildPadding(q_buf_,
                                                    k_buf_,
                                                    Q_int_buf_,
@@ -322,10 +337,12 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
                 &(scale_list->d_scale_list_[24 + 3]),
                 cublas_wrapper->getUseOrderCol322R4R4(),
                 stream_);
+            POP_RANGE;
         }
         else if (int8_mode_ == 2 || int8_mode_ == 3) {
 #ifdef SPARSITY_ENABLED
             if (sparse_) {
+                PUSH_RANGE("addQKVBiasTransformerRebuildPadding");
                 invokeAddQKBiasTransformRebuildPaddingRow(q_buf_,
                                                           k_buf_,
                                                           (const int8_t*)Q_int_buf_,
@@ -357,9 +374,11 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
                                                          &(scale_list->d_scale_list_[24 + 3]),
                                                          cublas_wrapper->getUseOrderCol322R4R4(),
                                                          stream_);
+                POP_RANGE;
             }
             else {
 #endif
+                PUSH_RANGE("addQKVBiasTransformerRebuildPadding");
                 invokeAddQKBiasTransformRebuildPadding(q_buf_,
                                                        k_buf_,
                                                        (const int8_t*)Q_int_buf_,
@@ -392,6 +411,7 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
                                                       &(scale_list->d_scale_list_[24 + 3]),
                                                       cublas_wrapper->getUseOrderCol322R4R4(),
                                                       stream_);
+                POP_RANGE;
 #ifdef SPARSITY_ENABLED
             }
 #endif
@@ -399,9 +419,10 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
         sync_check_cuda_error();
     }
 
-    int batchCount = request_batch_size * head_num_;
-    float scalar = 1.0f / (sqrtf(size_per_head_ * 1.0f) * q_scaling_);
+    int   batchCount = request_batch_size * head_num_;
+    float scalar     = 1.0f / (sqrtf(size_per_head_ * 1.0f) * q_scaling_);
     if (int8_mode_ == 1) {
+        PUSH_RANGE("Q*K batch gemm");
         cublas_wrapper->Gemm(qk_int_buf_,
                              batchCount,
                              request_seq_len,
@@ -412,7 +433,8 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
                              request_seq_len * seq_len_padded,
                              q_buf_,
                              k_buf_);
-
+        POP_RANGE;
+        PUSH_RANGE("softmax");
         invokeSoftmaxCOL32(qk_buf_,
                            qk_int_buf_,
                            attention_mask,
@@ -424,7 +446,8 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
                            &(scale_list->d_scale_list_[16 + 1]),
                            &(scale_list->d_scale_list_[32]),
                            stream_);
-
+        POP_RANGE;
+        PUSH_RANGE("QK*V batch gemm");
         cublas_wrapper->Gemm(transpose_dst_int_buf_,
                              batchCount,
                              request_seq_len,
@@ -435,7 +458,9 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
                              size_per_head_ * request_seq_len,
                              qk_buf_,
                              v_buf_);
+        POP_RANGE;
 
+        PUSH_RANGE("transposeRebuildPadding");
         if (padding_offset == nullptr) {
             invokeTransposeCOL32(dst_,
                                  transpose_dst_int_buf_,
@@ -462,9 +487,11 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
                                                &(scale_list->d_scale_list_[36 + 3]),
                                                stream_);
         }
+        POP_RANGE;
     }
     else if (int8_mode_ == 2 || int8_mode_ == 3) {
 
+        PUSH_RANGE("Q*K batch gemm");
         cublas_wrapper->Gemm((int8_t*)qk_int_buf_,
                              batchCount,
                              request_seq_len,
@@ -476,7 +503,8 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
                              scale_list->h_scale_list_[scale_list->p3_offset_ + 3],
                              q_buf_,
                              k_buf_);
-
+        POP_RANGE;
+        PUSH_RANGE("softmax");
         invokeSoftmaxCOL32(qk_buf_,
                            (int8_t*)qk_int_buf_,
                            attention_mask,
@@ -487,7 +515,8 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
                            &(scale_list->d_scale_list_[28 + 1]),
                            &(scale_list->d_scale_list_[32]),
                            stream_);
-
+        POP_RANGE;
+        PUSH_RANGE("QK*V batch gemm");
         cublas_wrapper->Gemm((int8_t*)transpose_dst_int_buf_,
                              batchCount,
                              request_seq_len,
@@ -499,8 +528,11 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
                              scale_list->h_scale_list_[scale_list->p3_offset_ + 4],
                              qk_buf_,
                              v_buf_);
+        POP_RANGE;
+
 #ifdef SPARSITY_ENABLED
         if (sparse_) {
+            PUSH_RANGE("transposeRebuildPadding");
             if (padding_offset == nullptr) {
                 invokeTransposeCOL32ToRow(dst_,
                                           (const int8_t*)transpose_dst_int_buf_,
@@ -525,9 +557,11 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
                                                         &(scale_list->d_scale_list_[36 + 3]),
                                                         stream_);
             }
+            POP_RANGE;
         }
         else {
 #endif
+            PUSH_RANGE("transposeRebuildPadding");
             if (padding_offset == nullptr) {
                 invokeTransposeCOL32(dst_,
                                      (const int8_t*)transpose_dst_int_buf_,
@@ -552,11 +586,13 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
                                                    &(scale_list->d_scale_list_[36 + 3]),
                                                    stream_);
             }
+            POP_RANGE;
 #ifdef SPARSITY_ENABLED
         }
 #endif
     }
 
+    PUSH_RANGE("proj gemm");
     if (int8_mode_ == 1) {
         cublas_wrapper->Gemm(
             attention_out, 1, m, n, k, 0, 0, 0, dst_, (int8_t*)(attention_weights->attention_output_weight.kernel));
@@ -589,6 +625,7 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
         }
 #endif
     }
+    POP_RANGE;
 
     if (is_free_buffer_after_forward_ == true) {
         freeBuffer();
@@ -597,17 +634,17 @@ void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor
 }
 
 template<typename T>
-UnfusedAttentionLayerINT8<T>::UnfusedAttentionLayerINT8(size_t max_batch_size,
-                                                        size_t max_seq_len,
-                                                        size_t head_num,
-                                                        size_t size_per_head,
-                                                        float q_scaling,
-                                                        int int8_mode,
-                                                        cudaStream_t stream,
+UnfusedAttentionLayerINT8<T>::UnfusedAttentionLayerINT8(size_t           max_batch_size,
+                                                        size_t           max_seq_len,
+                                                        size_t           head_num,
+                                                        size_t           size_per_head,
+                                                        float            q_scaling,
+                                                        int              int8_mode,
+                                                        cudaStream_t     stream,
                                                         cublasMMWrapper* cublas_wrapper,
-                                                        IAllocator* allocator,
-                                                        bool is_free_buffer_after_forward,
-                                                        bool sparse):
+                                                        IAllocator*      allocator,
+                                                        bool             is_free_buffer_after_forward,
+                                                        bool             sparse):
     BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     max_batch_size_(max_batch_size),
     max_seq_len_(max_seq_len),
@@ -649,24 +686,28 @@ void UnfusedAttentionLayerINT8<T>::allocateBuffer()
 {
     if (is_allocate_buffer_ == false) {
         int padded_max_seq_len = (max_seq_len_ + 31) / 32 * 32;
-        q_buf_ = (int8_t*)allocator_->malloc(sizeof(int8_t) * max_batch_size_ * padded_max_seq_len * hidden_units_ * 3,
-                                             false);
-        k_buf_ = q_buf_ + max_batch_size_ * padded_max_seq_len * hidden_units_;
-        v_buf_ = k_buf_ + max_batch_size_ * padded_max_seq_len * hidden_units_;
-        qk_buf_ = (int8_t*)allocator_->malloc(
-            sizeof(int8_t) * max_batch_size_ * head_num_ * padded_max_seq_len * padded_max_seq_len, false);
-        dst_ = (int8_t*)allocator_->malloc(sizeof(int8_t) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
+        q_buf_                 = (int8_t*)allocator_->reMalloc(
+            q_buf_, sizeof(int8_t) * max_batch_size_ * padded_max_seq_len * hidden_units_ * 3, false);
+        k_buf_  = q_buf_ + max_batch_size_ * padded_max_seq_len * hidden_units_;
+        v_buf_  = k_buf_ + max_batch_size_ * padded_max_seq_len * hidden_units_;
+        qk_buf_ = (int8_t*)allocator_->reMalloc(
+            qk_buf_, sizeof(int8_t) * max_batch_size_ * head_num_ * padded_max_seq_len * padded_max_seq_len, false);
+        dst_ =
+            (int8_t*)allocator_->reMalloc(dst_, sizeof(int8_t) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
 
-        Q_int_buf_ =
-            (int32_t*)allocator_->malloc(sizeof(int32_t) * max_batch_size_ * max_seq_len_ * hidden_units_ * 3, false);
-        V_int_buf_ = Q_int_buf_ + max_batch_size_ * max_seq_len_ * hidden_units_;
-        K_int_buf_ = V_int_buf_ + max_batch_size_ * max_seq_len_ * hidden_units_;
-        qk_int_buf_ = (int32_t*)allocator_->malloc(
-            sizeof(int32_t) * max_batch_size_ * head_num_ * padded_max_seq_len * padded_max_seq_len, false);
-        transpose_dst_int_buf_ =
-            (int32_t*)allocator_->malloc(sizeof(int32_t) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
+        Q_int_buf_ = (int32_t*)allocator_->reMalloc(
+            Q_int_buf_, sizeof(int32_t) * max_batch_size_ * max_seq_len_ * hidden_units_ * 3, false);
+        V_int_buf_             = Q_int_buf_ + max_batch_size_ * max_seq_len_ * hidden_units_;
+        K_int_buf_             = V_int_buf_ + max_batch_size_ * max_seq_len_ * hidden_units_;
+        qk_int_buf_            = (int32_t*)allocator_->reMalloc(qk_int_buf_,
+                                                     sizeof(int32_t) * max_batch_size_ * head_num_ * padded_max_seq_len
+                                                         * padded_max_seq_len,
+                                                     false);
+        transpose_dst_int_buf_ = (int32_t*)allocator_->reMalloc(
+            transpose_dst_int_buf_, sizeof(int32_t) * max_batch_size_ * max_seq_len_ * hidden_units_, false);
 
-        sequence_id_map_ = (int32_t*)allocator_->malloc(sizeof(int32_t) * max_batch_size_ * max_seq_len_, false);
+        sequence_id_map_ =
+            (int32_t*)allocator_->reMalloc(sequence_id_map_, sizeof(int32_t) * max_batch_size_ * max_seq_len_, false);
 
         is_allocate_buffer_ = true;
     }
@@ -676,13 +717,13 @@ template<typename T>
 void UnfusedAttentionLayerINT8<T>::freeBuffer()
 {
     if (is_allocate_buffer_ == true) {
-        allocator_->free(q_buf_);
-        allocator_->free(Q_int_buf_);
-        allocator_->free(qk_buf_);
-        allocator_->free(qk_int_buf_);
-        allocator_->free(dst_);
-        allocator_->free(transpose_dst_int_buf_);
-        allocator_->free(sequence_id_map_);
+        allocator_->free((void**)(&q_buf_));
+        allocator_->free((void**)(&Q_int_buf_));
+        allocator_->free((void**)(&qk_buf_));
+        allocator_->free((void**)(&qk_int_buf_));
+        allocator_->free((void**)(&dst_));
+        allocator_->free((void**)(&transpose_dst_int_buf_));
+        allocator_->free((void**)(&sequence_id_map_));
         is_allocate_buffer_ = false;
     }
 }

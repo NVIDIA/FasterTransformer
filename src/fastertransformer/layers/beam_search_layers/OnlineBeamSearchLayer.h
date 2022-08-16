@@ -33,9 +33,9 @@ private:
 
     void allocateBuffer() override;
     void allocateBuffer(size_t batch_size, size_t beam_width) override;
-    void invokeSoftMax(std::vector<fastertransformer::Tensor>* output_tensors,
+    void invokeSoftMax(std::vector<fastertransformer::Tensor>*       output_tensors,
                        const std::vector<fastertransformer::Tensor>* input_tensors) override;
-    void invokeSoftMax(std::unordered_map<std::string, Tensor>* output_tensors,
+    void invokeSoftMax(std::unordered_map<std::string, Tensor>*       output_tensors,
                        const std::unordered_map<std::string, Tensor>* input_tensors) override;
 
     using BaseBeamSearchLayer<T>::stream_;
@@ -44,21 +44,21 @@ private:
 
 protected:
 public:
-    OnlineBeamSearchLayer(size_t max_batch_size,
-                          size_t head_num,
-                          size_t size_per_head,
-                          size_t beam_width,
-                          size_t vocab_size,
-                          size_t vocab_size_padded,
-                          int end_id,
-                          float diversity_rate,
-                          float temperature,
-                          float len_penalty,
-                          float repetition_penalty,
-                          cudaStream_t stream,
+    OnlineBeamSearchLayer(size_t           max_batch_size,
+                          size_t           head_num,
+                          size_t           size_per_head,
+                          size_t           beam_width,
+                          size_t           vocab_size,
+                          size_t           vocab_size_padded,
+                          int              end_id,
+                          float            diversity_rate,
+                          float            temperature,
+                          float            len_penalty,
+                          float            repetition_penalty,
+                          cudaStream_t     stream,
                           cublasMMWrapper* cublas_wrapper,
-                          IAllocator* allocator,
-                          bool is_free_buffer_after_forward);
+                          IAllocator*      allocator,
+                          bool             is_free_buffer_after_forward);
 
     OnlineBeamSearchLayer(OnlineBeamSearchLayer<T> const& beam_search_layer);
 

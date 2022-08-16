@@ -97,7 +97,7 @@ def get_tasks_args(parser):
                        help='Whether to use negative examples during model '
                         'training')
     group.add_argument('--train-hard-neg', type=int, default=0,
-                       help='Number of hard negative exmaples to use during '
+                       help='Number of hard negative examples to use during '
                         'training')
 
     # parameters for Av.rank validation method
@@ -119,7 +119,13 @@ def get_tasks_args(parser):
                        help='top k for sampling.')
     group.add_argument('--top_p', type=float, required=True,
                        help='top p for sampling.')
-    
+    group.add_argument(
+        '--weights_data_type',
+        type=str,
+        default="fp32",
+        choices=["fp32", "fp16"],
+        help='Data type of FT checkpoint weights',
+    )
 
     return parser
 
@@ -158,7 +164,7 @@ def process_batch(batch):
     labels = tokens_[:, 1:].contiguous()
     tokens = tokens_[:, :-1].contiguous()
     
-    # Get the masks and postition ids.
+    # Get the masks and position ids.
     attention_mask, _, position_ids = get_ltor_masks_and_position_ids(
         tokens,
         tokenizer.eod,
@@ -190,6 +196,7 @@ def forward_step(batch, model, eval_metric, args):
     start_lengths = torch.sum(tokens != model.end_id, axis=1).contiguous().int()
     input_len = torch.max(start_lengths).contiguous().int()
     output = []
+    random_seed_tensor = 0 * torch.ones([max_batch_size], dtype=torch.int64)
     for i in range(input_len):
         tmp_length = torch.ones(args.micro_batch_size) * (i + 1)
         tmp_length = tmp_length.cuda().int()
@@ -199,15 +206,14 @@ def forward_step(batch, model, eval_metric, args):
         output_id = model(input_ids,
                           tmp_start_lengths,
                           1,
-                          args.beam_width,
-                          args.top_k,
-                          args.top_p,
-                          0.0,
-                          1.0,
-                          1.0,
-                          1.0,
-                          0)
-
+                          args.top_k * torch.ones(size=[max_batch_size], dtype=torch.int32),
+                          args.top_p * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                          0.0 * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                          1.0 * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                          1.0 * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                          1.0 * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                          random_seed_tensor)
+        
         output.append(output_id[:,0,-1].reshape([-1, 1]))
     output = torch.cat((output), 1)
     
@@ -318,7 +324,7 @@ def main():
     # Set up model and load checkpoint.
     model = GPT(args.num_attention_heads, (int)(args.hidden_size / args.num_attention_heads),
                 args.padded_vocab_size, tokenzier.eod, tokenzier.eod,
-                args.num_layers, args.seq_length, 1, 1, "lib/libth_gpt.so")
+                args.num_layers, args.seq_length, 1, 1, "lib/libth_gpt.so", weights_data_type=args.weights_data_type)
 
     if not model.load(ckpt_path=args.ckpt_path):
         print("[ERROR] Checkpoint file not found at {}.".format(args.ckpt_path))

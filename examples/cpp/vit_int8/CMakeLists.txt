@@ -15,4 +15,4 @@ cmake_minimum_required(VERSION 3.8)
 
 add_executable(vit_int8_example vit_int8_example.cc)
 target_link_libraries(vit_int8_example PUBLIC ViTINT8 trt_fused_multi_head_attention vit_kernels
-  cublasMMWrapper -lcublas -lcublasLt -lcudart -lcudnn -lm)
+  cublasMMWrapper nvtx_utils -lcublas -lcublasLt -lcudart -lcudnn -lm)

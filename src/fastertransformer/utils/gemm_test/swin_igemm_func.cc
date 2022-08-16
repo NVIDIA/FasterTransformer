@@ -60,28 +60,28 @@ static inline bool time_compare(const customMatmulPerf_t& perf_a, const customMa
     return ((perf_a.status == CUBLAS_STATUS_SUCCESS) && (perf_a.time < perf_b.time));
 }
 
-static cublasStatus_t customMatmulRun(cublasLtHandle_t ltHandle,  // to get the capabilities (required a GPU)
-                                      cublasLtMatmulDesc_t operationDesc,
-                                      const void* alpha, /* host or device pointer */
-                                      const void* A,
-                                      cublasLtMatrixLayout_t Adesc,
-                                      const void* B,
-                                      cublasLtMatrixLayout_t Bdesc,
-                                      const void* beta, /* host or device pointer */
-                                      const void* C,
-                                      cublasLtMatrixLayout_t Cdesc,
-                                      void* D,
-                                      cublasLtMatrixLayout_t Ddesc,
+static cublasStatus_t customMatmulRun(cublasLtHandle_t            ltHandle,  // to get the capabilities (required a GPU)
+                                      cublasLtMatmulDesc_t        operationDesc,
+                                      const void*                 alpha, /* host or device pointer */
+                                      const void*                 A,
+                                      cublasLtMatrixLayout_t      Adesc,
+                                      const void*                 B,
+                                      cublasLtMatrixLayout_t      Bdesc,
+                                      const void*                 beta, /* host or device pointer */
+                                      const void*                 C,
+                                      cublasLtMatrixLayout_t      Cdesc,
+                                      void*                       D,
+                                      cublasLtMatrixLayout_t      Ddesc,
                                       const cublasLtMatmulAlgo_t& algo,
-                                      int kernelRepeats,
-                                      void* workSpace,
-                                      size_t workSpaceSizeInBytes,
-                                      customMatmulPerf_t& perfResults,
-                                      cudaStream_t stream)
+                                      int                         kernelRepeats,
+                                      void*                       workSpace,
+                                      size_t                      workSpaceSizeInBytes,
+                                      customMatmulPerf_t&         perfResults,
+                                      cudaStream_t                stream)
 {
     cublasLtMatmulHeuristicResult_t heurResult;
     /* Looping over the Algo */
-    int repeats = kernelRepeats;
+    int            repeats = kernelRepeats;
     cublasStatus_t algoStatus =
         cublasLtMatmulAlgoCheck(ltHandle, operationDesc, Adesc, Bdesc, Cdesc, Ddesc, &algo, &heurResult);
     if (algoStatus == CUBLAS_STATUS_SUCCESS) {
@@ -116,10 +116,10 @@ static cublasStatus_t customMatmulRun(cublasLtHandle_t ltHandle,  // to get the 
             float time = diffTime(start, end);
             // For the moment only add successful findings
             if (algoStatus == CUBLAS_STATUS_SUCCESS) {
-                perfResults.algo = algo;
-                perfResults.time = time / repeats;
+                perfResults.algo          = algo;
+                perfResults.time          = time / repeats;
                 perfResults.workspaceSize = heurResult.workspaceSize;
-                perfResults.wavesCount = heurResult.wavesCount;
+                perfResults.wavesCount    = heurResult.wavesCount;
             }
         }
         else {
@@ -137,7 +137,7 @@ int igemm_config_INT8IO(int m, int n, int k, FILE* fout, void* buffer)
 {
     printf("batchCount %d m %d n %d k %d\n", 1, m, n, k);
     float alpha = 1.0f;
-    float beta = 0.0f;
+    float beta  = 0.0f;
 
     int8_t* d_A = (int8_t*)buffer;         // m * k, stored in column-major
     int8_t* d_B = d_A + m * k;             // k * n, stored in column-major
@@ -187,7 +187,7 @@ int generate_swin_igemm_config(
     else {
         fout = fopen(IGEMM_CONFIG, "a+");
         std::vector<std::string> config;
-        char line[1024];
+        char                     line[1024];
         while (fgets(line, 1024, fout) != NULL) {
             config.push_back(std::string(line));
         }
@@ -201,10 +201,10 @@ int generate_swin_igemm_config(
         }
     }
 
-    int m = batch_size * seq_len;
-    int n = head_num * size_per_head;
-    int k = n;
-    int batchCount;
+    int       m = batch_size * seq_len;
+    int       n = head_num * size_per_head;
+    int       k = n;
+    int       batchCount;
     const int NUM_OF_BASIC_LAYERS = 4;
 
     printf("***Swin IGemm Testing Begin***\n");
@@ -212,9 +212,9 @@ int generate_swin_igemm_config(
     for (int basic_layer = 0; basic_layer < NUM_OF_BASIC_LAYERS; basic_layer++) {
         printf("\n-----------------------------\n");
         batchCount = 1;
-        m = batch_size * seq_len;
-        k = head_num * size_per_head;
-        n = 3 * head_num * size_per_head;
+        m          = batch_size * seq_len;
+        k          = head_num * size_per_head;
+        n          = 3 * head_num * size_per_head;
         if (n % 32 != 0 || k % 32 != 0) {
             printf("[WARNING] For INT8 gemm test, n, k should be multiples of 32 (n = %d, k = %d)\n", n, k);
         }
@@ -258,10 +258,10 @@ int generate_swin_igemm_config(
         if (basic_layer != NUM_OF_BASIC_LAYERS - 1) {
             printf("\n-----------------------------\n");
             batch_size = batch_size / 4;
-            head_num = head_num * 2;
-            m = batch_size * seq_len;
-            n = head_num * size_per_head;
-            k = 2 * head_num * size_per_head;
+            head_num   = head_num * 2;
+            m          = batch_size * seq_len;
+            n          = head_num * size_per_head;
+            k          = 2 * head_num * size_per_head;
             if (n % 32 != 0 || k % 32 != 0) {
                 printf("[WARNING] For INT8 gemm test, n, k should be multiples of 32 (n = %d, k = %d)\n", n, k);
             }

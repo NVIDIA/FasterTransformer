@@ -70,7 +70,7 @@ class TestFusedQKVMutiheadAttention(unittest.TestCase):
         if data_type == tf.float16:
             threshold = 4e-3
         # Inputs: qkv_buf and k/v cache
-        # Do: update k/v cahce, and compute attention (Q*K, QK*V)
+        # Do: update k/v cache, and compute attention (Q*K, QK*V)
         # Output: attention result, new k/v cache
         # Notes: Only used for decoder, so seqlen of q is always 1.
         

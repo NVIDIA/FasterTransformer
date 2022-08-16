@@ -14,13 +14,13 @@
 
 from __future__ import print_function
 import argparse
-import configparser
 import json
 import numpy as np
 import os
 import sys
 import torch
 import torch.distributed as dist
+import configparser
 from datetime import datetime
 from datasets import load_dataset, load_metric
 from transformers import GPT2Tokenizer, GPT2LMHeadModel
@@ -33,9 +33,9 @@ from examples.pytorch.gpt.utils.parallel_gpt import ParallelGPT
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--ft_model_location', type=str,
-                        default='/data2/byshiue/models/huggingface-gpt/gpt2-xl/c-models')
+                        default='/models/GPT/HF/gpt2-xl/c-models')
     parser.add_argument('--hf_model_location', type=str,
-                        default='/data2/byshiue/models/huggingface-gpt/gpt2-xl/gpt2-xl')
+                        default='/models/GPT/HF/gpt2-xl/')
     parser.add_argument('--summarize', action='store_true')
     parser.add_argument('--test_hf', action='store_true')
     parser.add_argument('--data_type', type=str, choices=['fp32', 'fp16', 'bf16'], default='fp32')
@@ -49,13 +49,24 @@ def main():
                         help='tensor parallel size')
     parser.add_argument('--pipeline_para_size', type=int, default=1,
                         help='pipeline parallel size')
+    parser.add_argument(
+        '--weights_data_type',
+        type=str,
+        default="fp32",
+        choices=["fp32", "fp16"],
+        help='Data type of FT checkpoint weights',
+    )
+    parser.add_argument('--rougeLsum_threshold', type=float,
+                        help='Threshold of FT rougeLsum score')
+
+
 
     args = parser.parse_args()
 
     try:
         dist.init_process_group(backend='mpi')
     except:
-        print("[INFO] WARNING: Have initalize the process group")
+        print("[INFO] WARNING: Have initialized the process group")
     rank = dist.get_rank()
 
     summarize = args.summarize
@@ -78,13 +89,12 @@ def main():
 
     if not args.ft_use_hf_config:
         ft_config = configparser.ConfigParser()
-        ft_config.read(os.path.join(ft_model_location, '1-gpu/config.ini'))
-
-        head_num = ft_config.getint('gpt', 'num_attention_heads')
-        layer_num = ft_config.getint('gpt', 'num_layers')
-        start_id = 50256  # TODO: get this from the tokenizer
-        end_id = 50256  # TODO: get this from the tokenizer
-        size_per_head = ft_config.getint('gpt', 'hidden_size') // head_num
+        assert ft_config.read(os.path.join(ft_model_location, '1-gpu/config.ini')) != [], "[ERROR] fail to read the config.ini of model"
+        head_num = ft_config.getint('gpt', 'head_num')
+        layer_num = ft_config.getint('gpt', 'num_layer')
+        start_id = ft_config.getint('gpt', 'start_id')  # TODO: get this from the tokenizer
+        end_id = ft_config.getint('gpt', 'end_id')  # TODO: get this from the tokenizer
+        size_per_head = ft_config.getint('gpt', 'size_per_head')
 
     if summarize:
         top_k = 2
@@ -95,8 +105,8 @@ def main():
     top_p = 0.0
     random_seed = 5
     temperature = 1
-    max_seq_len = hf_config['n_ctx'] if args.ft_use_hf_config else ft_config.getint('gpt', 'max_position_embeddings')
-    max_batch_size = 5
+    max_seq_len = hf_config['n_ctx'] if args.ft_use_hf_config else ft_config.getint('gpt', 'max_pos_seq_len')
+    max_batch_size = 1
     repetition_penalty = 1
     vocab_size = 50257
     tensor_para_size = args.tensor_para_size
@@ -118,16 +128,17 @@ def main():
     print(f"ckpt_path: {ckpt_path}")
     print(f"hf_config: {hf_config}")
 
+    random_seed_tensor = random_seed * torch.ones([max_batch_size], dtype=torch.int64)
+
     gpt = ParallelGPT(head_num, size_per_head, vocab_size, start_id, end_id, layer_num,
-                      max_seq_len, tensor_para_size, pipeline_para_size, lib_path=lib_path, int8_mode=0)
+                      max_seq_len, tensor_para_size, pipeline_para_size, lib_path=lib_path, int8_mode=0,
+                      weights_data_type=args.weights_data_type)
 
     if not gpt.load(ckpt_path=ckpt_path):
         print("[WARNING] Checkpoint file not found. Model loading is skipped.")
 
     if (test_hf and summarize) or not summarize:
         model = GPT2LMHeadModel.from_pretrained(hf_model_location)
-        # device_hf = 'cuda:1'
-        # model.to(device_hf)
         model.cuda()
         if args.data_type == 'fp16':
             model.half()
@@ -158,13 +169,13 @@ def main():
             output, ft_output_len = gpt(line_encoded, torch.IntTensor([len(line_encoded[0])]),
                                         output_len,
                                         1,
-                                        top_k,
-                                        top_p,
-                                        0.0,
-                                        temperature,
-                                        1.0,
-                                        repetition_penalty,
-                                        random_seed,
+                                        top_k * torch.ones(size=[max_batch_size], dtype=torch.int32),
+                                        top_p * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                                        0.0 * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                                        temperature * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                                        1.0 * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                                        repetition_penalty * torch.ones(size=[max_batch_size], dtype=torch.float32),
+                                        random_seed_tensor,
                                         True)
 
         tokens = output[0][0][len(line_encoded[0]):ft_output_len[0]].cpu().numpy()
@@ -193,7 +204,7 @@ def main():
             output = model.generate(line_encoded,
                                     max_length=len(line_encoded[0]) + output_len,
                                     k=top_k,
-                                    temprature=temperature,
+                                    temperature=temperature,
                                     eos_token_id=tokenizer.eos_token_id,
                                     pad_token_id=tokenizer.pad_token_id)
 
@@ -286,6 +297,9 @@ def main():
             print(f'Faster Transformers (total latency: {ft_time} sec)')
             for key in computed_metrics_ft.keys():
                 print(f'{key} : {computed_metrics_ft[key].mid[2]*100}')
+            if args.rougeLsum_threshold != None:
+                assert computed_metrics_ft["rougeLsum"].mid[2]*100 >= args.rougeLsum_threshold, "[INFO] TEST FAIL !"
+                print(f"[INFO] TEST PASS !")
         else:
             em_metrics = compute_exact_match(tokens)
 

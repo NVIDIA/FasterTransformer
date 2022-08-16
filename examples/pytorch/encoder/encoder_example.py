@@ -43,8 +43,7 @@ def main():
                         help='head number')
     parser.add_argument('head_size', type=int,
                         help='size per head')
-    parser.add_argument('--fp16', action='store_true',
-                        help='is fp16')
+    parser.add_argument('--data_type', type=str, choices=['fp32', 'fp16', 'bf16'], default='fp32')
     parser.add_argument('--time', action='store_true',
                         help='test the time or not.')
     parser.add_argument('--avg_seq_len', type=int, default=-1, metavar='NUMBER',
@@ -89,19 +88,19 @@ def encoder_example(args):
             raise ValueError("wrong avg_seq_len")
 
     mask = ~sequence_mask(mem_seq_lens, seq_len).unsqueeze(1)
-    if args['fp16']:
+    if args['data_type'] == 'fp16':
         inp = inp.half()
 
     weights = EncoderWeights(layer_num, hidden_dim)
 
     onmt_encoder = ONMTEncoder(layer_num, hidden_dim, head_num, 4 * hidden_dim, weights)
     onmt_encoder.cuda()
-    if args['fp16']:
+    if args['data_type'] == 'fp16':
         onmt_encoder.half()
     onmt_encoder.eval()
     onmt_encoder = torch.jit.trace(onmt_encoder, (inp, mask))
 
-    if args['fp16']:
+    if args['data_type'] == 'fp16':
         weights.to_half()
     weights.to_cuda()
     custom_encoder = CustomEncoder(layer_num, head_num, head_size, weights,

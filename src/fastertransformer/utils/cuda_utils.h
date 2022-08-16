@@ -45,10 +45,10 @@ typedef struct half4 {
 /* **************************** type definition ***************************** */
 
 enum CublasDataType {
-    FLOAT_DATATYPE = 0,
-    HALF_DATATYPE = 1,
+    FLOAT_DATATYPE    = 0,
+    HALF_DATATYPE     = 1,
     BFLOAT16_DATATYPE = 2,
-    INT8_DATATYPE = 3
+    INT8_DATATYPE     = 3
 };
 
 enum FtCudaDataType {
@@ -147,17 +147,11 @@ void print_to_file(const T* result, const int size, const char* file)
     cudaDeviceSynchronize();
     check_cuda_error(cudaGetLastError());
     printf("[INFO] file: %s \n", file);
-    FILE* fd = fopen(file, "w");
-    T* tmp = reinterpret_cast<T*>(malloc(sizeof(T) * size));
+    FILE* fd  = fopen(file, "w");
+    T*    tmp = reinterpret_cast<T*>(malloc(sizeof(T) * size));
     check_cuda_error(cudaMemcpy(tmp, result, sizeof(T) * size, cudaMemcpyDeviceToHost));
     for (int i = 0; i < size; ++i) {
-        float val;
-        if (sizeof(T) == 2) {
-            val = (T)__half2float(tmp[i]);
-        }
-        else {
-            val = (T)tmp[i];
-        }
+        float val = (float)(tmp[i]);
         fprintf(fd, "%f\n", val);
     }
     free(tmp);
@@ -167,10 +161,10 @@ void print_to_file(const T* result, const int size, const char* file)
 }
 
 template<typename T>
-void print_to_file(const T* result,
-                   const int size,
-                   const char* file,
-                   cudaStream_t stream,
+void print_to_file(const T*           result,
+                   const int          size,
+                   const char*        file,
+                   cudaStream_t       stream,
                    std::ios::openmode open_mode = std::ios::out)
 {
     cudaDeviceSynchronize();
@@ -212,12 +206,12 @@ void print_abs_mean(const T* buf, uint size, cudaStream_t stream, std::string na
     cudaMemcpyAsync(h_tmp, buf, sizeof(T) * size, cudaMemcpyDeviceToHost, stream);
     cudaDeviceSynchronize();
     check_cuda_error(cudaGetLastError());
-    double sum = 0.0f;
+    double   sum        = 0.0f;
     uint64_t zero_count = 0;
-    float max_val = -1e10;
-    bool find_inf = false;
+    float    max_val    = -1e10;
+    bool     find_inf   = false;
     for (uint i = 0; i < size; i++) {
-        if (std::isinf(h_tmp[i])) {
+        if (std::isinf((float)(h_tmp[i]))) {
             find_inf = true;
             continue;
         }
@@ -292,6 +286,117 @@ static inline void printMatrix(T* ptr, int m, int k, int stride, bool is_device_
     }
 }
 
+static inline void printMatrix(unsigned long long* ptr, int m, int k, int stride, bool is_device_ptr)
+{
+    typedef unsigned long long T;
+    T*                         tmp;
+    if (is_device_ptr) {
+        // k < stride ; stride = col-dimension.
+        tmp = reinterpret_cast<T*>(malloc(m * stride * sizeof(T)));
+        check_cuda_error(cudaMemcpy(tmp, ptr, sizeof(T) * m * stride, cudaMemcpyDeviceToHost));
+        cudaDeviceSynchronize();
+    }
+    else {
+        tmp = ptr;
+    }
+
+    for (int ii = -1; ii < m; ++ii) {
+        if (ii >= 0) {
+            printf("%02d ", ii);
+        }
+        else {
+            printf("   ");
+        }
+
+        for (int jj = 0; jj < k; jj += 1) {
+            if (ii >= 0) {
+                printf("%4llu ", tmp[ii * stride + jj]);
+            }
+            else {
+                printf("%4d ", jj);
+            }
+        }
+        printf("\n");
+    }
+    if (is_device_ptr) {
+        free(tmp);
+    }
+}
+
+static inline void printMatrix(int* ptr, int m, int k, int stride, bool is_device_ptr)
+{
+    typedef int T;
+    T*          tmp;
+    if (is_device_ptr) {
+        // k < stride ; stride = col-dimension.
+        tmp = reinterpret_cast<T*>(malloc(m * stride * sizeof(T)));
+        check_cuda_error(cudaMemcpy(tmp, ptr, sizeof(T) * m * stride, cudaMemcpyDeviceToHost));
+        cudaDeviceSynchronize();
+    }
+    else {
+        tmp = ptr;
+    }
+
+    for (int ii = -1; ii < m; ++ii) {
+        if (ii >= 0) {
+            printf("%02d ", ii);
+        }
+        else {
+            printf("   ");
+        }
+
+        for (int jj = 0; jj < k; jj += 1) {
+            if (ii >= 0) {
+                printf("%4d ", tmp[ii * stride + jj]);
+            }
+            else {
+                printf("%4d ", jj);
+            }
+        }
+        printf("\n");
+    }
+    if (is_device_ptr) {
+        free(tmp);
+    }
+}
+
+static inline void printMatrix(size_t* ptr, int m, int k, int stride, bool is_device_ptr)
+{
+    typedef size_t T;
+    T*             tmp;
+    if (is_device_ptr) {
+        // k < stride ; stride = col-dimension.
+        tmp = reinterpret_cast<T*>(malloc(m * stride * sizeof(T)));
+        check_cuda_error(cudaMemcpy(tmp, ptr, sizeof(T) * m * stride, cudaMemcpyDeviceToHost));
+        cudaDeviceSynchronize();
+    }
+    else {
+        tmp = ptr;
+    }
+
+    for (int ii = -1; ii < m; ++ii) {
+        if (ii >= 0) {
+            printf("%02d ", ii);
+        }
+        else {
+            printf("   ");
+        }
+
+        for (int jj = 0; jj < k; jj += 1) {
+            if (ii >= 0) {
+                printf("%4ld ", tmp[ii * stride + jj]);
+            }
+            else {
+                printf("%4d ", jj);
+            }
+        }
+        printf("\n");
+    }
+    if (is_device_ptr) {
+        free(tmp);
+    }
+}
+
 template<typename T>
 void check_max_val(const T* result, const int size)
 {
@@ -352,8 +457,8 @@ inline void myAssert(bool result, const char* const file, int const line, std::s
 /*************Time Handling**************/
 class CudaTimer {
 private:
-    cudaEvent_t event_start_;
-    cudaEvent_t event_stop_;
+    cudaEvent_t  event_start_;
+    cudaEvent_t  event_stop_;
     cudaStream_t stream_;
 
 public:
@@ -387,13 +492,14 @@ static double diffTime(timeval start, timeval end)
 
 /* ***************************** common utils ****************************** */
 
-inline void print_mem_usage()
+inline void print_mem_usage(std::string time="after allocation")
 {
     size_t free_bytes, total_bytes;
     check_cuda_error(cudaMemGetInfo(&free_bytes, &total_bytes));
-    float free = static_cast<float>(free_bytes) / 1024.0 / 1024.0 / 1024.0;
+    float free  = static_cast<float>(free_bytes) / 1024.0 / 1024.0 / 1024.0;
     float total = static_cast<float>(total_bytes) / 1024.0 / 1024.0 / 1024.0;
-    printf("after allocation, free %.2f GB total %.2f GB\n", free, total);
+    float used = total - free;
+    printf("%-20s: free: %5.2f GB, total: %5.2f GB, used: %5.2f GB\n", time.c_str(), free, total, used);
 }
 
 inline int getSMVersion()
@@ -421,8 +527,8 @@ inline int div_up(int a, int n)
 
 inline cudaError_t getSetDevice(int i_device, int* o_device = NULL)
 {
-    int current_dev_id = 0;
-    cudaError_t err = cudaSuccess;
+    int         current_dev_id = 0;
+    cudaError_t err            = cudaSuccess;
 
     if (o_device != NULL) {
         err = cudaGetDevice(&current_dev_id);
@@ -524,7 +630,7 @@ struct getTypeFromCudaDataType<BFLOAT16_DATATYPE> {
 inline FtCudaDataType getModelFileType(std::string ini_file, std::string section_name)
 {
     FtCudaDataType model_file_type;
-    INIReader reader = INIReader(ini_file);
+    INIReader      reader = INIReader(ini_file);
     if (reader.ParseError() < 0) {
         FT_LOG_WARNING("Can't load %s. Use FP32 as default", ini_file.c_str());
         model_file_type = FtCudaDataType::FP32;

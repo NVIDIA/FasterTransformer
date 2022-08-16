@@ -83,7 +83,7 @@ int printPerfStructure(int m, int n, int k, const customMatmulPerf_t& perf, FILE
 #if (CUDART_VERSION >= 11000)
     cublasLtMatmulAlgoConfigGetAttribute(matmulAlgo, CUBLASLT_ALGO_CONFIG_STAGES_ID, &stages, sizeof(stages), NULL);
 #else
-    stages = 0;
+    stages                     = 0;
 #endif
 
     printf("algo={ Id=%d, tileIdx=%d (%s) splitK=%d reduc=%d swizzle=%d custom=%d stages=%d} status %d "
@@ -149,7 +149,7 @@ int printBatchPerfStructure(
 #if (CUDART_VERSION >= 11000)
     cublasLtMatmulAlgoConfigGetAttribute(matmulAlgo, CUBLASLT_ALGO_CONFIG_STAGES_ID, &stages, sizeof(stages), NULL);
 #else
-    stages = 0;
+    stages                     = 0;
 #endif
 
     printf("algo={ Id=%d, tileIdx=%d (%s) splitK=%d reduc=%d swizzle=%d custom=%d stages=%d} status %d "
@@ -202,28 +202,28 @@ static inline bool time_compare(const customMatmulPerf_t& perf_a, const customMa
     return ((perf_a.status == CUBLAS_STATUS_SUCCESS) && (perf_a.time < perf_b.time));
 }
 
-static cublasStatus_t customMatmulRun(cublasLtHandle_t ltHandle,  // to get the capabilities (required a GPU)
-                                      cublasLtMatmulDesc_t operationDesc,
-                                      const void* alpha, /* host or device pointer */
-                                      const void* A,
-                                      cublasLtMatrixLayout_t Adesc,
-                                      const void* B,
-                                      cublasLtMatrixLayout_t Bdesc,
-                                      const void* beta, /* host or device pointer */
-                                      const void* C,
-                                      cublasLtMatrixLayout_t Cdesc,
-                                      void* D,
-                                      cublasLtMatrixLayout_t Ddesc,
+static cublasStatus_t customMatmulRun(cublasLtHandle_t            ltHandle,  // to get the capabilities (required a GPU)
+                                      cublasLtMatmulDesc_t        operationDesc,
+                                      const void*                 alpha, /* host or device pointer */
+                                      const void*                 A,
+                                      cublasLtMatrixLayout_t      Adesc,
+                                      const void*                 B,
+                                      cublasLtMatrixLayout_t      Bdesc,
+                                      const void*                 beta, /* host or device pointer */
+                                      const void*                 C,
+                                      cublasLtMatrixLayout_t      Cdesc,
+                                      void*                       D,
+                                      cublasLtMatrixLayout_t      Ddesc,
                                       const cublasLtMatmulAlgo_t& algo,
-                                      int kernelRepeats,
-                                      void* workSpace,
-                                      size_t workSpaceSizeInBytes,
-                                      customMatmulPerf_t& perfResults,
-                                      cudaStream_t stream)
+                                      int                         kernelRepeats,
+                                      void*                       workSpace,
+                                      size_t                      workSpaceSizeInBytes,
+                                      customMatmulPerf_t&         perfResults,
+                                      cudaStream_t                stream)
 {
     cublasLtMatmulHeuristicResult_t heurResult;
     /* Looping over the Algo */
-    int repeats = kernelRepeats;
+    int            repeats = kernelRepeats;
     cublasStatus_t algoStatus =
         cublasLtMatmulAlgoCheck(ltHandle, operationDesc, Adesc, Bdesc, Cdesc, Ddesc, &algo, &heurResult);
     if (algoStatus == CUBLAS_STATUS_SUCCESS) {
@@ -258,10 +258,10 @@ static cublasStatus_t customMatmulRun(cublasLtHandle_t ltHandle,  // to get the 
             float time = diffTime(start, end);
             // For the moment only add successful findings
             if (algoStatus == CUBLAS_STATUS_SUCCESS) {
-                perfResults.algo = algo;
-                perfResults.time = time / repeats;
+                perfResults.algo          = algo;
+                perfResults.time          = time / repeats;
                 perfResults.workspaceSize = heurResult.workspaceSize;
-                perfResults.wavesCount = heurResult.wavesCount;
+                perfResults.wavesCount    = heurResult.wavesCount;
             }
         }
         else {
@@ -279,32 +279,32 @@ static cublasStatus_t customMatmulRun(cublasLtHandle_t ltHandle,  // to get the 
 // API
 template<typename T, typename scaleT>
 int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
-                      int m,
-                      int n,
-                      int k,
-                      const scaleT* alpha, /* host pointer */
-                      const int8_t* A,
-                      const int8_t* B,
-                      const scaleT* beta, /* host pointer */
-                      T* C,
-                      void* workSpace,
-                      size_t workSpaceSize,
-                      FILE* fout)
+                      int              m,
+                      int              n,
+                      int              k,
+                      const scaleT*    alpha, /* host pointer */
+                      const int8_t*    A,
+                      const int8_t*    B,
+                      const scaleT*    beta, /* host pointer */
+                      T*               C,
+                      void*            workSpace,
+                      size_t           workSpaceSize,
+                      FILE*            fout)
 {
     cublasStatus_t status = CUBLAS_STATUS_SUCCESS;
 
-    cublasLtMatmulDesc_t operationDesc = NULL;
+    cublasLtMatmulDesc_t   operationDesc = NULL;
     cublasLtMatrixLayout_t Adesc = NULL, Bdesc = NULL, Cdesc = NULL;
-    cudaStream_t stream = 0;
+    cudaStream_t           stream = 0;
     // SplitK value that we are going to try when SplitK is supported for a given algo
     const int splitKSequenceA[] = {2, 3, 4, 5, 6, 8, 12, 16, 32};
     // Let try a fixed number of combinations
 #define ALGO_COMBINATIONS 50000
-    int AlgoCombinations = ALGO_COMBINATIONS;
-    int AlgoCount = 0;
-    int kernelRepeats = 100;  // number of time the CUDA kernels will be run back to back
+    int                AlgoCombinations = ALGO_COMBINATIONS;
+    int                AlgoCount        = 0;
+    int                kernelRepeats    = 100;  // number of time the CUDA kernels will be run back to back
     customMatmulPerf_t perfResults[ALGO_COMBINATIONS];
-    int nbAlgoIds = 0;
+    int                nbAlgoIds = 0;
 #define ALGO_IDS 100
     int algoIdA[ALGO_IDS];
 
@@ -313,11 +313,11 @@ int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
     Btype = CUDA_R_8I;
 
     if (std::is_same<T, int32_t>::value && std::is_same<scaleT, int>::value) {
-        Ctype = CUDA_R_32I;
+        Ctype     = CUDA_R_32I;
         scaleType = CUDA_R_32I;
     }
     else if (std::is_same<T, int8_t>::value && std::is_same<scaleT, float>::value) {
-        Ctype = CUDA_R_8I;
+        Ctype     = CUDA_R_8I;
         scaleType = CUDA_R_32F;
     }
     else {
@@ -352,7 +352,7 @@ int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
         order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
     }
 #else
-    order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
+    order_matrixB              = CUBLASLT_ORDER_COL4_4R2_8C;
 #endif
 
     int ldaTransform = 32 * m;
@@ -369,7 +369,7 @@ int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
 #if (CUDART_VERSION >= 11000)
     status = cublasLtMatmulDescCreate(&operationDesc, computeType, scaleType);
 #else
-    status = cublasLtMatmulDescCreate(&operationDesc, scaleType);
+    status                     = cublasLtMatmulDescCreate(&operationDesc, scaleType);
 #endif
     if (status != CUBLAS_STATUS_SUCCESS) {
         goto CLEANUP;
@@ -413,7 +413,7 @@ int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
     // Loop over the Algo IDs
     for (int idx = 0; (idx < nbAlgoIds) && (AlgoCount < AlgoCombinations); idx++) {
         cublasLtMatmulAlgo_t algo;
-        size_t sizeWritten = 0;
+        size_t               sizeWritten = 0;
         /* Initialize algo structure with given Algp ID */
         status =
             cublasLtMatmulAlgoInit(ltHandle, computeType, scaleType, Atype, Btype, Ctype, Ctype, algoIdA[idx], &algo);
@@ -422,19 +422,19 @@ int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
         }
         // Query the tiles enums supported by that algo
         cublasLtMatmulAlgoCapGetAttribute(&algo, CUBLASLT_ALGO_CAP_TILE_IDS, NULL, 0, &sizeWritten);
-        int nbTiles = int(sizeWritten / sizeof(int));
-        int* tileA = new int[nbTiles == 0 ? 1 : nbTiles];
+        int  nbTiles = int(sizeWritten / sizeof(int));
+        int* tileA   = new int[nbTiles == 0 ? 1 : nbTiles];
         if (nbTiles == 0) {
             tileA[0] = CUBLASLT_MATMUL_TILE_UNDEFINED;
-            nbTiles = 1;
+            nbTiles  = 1;
         }
 #if (CUDART_VERSION >= 11000)
         cublasLtMatmulAlgoCapGetAttribute(&algo, CUBLASLT_ALGO_CAP_STAGES_IDS, NULL, 0, &sizeWritten);
-        int nbStages = int(sizeWritten / sizeof(int));
+        int              nbStages = int(sizeWritten / sizeof(int));
         std::vector<int> stagesA(nbStages == 0 ? 1 : nbStages);
         if (nbStages == 0) {
             stagesA[0] = CUBLASLT_MATMUL_STAGES_UNDEFINED;
-            nbStages = 1;
+            nbStages   = 1;
         }
         else {
             cublasLtMatmulAlgoCapGetAttribute(
@@ -471,14 +471,14 @@ int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
                         if (splitkSupport) {
                             splitK_trial += sizeof(splitKSequenceA) / sizeof(splitKSequenceA[0]);
                         }
-                        // Loop over the splitK value over a fixed sequence splitKSequenceA in addtion to the case where
-                        // splitK is not enabled
+                        // Loop over the splitK value over a fixed sequence splitKSequenceA in addition to the case
+                        // where splitK is not enabled
                         for (int l = 0; (l < (1 + splitK_trial)) && (AlgoCount < AlgoCombinations); l++) {
                             /* Setup attribute of the algo to run */
                             cublasLtMatmulAlgoConfigSetAttribute(
                                 &algo, CUBLASLT_ALGO_CONFIG_TILE_ID, &tileA[tileIdx], sizeof(tileA[tileIdx]));
                             int splitK_val = 0;
-                            int redScheme = CUBLASLT_REDUCTION_SCHEME_NONE;
+                            int redScheme  = CUBLASLT_REDUCTION_SCHEME_NONE;
                             cublasLtMatmulAlgoConfigSetAttribute(
                                 &algo, CUBLASLT_ALGO_CONFIG_SPLITK_NUM, &splitK_val, sizeof(splitK_val));
                             cublasLtMatmulAlgoConfigSetAttribute(
@@ -501,7 +501,7 @@ int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
                                                                              CUBLASLT_ALGO_CONFIG_REDUCTION_SCHEME,
                                                                              &redScheme,
                                                                              sizeof(redScheme));
-                                        status = customMatmulRun(ltHandle,
+                                        status                        = customMatmulRun(ltHandle,
                                                                  operationDesc,
                                                                  alpha, /* host or device pointer */
                                                                  A,
@@ -529,7 +529,7 @@ int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
                             else {  // Non-splitK case
                                 /* if user preference is ok with workspace */
                                 if (AlgoCount < AlgoCombinations) {
-                                    status = customMatmulRun(ltHandle,
+                                    status                        = customMatmulRun(ltHandle,
                                                              operationDesc,
                                                              alpha, /* host or device pointer */
                                                              A,
@@ -588,60 +588,60 @@ CLEANUP:
 }
 
 template int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
-                               int m,
-                               int n,
-                               int k,
-                               const int* alpha, /* host pointer */
-                               const int8_t* A,
-                               const int8_t* B,
-                               const int* beta, /* host pointer */
-                               int32_t* C,
-                               void* workSpace,
-                               size_t workSpaceSize,
-                               FILE* fout);
+                               int              m,
+                               int              n,
+                               int              k,
+                               const int*       alpha, /* host pointer */
+                               const int8_t*    A,
+                               const int8_t*    B,
+                               const int*       beta, /* host pointer */
+                               int32_t*         C,
+                               void*            workSpace,
+                               size_t           workSpaceSize,
+                               FILE*            fout);
 
 template int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
-                               int m,
-                               int n,
-                               int k,
-                               const float* alpha, /* host pointer */
-                               const int8_t* A,
-                               const int8_t* B,
-                               const float* beta, /* host pointer */
-                               int8_t* C,
-                               void* workSpace,
-                               size_t workSpaceSize,
-                               FILE* fout);
+                               int              m,
+                               int              n,
+                               int              k,
+                               const float*     alpha, /* host pointer */
+                               const int8_t*    A,
+                               const int8_t*    B,
+                               const float*     beta, /* host pointer */
+                               int8_t*          C,
+                               void*            workSpace,
+                               size_t           workSpaceSize,
+                               FILE*            fout);
 
 template<typename T, typename scaleT>
 int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
-                           int batchCount,
-                           int m,
-                           int n,
-                           int k,
-                           const scaleT* alpha, /* host pointer */
-                           const int8_t* A,
-                           const int8_t* B,
-                           const scaleT* beta, /* host pointer */
-                           T* C,
-                           void* workSpace,
-                           size_t workSpaceSize,
-                           FILE* fout)
+                           int              batchCount,
+                           int              m,
+                           int              n,
+                           int              k,
+                           const scaleT*    alpha, /* host pointer */
+                           const int8_t*    A,
+                           const int8_t*    B,
+                           const scaleT*    beta, /* host pointer */
+                           T*               C,
+                           void*            workSpace,
+                           size_t           workSpaceSize,
+                           FILE*            fout)
 {
     cublasStatus_t status = CUBLAS_STATUS_SUCCESS;
 
-    cublasLtMatmulDesc_t operationDesc = NULL;
+    cublasLtMatmulDesc_t   operationDesc = NULL;
     cublasLtMatrixLayout_t Adesc = NULL, Bdesc = NULL, Cdesc = NULL;
-    cudaStream_t stream = 0;
+    cudaStream_t           stream = 0;
     // SplitK value that we are going to try when SplitK is supported for a given algo
     const int splitKSequenceA[] = {2, 3, 4, 5, 6, 8, 12, 16, 32};
     // Let try a fixed number of combinations
 #define ALGO_COMBINATIONS 50000
-    int AlgoCombinations = ALGO_COMBINATIONS;
-    int AlgoCount = 0;
-    int kernelRepeats = 100;  // number of time the CUDA kernels will be run back to back
+    int                AlgoCombinations = ALGO_COMBINATIONS;
+    int                AlgoCount        = 0;
+    int                kernelRepeats    = 100;  // number of time the CUDA kernels will be run back to back
     customMatmulPerf_t perfResults[ALGO_COMBINATIONS];
-    int nbAlgoIds = 0;
+    int                nbAlgoIds = 0;
 #define ALGO_IDS 100
     int algoIdA[ALGO_IDS];
 
@@ -650,11 +650,11 @@ int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
     Btype = CUDA_R_8I;
 
     if (std::is_same<T, int32_t>::value && std::is_same<scaleT, int>::value) {
-        Ctype = CUDA_R_32I;
+        Ctype     = CUDA_R_32I;
         scaleType = CUDA_R_32I;
     }
     else if (std::is_same<T, int8_t>::value && std::is_same<scaleT, float>::value) {
-        Ctype = CUDA_R_8I;
+        Ctype     = CUDA_R_8I;
         scaleType = CUDA_R_32F;
     }
     else {
@@ -689,7 +689,7 @@ int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
         order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
     }
 #else
-    order_matrixB = CUBLASLT_ORDER_COL4_4R2_8C;
+    order_matrixB              = CUBLASLT_ORDER_COL4_4R2_8C;
 #endif
 
     int ldaTransform = 32 * m;
@@ -711,7 +711,7 @@ int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
 #if (CUDART_VERSION >= 11000)
     status = cublasLtMatmulDescCreate(&operationDesc, computeType, scaleType);
 #else
-    status = cublasLtMatmulDescCreate(&operationDesc, scaleType);
+    status                     = cublasLtMatmulDescCreate(&operationDesc, scaleType);
 #endif
     if (status != CUBLAS_STATUS_SUCCESS) {
         goto CLEANUP;
@@ -763,7 +763,7 @@ int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
     // Loop over the Algo IDs
     for (int idx = 0; (idx < nbAlgoIds) && (AlgoCount < AlgoCombinations); idx++) {
         cublasLtMatmulAlgo_t algo;
-        size_t sizeWritten = 0;
+        size_t               sizeWritten = 0;
         /* Initialize algo structure with given Algp ID */
         status =
             cublasLtMatmulAlgoInit(ltHandle, computeType, scaleType, Atype, Btype, Ctype, Ctype, algoIdA[idx], &algo);
@@ -772,19 +772,19 @@ int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
         }
         // Query the tiles enums supported by that algo
         cublasLtMatmulAlgoCapGetAttribute(&algo, CUBLASLT_ALGO_CAP_TILE_IDS, NULL, 0, &sizeWritten);
-        int nbTiles = int(sizeWritten / sizeof(int));
-        int* tileA = new int[nbTiles == 0 ? 1 : nbTiles];
+        int  nbTiles = int(sizeWritten / sizeof(int));
+        int* tileA   = new int[nbTiles == 0 ? 1 : nbTiles];
         if (nbTiles == 0) {
             tileA[0] = CUBLASLT_MATMUL_TILE_UNDEFINED;
-            nbTiles = 1;
+            nbTiles  = 1;
         }
 #if (CUDART_VERSION >= 11000)
         cublasLtMatmulAlgoCapGetAttribute(&algo, CUBLASLT_ALGO_CAP_STAGES_IDS, NULL, 0, &sizeWritten);
-        int nbStages = int(sizeWritten / sizeof(int));
+        int              nbStages = int(sizeWritten / sizeof(int));
         std::vector<int> stagesA(nbStages == 0 ? 1 : nbStages);
         if (nbStages == 0) {
             stagesA[0] = CUBLASLT_MATMUL_STAGES_UNDEFINED;
-            nbStages = 1;
+            nbStages   = 1;
         }
         else {
             cublasLtMatmulAlgoCapGetAttribute(
@@ -821,14 +821,14 @@ int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
                         if (splitkSupport) {
                             splitK_trial += sizeof(splitKSequenceA) / sizeof(splitKSequenceA[0]);
                         }
-                        // Loop over the splitK value over a fixed sequence splitKSequenceA in addtion to the case where
-                        // splitK is not enabled
+                        // Loop over the splitK value over a fixed sequence splitKSequenceA in addition to the case
+                        // where splitK is not enabled
                         for (int l = 0; (l < (1 + splitK_trial)) && (AlgoCount < AlgoCombinations); l++) {
                             /* Setup attribute of the algo to run */
                             cublasLtMatmulAlgoConfigSetAttribute(
                                 &algo, CUBLASLT_ALGO_CONFIG_TILE_ID, &tileA[tileIdx], sizeof(tileA[tileIdx]));
                             int splitK_val = 0;
-                            int redScheme = CUBLASLT_REDUCTION_SCHEME_NONE;
+                            int redScheme  = CUBLASLT_REDUCTION_SCHEME_NONE;
                             cublasLtMatmulAlgoConfigSetAttribute(
                                 &algo, CUBLASLT_ALGO_CONFIG_SPLITK_NUM, &splitK_val, sizeof(splitK_val));
                             cublasLtMatmulAlgoConfigSetAttribute(
@@ -851,7 +851,7 @@ int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
                                                                              CUBLASLT_ALGO_CONFIG_REDUCTION_SCHEME,
                                                                              &redScheme,
                                                                              sizeof(redScheme));
-                                        status = customMatmulRun(ltHandle,
+                                        status                        = customMatmulRun(ltHandle,
                                                                  operationDesc,
                                                                  alpha, /* host or device pointer */
                                                                  A,
@@ -879,7 +879,7 @@ int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
                             else {  // Non-splitK case
                                 /* if user preference is ok with workspace */
                                 if (AlgoCount < AlgoCombinations) {
-                                    status = customMatmulRun(ltHandle,
+                                    status                        = customMatmulRun(ltHandle,
                                                              operationDesc,
                                                              alpha, /* host or device pointer */
                                                              A,
@@ -938,32 +938,32 @@ CLEANUP:
 }
 
 template int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
-                                    int batchCount,
-                                    int m,
-                                    int n,
-                                    int k,
-                                    const int* alpha, /* host pointer */
-                                    const int8_t* A,
-                                    const int8_t* B,
-                                    const int* beta, /* host pointer */
-                                    int32_t* C,
-                                    void* workSpace,
-                                    size_t workSpaceSize,
-                                    FILE* fout);
+                                    int              batchCount,
+                                    int              m,
+                                    int              n,
+                                    int              k,
+                                    const int*       alpha, /* host pointer */
+                                    const int8_t*    A,
+                                    const int8_t*    B,
+                                    const int*       beta, /* host pointer */
+                                    int32_t*         C,
+                                    void*            workSpace,
+                                    size_t           workSpaceSize,
+                                    FILE*            fout);
 
 template int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
-                                    int batchCount,
-                                    int m,
-                                    int n,
-                                    int k,
-                                    const float* alpha, /* host pointer */
-                                    const int8_t* A,
-                                    const int8_t* B,
-                                    const float* beta, /* host pointer */
-                                    int8_t* C,
-                                    void* workSpace,
-                                    size_t workSpaceSize,
-                                    FILE* fout);
+                                    int              batchCount,
+                                    int              m,
+                                    int              n,
+                                    int              k,
+                                    const float*     alpha, /* host pointer */
+                                    const int8_t*    A,
+                                    const int8_t*    B,
+                                    const float*     beta, /* host pointer */
+                                    int8_t*          C,
+                                    void*            workSpace,
+                                    size_t           workSpaceSize,
+                                    FILE*            fout);
 
 // initialize matrix in column-major
 void matInit(int rows, int cols, int8_t* p, int ld)
@@ -983,10 +983,10 @@ int batch_igemm_config(int batchCount, int m, int n, int k, FILE* fout, void* bu
 {
     printf("batchCount %d m %d n %d k %d\n", batchCount, m, n, k);
     int alpha = 1;
-    int beta = 0;
+    int beta  = 0;
 
-    int8_t* d_A = (int8_t*)buffer;                        // m * k, stored in column-major
-    int8_t* d_B = d_A + batchCount * m * k;               // k * n, stored in column-major
+    int8_t*  d_A = (int8_t*)buffer;                       // m * k, stored in column-major
+    int8_t*  d_B = d_A + batchCount * m * k;              // k * n, stored in column-major
     int32_t* d_C = (int32_t*)(d_B + batchCount * k * n);  // m * n, stored in column-major
 
     cublasLtHandle_t ltHandle;
@@ -1014,10 +1014,10 @@ int igemm_config(int m, int n, int k, FILE* fout, void* buffer)
 {
     printf("batchCount %d m %d n %d k %d\n", 1, m, n, k);
     int alpha = 1;
-    int beta = 0;
+    int beta  = 0;
 
-    int8_t* d_A = (int8_t*)buffer;           // m * k, stored in column-major
-    int8_t* d_B = d_A + m * k;               // k * n, stored in column-major
+    int8_t*  d_A = (int8_t*)buffer;          // m * k, stored in column-major
+    int8_t*  d_B = d_A + m * k;              // k * n, stored in column-major
     int32_t* d_C = (int32_t*)(d_B + k * n);  // m * n, stored in column-major
 
     cublasLtHandle_t ltHandle;
@@ -1064,7 +1064,7 @@ int generate_encoder_igemm_config(
     else {
         fout = fopen(IGEMM_CONFIG, "a+");
         std::vector<std::string> config;
-        char line[1024];
+        char                     line[1024];
         while (fgets(line, 1024, fout) != NULL) {
             config.push_back(std::string(line));
         }
@@ -1078,22 +1078,22 @@ int generate_encoder_igemm_config(
         }
     }
 
-    batch_size_ = batch_size;
-    seq_len_ = seq_len;
-    head_num_ = head_num;
+    batch_size_    = batch_size;
+    seq_len_       = seq_len;
+    head_num_      = head_num;
     size_per_head_ = size_per_head;
-    int m = batch_size * seq_len;
-    int n = head_num * size_per_head;
-    int k = n;
+    int m          = batch_size * seq_len;
+    int n          = head_num * size_per_head;
+    int k          = n;
     int batchCount;
 
     printf("***Encoder IGemm Testing Begin***\n");
     printf("\n-----------------------------\n");
 
     batchCount = 3;
-    m = batch_size * seq_len;
-    k = head_num * size_per_head;
-    n = k;
+    m          = batch_size * seq_len;
+    k          = head_num * size_per_head;
+    n          = k;
     if (n % 32 != 0 || k % 32 != 0) {
         printf("[WARNING] For INT8 gemm test, n, k should be multiples of 32 (n = %d, k = %d)\n", n, k);
     }
@@ -1102,9 +1102,9 @@ int generate_encoder_igemm_config(
     }
 
     printf("\n-----------------------------\n");
-    m = seq_len;
-    n = seq_len;
-    k = size_per_head;
+    m          = seq_len;
+    n          = seq_len;
+    k          = size_per_head;
     batchCount = batch_size * head_num;
     if (n % 32 != 0 || k % 32 != 0) {
         printf("[WARNING] For INT8 gemm test, n, k should be multiples of 32 (n = %d, k = %d)\n", n, k);
@@ -1114,9 +1114,9 @@ int generate_encoder_igemm_config(
     }
 
     printf("\n-----------------------------\n");
-    m = seq_len;
-    n = size_per_head;
-    k = seq_len;
+    m          = seq_len;
+    n          = size_per_head;
+    k          = seq_len;
     batchCount = batch_size * head_num;
     if (n % 32 != 0 || k % 32 != 0) {
         printf("[WARNING] For INT8 gemm test, n, k should be multiples of 32 (n = %d, k = %d)\n", n, k);
@@ -1166,10 +1166,10 @@ int generate_encoder_igemm_config(
     }
     if (do_sparse_test) {
         printf("***cusparseLt Gemm Testing Begin***\n");
-        const int spgemm_num = 3;
-        FILE* fd;
-        int line_count = 0;
-        const int ites = 100;
+        const int      spgemm_num = 3;
+        FILE*          fd;
+        int            line_count = 0;
+        const int      ites       = 100;
         struct timeval start, end;
         if (!isAppend) {
             fd = fopen(SPIGEMM_CONFIG, "w+");
@@ -1177,7 +1177,7 @@ int generate_encoder_igemm_config(
         else {
             fd = fopen(SPIGEMM_CONFIG, "a+");
             std::vector<std::string> config;
-            char line[1024];
+            char                     line[1024];
             while (fgets(line, 1024, fd) != NULL) {
                 config.push_back(std::string(line));
             }
@@ -1218,17 +1218,17 @@ int generate_encoder_igemm_config(
 
         cusparseLtHandle_t handle;
         CHECK_CUSPARSE(cusparseLtInit(&handle));
-        cusparseOrder_t col_order = CUSPARSE_ORDER_COL;
-        cusparseOrder_t row_order = CUSPARSE_ORDER_ROW;
-        cusparseOperation_t opA = CUSPARSE_OPERATION_NON_TRANSPOSE;
-        cusparseOperation_t opB = CUSPARSE_OPERATION_NON_TRANSPOSE;
+        cusparseOrder_t     col_order    = CUSPARSE_ORDER_COL;
+        cusparseOrder_t     row_order    = CUSPARSE_ORDER_ROW;
+        cusparseOperation_t opA          = CUSPARSE_OPERATION_NON_TRANSPOSE;
+        cusparseOperation_t opB          = CUSPARSE_OPERATION_NON_TRANSPOSE;
         cusparseComputeType compute_type = CUSPARSE_COMPUTE_32I;
-        unsigned alignment = 16;
-        cudaStream_t stream = 0;
-        float alpha2 = 1.0f;
-        float beta2 = 0.0f;
+        unsigned            alignment    = 16;
+        cudaStream_t        stream       = 0;
+        float               alpha2       = 1.0f;
+        float               beta2        = 0.0f;
         for (int i = 0; i < spgemm_num; ++i) {
-            // to be compatable with spgemm wrapper, we let A be the weight matrix
+            // to be compatible with spgemm wrapper, we let A be the weight matrix
             // so m and n are swapped
             // A: mxk B: kxn C:mxn
             int m = N[i], n = M[i], k = K[i];
@@ -1256,13 +1256,13 @@ int generate_encoder_igemm_config(
             }
 
             float exec_time = 99999.0f;
-            int fast_algo = 0;
+            int   fast_algo = 0;
             for (int alg = 0; alg < 4; ++alg) {
                 cudaDeviceSynchronize();
                 cusparseLtMatDescriptor_t matA, matB, matC;
-                void* d_workspace = nullptr;
-                int num_streams = 1;
-                cudaStream_t streams[1] = {stream};
+                void*                     d_workspace = nullptr;
+                int                       num_streams = 1;
+                cudaStream_t              streams[1]  = {stream};
                 CHECK_CUSPARSE(cusparseLtStructuredDescriptorInit(
                     &handle, &matA, m, k, k, alignment, CUDA_R_8I, row_order, CUSPARSELT_SPARSITY_50_PERCENT))
                 CHECK_CUSPARSE(cusparseLtDenseDescriptorInit(&handle, &matB, k, n, k, alignment, CUDA_R_8I, col_order))
@@ -1272,9 +1272,9 @@ int generate_encoder_igemm_config(
                     // initializing MatDesc takes a lot of time
                     // and these descs can be stored to other place
                     // whereas storing MatMulPlan to other place will cause errors
-                    cusparseLtMatmulDescriptor_t matmul;
+                    cusparseLtMatmulDescriptor_t   matmul;
                     cusparseLtMatmulAlgSelection_t alg_sel;
-                    cusparseLtMatmulPlan_t plan;
+                    cusparseLtMatmulPlan_t         plan;
                     CHECK_CUSPARSE(cusparseLtMatmulDescriptorInit(
                         &handle, &matmul, opA, opB, &matA, &matB, &matC, &matC, compute_type))
                     CHECK_CUSPARSE(

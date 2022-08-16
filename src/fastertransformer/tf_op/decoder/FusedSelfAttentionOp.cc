@@ -40,6 +40,14 @@ public:
     typedef half DataType;
 };
 
+#ifdef ENABLE_BF16
+template<>
+class TFTraits<Eigen::bfloat16> {
+public:
+    typedef __nv_bfloat16 DataType;
+};
+#endif
+
 REGISTER_OP("FusedQkvMultiHeadAttention")
     .Input("qkv_tensor: T")
     .Input("qkv_bias: T")
@@ -115,8 +123,8 @@ public:
                                                     "([seq_len, batch_size, head_num, size_per_head])"));
         }
 
-        const cudaStream_t& stream = context->eigen_device<Device>().stream();
-        const DataType_* qkv_input = reinterpret_cast<const DataType_*>(context->input(0).flat<T>().data());
+        const cudaStream_t& stream    = context->eigen_device<Device>().stream();
+        const DataType_*    qkv_input = reinterpret_cast<const DataType_*>(context->input(0).flat<T>().data());
         OP_REQUIRES(context, qkv_input != nullptr, tf::errors::InvalidArgument("qkv_input is null"));
 
         const DataType_* qkv_bias = reinterpret_cast<const DataType_*>(context->input(1).flat<T>().data());
@@ -137,20 +145,31 @@ public:
         try {
             fastertransformer::fusedQKV_masked_attention_dispatch(qkv_input,
                                                                   qkv_bias,
-                                                                  k_cache,
-                                                                  v_cache,
-                                                                  output_ptr,
-                                                                  nullptr,
-                                                                  nullptr,
-                                                                  batch_size_,
-                                                                  batch_size_,
-                                                                  head_num_,
-                                                                  size_per_head_,
-                                                                  decoder_max_seq_len,
-                                                                  0,
-                                                                  nullptr,
-                                                                  seq_len_,
-                                                                  stream);
+                                                                  (const DataType_*)nullptr,  // relative_attention_bias
+                                                                  k_cache,                    // key_cache
+                                                                  v_cache,                    // value_cache
+                                                                  (const int*)nullptr,        // cache_indir
+                                                                  output_ptr,                 // context_buf
+                                                                  (const bool*)nullptr,       // finished
+                                                                  (const int*)nullptr,        // sequence_lengths
+                                                                  batch_size_,                // max_batch_size
+                                                                  batch_size_,                // inference_batch_size
+                                                                  1,                          // beam_width
+                                                                  head_num_,                  // head_num
+                                                                  size_per_head_,             // size_per_head
+                                                                  0,                          // rotary_embedding_dim
+                                                                  false,                      // neox_rotary_style
+                                                                  decoder_max_seq_len,        // max_seq_len
+                                                                  (const int*)nullptr,        // prefix_prompt_lengths
+                                                                  0,                    // max_prefix_prompt_length
+                                                                  0,                    // max_input_len
+                                                                  (const int*)nullptr,  // total_padding_tokens
+                                                                  seq_len_,             // step
+                                                                  1.0f,                 // q_scaling
+                                                                  0,  // relative_attention_bias_stride
+                                                                  (const bool*)nullptr,  //  masked_tokens
+                                                                  stream                 // stream
+            );
         }
         catch (std::runtime_error& error) {
             std::cout << tf::errors::Internal(error.what());
@@ -163,8 +182,8 @@ public:
     }
 
 private:
-    int batch_size_, head_num_, size_per_head_, seq_len_;
-    typedef TFTraits<T> traits_;
+    int                                batch_size_, head_num_, size_per_head_, seq_len_;
+    typedef TFTraits<T>                traits_;
     typedef typename traits_::DataType DataType_;
 };
 

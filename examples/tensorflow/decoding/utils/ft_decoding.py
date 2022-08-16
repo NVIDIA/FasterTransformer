@@ -55,7 +55,7 @@ def ft_decoding(memory_tensor,
                        The results of encoder transformer layer. The rank must be 3. 
                        Note that it must be extended by beam_width times.
         memory_sequence_length: A tf.Tensor with shape [batch_size * beam_width], type tf.int. 
-                                The lenght of each sentence of results of encoder. 
+                                The length of each sentence of results of encoder. 
                                 Note that it must be extended by beam_width times.
         embedding_table: A tf.Tensor with shape [vocab_size, hidden_dimension]. 
                          The embedding table of embedding lookup for each step.
@@ -152,7 +152,7 @@ def ft_decoding(memory_tensor,
         top_k=decoding_args.top_k,
         top_p=decoding_args.top_p,
         temperature=1.0,
-        len_penalty=1.0,
+        len_penalty=0.0,
         repetition_penalty=1.0)
 
     if decoder_args.beam_width > 1:

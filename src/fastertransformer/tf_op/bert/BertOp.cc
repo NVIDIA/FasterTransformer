@@ -72,6 +72,14 @@ public:
     typedef half DataType;
 };
 
+#ifdef ENABLE_BF16
+template<>
+class TFTraits<Eigen::bfloat16> {
+public:
+    typedef __nv_bfloat16 DataType;
+};
+#endif
+
 template<typename Device, typename T>
 class BertOp: public BaseOp<T> {
 public:
@@ -84,7 +92,7 @@ public:
             OP_REQUIRES_OK(context, context->GetAttr("num_layer", &num_layer_));
             OP_REQUIRES_OK(context, context->GetAttr("remove_padding", &remove_padding_));
             OP_REQUIRES_OK(context, context->GetAttr("q_scaling", &q_scaling_));
-            sm_ = ft::getSMVersion();
+            sm_              = ft::getSMVersion();
             cublas_algo_map_ = new ft::cublasAlgoMap("gemm_config.in");
         }
         catch (std::runtime_error& error) {
@@ -103,18 +111,18 @@ public:
                     context->num_inputs() == (num_layer_ * 16) + 3,
                     tf::errors::InvalidArgument("[ERROR] More or Less input arguments"));
 
-        const size_t batch_size_ = (size_t)context->input(0).dim_size(0);
+        const size_t batch_size_   = (size_t)context->input(0).dim_size(0);
         const size_t from_seq_len_ = (size_t)context->input(0).dim_size(1);
 
         OP_REQUIRES(context,
                     batch_size_ == (size_t)context->input(2).dim_size(0),
                     tf::errors::InvalidArgument("[ERROR] invalid shape"));
 
-        const cudaStream_t& stream = context->eigen_device<Device>().stream();
-        cublasHandle_t cublas_handle = this->get_cublas_handler();
+        const cudaStream_t& stream        = context->eigen_device<Device>().stream();
+        cublasHandle_t      cublas_handle = this->get_cublas_handler();
         cublasSetStream(cublas_handle, stream);
         ft::Allocator<ft::AllocatorType::TF> allocator(context, stream);
-        ft::cublasMMWrapper cublas_wrapper = ft::cublasMMWrapper(cublas_handle,
+        ft::cublasMMWrapper                  cublas_wrapper = ft::cublasMMWrapper(cublas_handle,
                                                                  this->get_cublaslt_handler(),
                                                                  stream,
                                                                  cublas_algo_map_,
@@ -124,6 +132,11 @@ public:
         if (std::is_same<T, Eigen::half>::value) {
             cublas_wrapper.setFP16GemmConfig();
         }
+#ifdef ENABLE_BF16
+        else if (std::is_same<T, Eigen::bfloat16>::value) {
+            cublas_wrapper.setBF16GemmConfig();
+        }
+#endif
         else if (std::is_same<T, float>::value) {
             cublas_wrapper.setFP32GemmConfig();
         }
@@ -173,7 +186,7 @@ public:
                 context, 3 + num_layer_ * 15 + i, &bert_weights.bert_layer_weights[i].ffn_layernorm_weights.gamma);
         }
         bert_weights.post_transformer_layernorm_weights.gamma = nullptr;
-        bert_weights.post_transformer_layernorm_weights.beta = nullptr;
+        bert_weights.post_transformer_layernorm_weights.beta  = nullptr;
 
         ft::AttentionType attention_type =
             ft::getAttentionType<DataType>(size_per_head_, sm_, remove_padding_, from_seq_len_);
@@ -199,7 +212,7 @@ public:
         OP_REQUIRES_OK(context, context->allocate_output(0, context->input(0).shape(), &output));
         DataType* out_tensor = reinterpret_cast<DataType*>(output->flat<T>().data());
 
-        ft::DataType data_type = ft::getTensorType<DataType>();
+        ft::DataType            data_type     = ft::getTensorType<DataType>();
         std::vector<ft::Tensor> input_tensors = std::vector<ft::Tensor>{this->convert_tensor(context->input(0)),
                                                                         this->convert_int_tensor(context->input(2))};
 
@@ -223,12 +236,12 @@ public:
     }
 
 private:
-    int head_num_ = 0, size_per_head_ = 0, inter_size_ = 0, num_layer_ = 0;
-    float q_scaling_ = 1.0f;
-    bool remove_padding_;
-    int sm_;
-    ft::cublasAlgoMap* cublas_algo_map_;
-    typedef TFTraits<T> traits_;
+    int                                head_num_ = 0, size_per_head_ = 0, inter_size_ = 0, num_layer_ = 0;
+    float                              q_scaling_ = 1.0f;
+    bool                               remove_padding_;
+    int                                sm_;
+    ft::cublasAlgoMap*                 cublas_algo_map_;
+    typedef TFTraits<T>                traits_;
     typedef typename traits_::DataType DataType;
 };
 

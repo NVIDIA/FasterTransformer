@@ -18,7 +18,7 @@ add_library(Decoding STATIC Decoding.cc)
 set_property(TARGET Decoding PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET Decoding PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(Decoding PUBLIC -lcublas -lcudart -lcurand Decoder decoding_kernels
-                        BeamSearchLayer DynamicDecodeLayer)
+                        BeamSearchLayer DynamicDecodeLayer tensor)
 
 add_executable(decoding_gemm decoding_gemm.cc)
 target_link_libraries(decoding_gemm PUBLIC -lcublas -lcublasLt -lcudart decoding_gemm_func memory_utils)

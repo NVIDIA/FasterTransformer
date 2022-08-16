@@ -36,21 +36,21 @@ class BertLayerINT8: public BaseLayer {
 private:
     // buffer handling
     size_t max_batch_size_ = 0;
-    size_t max_seq_len_ = 0;
+    size_t max_seq_len_    = 0;
 
     // meta data
-    size_t head_num_;
-    size_t size_per_head_;
-    size_t inter_size_;
-    int sm_;
-    float q_scaling_;
-    size_t hidden_units_;
+    size_t        head_num_;
+    size_t        size_per_head_;
+    size_t        inter_size_;
+    int           sm_;
+    float         q_scaling_;
+    size_t        hidden_units_;
     AttentionType attention_type_;
-    int int8_mode_;
-    bool sparse_;
+    int           int8_mode_;
+    bool          sparse_;
 
     BaseAttentionLayer<T>* attention_layer_;
-    FfnLayerINT8<T>* ffn_layer_;
+    FfnLayerINT8<T>*       ffn_layer_;
 
     void allocateBuffer() override;
     void freeBuffer() override;
@@ -61,34 +61,34 @@ private:
 
 protected:
     int32_t* attn_out_buf_;
-    int8_t* int8_buf_;
-    T* layer_norm_tmp_buf_;
-    T* transformer_out_tmp_DataType_;
-    T* col32_from_tensor_;
+    int8_t*  int8_buf_;
+    T*       layer_norm_tmp_buf_;
+    T*       transformer_out_tmp_DataType_;
+    T*       col32_from_tensor_;
 
 public:
-    BertLayerINT8(size_t max_batch_size,
-                  size_t max_seq_len,
-                  size_t head_num,
-                  size_t size_per_head,
-                  size_t inter_size,
-                  int sm,
-                  float q_scaling,
-                  int int8_mode,
-                  cudaStream_t stream,
+    BertLayerINT8(size_t           max_batch_size,
+                  size_t           max_seq_len,
+                  size_t           head_num,
+                  size_t           size_per_head,
+                  size_t           inter_size,
+                  int              sm,
+                  float            q_scaling,
+                  int              int8_mode,
+                  cudaStream_t     stream,
                   cublasMMWrapper* cublas_wrapper,
-                  IAllocator* allocator,
-                  bool is_free_buffer_after_forward,
-                  AttentionType attention_type = AttentionType::UNFUSED_PADDED_MHA,
-                  bool sparse = false);
+                  IAllocator*      allocator,
+                  bool             is_free_buffer_after_forward,
+                  AttentionType    attention_type = AttentionType::UNFUSED_PADDED_MHA,
+                  bool             sparse         = false);
 
     BertLayerINT8(BertLayerINT8<T> const& bert_layer);
 
     ~BertLayerINT8();
 
-    void forward(std::vector<Tensor>* output_tensors,
+    void forward(std::vector<Tensor>*       output_tensors,
                  const std::vector<Tensor>* input_tensors,
-                 const BertLayerWeight<T>* bert_layer_weight);
+                 const BertLayerWeight<T>*  bert_layer_weight);
 };
 
 }  // namespace fastertransformer

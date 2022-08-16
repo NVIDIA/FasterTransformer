@@ -31,8 +31,10 @@ void TopKTopPSamplingLayer<T>::allocateBuffer()
 }
 
 template<typename T>
-void TopKTopPSamplingLayer<T>::allocateBuffer(size_t batch_size, size_t top_k, float top_p)
+void TopKTopPSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tensor top_p)
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    BaseSamplingLayer<T>::allocateBuffer(batch_size, top_k, top_p);
     invokeTopKTopPSampling(nullptr,  // workspace
                            sampling_workspace_size_,
                            nullptr,      // output_ids
@@ -43,14 +45,12 @@ void TopKTopPSamplingLayer<T>::allocateBuffer(size_t batch_size, size_t top_k, f
                            nullptr,      // output_log_probs
                            nullptr,      // curandstate
                            batch_size,
-                           top_k,
-                           (T)top_p,
+                           static_cast<int>(top_k.max<uint>()),
+                           top_p.max<float>(),
                            vocab_size_padded_,
                            nullptr,
                            stream_);
     sampling_workspace_ = allocator_->reMalloc(sampling_workspace_, sampling_workspace_size_, true);
-    curandstate_buf_ = reinterpret_cast<curandState_t*>(
-        allocator_->reMalloc(curandstate_buf_, sizeof(curandState_t) * batch_size, false));
     is_allocate_buffer_ = true;
 }
 
@@ -59,24 +59,14 @@ void TopKTopPSamplingLayer<T>::freeBuffer()
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_) {
-        allocator_->free(sampling_workspace_);
-        allocator_->free(curandstate_buf_);
-        is_allocate_buffer_ = false;
+        allocator_->free((void**)(&sampling_workspace_));
     }
+    BaseSamplingLayer<T>::freeBuffer();
+    is_allocate_buffer_ = false;
 }
 
 template<typename T>
-void TopKTopPSamplingLayer<T>::invokeInitialize(size_t batch_size,
-                                                unsigned long long random_seed,
-                                                curandState_t* curandstate_buf)
-{
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    invokeCurandInitialize(curandstate_buf, batch_size, random_seed, stream_);
-    sync_check_cuda_error();
-}
-
-template<typename T>
-void TopKTopPSamplingLayer<T>::runSampling(std::vector<fastertransformer::Tensor>* output_tensors,
+void TopKTopPSamplingLayer<T>::runSampling(std::vector<fastertransformer::Tensor>*       output_tensors,
                                            const std::vector<fastertransformer::Tensor>* input_tensors)
 {
     // input_tensors:
@@ -113,7 +103,7 @@ void TopKTopPSamplingLayer<T>::runSampling(std::vector<fastertransformer::Tensor
 }
 
 template<typename T>
-void TopKTopPSamplingLayer<T>::runSampling(std::unordered_map<std::string, Tensor>* output_tensors,
+void TopKTopPSamplingLayer<T>::runSampling(std::unordered_map<std::string, Tensor>*       output_tensors,
                                            const std::unordered_map<std::string, Tensor>* input_tensors)
 {
     // input_tensors:
@@ -123,12 +113,12 @@ void TopKTopPSamplingLayer<T>::runSampling(std::unordered_map<std::string, Tenso
     //      max_input_length [1] on cpu
     //      input_lengths [local_batch_size]
     //      ite [1] on cpu
-    //      runtime_top_k [1] or [batch_size] on cpu, optional
-    //      runtime_top_p [1] or [batch_size] on cpu, optional
-    //      temperature [1] or [batch_size] on cpu, optional
-    //      len_penalty [1] or [batch_size] on cpu, optional
-    //      repetition_penalty [1] or [batch_size] on cpu, optional
-    //      random_seed [1] or [batch_size] on cpu, optional
+    //      runtime_top_k [1] or [batch_size] on cpu, optional, uint.
+    //      runtime_top_p [1] or [batch_size] on cpu, optional, float.
+    //      temperature [1] or [batch_size] on cpu, optional, float.
+    //      len_penalty [1] or [batch_size] on cpu, optional, float.
+    //      repetition_penalty [1] or [batch_size] on cpu, optional, float.
+    //      random_seed [1] or [batch_size] on cpu, optional, unsigned long long int.
 
     // output_tensors:
     //      output_ids [max_seq_len, batch_size]
@@ -142,25 +132,26 @@ void TopKTopPSamplingLayer<T>::runSampling(std::unordered_map<std::string, Tenso
     FT_CHECK(input_tensors->size() >= 6);
     FT_CHECK(output_tensors->size() >= 3);
 
-    const int batch_size = output_tensors->at("output_ids").shape[1];
+    const int batch_size       = output_tensors->at("output_ids").shape[1];
     const int local_batch_size = input_tensors->at("logits").shape[0];
-    const int step = *((int*)input_tensors->at("step").data);
-    const int ite = *((int*)input_tensors->at("ite").data);
+    const int step             = *((int*)input_tensors->at("step").data);
+    const int ite              = *((int*)input_tensors->at("ite").data);
 
-    const int runtime_top_k = input_tensors->at("runtime_top_k").shape[0] == 1 ?
-                                  input_tensors->at("runtime_top_k").getVal<int>(0) :
-                                  input_tensors->at("runtime_top_k").getVal<int>(ite * local_batch_size);
+    int runtime_top_k = (int)(input_tensors->at("runtime_top_k").shape[0] == 1 ?
+                                  input_tensors->at("runtime_top_k").getVal<uint>(0) :
+                                  input_tensors->at("runtime_top_k").getVal<uint>(ite * local_batch_size));
 
-    const float runtime_top_p = input_tensors->at("runtime_top_p").shape[0] == 1 ?
-                                    input_tensors->at("runtime_top_p").getVal<float>(0) :
-                                    input_tensors->at("runtime_top_p").getVal<float>(ite * local_batch_size);
-    allocateBuffer(batch_size, runtime_top_k, runtime_top_p);
-    if (input_tensors->find("random_seed") != input_tensors->end()) {
-        unsigned long long int random_seed =
-            input_tensors->at("random_seed").shape[0] == 1 ?
-                (unsigned long long int)input_tensors->at("random_seed").getVal<int>(0) :
-                (unsigned long long int)input_tensors->at("random_seed").getVal<int>(ite * local_batch_size);
-        invokeInitialize(local_batch_size, random_seed, curandstate_buf_ + ite * local_batch_size);
+    float runtime_top_p = input_tensors->at("runtime_top_p").shape[0] == 1 ?
+                              input_tensors->at("runtime_top_p").getVal<float>(0) :
+                              input_tensors->at("runtime_top_p").getVal<float>(ite * local_batch_size);
+    if ((runtime_top_k <= 0 || runtime_top_k > 64)) {
+        FT_LOG_ERROR("Invalid runtime topk: %d, using default topk value %d to do topk sampling.", runtime_top_k, 1);
+        runtime_top_k = 1;
+    }
+    if ((runtime_top_p <= 0.0f || runtime_top_p > 1.0f)) {
+        FT_LOG_ERROR(
+            "Invalid runtime topp: %f, using default topp value %f to do topp sampling.", runtime_top_p, 0.0001f);
+        runtime_top_p = 0.0001f;
     }
 
     invokeAddBiasEndMask((T*)(input_tensors->at("logits").data),
@@ -200,7 +191,7 @@ void TopKTopPSamplingLayer<T>::runSampling(std::unordered_map<std::string, Tenso
                            curandstate_buf_ + ite * local_batch_size,
                            local_batch_size,
                            runtime_top_k,
-                           (T)runtime_top_p,
+                           runtime_top_p,
                            vocab_size_padded_,
                            (const int*)input_tensors->at("end_id").data,
                            stream_);
@@ -208,20 +199,20 @@ void TopKTopPSamplingLayer<T>::runSampling(std::unordered_map<std::string, Tenso
 }
 
 template<typename T>
-TopKTopPSamplingLayer<T>::TopKTopPSamplingLayer(size_t max_batch_size,
-                                                size_t vocab_size,
-                                                size_t vocab_size_padded,
-                                                int end_id,
-                                                int top_k,
-                                                float top_p,
+TopKTopPSamplingLayer<T>::TopKTopPSamplingLayer(size_t             max_batch_size,
+                                                size_t             vocab_size,
+                                                size_t             vocab_size_padded,
+                                                int                end_id,
+                                                int                top_k,
+                                                float              top_p,
                                                 unsigned long long random_seed,
-                                                float temperature,
-                                                float len_penalty,
-                                                float repetition_penalty,
-                                                cudaStream_t stream,
-                                                cublasMMWrapper* cublas_wrapper,
-                                                IAllocator* allocator,
-                                                bool is_free_buffer_after_forward):
+                                                float              temperature,
+                                                float              len_penalty,
+                                                float              repetition_penalty,
+                                                cudaStream_t       stream,
+                                                cublasMMWrapper*   cublas_wrapper,
+                                                IAllocator*        allocator,
+                                                bool               is_free_buffer_after_forward):
     BaseSamplingLayer<T>(max_batch_size,
                          vocab_size,
                          vocab_size_padded,
@@ -238,6 +229,7 @@ TopKTopPSamplingLayer<T>::TopKTopPSamplingLayer(size_t max_batch_size,
                          is_free_buffer_after_forward,
                          nullptr)
 {
+    FT_LOG_WARNING("TopKTopPSamplingLayer is deprecated. Please use TopKSamplingLayer instead.");
 }
 
 template<typename T>

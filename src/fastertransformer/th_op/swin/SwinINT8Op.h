@@ -31,39 +31,39 @@ public:
 template<typename T>
 class SwinTransformerINT8Func: public ISwinTransformerINT8Func {
 public:
-    int sm_;
-    bool _use_ORDER_COL32_2R_4R4;
-    int int8_mode_;
-    int max_batch_;
-    int img_size_;
-    int patch_size_;
-    int in_chans_;
-    int embed_dim_;
-    int window_size_;
-    int* depths_;
-    int* num_heads_;
-    bool ape_;
-    bool patch_norm_;
-    int layer_num_;
+    int   sm_;
+    bool  _use_ORDER_COL32_2R_4R4;
+    int   int8_mode_;
+    int   max_batch_;
+    int   img_size_;
+    int   patch_size_;
+    int   in_chans_;
+    int   embed_dim_;
+    int   window_size_;
+    int*  depths_;
+    int*  num_heads_;
+    bool  ape_;
+    bool  patch_norm_;
+    int   layer_num_;
     float mlp_ratio_;
-    bool qkv_bias_;
+    bool  qkv_bias_;
     float qk_scale_;
 
-    SwinTransformerINT8Func(const int int8_mode,
-                            const int max_batch,
-                            const int img_size,
-                            const int patch_size,
-                            const int in_chans,
-                            const int embed_dim,
-                            const int window_size,
-                            int* depths,
-                            int* num_heads,
-                            const bool ape,
-                            const bool patch_norm,
-                            const int layer_num,
-                            const float mlp_ratio,
-                            const bool qkv_bias,
-                            const float qk_scale,
+    SwinTransformerINT8Func(const int                      int8_mode,
+                            const int                      max_batch,
+                            const int                      img_size,
+                            const int                      patch_size,
+                            const int                      in_chans,
+                            const int                      embed_dim,
+                            const int                      window_size,
+                            int*                           depths,
+                            int*                           num_heads,
+                            const bool                     ape,
+                            const bool                     patch_norm,
+                            const int                      layer_num,
+                            const float                    mlp_ratio,
+                            const bool                     qkv_bias,
+                            const float                    qk_scale,
                             const std::vector<th::Tensor>& w):
         weights_(w),
         int8_mode_(int8_mode),
@@ -93,7 +93,7 @@ public:
             _use_ORDER_COL32_2R_4R4 = true;
         }
 
-        cublas_algo_map_ = new ft::cublasAlgoMap(IGEMM_CONFIG, "");
+        cublas_algo_map_      = new ft::cublasAlgoMap(IGEMM_CONFIG, "");
         cublas_wrapper_mutex_ = new std::mutex();
 
         // We arrange weights layer by layer and block by block inside each layer;
@@ -121,41 +121,41 @@ public:
             ft::SwinTransformerINT8BasicLayerWeight<T> bl;
             for (int di = 0; di < depths[l]; di++) {
                 ft::SwinTransformerINT8BlockWeight<T> p;
-                p.attention_weights.query_weight.kernel = get_ptr<T>(weights_[weight_idx++]);
-                p.attention_weights.query_weight.bias = get_ptr<T>(weights_[weight_idx++]);
+                p.attention_weights.query_weight.kernel            = get_ptr<T>(weights_[weight_idx++]);
+                p.attention_weights.query_weight.bias              = get_ptr<T>(weights_[weight_idx++]);
                 p.attention_weights.attention_output_weight.kernel = get_ptr<T>(weights_[weight_idx++]);
-                p.attention_weights.attention_output_weight.bias = get_ptr<T>(weights_[weight_idx++]);
-                p.ffn_weights.intermediate_weight.kernel = get_ptr<T>(weights_[weight_idx++]);
-                p.ffn_weights.intermediate_weight.bias = get_ptr<T>(weights_[weight_idx++]);
-                p.ffn_weights.output_weight.kernel = get_ptr<T>(weights_[weight_idx++]);
-                p.ffn_weights.output_weight.bias = get_ptr<T>(weights_[weight_idx++]);
-                p.attn_layernorm_weights.gamma = get_ptr<T>(weights_[weight_idx++]);
-                p.attn_layernorm_weights.beta = get_ptr<T>(weights_[weight_idx++]);
-                p.ffn_layernorm_weights.gamma = get_ptr<T>(weights_[weight_idx++]);
-                p.ffn_layernorm_weights.beta = get_ptr<T>(weights_[weight_idx++]);
-                p.scalelist.size_ = ACTIVATION_AMAX_NUM + 5 + INT8O_GEMM_NUM + TRT_AMAX_NUM;
-                p.scalelist.p2_offset_ = ACTIVATION_AMAX_NUM;
-                p.scalelist.p3_offset_ = ACTIVATION_AMAX_NUM + 5;
-                p.scalelist.p4_offset_ = ACTIVATION_AMAX_NUM + 5 + INT8O_GEMM_NUM;
-                p.scalelist.d_scale_list_ = get_ptr<float>(weights_[weight_idx++]);
-                p.scalelist.h_scale_list_ = get_ptr<float>(weights_[weight_idx++]);
+                p.attention_weights.attention_output_weight.bias   = get_ptr<T>(weights_[weight_idx++]);
+                p.ffn_weights.intermediate_weight.kernel           = get_ptr<T>(weights_[weight_idx++]);
+                p.ffn_weights.intermediate_weight.bias             = get_ptr<T>(weights_[weight_idx++]);
+                p.ffn_weights.output_weight.kernel                 = get_ptr<T>(weights_[weight_idx++]);
+                p.ffn_weights.output_weight.bias                   = get_ptr<T>(weights_[weight_idx++]);
+                p.attn_layernorm_weights.gamma                     = get_ptr<T>(weights_[weight_idx++]);
+                p.attn_layernorm_weights.beta                      = get_ptr<T>(weights_[weight_idx++]);
+                p.ffn_layernorm_weights.gamma                      = get_ptr<T>(weights_[weight_idx++]);
+                p.ffn_layernorm_weights.beta                       = get_ptr<T>(weights_[weight_idx++]);
+                p.scalelist.size_             = ACTIVATION_AMAX_NUM + 5 + INT8O_GEMM_NUM + TRT_AMAX_NUM;
+                p.scalelist.p2_offset_        = ACTIVATION_AMAX_NUM;
+                p.scalelist.p3_offset_        = ACTIVATION_AMAX_NUM + 5;
+                p.scalelist.p4_offset_        = ACTIVATION_AMAX_NUM + 5 + INT8O_GEMM_NUM;
+                p.scalelist.d_scale_list_     = get_ptr<float>(weights_[weight_idx++]);
+                p.scalelist.h_scale_list_     = get_ptr<float>(weights_[weight_idx++]);
                 p.attention_relative_pos_bias = get_ptr<T>(weights_[weight_idx++]);
                 bl.block_weight_list.push_back(p);
             }
             bl.merge_layernorm_weights.gamma = get_ptr<T>(weights_[weight_idx++]);
-            bl.merge_layernorm_weights.beta = get_ptr<T>(weights_[weight_idx++]);
-            bl.merge_linear_weights.kernel = get_ptr<T>(weights_[weight_idx++]);
-            bl.attn_mask = get_ptr<T>(weights_[weight_idx++]);
+            bl.merge_layernorm_weights.beta  = get_ptr<T>(weights_[weight_idx++]);
+            bl.merge_linear_weights.kernel   = get_ptr<T>(weights_[weight_idx++]);
+            bl.attn_mask                     = get_ptr<T>(weights_[weight_idx++]);
 
             params_.basic_layer_weight_list.push_back(bl);
             hidden_dim *= 2;
         }
         params_.patchEmbed_linear_weights.kernel = get_ptr<T>(weights_[weight_idx++]);
-        params_.patchEmbed_linear_weights.bias = get_ptr<T>(weights_[weight_idx++]);
-        params_.patchEmbed_norm_weights.gamma = get_ptr<T>(weights_[weight_idx++]);
-        params_.patchEmbed_norm_weights.beta = get_ptr<T>(weights_[weight_idx++]);
-        params_.norm_weights.gamma = get_ptr<T>(weights_[weight_idx++]);
-        params_.norm_weights.beta = get_ptr<T>(weights_[weight_idx++]);
+        params_.patchEmbed_linear_weights.bias   = get_ptr<T>(weights_[weight_idx++]);
+        params_.patchEmbed_norm_weights.gamma    = get_ptr<T>(weights_[weight_idx++]);
+        params_.patchEmbed_norm_weights.beta     = get_ptr<T>(weights_[weight_idx++]);
+        params_.norm_weights.gamma               = get_ptr<T>(weights_[weight_idx++]);
+        params_.norm_weights.beta                = get_ptr<T>(weights_[weight_idx++]);
     }
 
     ~SwinTransformerINT8Func() override
@@ -204,8 +204,8 @@ public:
                                                                                       qkv_bias_,
                                                                                       qk_scale_);
 
-        ft::DataType data_type = ft::getTensorType<T>();
-        int sm_ptr[1] = {sm_};
+        ft::DataType            data_type     = ft::getTensorType<T>();
+        int                     sm_ptr[1]     = {sm_};
         std::vector<ft::Tensor> input_tensors = std::vector<ft::Tensor>{
             ft::Tensor{ft::MEMORY_GPU,
                        data_type,
@@ -226,33 +226,33 @@ public:
     }
 
 private:
-    std::vector<th::Tensor> weights_;
-    cublasHandle_t cublas_handle_ = nullptr;
-    cudnnHandle_t cudnn_handle_ = nullptr;
-    cublasLtHandle_t cublaslt_handle_ = nullptr;
+    std::vector<th::Tensor>          weights_;
+    cublasHandle_t                   cublas_handle_   = nullptr;
+    cudnnHandle_t                    cudnn_handle_    = nullptr;
+    cublasLtHandle_t                 cublaslt_handle_ = nullptr;
     ft::SwinTransformerINT8Weight<T> params_;
-    std::mutex* cublas_wrapper_mutex_;
-    ft::cublasAlgoMap* cublas_algo_map_;
+    std::mutex*                      cublas_wrapper_mutex_;
+    ft::cublasAlgoMap*               cublas_algo_map_;
 };
 
 class SwinTransformerINT8Class: public torch::jit::CustomClassHolder {
 public:
     SwinTransformerINT8Class(std::vector<th::Tensor> w,
-                             int64_t int8_mode,
-                             th::Tensor depths,
-                             th::Tensor num_heads,
-                             int64_t max_batch,
-                             int64_t img_size,
-                             int64_t patch_size,
-                             int64_t in_chans,
-                             int64_t embed_dim,
-                             int64_t window_size,
-                             bool ape,
-                             bool patch_norm,
-                             int64_t layer_num,
-                             double mlp_ratio,
-                             bool qkv_bias = true,
-                             double qk_scale = 1.0);
+                             int64_t                 int8_mode,
+                             th::Tensor              depths,
+                             th::Tensor              num_heads,
+                             int64_t                 max_batch,
+                             int64_t                 img_size,
+                             int64_t                 patch_size,
+                             int64_t                 in_chans,
+                             int64_t                 embed_dim,
+                             int64_t                 window_size,
+                             bool                    ape,
+                             bool                    patch_norm,
+                             int64_t                 layer_num,
+                             double                  mlp_ratio,
+                             bool                    qkv_bias = true,
+                             double                  qk_scale = 1.0);
 
     ~SwinTransformerINT8Class();
 
@@ -261,14 +261,14 @@ public:
     std::vector<th::Tensor> get_pickle_info() const;
 
 private:
-    const at::ScalarType st_;
+    const at::ScalarType      st_;
     ISwinTransformerINT8Func* swin_transformer_func_;
-    std::vector<th::Tensor> weights_;
-    th::Tensor depths_;
-    th::Tensor num_heads_;
-    th::Tensor info_int_;
-    th::Tensor info_float_;
-    int output_dim_;
+    std::vector<th::Tensor>   weights_;
+    th::Tensor                depths_;
+    th::Tensor                num_heads_;
+    th::Tensor                info_int_;
+    th::Tensor                info_float_;
+    int                       output_dim_;
 };
 
 }  // namespace torch_ext

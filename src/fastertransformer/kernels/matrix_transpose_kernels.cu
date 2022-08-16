@@ -24,10 +24,10 @@ template<typename T>
 __global__ void matrix_transpose(T* dst, const T* src, const int k, const int n)
 {
     __shared__ T shm[32][33];
-    const int tidx = threadIdx.x;
-    const int tidy = threadIdx.y;
-    int n_idx = blockIdx.x * 32 + tidx;
-    int k_idx = blockIdx.y * 32 + tidy;
+    const int    tidx  = threadIdx.x;
+    const int    tidy  = threadIdx.y;
+    int          n_idx = blockIdx.x * 32 + tidx;
+    int          k_idx = blockIdx.y * 32 + tidy;
     if (n_idx < n && k_idx < k) {
         shm[tidx][tidy] = src[k_idx * n + n_idx];
     }

@@ -19,11 +19,11 @@
 namespace fastertransformer {
 
 template<typename T>
-void TensorParallelReluFfnLayer<T>::forward(std::vector<fastertransformer::Tensor>* output_tensors,
+void TensorParallelReluFfnLayer<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                                             const std::vector<fastertransformer::Tensor>* input_tensors,
-                                            const FfnWeight<T>* ffn_weights)
+                                            const FfnWeight<T>*                           ffn_weights)
 {
-    const size_t token_num = output_tensors->at(0).shape[0];
+    const size_t token_num    = output_tensors->at(0).shape[0];
     const size_t hidden_units = output_tensors->at(0).shape[1];
 
     bool use_custom_all_reduce_kernel = false;
@@ -35,7 +35,7 @@ void TensorParallelReluFfnLayer<T>::forward(std::vector<fastertransformer::Tenso
     ReluFfnLayer<T>::forward(output_tensors, input_tensors, ffn_weights);
 
     T* ffn_out = (T*)(output_tensors->at(0).data);
-    if (tensor_para_.world_size_ > 1) {
+    if (do_all_reduce_ && tensor_para_.world_size_ > 1) {
         if (!use_custom_all_reduce_kernel) {
             ftNcclAllReduceSum(ffn_out, ffn_out, token_num * hidden_units, tensor_para_, ReluFfnLayer<T>::stream_);
         }
@@ -47,19 +47,21 @@ void TensorParallelReluFfnLayer<T>::forward(std::vector<fastertransformer::Tenso
 }
 
 template<typename T>
-TensorParallelReluFfnLayer<T>::TensorParallelReluFfnLayer(size_t max_batch_size,
-                                                          size_t max_seq_len,
-                                                          size_t head_num,
-                                                          size_t size_per_head,
-                                                          size_t inter_size,
-                                                          NcclParam tensor_para,
-                                                          cudaStream_t stream,
+TensorParallelReluFfnLayer<T>::TensorParallelReluFfnLayer(size_t           max_batch_size,
+                                                          size_t           max_seq_len,
+                                                          size_t           head_num,
+                                                          size_t           size_per_head,
+                                                          size_t           inter_size,
+                                                          NcclParam        tensor_para,
+                                                          cudaStream_t     stream,
                                                           cublasMMWrapper* cublas_wrapper,
-                                                          IAllocator* allocator,
-                                                          bool is_free_buffer_after_forward,
-                                                          bool is_sparse,
+                                                          IAllocator*      allocator,
+                                                          bool             do_all_reduce,
+                                                          bool             is_free_buffer_after_forward,
+                                                          bool             is_sparse,
+                                                          bool             use_gated_activation,
                                                           std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
-                                                          int enable_custom_all_reduce):
+                                                          int                                 enable_custom_all_reduce):
     ReluFfnLayer<T>(max_batch_size,
                     max_seq_len,
                     head_num,
@@ -69,21 +71,26 @@ TensorParallelReluFfnLayer<T>::TensorParallelReluFfnLayer(size_t max_batch_size,
                     cublas_wrapper,
                     allocator,
                     is_free_buffer_after_forward,
-                    is_sparse),
+                    is_sparse,
+                    use_gated_activation),
     tensor_para_(tensor_para),
     custom_all_reduce_comm_(custom_all_reduce_comm),
-    enable_custom_all_reduce_(enable_custom_all_reduce)
+    enable_custom_all_reduce_(enable_custom_all_reduce),
+    do_all_reduce_(do_all_reduce)
 {
     FT_CHECK(inter_size % tensor_para_.world_size_ == 0);
 }
 
 template<typename T>
 TensorParallelReluFfnLayer<T>::TensorParallelReluFfnLayer(TensorParallelReluFfnLayer<T> const& ffn_layer):
-    ReluFfnLayer<T>(ffn_layer), tensor_para_(ffn_layer.tensor_para_)
+    ReluFfnLayer<T>(ffn_layer), tensor_para_(ffn_layer.tensor_para_), do_all_reduce_(ffn_layer.do_all_reduce_)
 {
 }
 
 template class TensorParallelReluFfnLayer<float>;
 template class TensorParallelReluFfnLayer<half>;
+#ifdef ENABLE_BF16
+template class TensorParallelReluFfnLayer<__nv_bfloat16>;
+#endif
 
 }  // namespace fastertransformer

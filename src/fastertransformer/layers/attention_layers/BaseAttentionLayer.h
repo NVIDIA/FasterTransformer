@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -66,18 +66,22 @@ template<typename T>
 class BaseAttentionLayer: public BaseLayer {
 
 public:
-    virtual void forward(std::vector<fastertransformer::Tensor>* output_tensors,
+    virtual void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                          const std::vector<fastertransformer::Tensor>* input_tensors,
-                         const AttentionWeight<T>* attention_weights) = 0;
-    BaseAttentionLayer(cudaStream_t stream,
+                         const AttentionWeight<T>*                     attention_weights) = 0;
+    BaseAttentionLayer(cudaStream_t     stream,
                        cublasMMWrapper* cublas_wrapper,
-                       IAllocator* allocator,
-                       bool is_free_buffer_after_forward,
-                       bool sparse = false):
+                       IAllocator*      allocator,
+                       bool             is_free_buffer_after_forward,
+                       bool             sparse = false):
         BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, nullptr, sparse)
     {
     }
     virtual ~BaseAttentionLayer() = default;
+    virtual bool isValidSeqLen(const size_t seq_len)
+    {
+        return true;
+    }
 };
 
 }  // namespace fastertransformer

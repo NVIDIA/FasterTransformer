@@ -19,20 +19,20 @@
 namespace fastertransformer {
 
 template<typename T>
-void generate_decoding_gemm_config(int batch_size,
-                                   int beam_width,
-                                   int max_mem_seq_len,
-                                   int head_num,
-                                   int size_per_head,
-                                   int inter_size,
-                                   int vocab_size,
-                                   int mem_hidden_units,
+void generate_decoding_gemm_config(int   batch_size,
+                                   int   beam_width,
+                                   int   max_mem_seq_len,
+                                   int   head_num,
+                                   int   size_per_head,
+                                   int   inter_size,
+                                   int   vocab_size,
+                                   int   mem_hidden_units,
                                    void* buffer_in,
-                                   bool isAppend)
+                                   bool  isAppend)
 {
     void* cublas_workspace;
     void* buffer;
-    int workSpaceSize;
+    int   workSpaceSize;
 
 #ifdef ENABLE_BF16
     if (std::is_same<T, half>::value || std::is_same<T, __nv_bfloat16>::value) {
@@ -42,13 +42,13 @@ void generate_decoding_gemm_config(int batch_size,
         // cublas_workspace_ should be the start pointer of cudaMalloc()
         // to ensure 16B alignemnet
         cublas_workspace = buffer_in;
-        buffer = (void*)((char*)cublas_workspace + CUBLAS_WORKSPACE_SIZE);
-        workSpaceSize = CUBLAS_WORKSPACE_SIZE;
+        buffer           = (void*)((char*)cublas_workspace + CUBLAS_WORKSPACE_SIZE);
+        workSpaceSize    = CUBLAS_WORKSPACE_SIZE;
     }
     else {
         cublas_workspace = nullptr;
-        buffer = buffer_in;
-        workSpaceSize = 0;
+        buffer           = buffer_in;
+        workSpaceSize    = 0;
     }
 
     struct cudaDeviceProp prop;
@@ -57,14 +57,14 @@ void generate_decoding_gemm_config(int batch_size,
 
     // check config
     FILE* fd;
-    int line_count = 0;
+    int   line_count = 0;
     if (!isAppend) {
         fd = fopen(GEMM_CONFIG, "w+");
     }
     else {
         fd = fopen(GEMM_CONFIG, "a+");
         std::vector<std::string> config;
-        char line[1024];
+        char                     line[1024];
         while (fgets(line, 1024, fd) != NULL) {
             config.push_back(std::string(line));
         }
@@ -83,12 +83,12 @@ void generate_decoding_gemm_config(int batch_size,
     }
 
     const int hidden_units = head_num * size_per_head;
-    const int gemm_num = 6;
-    int M[gemm_num];
-    int N[gemm_num];
-    int K[gemm_num];
-    int batchCount[gemm_num] = {1, 1, 1, 1, 1, 1};
-    char mess[gemm_num][256];
+    const int gemm_num     = 6;
+    int       M[gemm_num];
+    int       N[gemm_num];
+    int       K[gemm_num];
+    int       batchCount[gemm_num] = {1, 1, 1, 1, 1, 1};
+    char      mess[gemm_num][256];
 
     // gemm 0
     M[0] = batch_size * beam_width;
@@ -135,44 +135,44 @@ void generate_decoding_gemm_config(int batch_size,
     cudaDataType_t BType;
     cudaDataType_t CType;
     cudaDataType_t computeType;
-    int startAlgo, endAlgo;
-    const int ites = 100;
+    int            startAlgo, endAlgo;
+    const int      ites = 100;
     struct timeval start, end;
 
     CublasDataType data_type;
     if (std::is_same<T, float>::value) {
-        data_type = FLOAT_DATATYPE;
-        AType = CUDA_R_32F;
-        BType = CUDA_R_32F;
-        CType = CUDA_R_32F;
+        data_type   = FLOAT_DATATYPE;
+        AType       = CUDA_R_32F;
+        BType       = CUDA_R_32F;
+        CType       = CUDA_R_32F;
         computeType = CUDA_R_32F;
-        startAlgo = (int)CUBLAS_GEMM_DEFAULT;
-        endAlgo = (int)CUBLAS_GEMM_ALGO23;
+        startAlgo   = (int)CUBLAS_GEMM_DEFAULT;
+        endAlgo     = (int)CUBLAS_GEMM_ALGO23;
     }
     else if (std::is_same<T, half>::value) {
-        data_type = HALF_DATATYPE;
-        AType = CUDA_R_16F;
-        BType = CUDA_R_16F;
-        CType = CUDA_R_16F;
+        data_type   = HALF_DATATYPE;
+        AType       = CUDA_R_16F;
+        BType       = CUDA_R_16F;
+        CType       = CUDA_R_16F;
         computeType = CUDA_R_32F;
-        startAlgo = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
-        endAlgo = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
+        startAlgo   = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+        endAlgo     = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
     }
 #ifdef ENABLE_BF16
     else if (std::is_same<T, __nv_bfloat16>::value) {
-        data_type = BFLOAT16_DATATYPE;
-        AType = CUDA_R_16BF;
-        BType = CUDA_R_16BF;
-        CType = CUDA_R_16BF;
+        data_type   = BFLOAT16_DATATYPE;
+        AType       = CUDA_R_16BF;
+        BType       = CUDA_R_16BF;
+        CType       = CUDA_R_16BF;
         computeType = CUDA_R_32F;
-        startAlgo = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
-        endAlgo = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
+        startAlgo   = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+        endAlgo     = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
     }
 #endif
     using scaleT = typename ScaleTypeConverter<T>::Type;
 
     scaleT alpha = (scaleT)1.0f;
-    scaleT beta = (scaleT)0.0f;
+    scaleT beta  = (scaleT)0.0f;
 
     printf("***Encoder Gemm Testing Begin***\n");
     printf("***Cublas Gemm Testing Begin***\n");
@@ -190,8 +190,8 @@ void generate_decoding_gemm_config(int batch_size,
         T* d_C = d_B + k * n * batchCount[i];
 
         float exec_time = 99999.0f;
-        int fast_algo = 0;
-        int seq_len = i == 2 ? max_mem_seq_len : 1;
+        int   fast_algo = 0;
+        int   seq_len   = i == 2 ? max_mem_seq_len : 1;
         for (int algo = startAlgo; algo <= endAlgo; algo++) {
             cublasStatus_t status;
             cudaDeviceSynchronize();
@@ -236,7 +236,7 @@ void generate_decoding_gemm_config(int batch_size,
         if (data_type != FLOAT_DATATYPE) {
             printf("***cublasLt Gemm Testing Beign***\n");
             // Let try a fixed number of combinations
-            int ALGO_COMBINATIONS = 5000;
+            int                ALGO_COMBINATIONS = 5000;
             customMatmulPerf_t perfResults[ALGO_COMBINATIONS];
 
             LtHgemmCustomFind<T, scaleT>(ltHandle,
@@ -309,61 +309,61 @@ void generate_decoding_gemm_config(int batch_size,
     return;
 }
 
-template void generate_decoding_gemm_config<float>(int batch_size,
-                                                   int beam_width,
-                                                   int seq_len,
-                                                   int head_num,
-                                                   int size_per_head,
-                                                   int inter_size,
-                                                   int vocab_size,
-                                                   int mem_hidden_units,
+template void generate_decoding_gemm_config<float>(int   batch_size,
+                                                   int   beam_width,
+                                                   int   seq_len,
+                                                   int   head_num,
+                                                   int   size_per_head,
+                                                   int   inter_size,
+                                                   int   vocab_size,
+                                                   int   mem_hidden_units,
                                                    void* buffer_in,
-                                                   bool isAppend);
+                                                   bool  isAppend);
 
-template void generate_decoding_gemm_config<half>(int batch_size,
-                                                  int beam_width,
-                                                  int seq_len,
-                                                  int head_num,
-                                                  int size_per_head,
-                                                  int inter_size,
-                                                  int vocab_size,
-                                                  int mem_hidden_units,
+template void generate_decoding_gemm_config<half>(int   batch_size,
+                                                  int   beam_width,
+                                                  int   seq_len,
+                                                  int   head_num,
+                                                  int   size_per_head,
+                                                  int   inter_size,
+                                                  int   vocab_size,
+                                                  int   mem_hidden_units,
                                                   void* buffer_in,
-                                                  bool isAppend);
+                                                  bool  isAppend);
 
 #ifdef ENABLE_BF16
-template void generate_decoding_gemm_config<__nv_bfloat16>(int batch_size,
-                                                           int beam_width,
-                                                           int seq_len,
-                                                           int head_num,
-                                                           int size_per_head,
-                                                           int inter_size,
-                                                           int vocab_size,
-                                                           int mem_hidden_units,
+template void generate_decoding_gemm_config<__nv_bfloat16>(int   batch_size,
+                                                           int   beam_width,
+                                                           int   seq_len,
+                                                           int   head_num,
+                                                           int   size_per_head,
+                                                           int   inter_size,
+                                                           int   vocab_size,
+                                                           int   mem_hidden_units,
                                                            void* buffer_in,
-                                                           bool isAppend);
+                                                           bool  isAppend);
 #endif
 
-size_t calDecodingGemmTestBufSizeInByte(int batch_size,
-                                        int beam_width,
-                                        int max_mem_seq_len,
-                                        int head_num,
-                                        int size_per_head,
-                                        int inter_size,
-                                        int memory_hidden_units,
-                                        int vocab_size,
+size_t calDecodingGemmTestBufSizeInByte(int            batch_size,
+                                        int            beam_width,
+                                        int            max_mem_seq_len,
+                                        int            head_num,
+                                        int            size_per_head,
+                                        int            inter_size,
+                                        int            memory_hidden_units,
+                                        int            vocab_size,
                                         CublasDataType data_type)
 {
-    size_t buf_size_in_byte = 0;
-    const size_t tensor_para_size = 1;
-    const size_t hidden_units = head_num * size_per_head;
-    const size_t local_head_num = head_num / tensor_para_size;
+    size_t       buf_size_in_byte   = 0;
+    const size_t tensor_para_size   = 1;
+    const size_t hidden_units       = head_num * size_per_head;
+    const size_t local_head_num     = head_num / tensor_para_size;
     const size_t local_hidden_units = local_head_num * size_per_head;
 
     // TODO need to add bfloat16 here
     int wordSize = (data_type == FLOAT_DATATYPE ? sizeof(float) : sizeof(half));
 
-    size_t m = batch_size * beam_width;
+    size_t              m = batch_size * beam_width;
     std::vector<size_t> buff_size;
     // for qkv gemm
     buff_size.push_back(m * hidden_units + hidden_units * 3 * local_hidden_units + m * 3 * local_hidden_units);

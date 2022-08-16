@@ -23,17 +23,17 @@
 namespace fastertransformer {
 
 // Utility function to print customMatmulPerf_t structure
-int printPerfStructure(int batch_size,
-                       int seq_len,
-                       int head_num,
-                       int size_per_head,
-                       int m,
-                       int n,
-                       int k,
+int printPerfStructure(int                       batch_size,
+                       int                       seq_len,
+                       int                       head_num,
+                       int                       size_per_head,
+                       int                       m,
+                       int                       n,
+                       int                       k,
                        const customMatmulPerf_t& perf,
-                       FILE* fout,
-                       CublasDataType data_type,
-                       int hasPrint)
+                       FILE*                     fout,
+                       CublasDataType            data_type,
+                       int                       hasPrint)
 {
     int algoId, tile, swizzle, customOption, numSplitsK, reductionScheme, stages;
 
@@ -103,30 +103,30 @@ static inline bool time_compare(const customMatmulPerf_t& perf_a, const customMa
     return ((perf_a.status == CUBLAS_STATUS_SUCCESS) && (perf_a.time < perf_b.time));
 }
 
-static cublasStatus_t customMatmulRun(cublasLtHandle_t ltHandle,  // to get the capabilities (required a GPU)
-                                      cublasLtMatmulDesc_t operationDesc,
-                                      const void* alpha, /* host or device pointer */
-                                      const void* A,
-                                      cublasLtMatrixLayout_t Adesc,
-                                      const void* B,
-                                      cublasLtMatrixLayout_t Bdesc,
-                                      const void* beta, /* host or device pointer */
-                                      const void* C,
-                                      cublasLtMatrixLayout_t Cdesc,
-                                      void* D,
-                                      cublasLtMatrixLayout_t Ddesc,
+static cublasStatus_t customMatmulRun(cublasLtHandle_t            ltHandle,  // to get the capabilities (required a GPU)
+                                      cublasLtMatmulDesc_t        operationDesc,
+                                      const void*                 alpha, /* host or device pointer */
+                                      const void*                 A,
+                                      cublasLtMatrixLayout_t      Adesc,
+                                      const void*                 B,
+                                      cublasLtMatrixLayout_t      Bdesc,
+                                      const void*                 beta, /* host or device pointer */
+                                      const void*                 C,
+                                      cublasLtMatrixLayout_t      Cdesc,
+                                      void*                       D,
+                                      cublasLtMatrixLayout_t      Ddesc,
                                       const cublasLtMatmulAlgo_t& algo,
-                                      int kernelRepeats,
-                                      void* workSpace,
-                                      size_t workSpaceSizeInBytes,
-                                      customMatmulPerf_t& perfResults,
-                                      cudaStream_t stream,
-                                      cudaEvent_t& startEvent,
-                                      cudaEvent_t& stopEvent)
+                                      int                         kernelRepeats,
+                                      void*                       workSpace,
+                                      size_t                      workSpaceSizeInBytes,
+                                      customMatmulPerf_t&         perfResults,
+                                      cudaStream_t                stream,
+                                      cudaEvent_t&                startEvent,
+                                      cudaEvent_t&                stopEvent)
 {
     cublasLtMatmulHeuristicResult_t heurResult;
     /* Looping over the Algo */
-    int repeats = kernelRepeats;
+    int            repeats = kernelRepeats;
     cublasStatus_t algoStatus =
         cublasLtMatmulAlgoCheck(ltHandle, operationDesc, Adesc, Bdesc, Cdesc, Ddesc, &algo, &heurResult);
 
@@ -165,10 +165,10 @@ static cublasStatus_t customMatmulRun(cublasLtHandle_t ltHandle,  // to get the 
             }
             // For the moment only add successful findings
             if (algoStatus == CUBLAS_STATUS_SUCCESS) {
-                perfResults.algo = algo;
-                perfResults.time = time / repeats;
+                perfResults.algo          = algo;
+                perfResults.time          = time / repeats;
                 perfResults.workspaceSize = heurResult.workspaceSize;
-                perfResults.wavesCount = heurResult.wavesCount;
+                perfResults.wavesCount    = heurResult.wavesCount;
             }
         }
         else {
@@ -181,31 +181,31 @@ static cublasStatus_t customMatmulRun(cublasLtHandle_t ltHandle,  // to get the 
 }
 
 template<typename T, typename scaleT>
-int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
-                      int batch_size,
-                      int seq_len,
-                      int head_num,
-                      int size_per_head,
-                      int m,
-                      int n,
-                      int k,
-                      const scaleT* alpha, /* host pointer */
-                      const T* A,
-                      const T* B,
-                      const scaleT* beta, /* host pointer */
-                      T* C,
-                      void* workSpace,
-                      size_t workSpaceSize,
-                      FILE* fout,
+int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
+                      int                batch_size,
+                      int                seq_len,
+                      int                head_num,
+                      int                size_per_head,
+                      int                m,
+                      int                n,
+                      int                k,
+                      const scaleT*      alpha, /* host pointer */
+                      const T*           A,
+                      const T*           B,
+                      const scaleT*      beta, /* host pointer */
+                      T*                 C,
+                      void*              workSpace,
+                      size_t             workSpaceSize,
+                      FILE*              fout,
                       customMatmulPerf_t perfResults[],
-                      int AlgoCombinations)
+                      int                AlgoCombinations)
 {
     cublasStatus_t status = CUBLAS_STATUS_SUCCESS;
-    cudaEvent_t startEvent;
-    cudaEvent_t stopEvent;
+    cudaEvent_t    startEvent;
+    cudaEvent_t    stopEvent;
     CublasDataType data_type;
 
-    cublasLtMatmulDesc_t operationDesc = NULL;
+    cublasLtMatmulDesc_t   operationDesc = NULL;
     cublasLtMatrixLayout_t Adesc = NULL, Bdesc = NULL, Cdesc = NULL;
 
     cudaStream_t stream = 0;
@@ -213,13 +213,13 @@ int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
     // given algo
     const int splitKSequenceA[] = {2, 3, 4, 5, 6, 8, 12, 16, 32};
     // Let try a fixed number of combinations
-    int AlgoCount = 0;
-    int AlgoCountRestrict = 0;                             // workspace == 0
-    int maxNumTraversal = 50;                              // max number of traversal
+    int                  AlgoCount         = 0;
+    int                  AlgoCountRestrict = 0;            // workspace == 0
+    int                  maxNumTraversal   = 50;           // max number of traversal
     cublasLtMatmulAlgo_t algos[AlgoCombinations];          // 0 <= workspace <= 32MB
     cublasLtMatmulAlgo_t algosRestrict[AlgoCombinations];  // workspace == 0
-    int kernelRepeats = 100;                               // number of time the CUDA kernels will be run back to back
-    int nbAlgoIds = 0;                                     // Number of algorithms actually returned by
+    int                  kernelRepeats = 100;              // number of time the CUDA kernels will be run back to back
+    int                  nbAlgoIds     = 0;                // Number of algorithms actually returned by
                                                            // cublasLtMatmulAlgoGetIds function.
 #define ALGO_IDS 100                                       // Number of algorithms requested.
     int algoIdA[ALGO_IDS];                                 // 	Array containing the algorithm IDs returned by
@@ -310,7 +310,7 @@ int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
     // Loop over the Algo IDs
     for (int idx = 0; (idx < nbAlgoIds) && (AlgoCount < AlgoCombinations); idx++) {
         cublasLtMatmulAlgo_t algo;
-        size_t sizeWritten = 0;
+        size_t               sizeWritten = 0;
         /* Initialize algo structure with given Algp ID */
         status =
             cublasLtMatmulAlgoInit(ltHandle, computeType, scaleType, Atype, Btype, Ctype, Ctype, algoIdA[idx], &algo);
@@ -319,19 +319,19 @@ int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
         }
         // Query the tiles enums supported by that algo
         cublasLtMatmulAlgoCapGetAttribute(&algo, CUBLASLT_ALGO_CAP_TILE_IDS, NULL, 0, &sizeWritten);
-        int nbTiles = int(sizeWritten / sizeof(int));
-        int* tileA = new int[nbTiles == 0 ? 1 : nbTiles];
+        int  nbTiles = int(sizeWritten / sizeof(int));
+        int* tileA   = new int[nbTiles == 0 ? 1 : nbTiles];
         if (nbTiles == 0) {
             tileA[0] = CUBLASLT_MATMUL_TILE_UNDEFINED;
-            nbTiles = 1;
+            nbTiles  = 1;
         }
 #if (CUDART_VERSION >= 11000)
         cublasLtMatmulAlgoCapGetAttribute(&algo, CUBLASLT_ALGO_CAP_STAGES_IDS, NULL, 0, &sizeWritten);
-        int nbStages = int(sizeWritten / sizeof(int));
+        int              nbStages = int(sizeWritten / sizeof(int));
         std::vector<int> stagesA(nbStages == 0 ? 1 : nbStages);
         if (nbStages == 0) {
             stagesA[0] = CUBLASLT_MATMUL_STAGES_UNDEFINED;
-            nbStages = 1;
+            nbStages   = 1;
         }
         else {
             cublasLtMatmulAlgoCapGetAttribute(
@@ -371,14 +371,14 @@ int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
                             splitK_trial += sizeof(splitKSequenceA) / sizeof(splitKSequenceA[0]);
                         }
                         // Loop over the splitK value over a fixed sequence
-                        // splitKSequenceA in addtion to the case where splitK
+                        // splitKSequenceA in addition to the case where splitK
                         // is not enabled
                         for (int l = 0; (l < (1 + splitK_trial)) && (AlgoCount < AlgoCombinations); l++) {
                             /* Setup attribute of the algo to run */
                             cublasLtMatmulAlgoConfigSetAttribute(
                                 &algo, CUBLASLT_ALGO_CONFIG_TILE_ID, &tileA[tileIdx], sizeof(tileA[tileIdx]));
                             int splitK_val = 0;
-                            int redScheme = CUBLASLT_REDUCTION_SCHEME_NONE;
+                            int redScheme  = CUBLASLT_REDUCTION_SCHEME_NONE;
                             cublasLtMatmulAlgoConfigSetAttribute(
                                 &algo, CUBLASLT_ALGO_CONFIG_SPLITK_NUM, &splitK_val, sizeof(splitK_val));
                             cublasLtMatmulAlgoConfigSetAttribute(
@@ -403,7 +403,7 @@ int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
                                                                              sizeof(redScheme));
 
                                         cublasLtMatmulHeuristicResult_t heurResult;
-                                        cublasStatus_t algoStatus = cublasLtMatmulAlgoCheck(
+                                        cublasStatus_t                  algoStatus = cublasLtMatmulAlgoCheck(
                                             ltHandle, operationDesc, Adesc, Bdesc, Cdesc, Cdesc, &algo, &heurResult);
                                         if (heurResult.workspaceSize > workSpaceSize) {
                                             // printf("not enough workspace!
@@ -426,7 +426,7 @@ int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
                                 /* if user preference is ok with workspace */
                                 if (AlgoCount < AlgoCombinations) {
                                     cublasLtMatmulHeuristicResult_t heurResult;
-                                    cublasStatus_t algoStatus = cublasLtMatmulAlgoCheck(
+                                    cublasStatus_t                  algoStatus = cublasLtMatmulAlgoCheck(
                                         ltHandle, operationDesc, Adesc, Bdesc, Cdesc, Cdesc, &algo, &heurResult);
                                     if (heurResult.workspaceSize > workSpaceSize) {
                                         // printf("not enough workspace! %ld\n",
@@ -459,7 +459,7 @@ int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
     if (AlgoCount < maxNumTraversal) {
         // 0 <= workspacesize <= 32MB
         for (int i = 0; i < AlgoCount; i++) {
-            status = customMatmulRun(ltHandle,
+            status                = customMatmulRun(ltHandle,
                                      operationDesc,
                                      alpha, /* host or device pointer */
                                      A,
@@ -508,7 +508,7 @@ int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
         printf("return %d and run heuristic algo\n", nbAlgoIds);
         for (int i = 0; i < nbAlgoIds; i++) {
             if (heuristicResultsArray[i].state == CUBLAS_STATUS_SUCCESS) {
-                status = customMatmulRun(ltHandle,
+                status                        = customMatmulRun(ltHandle,
                                          operationDesc,
                                          alpha, /* host or device pointer */
                                          A,
@@ -538,7 +538,7 @@ int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
         // workspacesize==0
         printf("workspacesize==0, run %d algos\n", AlgoCountRestrict);
         for (int i = 0; i < AlgoCountRestrict && i < (maxNumTraversal - nbAlgoIds); i++) {
-            status = customMatmulRun(ltHandle,
+            status                        = customMatmulRun(ltHandle,
                                      operationDesc,
                                      alpha, /* host or device pointer */
                                      A,
@@ -597,91 +597,91 @@ CLEANUP:
     return status == CUBLAS_STATUS_SUCCESS ? 0 : 1;
 }
 
-template int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
-                               int batch_size,
-                               int seq_len,
-                               int head_num,
-                               int size_per_head,
-                               int m,
-                               int n,
-                               int k,
-                               const float* alpha, /* host pointer */
-                               const float* A,
-                               const float* B,
-                               const float* beta, /* host pointer */
-                               float* C,
-                               void* workSpace,
-                               size_t workSpaceSize,
-                               FILE* fout,
+template int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
+                               int                batch_size,
+                               int                seq_len,
+                               int                head_num,
+                               int                size_per_head,
+                               int                m,
+                               int                n,
+                               int                k,
+                               const float*       alpha, /* host pointer */
+                               const float*       A,
+                               const float*       B,
+                               const float*       beta, /* host pointer */
+                               float*             C,
+                               void*              workSpace,
+                               size_t             workSpaceSize,
+                               FILE*              fout,
                                customMatmulPerf_t perfResults[],
-                               int AlgoCombinations);
+                               int                AlgoCombinations);
 
-template int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
-                               int batch_size,
-                               int seq_len,
-                               int head_num,
-                               int size_per_head,
-                               int m,
-                               int n,
-                               int k,
-                               const half* alpha, /* host pointer */
-                               const half* A,
-                               const half* B,
-                               const half* beta, /* host pointer */
-                               half* C,
-                               void* workSpace,
-                               size_t workSpaceSize,
-                               FILE* fout,
+template int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
+                               int                batch_size,
+                               int                seq_len,
+                               int                head_num,
+                               int                size_per_head,
+                               int                m,
+                               int                n,
+                               int                k,
+                               const half*        alpha, /* host pointer */
+                               const half*        A,
+                               const half*        B,
+                               const half*        beta, /* host pointer */
+                               half*              C,
+                               void*              workSpace,
+                               size_t             workSpaceSize,
+                               FILE*              fout,
                                customMatmulPerf_t perfResults[],
-                               int AlgoCombinations);
+                               int                AlgoCombinations);
 
 #ifdef ENABLE_BF16
-template int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
-                               int batch_size,
-                               int seq_len,
-                               int head_num,
-                               int size_per_head,
-                               int m,
-                               int n,
-                               int k,
-                               const float* alpha, /* host pointer */
+template int LtHgemmCustomFind(cublasLtHandle_t     ltHandle,
+                               int                  batch_size,
+                               int                  seq_len,
+                               int                  head_num,
+                               int                  size_per_head,
+                               int                  m,
+                               int                  n,
+                               int                  k,
+                               const float*         alpha, /* host pointer */
                                const __nv_bfloat16* A,
                                const __nv_bfloat16* B,
-                               const float* beta, /* host pointer */
-                               __nv_bfloat16* C,
-                               void* workSpace,
-                               size_t workSpaceSize,
-                               FILE* fout,
-                               customMatmulPerf_t perfResults[],
-                               int AlgoCombinations);
+                               const float*         beta, /* host pointer */
+                               __nv_bfloat16*       C,
+                               void*                workSpace,
+                               size_t               workSpaceSize,
+                               FILE*                fout,
+                               customMatmulPerf_t   perfResults[],
+                               int                  AlgoCombinations);
 #endif
 
-template int LtHgemmCustomFind(cublasLtHandle_t ltHandle,
-                               int batch_size,
-                               int seq_len,
-                               int head_num,
-                               int size_per_head,
-                               int m,
-                               int n,
-                               int k,
-                               const float* alpha, /* host pointer */
-                               const half* A,
-                               const half* B,
-                               const float* beta, /* host pointer */
-                               half* C,
-                               void* workSpace,
-                               size_t workSpaceSize,
-                               FILE* fout,
+template int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
+                               int                batch_size,
+                               int                seq_len,
+                               int                head_num,
+                               int                size_per_head,
+                               int                m,
+                               int                n,
+                               int                k,
+                               const float*       alpha, /* host pointer */
+                               const half*        A,
+                               const half*        B,
+                               const float*       beta, /* host pointer */
+                               half*              C,
+                               void*              workSpace,
+                               size_t             workSpaceSize,
+                               FILE*              fout,
                                customMatmulPerf_t perfResults[],
-                               int AlgoCombinations);
+                               int                AlgoCombinations);
 
-size_t calGemmTestBufSizeInByte(int batch_size,
-                                int seq_len,
-                                int head_num,
-                                int size_per_head,
-                                int inter_size,
-                                int vocab_size,
-                                int int8_mode,
+size_t calGemmTestBufSizeInByte(int            batch_size,
+                                int            seq_len,
+                                int            head_num,
+                                int            size_per_head,
+                                int            inter_size,
+                                int            vocab_size,
+                                int            int8_mode,
                                 CublasDataType data_type)
 {
     size_t buf_size_in_byte;
@@ -697,24 +697,26 @@ size_t calGemmTestBufSizeInByte(int batch_size,
         size_t size3 = batch_size * head_num
                        * (seq_len * seq_len * sizeof(int8_t) + seq_len * size_per_head * sizeof(int8_t)
                           + seq_len * size_per_head * sizeof(int));
-        size_t size4 = m * k * sizeof(int8_t) + k * inter_size * sizeof(int8_t) + m * inter_size * sizeof(int);
-        size_t size5 = m * k * sizeof(int8_t) + k * vocab_size * sizeof(int8_t) + m * vocab_size * sizeof(int);
+        size_t size4     = m * k * sizeof(int8_t) + k * inter_size * sizeof(int8_t) + m * inter_size * sizeof(int);
+        size_t size5     = m * k * sizeof(int8_t) + k * vocab_size * sizeof(int8_t) + m * vocab_size * sizeof(int);
         buf_size_in_byte = size1 > size2 ? size1 : size2;
         buf_size_in_byte = buf_size_in_byte > size3 ? buf_size_in_byte : size3;
         buf_size_in_byte = buf_size_in_byte > size4 ? buf_size_in_byte : size4;
         buf_size_in_byte = buf_size_in_byte > size5 ? buf_size_in_byte : size5;
     }
     else {
-        int m = batch_size * seq_len;
-        int n = head_num * size_per_head;
-        int k = n;
+        size_t m = batch_size * seq_len;
+        size_t n = head_num * size_per_head;
+        size_t k = n;
         // TODO need to add bfloat16 here
-        int wordSize = (data_type == FLOAT_DATATYPE ? sizeof(float) : sizeof(half));
-        size_t size1 = 3 * (m * k + k * n + m * n) * wordSize;
-        size_t size2 =
-            batch_size * head_num * (seq_len * seq_len + seq_len * size_per_head + seq_len * size_per_head) * wordSize;
-        size_t size3 = (m * k + k * inter_size + m * inter_size) * wordSize;
-        size_t size4 = (m * k + k * vocab_size + m * vocab_size) * wordSize;
+        int    wordSize = (data_type == FLOAT_DATATYPE ? sizeof(float) : sizeof(half));
+        size_t size1    = 3 * (m * k + k * n + m * n) * wordSize;
+        size_t size2    = (size_t)batch_size * (size_t)head_num
+                       * ((size_t)seq_len * (size_t)seq_len + (size_t)seq_len * (size_t)size_per_head
+                          + (size_t)seq_len * (size_t)size_per_head)
+                       * (size_t)wordSize;
+        size_t size3     = (m * k + k * inter_size + m * inter_size) * wordSize;
+        size_t size4     = (m * k + k * vocab_size + m * vocab_size) * wordSize;
         buf_size_in_byte = size1 > size2 ? size1 : size2;
         buf_size_in_byte = buf_size_in_byte > size3 ? buf_size_in_byte : size3;
         buf_size_in_byte = buf_size_in_byte > size4 ? buf_size_in_byte : size4;
@@ -727,39 +729,39 @@ size_t calGemmTestBufSizeInByte(int batch_size,
 size_t calGemmTestBufSizeInByteXlnet(
     int batch_size, int seq_len, int head_num, int size_per_head, int inter_size, int hidden_units, int is_fp16)
 {
-    int M[10] = {0};
-    int N[10] = {0};
-    int K[10] = {0};
+    int M[10]          = {0};
+    int N[10]          = {0};
+    int K[10]          = {0};
     int batchCount[10] = {0};
 
     // gemm1
-    M[0] = hidden_units;
-    N[0] = seq_len * batch_size;
-    K[0] = hidden_units;
+    M[0]          = hidden_units;
+    N[0]          = seq_len * batch_size;
+    K[0]          = hidden_units;
     batchCount[0] = 3;
 
     // gemm2
-    M[1] = hidden_units;
-    N[1] = seq_len * 2;
-    K[1] = hidden_units;
+    M[1]          = hidden_units;
+    N[1]          = seq_len * 2;
+    K[1]          = hidden_units;
     batchCount[1] = 1;
 
     // gemm3
-    M[2] = seq_len;
-    N[2] = seq_len;
-    K[2] = size_per_head;
+    M[2]          = seq_len;
+    N[2]          = seq_len;
+    K[2]          = size_per_head;
     batchCount[2] = batch_size * head_num;
 
     // gemm4
-    M[3] = seq_len * 2;
-    N[3] = seq_len;
-    K[3] = size_per_head;
+    M[3]          = seq_len * 2;
+    N[3]          = seq_len;
+    K[3]          = size_per_head;
     batchCount[3] = batch_size * head_num;
 
     // gemm5
-    M[4] = 2;
-    N[4] = seq_len;
-    K[4] = size_per_head;
+    M[4]          = 2;
+    N[4]          = seq_len;
+    K[4]          = size_per_head;
     batchCount[4] = batch_size * head_num;
 
     // gemm6
@@ -767,33 +769,33 @@ size_t calGemmTestBufSizeInByteXlnet(
     N[5] = seq_len;
     K[5] = 2;
     // gemm7
-    M[6] = size_per_head;
-    N[6] = seq_len;
-    K[6] = seq_len;
+    M[6]          = size_per_head;
+    N[6]          = seq_len;
+    K[6]          = seq_len;
     batchCount[6] = batch_size * head_num;
 
     // gemm8
-    M[7] = hidden_units;
-    N[7] = seq_len;
-    K[7] = hidden_units;
+    M[7]          = hidden_units;
+    N[7]          = seq_len;
+    K[7]          = hidden_units;
     batchCount[7] = batch_size;
 
     // gemm9
-    M[8] = inter_size;
-    N[8] = seq_len;
-    K[8] = hidden_units;
+    M[8]          = inter_size;
+    N[8]          = seq_len;
+    K[8]          = hidden_units;
     batchCount[8] = batch_size;
 
     // gemm10
-    M[9] = hidden_units;
-    N[9] = seq_len;
-    K[9] = inter_size;
+    M[9]          = hidden_units;
+    N[9]          = seq_len;
+    K[9]          = inter_size;
     batchCount[9] = batch_size;
 
     size_t max_size = 0;
 
     for (int i = 0; i < 10; ++i) {
-        int m = M[i], n = N[i], k = K[i];
+        int    m = M[i], n = N[i], k = K[i];
         size_t size = (M[i] * N[i] + M[i] * K[i] + N[i] * K[i]) * batchCount[i];
         if (size > max_size) {
             max_size = size;

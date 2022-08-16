@@ -46,7 +46,7 @@ class TransformerArgument:
         dtype: The data type of weights initializer and inputs. 
         kernel_init_range: The initializer range of kernel for all convolution layer and fully-connected layer. 
         kernel_init_range: The initializer range of bias for all convolution layer and fully-connected layer. 
-        fuse_qkv: bool. Wether fuse the q, k, v gemm or not.
+        fuse_qkv: bool. Whether fuse the q, k, v gemm or not.
         remove_padding: bool. Remove the padding of sentences of encoder.
         int8_mode: Mode of int8 quantization. 0 means not using int8 quantization, 1 means using int8 quantization without quantizing residuals, 
                                                                                    2 means using int8 quantization with quantizing residuals.

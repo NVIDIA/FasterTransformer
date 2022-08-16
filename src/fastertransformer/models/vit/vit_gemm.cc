@@ -29,14 +29,14 @@ int main(int argc, char* argv[])
         return 0;
     }
 
-    const int batch_size = atoi(argv[1]);
-    const int img_size = atoi(argv[2]);
-    const int patch_size = atoi(argv[3]);
-    const int embed_dim = atoi(argv[4]);
-    const int head_num = atoi(argv[5]);
-    const int with_cls_token = atoi(argv[6]);
+    const int                batch_size     = atoi(argv[1]);
+    const int                img_size       = atoi(argv[2]);
+    const int                patch_size     = atoi(argv[3]);
+    const int                embed_dim      = atoi(argv[4]);
+    const int                head_num       = atoi(argv[5]);
+    const int                with_cls_token = atoi(argv[6]);
     const ft::CublasDataType data_type = static_cast<ft::CublasDataType>(atoi(argv[7]));  // 0 FP32, 1 FP16, 2 BF 16
-    const int int8_mode = atoi(argv[8]);
+    const int                int8_mode = atoi(argv[8]);
 
     printf("[INFO] arguments: \n");
     printf("  batch_size: %d \n", batch_size);
@@ -58,7 +58,7 @@ int main(int argc, char* argv[])
     }
 
     const int patch_resol = img_size / patch_size;
-    int seq_len = patch_resol * patch_resol + (with_cls_token != 0 ? 1 : 0);
+    int       seq_len     = patch_resol * patch_resol + (with_cls_token != 0 ? 1 : 0);
     if (atoi(argv[7]) == 1 && seq_len > 384 && seq_len % 8 != 0) {
         seq_len = (seq_len + 7) / 8 * 8;
     }
@@ -68,7 +68,7 @@ int main(int argc, char* argv[])
 
     std::cout << std::endl;
 
-    void* gemm_test_buf;
+    void*  gemm_test_buf;
     size_t buf_size_in_byte =
         ft::calGemmTestBufSizeInByte(batch_size, seq_len, head_num, size_per_head, inter_size, 0, int8_mode, data_type);
     size_t total, free;

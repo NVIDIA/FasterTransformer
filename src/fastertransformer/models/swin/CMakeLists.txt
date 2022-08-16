@@ -31,4 +31,4 @@ set_property(TARGET Swin PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(Swin PUBLIC -lcudart SwinBasicLayer memory_utils)
 
 add_executable(swin_gemm swin_gemm.cc)
-target_link_libraries(swin_gemm PUBLIC -lcublas -lcublasLt -lcudart swin_igemm_func swin_gemm_func memory_utils)
+target_link_libraries(swin_gemm PUBLIC -lcublas -lcublasLt -lcudart swin_igemm_func swin_gemm_func memory_utils tensor)

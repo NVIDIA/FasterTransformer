@@ -89,7 +89,7 @@ def parse_option():
     parser.add_argument('--accumulation-steps', type=int, help="gradient accumulation steps")
     parser.add_argument('--use-checkpoint', action='store_true',
                         help="whether to use gradient checkpointing to save memory")
-    parser.add_argument('--amp-opt-level', type=str, default='O1', choices=['O0', 'O1', 'O2'],
+    parser.add_argument('--amp-opt-level', type=str, default='O0', choices=['O0', 'O1', 'O2'],
                         help='mixed precision opt level, if O0, no amp is used')
     parser.add_argument('--output', default='output', type=str, metavar='PATH',
                         help='root of output folder, the full path is <output>/<model_name>/<tag> (default: output)')
@@ -304,7 +304,7 @@ def run_swintransformernv_op(config, args, model, images, use_fp16):
     # warm up
     for i in range(warmup_time):
         op_embedding = swin_transformer.forward(images)
-        op_output = model.head(op_embedding)
+        op_output = model.head(op_embedding.float())
 
     torch.cuda.synchronize()
     op_begin = time.time()
@@ -368,7 +368,7 @@ def validate_with_random_data(config, args, model):
     # torch.cuda.synchronize()
     # torch_start = time.time()
     # for i in range(test_time):
-    INT8_torch_output = model(images_half)
+    INT8_torch_output = model(images_float)
 
     # torch.cuda.synchronize()
     # torch_end = time.time()
@@ -386,7 +386,8 @@ def validate_with_random_data(config, args, model):
     # print("diff between instance 0 and 1:", diff_int8.mean())
     diff = abs(INT8_torch_output - INT8_op_output)
     print("INT8_torch_output vs INT8_op_output , avg diff : ", diff.mean((1)), "max diff : ", diff.max((1)))
-
+    assert diff.mean() < 0.04, "[ERROR] SWIN INT8 Op TEST FAIL !"
+    print("[INFO] SWIN INT8 Op TEST PASS !")
 
 
 @torch.no_grad()

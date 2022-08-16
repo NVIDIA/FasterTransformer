@@ -24,29 +24,29 @@ bool isSparseGemmAvailable(size_t m, size_t n, size_t k)
 }
 
 template<typename T>
-void generate_t5_gemm_config(int batch_size,
-                             int beam_width,
-                             int max_mem_seq_len,
-                             int encoder_d_model,
-                             int encoder_head_num,
-                             int encoder_size_per_head,
-                             int encoder_inter_size,
-                             int decoder_d_model,
-                             int decoder_head_num,
-                             int decoder_size_per_head,
-                             int decoder_inter_size,
-                             int decoder_vocab_size,
-                             int tensor_para_size,
+void generate_t5_gemm_config(int   batch_size,
+                             int   beam_width,
+                             int   max_mem_seq_len,
+                             int   encoder_d_model,
+                             int   encoder_head_num,
+                             int   encoder_size_per_head,
+                             int   encoder_inter_size,
+                             int   decoder_d_model,
+                             int   decoder_head_num,
+                             int   decoder_size_per_head,
+                             int   decoder_inter_size,
+                             int   decoder_vocab_size,
+                             int   tensor_para_size,
                              void* buffer_in,
-                             bool isAppend,
-                             bool is_fp16_compute_type)
+                             bool  isAppend,
+                             bool  is_fp16_compute_type)
 {
     FT_CHECK(encoder_head_num % tensor_para_size == 0);
     FT_CHECK(decoder_head_num % tensor_para_size == 0);
 
     void* cublas_workspace;
     void* buffer;
-    int workSpaceSize;
+    int   workSpaceSize;
 #ifdef ENABLE_BF16
     if (std::is_same<T, half>::value || std::is_same<T, __nv_bfloat16>::value) {
 #else
@@ -55,13 +55,13 @@ void generate_t5_gemm_config(int batch_size,
         // cublas_workspace_ should be the start pointer of cudaMalloc()
         // to ensure 16B alignemnet
         cublas_workspace = buffer_in;
-        buffer = (void*)((char*)cublas_workspace + CUBLAS_WORKSPACE_SIZE);
-        workSpaceSize = CUBLAS_WORKSPACE_SIZE;
+        buffer           = (void*)((char*)cublas_workspace + CUBLAS_WORKSPACE_SIZE);
+        workSpaceSize    = CUBLAS_WORKSPACE_SIZE;
     }
     else {
         cublas_workspace = nullptr;
-        buffer = buffer_in;
-        workSpaceSize = 0;
+        buffer           = buffer_in;
+        workSpaceSize    = 0;
     }
 
     struct cudaDeviceProp prop;
@@ -70,14 +70,14 @@ void generate_t5_gemm_config(int batch_size,
 
     // check config
     FILE* fd;
-    int line_count = 0;
+    int   line_count = 0;
     if (!isAppend) {
         fd = fopen(GEMM_CONFIG, "w+");
     }
     else {
         fd = fopen(GEMM_CONFIG, "a+");
         std::vector<std::string> config;
-        char line[1024];
+        char                     line[1024];
         while (fgets(line, 1024, fd) != NULL) {
             config.push_back(std::string(line));
         }
@@ -96,80 +96,80 @@ void generate_t5_gemm_config(int batch_size,
     }
 
     const int gemm_num = 12;
-    int M[gemm_num];
-    int N[gemm_num];
-    int K[gemm_num];
-    int batchCount[gemm_num];
-    char mess[gemm_num][256];
-    float exec_times[gemm_num];
+    int       M[gemm_num];
+    int       N[gemm_num];
+    int       K[gemm_num];
+    int       batchCount[gemm_num];
+    char      mess[gemm_num][256];
+    float     exec_times[gemm_num];
 
     // gemm 0
-    M[0] = batch_size * max_mem_seq_len;
-    K[0] = encoder_d_model;
-    N[0] = encoder_head_num / tensor_para_size * encoder_size_per_head;
+    M[0]          = batch_size * max_mem_seq_len;
+    K[0]          = encoder_d_model;
+    N[0]          = encoder_head_num / tensor_para_size * encoder_size_per_head;
     batchCount[0] = 3;
     strcpy(mess[0], "encoder from_tensor * batched gemm weightQKV");
 
     // gemm 1
-    M[1] = max_mem_seq_len;
-    K[1] = encoder_size_per_head;
-    N[1] = max_mem_seq_len;
+    M[1]          = max_mem_seq_len;
+    K[1]          = encoder_size_per_head;
+    N[1]          = max_mem_seq_len;
     batchCount[1] = batch_size * encoder_head_num / tensor_para_size;
     strcpy(mess[1], "encoder batch strided gemm Q*K^T");
 
     // gemm 2
-    M[2] = max_mem_seq_len;
-    K[2] = max_mem_seq_len;
-    N[2] = encoder_size_per_head;
+    M[2]          = max_mem_seq_len;
+    K[2]          = max_mem_seq_len;
+    N[2]          = encoder_size_per_head;
     batchCount[2] = batch_size * encoder_head_num / tensor_para_size;
     strcpy(mess[2], "encoder batch strided gemm QK*V^T");
 
     // gemm 3
-    M[3] = batch_size * max_mem_seq_len;
-    K[3] = encoder_head_num / tensor_para_size * encoder_size_per_head;
-    N[3] = encoder_d_model;
+    M[3]          = batch_size * max_mem_seq_len;
+    K[3]          = encoder_head_num / tensor_para_size * encoder_size_per_head;
+    N[3]          = encoder_d_model;
     batchCount[3] = 1;
     strcpy(mess[3], "encoder attr * output_kernel");
 
     // gemm 4
-    M[4] = batch_size * max_mem_seq_len;
-    K[4] = encoder_d_model;
-    N[4] = encoder_inter_size / tensor_para_size;
+    M[4]          = batch_size * max_mem_seq_len;
+    K[4]          = encoder_d_model;
+    N[4]          = encoder_inter_size / tensor_para_size;
     batchCount[4] = 1;
     strcpy(mess[4], "encoder ffn gemm 1");
 
     // gemm 5
-    M[5] = batch_size * max_mem_seq_len;
-    K[5] = encoder_inter_size / tensor_para_size;
-    N[5] = encoder_d_model;
+    M[5]          = batch_size * max_mem_seq_len;
+    K[5]          = encoder_inter_size / tensor_para_size;
+    N[5]          = encoder_d_model;
     batchCount[5] = 1;
     strcpy(mess[5], "encoder ffn gemm 2");
 
     // gemm 6
-    M[6] = batch_size * beam_width;
-    K[6] = decoder_d_model;
-    N[6] = 3 * decoder_head_num / tensor_para_size * decoder_size_per_head;
+    M[6]          = batch_size * beam_width;
+    K[6]          = decoder_d_model;
+    N[6]          = 3 * decoder_head_num / tensor_para_size * decoder_size_per_head;
     batchCount[6] = 1;
     strcpy(mess[6], "from_tensor * weightQKV");
 
     // gemm 7
-    M[7] = batch_size * beam_width;
-    K[7] = decoder_head_num / tensor_para_size * decoder_size_per_head;
-    N[7] = decoder_d_model;
+    M[7]          = batch_size * beam_width;
+    K[7]          = decoder_head_num / tensor_para_size * decoder_size_per_head;
+    N[7]          = decoder_d_model;
     batchCount[7] = 1;
     strcpy(mess[7], "attr * output_kernel");
 
     // gemm 8
-    M[8] = batch_size * beam_width;
-    K[8] = decoder_d_model;
-    N[8] = decoder_inter_size / tensor_para_size;
+    M[8]          = batch_size * beam_width;
+    K[8]          = decoder_d_model;
+    N[8]          = decoder_inter_size / tensor_para_size;
     batchCount[8] = 1;
     strcpy(mess[8], "ffn gemm 1");
 
     // gemm 9
-    M[9] = batch_size * beam_width;
-    K[9] = decoder_inter_size / tensor_para_size;
-    N[9] = decoder_d_model;
+    M[9]          = batch_size * beam_width;
+    K[9]          = decoder_inter_size / tensor_para_size;
+    N[9]          = decoder_d_model;
     batchCount[9] = 1;
     strcpy(mess[9], "ffn gemm 2");
 
@@ -178,16 +178,16 @@ void generate_t5_gemm_config(int batch_size,
     if (!std::is_same<T, float>::value) {
         decoder_vocab_size_padded = ((size_t)ceil(decoder_vocab_size_padded / 8.) * 8);
     }
-    M[10] = batch_size * beam_width;
-    K[10] = decoder_d_model;
-    N[10] = decoder_vocab_size_padded / tensor_para_size;
+    M[10]          = batch_size * beam_width;
+    K[10]          = decoder_d_model;
+    N[10]          = decoder_vocab_size_padded / tensor_para_size;
     batchCount[10] = 1;
     strcpy(mess[10], "logits gemm");
 
     // gemm 11
-    M[11] = batch_size * max_mem_seq_len;
-    K[11] = encoder_d_model;
-    N[11] = encoder_head_num / tensor_para_size * encoder_size_per_head;
+    M[11]          = batch_size * max_mem_seq_len;
+    K[11]          = encoder_d_model;
+    N[11]          = encoder_head_num / tensor_para_size * encoder_size_per_head;
     batchCount[11] = 1;
     strcpy(mess[11], "encoder from_tensor * splited qkv weight");
 
@@ -200,48 +200,48 @@ void generate_t5_gemm_config(int batch_size,
     cudaDataType_t BType;
     cudaDataType_t CType;
     cudaDataType_t computeType;
-    int startAlgo, endAlgo;
-    const int ites = 100;
+    int            startAlgo, endAlgo;
+    const int      ites = 100;
     struct timeval start, end;
 
     CublasDataType data_type;
     if (std::is_same<T, float>::value) {
-        data_type = FLOAT_DATATYPE;
-        AType = CUDA_R_32F;
-        BType = CUDA_R_32F;
-        CType = CUDA_R_32F;
+        data_type   = FLOAT_DATATYPE;
+        AType       = CUDA_R_32F;
+        BType       = CUDA_R_32F;
+        CType       = CUDA_R_32F;
         computeType = CUDA_R_32F;
-        startAlgo = (int)CUBLAS_GEMM_DEFAULT;
-        endAlgo = (int)CUBLAS_GEMM_ALGO23;
+        startAlgo   = (int)CUBLAS_GEMM_DEFAULT;
+        endAlgo     = (int)CUBLAS_GEMM_ALGO23;
     }
     else if (std::is_same<T, half>::value) {
-        data_type = HALF_DATATYPE;
-        AType = CUDA_R_16F;
-        BType = CUDA_R_16F;
-        CType = CUDA_R_16F;
+        data_type   = HALF_DATATYPE;
+        AType       = CUDA_R_16F;
+        BType       = CUDA_R_16F;
+        CType       = CUDA_R_16F;
         computeType = CUDA_R_32F;
-        startAlgo = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
-        endAlgo = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
+        startAlgo   = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+        endAlgo     = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
     }
 #ifdef ENABLE_BF16
     else if (std::is_same<T, __nv_bfloat16>::value) {
-        data_type = BFLOAT16_DATATYPE;
-        AType = CUDA_R_16BF;
-        BType = CUDA_R_16BF;
-        CType = CUDA_R_16BF;
+        data_type   = BFLOAT16_DATATYPE;
+        AType       = CUDA_R_16BF;
+        BType       = CUDA_R_16BF;
+        CType       = CUDA_R_16BF;
         computeType = CUDA_R_32F;
-        startAlgo = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
-        endAlgo = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
+        startAlgo   = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+        endAlgo     = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
     }
 #endif
     float f_alpha = (float)1.0f;
-    float f_beta = (float)0.0f;
+    float f_beta  = (float)0.0f;
 
     half h_alpha = (half)(1.0f);
-    half h_beta = (half)(0.0f);
+    half h_beta  = (half)(0.0f);
 
     void* alpha = computeType == CUDA_R_16F ? (void*)(&h_alpha) : (void*)(&f_alpha);
-    void* beta = computeType == CUDA_R_16F ? (void*)(&h_beta) : (void*)(&f_beta);
+    void* beta  = computeType == CUDA_R_16F ? (void*)(&h_beta) : (void*)(&f_beta);
 
     printf("***Encoder Gemm Testing Begin***\n");
     printf("***Cublas Gemm Testing Begin***\n");
@@ -251,8 +251,8 @@ void generate_t5_gemm_config(int batch_size,
                 "customOption, tile, numSplitsK, swizzle, reductionScheme, workspaceSize, stages, exec_time\n");
     }
     for (int i = 0; i < gemm_num; ++i) {
-        int seq_len = (i <= 5 || i == 11) ? max_mem_seq_len : 1;
-        int head_num = ((i <= 5 || i == 11) ? encoder_head_num : decoder_head_num) / tensor_para_size;
+        int seq_len       = (i <= 5 || i == 11) ? max_mem_seq_len : 1;
+        int head_num      = ((i <= 5 || i == 11) ? encoder_head_num : decoder_head_num) / tensor_para_size;
         int size_per_head = (i <= 5 || i == 11) ? encoder_size_per_head : decoder_size_per_head;
 
         int m = M[i], n = N[i], k = K[i];
@@ -264,14 +264,14 @@ void generate_t5_gemm_config(int batch_size,
 
         // array of pointer for batchedGemm
         T* harray[12];
-        harray[0] = (T*)buffer;
-        harray[1] = (T*)((char*)buffer + sizeof(T) * m * k);
-        harray[2] = (T*)((char*)buffer + 2 * sizeof(T) * m * k);
-        harray[4] = (T*)((char*)buffer + 3 * sizeof(T) * m * k);
-        harray[5] = (T*)((char*)buffer + 3 * sizeof(T) * m * k + sizeof(T) * k * n);
-        harray[6] = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 2 * sizeof(T) * k * n);
-        harray[8] = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 3 * sizeof(T) * k * n);
-        harray[9] = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 3 * sizeof(T) * k * n + sizeof(T) * m * n);
+        harray[0]  = (T*)buffer;
+        harray[1]  = (T*)((char*)buffer + sizeof(T) * m * k);
+        harray[2]  = (T*)((char*)buffer + 2 * sizeof(T) * m * k);
+        harray[4]  = (T*)((char*)buffer + 3 * sizeof(T) * m * k);
+        harray[5]  = (T*)((char*)buffer + 3 * sizeof(T) * m * k + sizeof(T) * k * n);
+        harray[6]  = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 2 * sizeof(T) * k * n);
+        harray[8]  = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 3 * sizeof(T) * k * n);
+        harray[9]  = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 3 * sizeof(T) * k * n + sizeof(T) * m * n);
         harray[10] = (T*)((char*)buffer + 3 * sizeof(T) * m * k + 3 * sizeof(T) * k * n + 2 * sizeof(T) * m * n);
 
         T** darray = 0;
@@ -282,7 +282,7 @@ void generate_t5_gemm_config(int batch_size,
         T** dCarray = darray + 8;
 
         float exec_time = 99999.0f;
-        int fast_algo = 0;
+        int   fast_algo = 0;
         for (int algo = startAlgo; algo <= endAlgo; algo++) {
             cublasStatus_t status;
             cudaDeviceSynchronize();
@@ -431,14 +431,14 @@ void generate_t5_gemm_config(int batch_size,
         if (data_type != FLOAT_DATATYPE && i != 1 && i != 2 && i != 0 && i != 10) {
             printf("***cublasLt Gemm Testing Beign***\n");
             // Let try a fixed number of combinations
-            int ALGO_COMBINATIONS = 5000;
+            int                ALGO_COMBINATIONS = 5000;
             customMatmulPerf_t perfResults[ALGO_COMBINATIONS];
 
             // for t5, computeType & scaleType should be FP32
             if (is_fp16_compute_type) {
-                using scaleT = typename ScaleTypeConverter<T, true>::Type;
+                using scaleT       = typename ScaleTypeConverter<T, true>::Type;
                 scaleT alpha_scale = (scaleT)1.0f;
-                scaleT beta_scale = (scaleT)0.0f;
+                scaleT beta_scale  = (scaleT)0.0f;
 
                 LtHgemmCustomFind<T, scaleT>(ltHandle,
                                              m,
@@ -547,7 +547,7 @@ void generate_t5_gemm_config(int batch_size,
         else {
             fd = fopen(SPGEMM_CONFIG, "a+");
             std::vector<std::string> config;
-            char line[1024];
+            char                     line[1024];
             while (fgets(line, 1024, fd) != NULL) {
                 config.push_back(std::string(line));
             }
@@ -573,15 +573,15 @@ void generate_t5_gemm_config(int batch_size,
 
         cusparseLtHandle_t handle;
         CHECK_CUSPARSE(cusparseLtInit(&handle));
-        cusparseOrder_t order = CUSPARSE_ORDER_COL;
-        cusparseOperation_t opA = CUSPARSE_OPERATION_NON_TRANSPOSE;
-        cusparseOperation_t opB = CUSPARSE_OPERATION_NON_TRANSPOSE;
+        cusparseOrder_t     order = CUSPARSE_ORDER_COL;
+        cusparseOperation_t opA   = CUSPARSE_OPERATION_NON_TRANSPOSE;
+        cusparseOperation_t opB   = CUSPARSE_OPERATION_NON_TRANSPOSE;
         // let's make this optional
         cusparseComputeType compute_type = CUSPARSE_COMPUTE_16F;
-        unsigned alignment = 16;
-        cudaStream_t stream = 0;
-        float alpha2 = 1.0f;
-        float beta2 = 0.0f;
+        unsigned            alignment    = 16;
+        cudaStream_t        stream       = 0;
+        float               alpha2       = 1.0f;
+        float               beta2        = 0.0f;
         for (int i = 0; i < gemm_num; ++i) {
             // skip qk or attn or logit gemms.
             if (i == 1 || i == 2 || i == 10) {
@@ -589,11 +589,11 @@ void generate_t5_gemm_config(int batch_size,
             }
 
             // seq_len is always 1 except context gemms.
-            int seq_len = i <= 5 ? max_mem_seq_len : 1;
-            int head_num = (i <= 5 ? encoder_head_num : decoder_head_num) / tensor_para_size;
+            int seq_len       = i <= 5 ? max_mem_seq_len : 1;
+            int head_num      = (i <= 5 ? encoder_head_num : decoder_head_num) / tensor_para_size;
             int size_per_head = i <= 5 ? encoder_size_per_head : decoder_size_per_head;
 
-            // to be compatable with spgemm wrapper, we let A be the weight matrix
+            // to be compatible with spgemm wrapper, we let A be the weight matrix
             // so m and n are swapped
             // A: mxk B: kxn C:mxn
             int m = N[i], n = M[i], k = K[i];
@@ -616,14 +616,14 @@ void generate_t5_gemm_config(int batch_size,
             }
 
             float exec_time = 99999.0f;
-            int fast_algo = 0;
+            int   fast_algo = 0;
             if (isSparseGemmAvailable(m, n, k)) {
                 for (int alg = 0; alg < 4; ++alg) {
                     cudaDeviceSynchronize();
                     cusparseLtMatDescriptor_t matA, matB, matC;
-                    void* d_workspace = nullptr;
-                    int num_streams = 1;
-                    cudaStream_t streams[1] = {stream};
+                    void*                     d_workspace = nullptr;
+                    int                       num_streams = 1;
+                    cudaStream_t              streams[1]  = {stream};
                     CHECK_CUSPARSE(cusparseLtStructuredDescriptorInit(
                         &handle, &matA, m, k, m, alignment, CUDA_R_16F, order, CUSPARSELT_SPARSITY_50_PERCENT))
                     CHECK_CUSPARSE(cusparseLtDenseDescriptorInit(&handle, &matB, k, n, k, alignment, CUDA_R_16F, order))
@@ -634,9 +634,9 @@ void generate_t5_gemm_config(int batch_size,
                         // initializing MatDesc takes a lot of time
                         // and these descs can be stored to other place
                         // whereas storing MatMulPlan to other place will cause errors
-                        cusparseLtMatmulDescriptor_t matmul;
+                        cusparseLtMatmulDescriptor_t   matmul;
                         cusparseLtMatmulAlgSelection_t alg_sel;
-                        cusparseLtMatmulPlan_t plan;
+                        cusparseLtMatmulPlan_t         plan;
                         CHECK_CUSPARSE(cusparseLtMatmulDescriptorInit(
                             &handle, &matmul, opA, opB, &matA, &matB, &matC, &matC, compute_type))
                         CHECK_CUSPARSE(
@@ -698,82 +698,82 @@ void generate_t5_gemm_config(int batch_size,
     return;
 }
 
-template void generate_t5_gemm_config<float>(int batch_size,
-                                             int beam_width,
-                                             int max_mem_seq_len,
-                                             int encoder_d_model,
-                                             int encoder_head_num,
-                                             int encoder_size_per_head,
-                                             int encoder_inter_size,
-                                             int decoder_d_model,
-                                             int decoder_head_num,
-                                             int decoder_size_per_head,
-                                             int decoder_inter_size,
-                                             int decoder_vocab_size,
-                                             int tensor_para_size,
+template void generate_t5_gemm_config<float>(int   batch_size,
+                                             int   beam_width,
+                                             int   max_mem_seq_len,
+                                             int   encoder_d_model,
+                                             int   encoder_head_num,
+                                             int   encoder_size_per_head,
+                                             int   encoder_inter_size,
+                                             int   decoder_d_model,
+                                             int   decoder_head_num,
+                                             int   decoder_size_per_head,
+                                             int   decoder_inter_size,
+                                             int   decoder_vocab_size,
+                                             int   tensor_para_size,
                                              void* buffer_in,
-                                             bool isAppend,
-                                             bool is_fp16_compute_type);
+                                             bool  isAppend,
+                                             bool  is_fp16_compute_type);
 
-template void generate_t5_gemm_config<half>(int batch_size,
-                                            int beam_width,
-                                            int max_mem_seq_len,
-                                            int encoder_d_model,
-                                            int encoder_head_num,
-                                            int encoder_size_per_head,
-                                            int encoder_inter_size,
-                                            int decoder_d_model,
-                                            int decoder_head_num,
-                                            int decoder_size_per_head,
-                                            int decoder_inter_size,
-                                            int decoder_vocab_size,
-                                            int tensor_para_size,
+template void generate_t5_gemm_config<half>(int   batch_size,
+                                            int   beam_width,
+                                            int   max_mem_seq_len,
+                                            int   encoder_d_model,
+                                            int   encoder_head_num,
+                                            int   encoder_size_per_head,
+                                            int   encoder_inter_size,
+                                            int   decoder_d_model,
+                                            int   decoder_head_num,
+                                            int   decoder_size_per_head,
+                                            int   decoder_inter_size,
+                                            int   decoder_vocab_size,
+                                            int   tensor_para_size,
                                             void* buffer_in,
-                                            bool isAppend,
-                                            bool is_fp16_compute_type);
+                                            bool  isAppend,
+                                            bool  is_fp16_compute_type);
 
 #ifdef ENABLE_BF16
-template void generate_t5_gemm_config<__nv_bfloat16>(int batch_size,
-                                                     int beam_width,
-                                                     int max_mem_seq_len,
-                                                     int encoder_d_model,
-                                                     int encoder_head_num,
-                                                     int encoder_size_per_head,
-                                                     int encoder_inter_size,
-                                                     int decoder_d_model,
-                                                     int decoder_head_num,
-                                                     int decoder_size_per_head,
-                                                     int decoder_inter_size,
-                                                     int decoder_vocab_size,
-                                                     int tensor_para_size,
+template void generate_t5_gemm_config<__nv_bfloat16>(int   batch_size,
+                                                     int   beam_width,
+                                                     int   max_mem_seq_len,
+                                                     int   encoder_d_model,
+                                                     int   encoder_head_num,
+                                                     int   encoder_size_per_head,
+                                                     int   encoder_inter_size,
+                                                     int   decoder_d_model,
+                                                     int   decoder_head_num,
+                                                     int   decoder_size_per_head,
+                                                     int   decoder_inter_size,
+                                                     int   decoder_vocab_size,
+                                                     int   tensor_para_size,
                                                      void* buffer_in,
-                                                     bool isAppend,
-                                                     bool is_fp16_compute_type);
+                                                     bool  isAppend,
+                                                     bool  is_fp16_compute_type);
 #endif
 
-size_t calT5GemmTestBufSizeInByte(int batch_size,
-                                  int beam_width,
-                                  int max_mem_seq_len,
-                                  int encoder_d_model,
-                                  int encoder_head_num,
-                                  int encoder_size_per_head,
-                                  int encoder_inter_size,
-                                  int decoder_d_model,
-                                  int decoder_head_num,
-                                  int decoder_size_per_head,
-                                  int decoder_inter_size,
-                                  int decoder_vocab_size,
-                                  int tensor_para_size,
+size_t calT5GemmTestBufSizeInByte(int            batch_size,
+                                  int            beam_width,
+                                  int            max_mem_seq_len,
+                                  int            encoder_d_model,
+                                  int            encoder_head_num,
+                                  int            encoder_size_per_head,
+                                  int            encoder_inter_size,
+                                  int            decoder_d_model,
+                                  int            decoder_head_num,
+                                  int            decoder_size_per_head,
+                                  int            decoder_inter_size,
+                                  int            decoder_vocab_size,
+                                  int            tensor_para_size,
                                   CublasDataType data_type)
 {
-    const size_t local_encoder_head_num = encoder_head_num / tensor_para_size;
+    const size_t local_encoder_head_num     = encoder_head_num / tensor_para_size;
     const size_t local_encoder_hidden_units = local_encoder_head_num * encoder_size_per_head;
-    const size_t local_encoder_inter_size = encoder_inter_size / tensor_para_size;
-    const size_t local_decoder_head_num = decoder_head_num / tensor_para_size;
+    const size_t local_encoder_inter_size   = encoder_inter_size / tensor_para_size;
+    const size_t local_decoder_head_num     = decoder_head_num / tensor_para_size;
     const size_t local_decoder_hidden_units = local_decoder_head_num * decoder_size_per_head;
-    const size_t local_decoder_inter_size = decoder_inter_size / tensor_para_size;
+    const size_t local_decoder_inter_size   = decoder_inter_size / tensor_para_size;
 
-    size_t m = batch_size * max_mem_seq_len;
+    size_t              m = batch_size * max_mem_seq_len;
     std::vector<size_t> buff_size;
 
     // encoder qkv gemm
@@ -805,7 +805,7 @@ size_t calT5GemmTestBufSizeInByte(int batch_size,
                         + m * decoder_vocab_size_padded / tensor_para_size);
 
     size_t buf_size_in_byte = 0;
-    int wordSize = (data_type == FLOAT_DATATYPE ? sizeof(float) : sizeof(half));
+    int    wordSize         = (data_type == FLOAT_DATATYPE ? sizeof(float) : sizeof(half));
     for (auto t : buff_size) {
         buf_size_in_byte = buf_size_in_byte > t ? buf_size_in_byte : t;
     }

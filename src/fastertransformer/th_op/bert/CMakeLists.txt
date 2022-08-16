@@ -13,4 +13,4 @@
 # limitations under the License.
 
 add_library(th_bert SHARED BertOp.cc BertINT8Op.cc WeightQuantizeOp.cc)
-target_link_libraries(th_bert PRIVATE "${TORCH_LIBRARIES}" Bert BertINT8 th_utils quantize_weight)
+target_link_libraries(th_bert PRIVATE "${TORCH_LIBRARIES}" Bert BertINT8 nccl_utils th_utils quantize_weight)

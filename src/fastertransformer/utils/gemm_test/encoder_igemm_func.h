@@ -48,32 +48,32 @@ int printBatchPerfStructure(
 
 template<typename T, typename scaleT>
 int LtIgemmCustomFind(cublasLtHandle_t ltHandle,
-                      int m,
-                      int n,
-                      int k,
-                      const scaleT* alpha, /* host pointer */
-                      const int8_t* A,
-                      const int8_t* B,
-                      const scaleT* beta, /* host pointer */
-                      T* C,
-                      void* workSpace,
-                      size_t workSpaceSize,
-                      FILE* fout);
+                      int              m,
+                      int              n,
+                      int              k,
+                      const scaleT*    alpha, /* host pointer */
+                      const int8_t*    A,
+                      const int8_t*    B,
+                      const scaleT*    beta, /* host pointer */
+                      T*               C,
+                      void*            workSpace,
+                      size_t           workSpaceSize,
+                      FILE*            fout);
 
 template<typename T, typename scaleT>
 int LtBatchIgemmCustomFind(cublasLtHandle_t ltHandle,
-                           int batchCount,
-                           int m,
-                           int n,
-                           int k,
-                           const scaleT* alpha, /* host pointer */
-                           const int8_t* A,
-                           const int8_t* B,
-                           const scaleT* beta, /* host pointer */
-                           T* C,
-                           void* workSpace,
-                           size_t workSpaceSize,
-                           FILE* fout);
+                           int              batchCount,
+                           int              m,
+                           int              n,
+                           int              k,
+                           const scaleT*    alpha, /* host pointer */
+                           const int8_t*    A,
+                           const int8_t*    B,
+                           const scaleT*    beta, /* host pointer */
+                           T*               C,
+                           void*            workSpace,
+                           size_t           workSpaceSize,
+                           FILE*            fout);
 
 void matInit(int rows, int cols, int8_t* p, int ld);
 

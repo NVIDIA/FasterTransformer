@@ -44,10 +44,19 @@ set_property(TARGET memory_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET memory_utils PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(memory_utils PUBLIC -lnvToolsExt)
 
+add_library(mpi_utils STATIC mpi_utils.cc)
+set_property(TARGET mpi_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET mpi_utils PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+if (BUILD_MULTI_GPU)
+    target_link_libraries(mpi_utils PUBLIC -lmpi)
+endif()
+
 add_library(nccl_utils STATIC nccl_utils.cc)
 set_property(TARGET nccl_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET nccl_utils PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(nccl_utils PUBLIC -lnccl)
+if (BUILD_MULTI_GPU)
+    target_link_libraries(nccl_utils PUBLIC -lnccl mpi_utils)
+endif()
 
 add_library(cublasINT8MMWrapper STATIC cublasINT8MMWrapper.cc)
 set_property(TARGET cublasINT8MMWrapper PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -71,3 +80,7 @@ else()
                           -lcublas -lcublasLt -lcudart -lcurand
                           cublasAlgoMap memory_utils)
 endif()
+
+add_library(tensor STATIC Tensor.cc)
+set_property(TARGET tensor PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET tensor PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)

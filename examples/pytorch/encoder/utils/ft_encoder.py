@@ -84,6 +84,10 @@ class EncoderWeights(object):
         for k, v in self.weights.items():
             self.weights[k] = v.half()
 
+    def to_bfloat16(self):
+        for k, v in self.weights.items():
+            self.weights[k] = v.bfloat16()
+
 
 class CustomEncoder(torch.nn.Module):
     def __init__(self, layer_num, head_num, head_size, weights,

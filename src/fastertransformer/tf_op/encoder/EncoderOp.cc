@@ -86,7 +86,7 @@ public:
             OP_REQUIRES_OK(context, context->GetAttr("num_layer", &num_layer_));
             OP_REQUIRES_OK(context, context->GetAttr("remove_padding", &remove_padding_));
             OP_REQUIRES_OK(context, context->GetAttr("q_scaling", &q_scaling_));
-            sm_ = ft::getSMVersion();
+            sm_              = ft::getSMVersion();
             cublas_algo_map_ = new ft::cublasAlgoMap("gemm_config.in");
         }
         catch (std::runtime_error& error) {
@@ -105,18 +105,18 @@ public:
                     context->num_inputs() == (num_layer_ * 16) + 5,
                     tf::errors::InvalidArgument("[ERROR] More or Less input arguments"));
 
-        const size_t batch_size_ = (size_t)context->input(0).dim_size(0);
+        const size_t batch_size_   = (size_t)context->input(0).dim_size(0);
         const size_t from_seq_len_ = (size_t)context->input(0).dim_size(1);
 
         OP_REQUIRES(context,
                     batch_size_ == (size_t)context->input(2).dim_size(0),
                     tf::errors::InvalidArgument("[ERROR] invalid shape"));
 
-        const cudaStream_t& stream = context->eigen_device<Device>().stream();
-        cublasHandle_t cublas_handle = this->get_cublas_handler();
+        const cudaStream_t& stream        = context->eigen_device<Device>().stream();
+        cublasHandle_t      cublas_handle = this->get_cublas_handler();
         cublasSetStream(cublas_handle, stream);
         ft::Allocator<ft::AllocatorType::TF> allocator(context, stream);
-        ft::cublasMMWrapper cublas_wrapper = ft::cublasMMWrapper(cublas_handle,
+        ft::cublasMMWrapper                  cublas_wrapper = ft::cublasMMWrapper(cublas_handle,
                                                                  this->get_cublaslt_handler(),
                                                                  stream,
                                                                  cublas_algo_map_,
@@ -208,7 +208,7 @@ public:
         OP_REQUIRES_OK(context, context->allocate_output(0, context->input(0).shape(), &output));
         DataType* out_tensor = reinterpret_cast<DataType*>(output->flat<T>().data());
 
-        ft::DataType data_type = ft::getTensorType<DataType>();
+        ft::DataType            data_type     = ft::getTensorType<DataType>();
         std::vector<ft::Tensor> input_tensors = std::vector<ft::Tensor>{this->convert_tensor(context->input(0)),
                                                                         this->convert_int_tensor(context->input(2))};
 
@@ -232,12 +232,12 @@ public:
     }
 
 private:
-    int head_num_ = 0, size_per_head_ = 0, inter_size_ = 0, num_layer_ = 0;
-    float q_scaling_ = 1.0f;
-    bool remove_padding_;
-    int sm_;
-    ft::cublasAlgoMap* cublas_algo_map_;
-    typedef TFTraits<T> traits_;
+    int                                head_num_ = 0, size_per_head_ = 0, inter_size_ = 0, num_layer_ = 0;
+    float                              q_scaling_ = 1.0f;
+    bool                               remove_padding_;
+    int                                sm_;
+    ft::cublasAlgoMap*                 cublas_algo_map_;
+    typedef TFTraits<T>                traits_;
     typedef typename traits_::DataType DataType;
 };
 

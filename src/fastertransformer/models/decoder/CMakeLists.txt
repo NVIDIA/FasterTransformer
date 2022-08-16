@@ -18,4 +18,4 @@ add_library(Decoder STATIC Decoder.cc)
 set_property(TARGET Decoder PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET Decoder PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(Decoder PUBLIC -lcudart cublasMMWrapper DecoderSelfAttentionLayer
-                    DecoderCrossAttentionLayer FfnLayer layernorm_kernels add_residual_kernels)
+                    DecoderCrossAttentionLayer FfnLayer layernorm_kernels add_residual_kernels tensor)

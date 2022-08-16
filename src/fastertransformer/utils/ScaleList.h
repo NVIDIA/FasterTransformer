@@ -42,10 +42,10 @@ struct ScaleList {
     // Part 5 -- 21: reverse
     const float* d_scale_list_ = nullptr;
     const float* h_scale_list_ = nullptr;
-    size_t size_ = ACTIVATION_AMAX_NUM + 9 * 768 + INT8O_GEMM_NUM + TRT_AMAX_NUM;
-    size_t p2_offset_ = ACTIVATION_AMAX_NUM;
-    size_t p3_offset_ = ACTIVATION_AMAX_NUM + 9 * 768;
-    size_t p4_offset_ = ACTIVATION_AMAX_NUM + 9 * 768 + INT8O_GEMM_NUM;
+    size_t       size_         = ACTIVATION_AMAX_NUM + 9 * 768 + INT8O_GEMM_NUM + TRT_AMAX_NUM;
+    size_t       p2_offset_    = ACTIVATION_AMAX_NUM;
+    size_t       p3_offset_    = ACTIVATION_AMAX_NUM + 9 * 768;
+    size_t       p4_offset_    = ACTIVATION_AMAX_NUM + 9 * 768 + INT8O_GEMM_NUM;
 };
 
 }  // namespace fastertransformer

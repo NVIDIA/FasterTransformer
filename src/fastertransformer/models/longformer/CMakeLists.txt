@@ -19,4 +19,4 @@ set_property(TARGET LongformerEncoder PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET LongformerEncoder PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(LongformerEncoder PUBLIC -lcublas -lcudart -lcurand cublasMMWrapper
                       LongformerAttentionLayer longformer_kernels add_bias_transpose_kernels
-                      activation_kernels layernorm_kernels FfnLayer)
+                      activation_kernels layernorm_kernels FfnLayer tensor)

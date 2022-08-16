@@ -25,7 +25,14 @@
 namespace fastertransformer {
 
 template<typename T>
-void invokeAddBiasResidual(T* output, const T* input, const T* bias, const int m, const int n, cudaStream_t stream);
+void invokeAddBiasResidual(
+    T* output, const T* residual1, const T* residual2, const T* bias, const int m, const int n, cudaStream_t stream);
+
+template<typename T>
+void invokeAddBiasResidual(T* output, const T* residual1, const T* bias, const int m, const int n, cudaStream_t stream)
+{
+    invokeAddBiasResidual(output, residual1, (const T*)nullptr, bias, m, n, stream);
+}
 
 template<typename T>
 void invokeT5AddResidual(T* output, const T* input, const int m, const int n, cudaStream_t stream);
@@ -34,35 +41,49 @@ template<typename T>
 void invokeT5AddBiasResidual(T* output, const T* input, const T* bias, const int m, const int n, cudaStream_t stream);
 
 template<typename T>
-void invokeAddBiasAttentionFfnResidual(T* block_output,
-                                       const T* ffn_output,
-                                       const T* attn_output,
-                                       const T* block_input,
-                                       const T* bias,
-                                       const int m,
-                                       const int n,
+void invokeAddBiasAttentionFfnResidual(T*           block_output,
+                                       const T*     ffn_output,
+                                       const T*     attn_output,
+                                       const T*     block_input,
+                                       const T*     bias,
+                                       const int    m,
+                                       const int    n,
+                                       const int    block_input_tp_split,
                                        cudaStream_t stream);
 
 template<typename T>
-void invokeAddBiasResidualCol32(T* output,
-                                const int8_t* input1,
-                                const T* input2,
-                                const T* bias,
-                                int m,
-                                int n,
-                                cudaStream_t stream,
-                                const float* input1_deQFactor_ptr);
+void invokeAddBiasAttentionFfnResidual(T*           block_output,
+                                       const T*     ffn_output,
+                                       const T*     attn_output,
+                                       const T*     block_input,
+                                       const T*     bias,
+                                       const int    m,
+                                       const int    n,
+                                       cudaStream_t stream)
+{
+    invokeAddBiasAttentionFfnResidual(block_output, ffn_output, attn_output, block_input, bias, m, n, 1, stream);
+}
 
 template<typename T>
-void invokeAddBiasResidualCol32(T* output,
+void invokeAddBiasResidualCol32(T*            output,
+                                const int8_t* input1,
+                                const T*      input2,
+                                const T*      bias,
+                                int           m,
+                                int           n,
+                                cudaStream_t  stream,
+                                const float*  input1_deQFactor_ptr);
+
+template<typename T>
+void invokeAddBiasResidualCol32(T*             output,
                                 const int32_t* input1,
-                                const T* input2,
-                                const T* bias,
-                                int m,
-                                int n,
-                                cudaStream_t stream,
-                                const float* weight_amax,
-                                const float* input1_amax_ptr,
-                                const int scale_is_vector = 0);
+                                const T*       input2,
+                                const T*       bias,
+                                int            m,
+                                int            n,
+                                cudaStream_t   stream,
+                                const float*   weight_amax,
+                                const float*   input1_amax_ptr,
+                                const int      scale_is_vector = 0);
 
 }  // namespace fastertransformer

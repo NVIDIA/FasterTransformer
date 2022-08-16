@@ -27,10 +27,12 @@ void GptJDecoder<T>::initialize()
                                                                            head_num_,
                                                                            size_per_head_,
                                                                            rotary_embedding_dim_,
+                                                                           neox_rotary_style_,
                                                                            tensor_para_,
                                                                            stream_,
                                                                            cublas_wrapper_,
                                                                            allocator_,
+                                                                           true,
                                                                            is_free_buffer_after_forward_,
                                                                            false,
                                                                            0,
@@ -46,51 +48,44 @@ void GptJDecoder<T>::initialize()
                                                    stream_,
                                                    cublas_wrapper_,
                                                    allocator_,
+                                                   true,
                                                    is_free_buffer_after_forward_,
                                                    false,
                                                    0,
+                                                   false,  // use_gated_activation = false;
                                                    custom_all_reduce_comm_,
                                                    enable_custom_all_reduce_);
-    allocateBuffer();
 }
 
 template<typename T>
 void GptJDecoder<T>::allocateBuffer()
 {
-    if (is_allocate_buffer_ == false) {
-        decoder_normed_input_ =
-            reinterpret_cast<T*>(allocator_->malloc(sizeof(T) * max_batch_size_ * hidden_units_, false));
-        self_attn_output_ =
-            reinterpret_cast<T*>(allocator_->malloc(sizeof(T) * max_batch_size_ * hidden_units_, false));
-        ffn_output_ = reinterpret_cast<T*>(allocator_->malloc(sizeof(T) * max_batch_size_ * hidden_units_, false));
-        decoder_layer_output_ =
-            reinterpret_cast<T*>(allocator_->malloc(sizeof(T) * max_batch_size_ * hidden_units_, false));
-        is_allocate_buffer_ = true;
-    }
+    FT_CHECK(false);
+}
+
+template<typename T>
+void GptJDecoder<T>::allocateBuffer(size_t batch_size)
+{
+    decoder_normed_input_ = reinterpret_cast<T*>(
+        allocator_->reMalloc(decoder_normed_input_, sizeof(T) * batch_size * hidden_units_, false));
+    self_attn_output_ =
+        reinterpret_cast<T*>(allocator_->reMalloc(self_attn_output_, sizeof(T) * batch_size * hidden_units_, false));
+    ffn_output_ =
+        reinterpret_cast<T*>(allocator_->reMalloc(ffn_output_, sizeof(T) * batch_size * hidden_units_, false));
+    decoder_layer_output_ = reinterpret_cast<T*>(
+        allocator_->reMalloc(decoder_layer_output_, sizeof(T) * batch_size * hidden_units_, false));
+    is_allocate_buffer_ = true;
 }
 
 template<typename T>
 void GptJDecoder<T>::freeBuffer()
 {
     if (is_allocate_buffer_ == true) {
-        allocator_->free(decoder_normed_input_);
-        allocator_->free(self_attn_output_);
-        allocator_->free(ffn_output_);
-        allocator_->free(decoder_layer_output_);
+        allocator_->free((void**)(&decoder_normed_input_));
+        allocator_->free((void**)(&self_attn_output_));
+        allocator_->free((void**)(&ffn_output_));
+        allocator_->free((void**)(&decoder_layer_output_));
         is_allocate_buffer_ = false;
-    }
-}
-
-template<typename T>
-bool GptJDecoder<T>::isValidBatchSize(size_t batch_size)
-{
-    if (batch_size <= max_batch_size_) {
-        return true;
-    }
-    else {
-        freeBuffer();
-        max_batch_size_ = batch_size * 1.2;
-        return true;
     }
 }
 
@@ -124,20 +119,22 @@ int GptJDecoder<T>::getFirstLayerParallelId()
 }
 
 template<typename T>
-GptJDecoder<T>::GptJDecoder(size_t max_batch_size,
-                            size_t head_num,
-                            size_t size_per_head,
-                            size_t inter_size,
-                            size_t num_layer,
-                            size_t rotary_embedding_dim,
-                            NcclParam tensor_para,
-                            NcclParam pipeline_para,
-                            cudaStream_t stream,
-                            cublasMMWrapper* cublas_wrapper,
-                            IAllocator* allocator,
-                            bool is_free_buffer_after_forward,
+GptJDecoder<T>::GptJDecoder(size_t                              max_batch_size,
+                            size_t                              head_num,
+                            size_t                              size_per_head,
+                            size_t                              inter_size,
+                            size_t                              num_layer,
+                            size_t                              rotary_embedding_dim,
+                            bool                                neox_rotary_style,
+                            float                               layernorm_eps,
+                            NcclParam                           tensor_para,
+                            NcclParam                           pipeline_para,
+                            cudaStream_t                        stream,
+                            cublasMMWrapper*                    cublas_wrapper,
+                            IAllocator*                         allocator,
+                            bool                                is_free_buffer_after_forward,
                             std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
-                            int enable_custom_all_reduce):
+                            int                                 enable_custom_all_reduce):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     max_batch_size_(max_batch_size),
     head_num_(head_num),
@@ -145,6 +142,8 @@ GptJDecoder<T>::GptJDecoder(size_t max_batch_size,
     inter_size_(inter_size),
     num_layer_(num_layer),
     rotary_embedding_dim_(rotary_embedding_dim),
+    neox_rotary_style_(neox_rotary_style),
+    layernorm_eps_(layernorm_eps),
     hidden_units_(head_num_ * size_per_head),
     tensor_para_(tensor_para),
     pipeline_para_(pipeline_para),
@@ -163,6 +162,7 @@ GptJDecoder<T>::GptJDecoder(GptJDecoder<T> const& decoder):
     inter_size_(decoder.inter_size_),
     num_layer_(decoder.num_layer_),
     rotary_embedding_dim_(decoder.rotary_embedding_dim_),
+    layernorm_eps_(decoder.layernorm_eps_),
     hidden_units_(decoder.hidden_units_),
     tensor_para_(decoder.tensor_para_),
     pipeline_para_(decoder.pipeline_para_),
@@ -181,61 +181,51 @@ GptJDecoder<T>::~GptJDecoder()
 }
 
 template<typename T>
-void GptJDecoder<T>::forward(std::vector<Tensor>* output_tensors,
-                             const std::vector<Tensor>* input_tensors,
+void GptJDecoder<T>::forward(std::vector<Tensor>*                          output_tensors,
+                             const std::vector<Tensor>*                    input_tensors,
                              const std::vector<GptJDecoderLayerWeight<T>>* gpt_decoder_layer_weight)
 {
-    std::unordered_map<std::string, Tensor> input_tensors_map{{"decoder_input", input_tensors->at(0)},
-                                                              {"finished", input_tensors->at(1)},
-                                                              {"sequence_lengths", input_tensors->at(2)},
-                                                              {"input_lengths", input_tensors->at(3)},
-                                                              {"max_input_length", input_tensors->at(4)},
-                                                              {"step", input_tensors->at(5)},
-                                                              {"ite", input_tensors->at(6)}};
-    std::unordered_map<std::string, Tensor> output_tensors_map{
-        {"decoder_output", output_tensors->at(0)},
-        {"key_cache", output_tensors->at(1)},
-        {"value_cache", output_tensors->at(2)},
-    };
-
-    forward(&output_tensors_map, &input_tensors_map, gpt_decoder_layer_weight);
+    FT_CHECK(false);
 }
+
 template<typename T>
-void GptJDecoder<T>::forward(std::unordered_map<std::string, Tensor>* output_tensors,
+void GptJDecoder<T>::forward(std::unordered_map<std::string, Tensor>*       output_tensors,
                              const std::unordered_map<std::string, Tensor>* input_tensors,
-                             const std::vector<GptJDecoderLayerWeight<T>>* gpt_decoder_layer_weight)
+                             const std::vector<GptJDecoderLayerWeight<T>>*  gpt_decoder_layer_weight)
 {
     // input tensors:
     //      decoder_input [local_batch_size, hidden_dimension],
     //      finished [local_batch_size],
     //      sequence_lengths [local_batch_size]
-    //      input_lengths [local_batch_size],
+    //      total_padding_tokens [local_batch_size],
+    //      d_prefix_prompt_lengths [local_batch_size],on GPU
+    //      max_prefix_prompt_length [1] on cpu
     //      max_input_length [1] on cpu
     //      step [1] on cpu
     //      ite [1] on cpu
-    //      cache_indirection [local_batch_size / beam_width, beam_width, max_seq_len]
+    //      cache_indirection [local_batch_size / beam_width, beam_width, memory_len]
     //              Here, local_batch_size contains the beam_width, so local_batch_size / beam_width
     //              is real local_batch_size.
+    //      masked_tokens[local_batch_size, memory_len]
 
     // output tensors:
     //      decoder_output [local_batch_size, hidden_dimension],
-    //      key_cache [num_layer, batch_size, head_num, size_per_head // x, max_seq_len, x]
-    //      value_cache [num_layer, batch_size, head_num, max_seq_len, size_per_head]
+    //      key_cache [num_layer, batch_size, head_num, size_per_head // x, memory_len, x]
+    //      value_cache [num_layer, batch_size, head_num, memory_len, size_per_head]
 
-    FT_CHECK(input_tensors->size() == 8);
+    FT_CHECK(input_tensors->size() == 11);
     FT_CHECK(output_tensors->size() == 3);
-    isValidBatchSize(input_tensors->at("decoder_input").shape[0]);
-    allocateBuffer();
 
-    const DataType data_type = getTensorType<T>();
-    const size_t local_batch_size = input_tensors->at("decoder_input").shape[0];
-    const int ite = *((int*)(input_tensors->at("ite").data));
+    const DataType data_type        = getTensorType<T>();
+    const size_t   local_batch_size = input_tensors->at("decoder_input").shape[0];
+    const int      ite              = *((int*)(input_tensors->at("ite").data));
+    allocateBuffer(local_batch_size);
 
-    T* decoder_input = (T*)input_tensors->at("decoder_input").data;
+    T* decoder_input  = (T*)input_tensors->at("decoder_input").data;
     T* decoder_output = (T*)output_tensors->at("decoder_output").data;
 
-    Tensor& k_cache = output_tensors->at("key_cache");
-    Tensor& v_cache = output_tensors->at("value_cache");
+    Tensor&             k_cache = output_tensors->at("key_cache");
+    Tensor&             v_cache = output_tensors->at("value_cache");
     std::vector<size_t> self_k_cache_size;
     self_k_cache_size.push_back(local_batch_size);
     for (auto t = k_cache.shape.begin() + 2; t != k_cache.shape.end(); ++t) {
@@ -251,7 +241,7 @@ void GptJDecoder<T>::forward(std::unordered_map<std::string, Tensor>* output_ten
         if (isValidLayerParallelId(l) == false) {
             continue;
         }
-        T* layer_input = (l == 0) ? decoder_input : decoder_layer_output_;
+        T* layer_input  = (l == 0) ? decoder_input : decoder_layer_output_;
         T* layer_output = (l == num_layer_ - 1) ? decoder_output : decoder_layer_output_;
 
         if (isFirstLayerParallelId(l) == true && pipeline_para_.rank_ != 0 && pipeline_para_.world_size_ > 1) {
@@ -273,6 +263,7 @@ void GptJDecoder<T>::forward(std::unordered_map<std::string, Tensor>* output_ten
                                layer_input,
                                gpt_decoder_layer_weight->at(l).pre_layernorm_weights.gamma,
                                gpt_decoder_layer_weight->at(l).pre_layernorm_weights.beta,
+                               layernorm_eps_,
                                local_batch_size,
                                hidden_units_,
                                stream_);
@@ -282,10 +273,13 @@ void GptJDecoder<T>::forward(std::unordered_map<std::string, Tensor>* output_ten
             Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, decoder_normed_input_},
             input_tensors->at("finished"),
             input_tensors->at("sequence_lengths"),
-            input_tensors->at("input_lengths"),
+            input_tensors->at("total_padding_tokens"),
+            input_tensors->at("d_prefix_prompt_lengths"),
+            input_tensors->at("max_prefix_prompt_length"),
             input_tensors->at("max_input_length"),
             input_tensors->at("step"),
-            input_tensors->at("cache_indirection")};
+            input_tensors->at("cache_indirection"),
+            input_tensors->at("masked_tokens")};
 
         size_t cache_offset = l - getFirstLayerParallelId();
         for (auto t = k_cache.shape.begin() + 1; t != k_cache.shape.end(); ++t) {
@@ -343,5 +337,8 @@ void GptJDecoder<T>::forward(std::unordered_map<std::string, Tensor>* output_ten
 
 template class GptJDecoder<float>;
 template class GptJDecoder<half>;
+#ifdef ENABLE_BF16
+template class GptJDecoder<__nv_bfloat16>;
+#endif
 
 }  // namespace fastertransformer

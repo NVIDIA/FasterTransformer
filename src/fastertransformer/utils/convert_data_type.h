@@ -21,7 +21,7 @@
 // be consistent with FasterTransformer
 int8_t float_to_int8_rn_host(float x)
 {
-    int8_t res;
+    int8_t  res;
     int32_t tmp;
     if (x >= 0) {
         tmp = int(x + 0.5);

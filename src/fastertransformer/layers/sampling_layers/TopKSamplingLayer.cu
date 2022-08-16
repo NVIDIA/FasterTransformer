@@ -21,8 +21,64 @@
 #include "src/fastertransformer/kernels/sampling_topp_kernels.h"
 #include "src/fastertransformer/layers/sampling_layers/TopKSamplingLayer.h"
 #include "src/fastertransformer/utils/logger.h"
+#include "src/fastertransformer/utils/memory_utils.h"
 
 namespace fastertransformer {
+
+template<uint TOP_K_MAX>
+__global__ void setup_topk_runtime_args(int    batch_size,
+                                        uint   top_k,
+                                        uint*  top_ks,
+                                        int    top_ks_size,
+                                        float  top_p,
+                                        float* top_ps,
+                                        int    top_ps_size,
+                                        bool*  skip_decode)
+{
+    int index = blockIdx.x * gridDim.x + threadIdx.x;
+    for (int i = index; i < batch_size; i += gridDim.x * blockDim.x) {
+        uint  k = top_ks_size > 1 ? top_ks[i] : top_k;
+        float p = top_ps_size > 1 ? top_ps[i] : top_p;
+        if (k == 0 && p == 0.0f) {
+            // Invalid runtime topk/topp combination. Use a greedy decoding as default.
+            printf("[WARNING] Invalid runtime topk/topp combination for token %d (topk: %d, topp: %f). "
+                   "Use a greedy decoding as default.\n",
+                   i,
+                   k,
+                   p);
+            k = 1;
+        }
+        if (k > 0 && p == 0.0f) {
+            // for compatibility <= FT5.0.
+            // This case corresponds to the old topk sampling, which is equivalent to
+            // the old topk_topp sampling with topp=1.0f. TopKSamplingLayer and
+            // TopKTopPSamplingLayer are now merged by TopKSamplingLayer. Thus, we
+            // replace the case topk>0 and topp=0.0f by topk>0 and topp=1.0f for the
+            // compatibility.
+            p = 1.0f;
+        }
+        // Clip k value. A topk sampling kernel supports up to TOP_K_MAX=64.
+        top_ks[i] = k > TOP_K_MAX ? TOP_K_MAX : k;
+        if (k > TOP_K_MAX) {
+            printf("[WARNING] topk (%d) is larger than max supported number (%d) for token %d"
+                   " clip to max supported number %d. \n",
+                   k,
+                   TOP_K_MAX,
+                   i,
+                   top_ks[i]);
+        }
+        // Clip p value if it is out of range. range = [0.0, 1.0].
+        top_ps[i] = p < 0.0f ? 0.0f : (p > 1.0f ? 1.0f : p);
+        if (p < 0.0f || p > 1.0f) {
+            printf("[WARNING] topp (%f) is out of range ([0.0, 1.0f]) for token %d"
+                   " clip to closest number %f.\n",
+                   p,
+                   i,
+                   top_ps[i]);
+        }
+        skip_decode[i] = k == 0;
+    }
+}
 
 template<typename T>
 void TopKSamplingLayer<T>::allocateBuffer()
@@ -31,9 +87,16 @@ void TopKSamplingLayer<T>::allocateBuffer()
 }
 
 template<typename T>
-void TopKSamplingLayer<T>::allocateBuffer(size_t batch_size, size_t top_k, float top_p)
+void TopKSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tensor top_p)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    BaseSamplingLayer<T>::allocateBuffer(batch_size, top_k, top_p);
+    uint max_top_k = top_k.size() > 0 ? top_k.max<uint>() : 1;
+    if (max_top_k == 0) {
+        // for safety. TopKSamplingLayer handles a case of top_k=0 and top_p=0 as
+        // a greedy decode, i.e. top_k=1, although such case has max_top_k=0.
+        max_top_k = 1;
+    }
     invokeTopKSampling<T>(nullptr,
                           sampling_workspace_size_,
                           nullptr,
@@ -43,14 +106,18 @@ void TopKSamplingLayer<T>::allocateBuffer(size_t batch_size, size_t top_k, float
                           nullptr,
                           nullptr,
                           nullptr,
-                          top_k,
+                          max_top_k,
+                          1.0f,
                           vocab_size_padded_,
                           nullptr,
                           stream_,
-                          batch_size);
+                          batch_size,
+                          skip_decode_buf_);
     sampling_workspace_ = allocator_->reMalloc(sampling_workspace_, sampling_workspace_size_, false);
-    curandstate_buf_ = reinterpret_cast<curandState_t*>(
-        allocator_->reMalloc(curandstate_buf_, sizeof(curandState_t) * batch_size, false));
+    runtime_top_k_buf_ =
+        reinterpret_cast<uint*>(allocator_->reMalloc(runtime_top_k_buf_, sizeof(uint) * batch_size, false));
+    runtime_top_p_buf_ =
+        reinterpret_cast<float*>(allocator_->reMalloc(runtime_top_p_buf_, sizeof(float) * batch_size, false));
     is_allocate_buffer_ = true;
 }
 
@@ -59,24 +126,73 @@ void TopKSamplingLayer<T>::freeBuffer()
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_) {
-        allocator_->free(sampling_workspace_);
-        allocator_->free(curandstate_buf_);
-        is_allocate_buffer_ = false;
+        allocator_->free((void**)(&sampling_workspace_));
+        allocator_->free((void**)(&runtime_top_k_buf_));
+        allocator_->free((void**)(&runtime_top_p_buf_));
     }
+    BaseSamplingLayer<T>::freeBuffer();
+    is_allocate_buffer_ = false;
 }
 
 template<typename T>
-void TopKSamplingLayer<T>::invokeInitialize(size_t batch_size,
-                                            unsigned long long random_seed,
-                                            curandState_t* curandstate_buf)
+void TopKSamplingLayer<T>::setup(const size_t                                   batch_size,
+                                 const size_t                                   beam_width,
+                                 const std::unordered_map<std::string, Tensor>* runtime_args)
 {
+    // Setup runtime topk and topp arguments.
+    //
+    // runtime_args:
+    //     runtime_top_k [1] or [batch_size] on cpu, optional, uint.
+    //     runtime_top_p [1] or [batch_size] on cpu, optional, float.
+    //     temperature [1] or [batch_size] on cpu, optional
+    //     repetition_penalty [1] or [batch_size] on cpu, optional
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    invokeCurandInitialize(curandstate_buf, batch_size, random_seed, stream_);
-    sync_check_cuda_error();
+    BaseSamplingLayer<T>::setup(batch_size, beam_width, runtime_args);
+
+    uint         tmp_top_k     = 0;
+    const Tensor runtime_top_k = runtime_args->count("runtime_top_k") ?
+                                     runtime_args->at("runtime_top_k") :
+                                     Tensor(MEMORY_CPU, TYPE_UINT32, {1}, &tmp_top_k);
+    const Tensor runtime_top_p = runtime_args->count("runtime_top_p") ? runtime_args->at("runtime_top_p") : Tensor();
+    const size_t runtime_top_k_size = runtime_top_k.size();
+    const size_t runtime_top_p_size = runtime_top_p.size();
+
+    uint  top_k = runtime_top_k.max<uint>();
+    float top_p = runtime_top_p_size == 0 ? 0.0f : runtime_top_p.getVal<float>();
+
+    if (runtime_top_k_size > 1) {
+        FT_CHECK_WITH_INFO(
+            runtime_top_k.size() == batch_size,
+            fmtstr("runtime_top_k.size() (%d) == batch_size (%d) is not satisfied!", runtime_top_k.size(), batch_size));
+        cudaAutoCpy(runtime_top_k_buf_, runtime_top_k.getPtr<uint>(), batch_size, stream_);
+    }
+    if (runtime_top_p_size > 1) {
+        FT_CHECK_WITH_INFO(
+            runtime_top_p.size() == batch_size,
+            fmtstr("runtime_top_p.size() (%d) == batch_size (%d) is not satisfied!", runtime_top_p.size(), batch_size));
+        cudaAutoCpy(runtime_top_p_buf_, runtime_top_p.getPtr<float>(), batch_size, stream_);
+    }
+
+    dim3 block(std::min((int)batch_size, 1024));
+    dim3 grid(div_up((int)batch_size, (int)block.x));
+    // support top_k up to 1024.
+    setup_topk_runtime_args<1024><<<grid, block, 0, stream_>>>(batch_size,
+                                                               top_k,
+                                                               runtime_top_k_buf_,
+                                                               runtime_top_k_size,
+                                                               top_p,
+                                                               runtime_top_p_buf_,
+                                                               runtime_top_p_size,
+                                                               skip_decode_buf_);
+    cudaAutoCpy(skip_decode_, skip_decode_buf_, batch_size, stream_);
+    uint* runtime_top_ks = new uint[batch_size];
+    cudaAutoCpy(runtime_top_ks, runtime_top_k_buf_, batch_size, stream_);
+    runtime_max_top_k_ = static_cast<int>(*std::max_element(runtime_top_ks, runtime_top_ks + batch_size));
+    delete[] runtime_top_ks;
 }
 
 template<typename T>
-void TopKSamplingLayer<T>::runSampling(std::vector<fastertransformer::Tensor>* output_tensors,
+void TopKSamplingLayer<T>::runSampling(std::vector<fastertransformer::Tensor>*       output_tensors,
                                        const std::vector<fastertransformer::Tensor>* input_tensors)
 {
     // input_tensors:
@@ -115,7 +231,7 @@ void TopKSamplingLayer<T>::runSampling(std::vector<fastertransformer::Tensor>* o
 }
 
 template<typename T>
-void TopKSamplingLayer<T>::runSampling(std::unordered_map<std::string, Tensor>* output_tensors,
+void TopKSamplingLayer<T>::runSampling(std::unordered_map<std::string, Tensor>*       output_tensors,
                                        const std::unordered_map<std::string, Tensor>* input_tensors)
 {
     // input_tensors:
@@ -125,11 +241,6 @@ void TopKSamplingLayer<T>::runSampling(std::unordered_map<std::string, Tensor>* 
     //      max_input_length [1] on cpu
     //      input_lengths [local_batch_size]
     //      ite [1] on cpu
-    //      runtime_top_k [1] or [batch_size] on cpu, optional
-    //      temperature [1] or [batch_size] on cpu, optional
-    //      len_penalty [1] or [batch_size] on cpu, optional
-    //      repetition_penalty [1] or [batch_size] on cpu, optional
-    //      random_seed [1] or [batch_size] on cpu, optional
 
     // output_tensors:
     //      output_ids [max_seq_len, batch_size]
@@ -144,24 +255,15 @@ void TopKSamplingLayer<T>::runSampling(std::unordered_map<std::string, Tensor>* 
     FT_CHECK(input_tensors->size() >= 6);
     FT_CHECK(output_tensors->size() >= 3);
 
-    const int batch_size = output_tensors->at("output_ids").shape[1];
+    const int batch_size       = output_tensors->at("output_ids").shape[1];
     const int local_batch_size = input_tensors->at("logits").shape[0];
-    const int step = *((int*)input_tensors->at("step").data);
-    const int ite = *((int*)input_tensors->at("ite").data);
+    const int ite              = *((int*)input_tensors->at("ite").data);
+    const int step             = *((int*)input_tensors->at("step").data);
 
-    const int runtime_top_k = input_tensors->at("runtime_top_k").shape[0] == 1 ?
-                                  input_tensors->at("runtime_top_k").getVal<int>(0) :
-                                  input_tensors->at("runtime_top_k").getVal<int>(ite * local_batch_size);
-    allocateBuffer(batch_size, runtime_top_k, 0.0f);
-    if (input_tensors->count("random_seed")) {
-        unsigned long long int random_seed =
-            input_tensors->at("random_seed").shape[0] == 1 ?
-                (unsigned long long int)input_tensors->at("random_seed").getVal<int>(0) :
-                (unsigned long long int)input_tensors->at("random_seed").getVal<int>(ite * local_batch_size);
-        invokeInitialize(local_batch_size, random_seed, curandstate_buf_ + ite * local_batch_size);
-    }
+    // in case of skip any, the logit value is already copied and processed.
+    T* logits = !skip_any_ ? input_tensors->at("logits").getPtr<T>() : runtime_logits_buf_;
 
-    invokeAddBiasEndMask((T*)(input_tensors->at("logits").data),
+    invokeAddBiasEndMask(logits,
                          (T*)(nullptr),
                          (const int*)input_tensors->at("end_id").data,
                          (bool*)output_tensors->at("finished").data,
@@ -176,48 +278,53 @@ void TopKSamplingLayer<T>::runSampling(std::unordered_map<std::string, Tensor>* 
         output_tensors->count("output_log_probs") ? output_tensors->at("output_log_probs").getPtr<float>() : nullptr;
 
     if (cum_log_probs != nullptr || output_log_probs != nullptr) {
-        invokeAddBiasSoftMax((T*)(input_tensors->at("logits").data),
+        invokeAddBiasSoftMax(logits,
                              (T*)(nullptr),
-                             (const int*)input_tensors->at("end_id").data,
-                             (bool*)output_tensors->at("finished").data,
+                             input_tensors->at("end_id").getPtr<int>(),
+                             output_tensors->at("finished").getPtr<bool>(),
                              local_batch_size,
                              vocab_size_padded_,
                              vocab_size_,
                              stream_);
+        sync_check_cuda_error();
     }
 
-    invokeTopKSampling(
+    invokeBatchTopKSampling(
         sampling_workspace_,
         sampling_workspace_size_,
-        input_tensors->at("logits").getPtr<T>(),
+        logits,
         output_tensors->at("output_ids").getPtrWithOffset<int>(step * batch_size + ite * local_batch_size),
         output_tensors->at("sequence_length").getPtr<int>(),
         output_tensors->at("finished").getPtr<bool>(),
         cum_log_probs,
         output_log_probs,
         curandstate_buf_ + ite * local_batch_size,
-        runtime_top_k,
+        (int)runtime_max_top_k_,  // useless because runtime_top_k_buf_ is never nullptr. Keep for legacy.
+        (int*)(runtime_top_k_buf_ + ite * local_batch_size),
+        1.0f,  // useless because runtime_top_p_buf_ is never nullptr. Keep for legacy.
+        runtime_top_p_buf_ + ite * local_batch_size,
         vocab_size_padded_,
-        (const int*)input_tensors->at("end_id").data,
+        input_tensors->at("end_id").getPtr<int>(),
         stream_,
-        local_batch_size);
+        local_batch_size,
+        skip_decode_buf_ + ite * local_batch_size);
     sync_check_cuda_error();
 }
 
 template<typename T>
-TopKSamplingLayer<T>::TopKSamplingLayer(size_t max_batch_size,
-                                        size_t vocab_size,
-                                        size_t vocab_size_padded,
-                                        int end_id,
-                                        size_t top_k,
+TopKSamplingLayer<T>::TopKSamplingLayer(size_t             max_batch_size,
+                                        size_t             vocab_size,
+                                        size_t             vocab_size_padded,
+                                        int                end_id,
+                                        size_t             top_k,
                                         unsigned long long random_seed,
-                                        float temperature,
-                                        float len_penalty,
-                                        float repetition_penalty,
-                                        cudaStream_t stream,
-                                        cublasMMWrapper* cublas_wrapper,
-                                        IAllocator* allocator,
-                                        bool is_free_buffer_after_forward):
+                                        float              temperature,
+                                        float              len_penalty,
+                                        float              repetition_penalty,
+                                        cudaStream_t       stream,
+                                        cublasMMWrapper*   cublas_wrapper,
+                                        IAllocator*        allocator,
+                                        bool               is_free_buffer_after_forward):
     BaseSamplingLayer<T>(max_batch_size,
                          vocab_size,
                          vocab_size_padded,
@@ -245,6 +352,7 @@ TopKSamplingLayer<T>::TopKSamplingLayer(TopKSamplingLayer<T> const& top_k_sampli
 template<typename T>
 TopKSamplingLayer<T>::~TopKSamplingLayer()
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     freeBuffer();
 }
 

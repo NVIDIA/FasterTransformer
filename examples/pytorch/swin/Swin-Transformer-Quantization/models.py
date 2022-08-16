@@ -49,7 +49,7 @@ def build_model(config):
                                 patch_norm=config.MODEL.SWIN.PATCH_NORM,
                                 use_checkpoint=config.TRAIN.USE_CHECKPOINT)
     else:
-        raise NotImplementedError(f"Unkown model: {model_type}")
+        raise NotImplementedError(f"Unknown model: {model_type}")
 
     return model
 
@@ -360,7 +360,7 @@ class SwinTransformerBlock(nn.Module):
 
     Args:
         dim (int): Number of input channels.
-        input_resolution (tuple[int]): Input resulotion.
+        input_resolution (tuple[int]): Input resolution.
         num_heads (int): Number of attention heads.
         window_size (int): Window size.
         shift_size (int): Shift size for SW-MSA.

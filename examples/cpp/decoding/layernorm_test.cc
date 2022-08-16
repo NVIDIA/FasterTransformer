@@ -37,13 +37,13 @@ int checkNonZero(T* A, int size)
 }
 
 template<typename TA, typename TB>
-void checkMat(TA* A, TB* B, int size, char* mark)
+void checkMat(TA* A, TB* B, int size, const char* mark, float threshold)
 {
     float max_diff = -10000.0f;
     float max_diff_a, max_diff_b;
-    TA* matA = (TA*)malloc(sizeof(TA) * size);
-    TB* matB = (TB*)malloc(sizeof(TB) * size);
-    int not_passed = 0;
+    TA*   matA       = (TA*)malloc(sizeof(TA) * size);
+    TB*   matB       = (TB*)malloc(sizeof(TB) * size);
+    int   not_passed = 0;
     cudaMemcpy(matA, A, sizeof(TA) * size, cudaMemcpyDeviceToHost);
     cudaMemcpy(matB, B, sizeof(TB) * size, cudaMemcpyDeviceToHost);
     float A_nonZero_ratio = float(checkNonZero(A, size)) / float(size);
@@ -54,23 +54,24 @@ void checkMat(TA* A, TB* B, int size, char* mark)
     for (int jjj = 0; jjj < size; jjj++) {
         float diff = fabs(float(matA[jjj]) - float(matB[jjj]));
         if (diff > max_diff) {
-            max_diff = diff;
+            max_diff   = diff;
             max_diff_a = float(matA[jjj]);
             max_diff_b = float(matB[jjj]);
         }
-        if (fabs(float(matA[jjj]) - float(matB[jjj])) > 0.001) {
+        if (fabs(float(matA[jjj]) - float(matB[jjj])) > threshold) {
             not_passed += 1;
             if (not_passed < 1000) {
                 printf("%d %f %f %f\n", jjj, float(matA[jjj]), float(matB[jjj]), float(matA[jjj]) - float(matB[jjj]));
             }
         }
     }
-    printf("[%s] max diff : %f ; a : %f ; b : %f\n", mark, max_diff, max_diff_a, max_diff_b);
+    FT_LOG_INFO("[%s] max diff : %f ; a : %f ; b : %f", mark, max_diff, max_diff_a, max_diff_b);
     if (not_passed != 0) {
-        printf("[%s] different elements : %d \n", mark, not_passed);
+        FT_LOG_ERROR("[%s] different elements : %d ", mark, not_passed);
+        FT_CHECK(false);
     }
     else {
-        printf("[%s] check pass!\n", mark);
+        FT_LOG_INFO("[%s] check pass!", mark);
     }
     free(matA);
     free(matB);
@@ -85,22 +86,31 @@ void add_bias_residual_layernorm_test(const int m, const int n);
 int main(int argc, char** argv)
 {
     if (argc != 4) {
-        printf("[ERROR] layernorm_test max_m max_n is_fp16\n");
+        printf("[ERROR] layernorm_test max_m max_n data_type\n");
         printf("e.g., ./bin/layernorm_test 1 1024 1\n");
         return 0;
     }
 
-    int max_m = atoi(argv[1]);
-    int max_n = atoi(argv[2]);
-    int is_fp16 = atoi(argv[3]);
+    int                  max_m     = atoi(argv[1]);
+    int                  max_n     = atoi(argv[2]);
+    const FtCudaDataType data_type = static_cast<FtCudaDataType>(atoi(argv[3]));  // 0 FP32, 1 FP16, 2 BF 16
 
     for (int m = 1; m <= max_m; m *= 2) {
         for (int n = 128; n <= max_n; n *= 2) {
-            if (is_fp16) {
+            if (data_type == FP16) {
                 add_bias_residual_layernorm_test<half>(m, n);
             }
-            else {
+#ifdef ENABLE_BF16
+            else if (data_type == BF16) {
+                add_bias_residual_layernorm_test<__nv_bfloat16>(m, n);
+            }
+#endif
+            else if (data_type == FP32) {
                 add_bias_residual_layernorm_test<float>(m, n);
+            }
+            else {
+                FT_LOG_ERROR("data_type should be fp32, fp16 or bf16!");
+                exit(-1);
             }
         }
     }
@@ -114,7 +124,8 @@ void layernorm_test(const int m, const int n)
     check_cuda_error(cudaGetDeviceProperties(&prop, 0));
     printf("Device %s\n", prop.name);
 
-    T *input, *output_opt, *output_baseline, *gamma, *beta;
+    const float layernorm_eps = 1e-4f;
+    T *         input, *output_opt, *output_baseline, *gamma, *beta;
     deviceMalloc(&input, m * n);
     deviceMalloc(&output_baseline, m * n);
     deviceMalloc(&output_opt, m * n);
@@ -126,15 +137,15 @@ void layernorm_test(const int m, const int n)
 
     // warmup
     for (int i = 0; i < 1000; i++) {
-        invokeGeneralLayerNorm<T>(output_baseline, input, gamma, beta, m, n, stream);
-        invokeGeneralLayerNorm<T>(output_opt, input, gamma, beta, m, n, stream, true);
+        invokeGeneralLayerNorm<T>(output_baseline, input, gamma, beta, layernorm_eps, m, n, stream);
+        invokeGeneralLayerNorm<T>(output_opt, input, gamma, beta, layernorm_eps, m, n, stream, true);
     }
 
     struct timeval start, end;
     cudaDeviceSynchronize();
     gettimeofday(&start, NULL);
     for (int i = 0; i < ite; i++) {
-        invokeGeneralLayerNorm<T>(output_baseline, input, gamma, beta, m, n, stream);
+        invokeGeneralLayerNorm<T>(output_baseline, input, gamma, beta, layernorm_eps, m, n, stream);
     }
     cudaDeviceSynchronize();
     gettimeofday(&end, NULL);
@@ -144,7 +155,7 @@ void layernorm_test(const int m, const int n)
     cudaDeviceSynchronize();
     gettimeofday(&start_2, NULL);
     for (int i = 0; i < ite; i++) {
-        invokeGeneralLayerNorm<T>(output_opt, input, gamma, beta, m, n, stream, true);
+        invokeGeneralLayerNorm<T>(output_opt, input, gamma, beta, layernorm_eps, m, n, stream, true);
     }
     cudaDeviceSynchronize();
     gettimeofday(&end_2, NULL);
@@ -166,9 +177,10 @@ void add_bias_residual_layernorm_test(const int m, const int n)
     check_cuda_error(cudaGetDeviceProperties(&prop, 0));
     printf("Device %s\n", prop.name);
 
-    int opt_version = 2;
-    T *input, *output_opt, *output_baseline, *gamma, *beta, *bias;
-    T *normed_output_opt, *normed_output_baseline;
+    const float layernorm_eps = 1e-4f;
+    int         opt_version   = 2;
+    T *         input, *output_opt, *output_baseline, *gamma, *beta, *bias;
+    T *         normed_output_opt, *normed_output_baseline;
     deviceMalloc(&input, m * n);
     deviceMalloc(&output_baseline, m * n);
     deviceMalloc(&output_opt, m * n);
@@ -181,22 +193,39 @@ void add_bias_residual_layernorm_test(const int m, const int n)
     cudaStream_t stream;
     cudaStreamCreate(&stream);
     const int warmup_ite = 1000;  // 1000;
-    const int ite = 5000;         // 5000;
+    const int ite        = 5000;  // 5000;
 
     // verify correctness
     invokeGeneralAddBiasResidualPreLayerNorm(
-        output_baseline, normed_output_baseline, input, gamma, beta, bias, m, n, stream, 0);
+        output_baseline, normed_output_baseline, input, gamma, beta, bias, layernorm_eps, m, n, stream, 0);
     invokeGeneralAddBiasResidualPreLayerNorm(
-        output_opt, normed_output_opt, input, gamma, beta, bias, m, n, stream, opt_version);
-    checkMat(output_baseline, output_opt, m * n, "output_baseline vs output_opt");
-    checkMat(normed_output_baseline, normed_output_opt, m * n, "normed_output_baseline vs normed_output_opt");
+        output_opt, normed_output_opt, input, gamma, beta, bias, layernorm_eps, m, n, stream, opt_version);
+    float threshold = 0.0f;
+    if (std::is_same<T, float>::value) {
+        threshold = 1e-6f;
+    }
+    else if (std::is_same<T, half>::value) {
+        threshold = 1e-3;
+    }
+#ifdef ENABLE_BF16
+    else if (std::is_same<T, __nv_bfloat16>::value) {
+        threshold = 5e-2;
+    }
+#endif
+    else {
+        FT_LOG_ERROR("data_type should be fp32, fp16 or bf16!");
+        exit(-1);
+    }
+    checkMat(output_baseline, output_opt, m * n, "output_baseline vs output_opt", threshold);
+    checkMat(
+        normed_output_baseline, normed_output_opt, m * n, "normed_output_baseline vs normed_output_opt", threshold);
 
     // warmup
     for (int i = 0; i < warmup_ite; i++) {
         invokeGeneralAddBiasResidualPreLayerNorm(
-            output_baseline, normed_output_baseline, input, gamma, beta, bias, m, n, stream, 0);
+            output_baseline, normed_output_baseline, input, gamma, beta, bias, layernorm_eps, m, n, stream, 0);
         invokeGeneralAddBiasResidualPreLayerNorm(
-            output_opt, normed_output_opt, input, gamma, beta, bias, m, n, stream, opt_version);
+            output_opt, normed_output_opt, input, gamma, beta, bias, layernorm_eps, m, n, stream, opt_version);
     }
 
     struct timeval start, end;
@@ -204,7 +233,7 @@ void add_bias_residual_layernorm_test(const int m, const int n)
     gettimeofday(&start, NULL);
     for (int i = 0; i < ite; i++) {
         invokeGeneralAddBiasResidualPreLayerNorm(
-            output_baseline, normed_output_baseline, input, gamma, beta, bias, m, n, stream, 0);
+            output_baseline, normed_output_baseline, input, gamma, beta, bias, layernorm_eps, m, n, stream, 0);
     }
     cudaDeviceSynchronize();
     gettimeofday(&end, NULL);
@@ -215,7 +244,7 @@ void add_bias_residual_layernorm_test(const int m, const int n)
     gettimeofday(&start_2, NULL);
     for (int i = 0; i < ite; i++) {
         invokeGeneralAddBiasResidualPreLayerNorm(
-            output_opt, normed_output_opt, input, gamma, beta, bias, m, n, stream, opt_version);
+            output_opt, normed_output_opt, input, gamma, beta, bias, layernorm_eps, m, n, stream, opt_version);
     }
     cudaDeviceSynchronize();
     gettimeofday(&end_2, NULL);

@@ -23,20 +23,20 @@ template class SwinTransformerFunc<float>;
 template class SwinTransformerFunc<half>;
 
 SwinTransformerClass::SwinTransformerClass(std::vector<th::Tensor> w,
-                                           th::Tensor depths,
-                                           th::Tensor num_heads,
-                                           int64_t max_batch,
-                                           int64_t img_size,
-                                           int64_t patch_size,
-                                           int64_t in_chans,
-                                           int64_t embed_dim,
-                                           int64_t window_size,
-                                           bool ape,
-                                           bool patch_norm,
-                                           int64_t layer_num,
-                                           double mlp_ratio,
-                                           bool qkv_bias,
-                                           double qk_scale):
+                                           th::Tensor              depths,
+                                           th::Tensor              num_heads,
+                                           int64_t                 max_batch,
+                                           int64_t                 img_size,
+                                           int64_t                 patch_size,
+                                           int64_t                 in_chans,
+                                           int64_t                 embed_dim,
+                                           int64_t                 window_size,
+                                           bool                    ape,
+                                           bool                    patch_norm,
+                                           int64_t                 layer_num,
+                                           double                  mlp_ratio,
+                                           bool                    qkv_bias,
+                                           double                  qk_scale):
     st_(w[0].scalar_type()), depths_(depths), num_heads_(num_heads), weights_(w)
 {
 
@@ -87,21 +87,40 @@ SwinTransformerClass::SwinTransformerClass(std::vector<th::Tensor> w,
                                                                    qk_scale,
                                                                    weights_);
             break;
+#ifdef ENABLE_BF16
+        case at::ScalarType::BFloat16:
+            swin_transformer_func_ = new SwinTransformerFunc<__nv_bfloat16>(max_batch,
+                                                                            img_size,
+                                                                            patch_size,
+                                                                            in_chans,
+                                                                            embed_dim,
+                                                                            window_size,
+                                                                            get_ptr<int>(depths),
+                                                                            get_ptr<int>(num_heads),
+                                                                            ape,
+                                                                            patch_norm,
+                                                                            layer_num,
+                                                                            mlp_ratio,
+                                                                            qkv_bias,
+                                                                            qk_scale,
+                                                                            weights_);
+            break;
+#endif
         default:
             throw std::runtime_error("Wrong th::Tensor type.");
     }
-    info_int_ = torch::empty({10}, torch::dtype(torch::kInt64));
-    info_int_[0] = max_batch;
-    info_int_[1] = img_size;
-    info_int_[2] = patch_size;
-    info_int_[3] = in_chans;
-    info_int_[4] = embed_dim;
-    info_int_[5] = window_size;
-    info_int_[6] = (int64_t)ape;
-    info_int_[7] = (int64_t)patch_norm;
-    info_int_[8] = layer_num;
-    info_int_[9] = (int64_t)qkv_bias;
-    info_float_ = torch::empty({2}, torch::dtype(torch::kFloat64));
+    info_int_      = torch::empty({10}, torch::dtype(torch::kInt64));
+    info_int_[0]   = max_batch;
+    info_int_[1]   = img_size;
+    info_int_[2]   = patch_size;
+    info_int_[3]   = in_chans;
+    info_int_[4]   = embed_dim;
+    info_int_[5]   = window_size;
+    info_int_[6]   = (int64_t)ape;
+    info_int_[7]   = (int64_t)patch_norm;
+    info_int_[8]   = layer_num;
+    info_int_[9]   = (int64_t)qkv_bias;
+    info_float_    = torch::empty({2}, torch::dtype(torch::kFloat64));
     info_float_[0] = mlp_ratio;
     info_float_[1] = qk_scale;
 }
@@ -124,15 +143,15 @@ SwinTransformerClass::~SwinTransformerClass()
 th::Tensor SwinTransformerClass::forward(th::Tensor input)
 {
     CHECK_INPUT(input, st_);
-    int batch_size = input.size(0);
+    int  batch_size = input.size(0);
     auto output =
         torch::empty({batch_size, output_dim_}, torch::dtype(input.dtype()).device(torch::kCUDA).requires_grad(false));
     swin_transformer_func_->forward(batch_size, input, output);
     return output;
 }
 
-th::Tensor gen_relative_pos_bias(th::Tensor relative_position_bias_table,
-                                 th::Tensor relative_position_bias_index,
+th::Tensor gen_relative_pos_bias(th::Tensor    relative_position_bias_table,
+                                 th::Tensor    relative_position_bias_index,
                                  const int64_t window_size,
                                  const int64_t head_num)
 {
@@ -179,25 +198,25 @@ static auto swinTransformerTHS =
                 return self->get_pickle_info();
             },
             [](std::vector<th::Tensor> state) -> c10::intrusive_ptr<torch_ext::SwinTransformerClass> {
-                int state_size = state.size();
-                std::vector<th::Tensor>::const_iterator first = state.begin();
-                std::vector<th::Tensor>::const_iterator last = state.begin() + (state_size - 4);
-                std::vector<th::Tensor> weights(first, last);
-                int idx = state.size() - 2;
-                int i = 0;
-                int64_t max_batch = state[idx][i++].item().to<int>();
-                int64_t img_size = state[idx][i++].item().to<int>();
-                int64_t patch_size = state[idx][i++].item().to<int>();
-                int64_t in_chans = state[idx][i++].item().to<int>();
-                int64_t embed_dim = state[idx][i++].item().to<int>();
-                int64_t window_size = state[idx][i++].item().to<int>();
-                bool ape = state[idx][i++].item().to<bool>();
-                bool patch_norm = state[idx][i++].item().to<bool>();
-                int64_t layer_num = state[idx][i++].item().to<int>();
-                bool qkv_bias = state[idx][i++].item().to<bool>();
-                idx = state.size() - 1;
-                double mlp_ratio = state[idx][0].item().to<double>();
-                double qk_scale = state[idx][1].item().to<double>();
+                int                                     state_size = state.size();
+                std::vector<th::Tensor>::const_iterator first      = state.begin();
+                std::vector<th::Tensor>::const_iterator last       = state.begin() + (state_size - 4);
+                std::vector<th::Tensor>                 weights(first, last);
+                int                                     idx         = state.size() - 2;
+                int                                     i           = 0;
+                int64_t                                 max_batch   = state[idx][i++].item().to<int>();
+                int64_t                                 img_size    = state[idx][i++].item().to<int>();
+                int64_t                                 patch_size  = state[idx][i++].item().to<int>();
+                int64_t                                 in_chans    = state[idx][i++].item().to<int>();
+                int64_t                                 embed_dim   = state[idx][i++].item().to<int>();
+                int64_t                                 window_size = state[idx][i++].item().to<int>();
+                bool                                    ape         = state[idx][i++].item().to<bool>();
+                bool                                    patch_norm  = state[idx][i++].item().to<bool>();
+                int64_t                                 layer_num   = state[idx][i++].item().to<int>();
+                bool                                    qkv_bias    = state[idx][i++].item().to<bool>();
+                idx                                                 = state.size() - 1;
+                double mlp_ratio                                    = state[idx][0].item().to<double>();
+                double qk_scale                                     = state[idx][1].item().to<double>();
                 return c10::make_intrusive<torch_ext::SwinTransformerClass>(weights,
                                                                             state[state_size - 4],
                                                                             state[state_size - 3],
