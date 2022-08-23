@@ -190,7 +190,7 @@ T5TritonModel<T>::createModelInstance(int                                       
         ft::getAttentionType<T>(encoder_size_per_head_, sm_, true, encoder_num_bucket_or_max_pos_seq_len_, false);
 
     ft::NcclParam tensor_para_   = nccl_params.first[comms_rank];
-    ft::NcclParam pipeline_para_ = nccl_params.first[comms_rank];
+    ft::NcclParam pipeline_para_ = nccl_params.second[comms_rank];
 
     auto encoder = std::make_unique<ft::T5Encoder<T>>(ft::T5Encoder<T>(0,
                                                                        0,
