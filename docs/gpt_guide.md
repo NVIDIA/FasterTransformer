@@ -875,7 +875,7 @@ TP means tensor parallelism, PP means pipeline parallelism.
 <div align=center><img width=800 src ="images/gpt/Megatron_530B_benchmark_4.png "/></div>
 <div align=center> Fig 10. Latency on fixing input length 128, 16 ways tensor parallelism, different output length and batch size. </div>
 <br/><br/>
-3
+
 | Batch Size | Input Length | Output Length | Latency of TP-16, PP-1 (ms) | Latency of TP-32, PP-1 (ms) | Latency of TP-8, PP-3 (ms) |
 | :--------: | :----------: | :-----------: | :-------------------------: | :-------------------------: | :------------------------: |
 |     1      |      20      |       8       |             565             |             431             |            842             |
