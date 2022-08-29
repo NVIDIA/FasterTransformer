@@ -234,7 +234,7 @@ void T5DecodingWeight<T>::loadModel(std::string dir_path)
     }
     loadWeightFromBin<T>(
         weights_ptr[2], {(size_t)weights_size[2]}, dir_path + "/decoder.final_layer_norm.weight.bin", model_file_type);
-    loadWeightFromBin<T>(weights_ptr[3], {(size_t)weights_size[3]}, dir_path + "/shared.weight_T.bin", model_file_type);
+    loadWeightFromBin<T>(weights_ptr[3], {(size_t)weights_size[3]}, dir_path + "/lm_head.weight.bin", model_file_type);
 
     if (t5_with_bias) {
         loadWeightFromBin<T>(
