@@ -39,12 +39,12 @@ def param2distributed(
         savebin(p, save_path + f".{i}")
 
 
-def save(w, save_dir, n_inference_gpus, layer_id):
+def save(w, save_dir, n_inference_gpus, n_layers, layer_id):
     makedirs(save_dir, exist_ok=True)
 
     savebin(w['transformer.wte.weight'], save_dir + "/model.wte")
     l = layer_id
-    print(f"Saving layer {l} / 28")
+    print(f"Saving layer {l} / {n_layers}")
     base_k = "transformer.h." + str(l) + "."
     param2file(
         w[base_k + "ln_1.bias"],
@@ -106,9 +106,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--n-inference-gpus", help="Number of GPUs used for inference runtime", default=1, type=int
     )
+    parser.add_argument(
+        "--n-layers", help="Number of GPT-J decoder layer", default=28, type=int
+    )
     args = parser.parse_args()
-
-    NUM_LAYERS = 28
 
     ckpt_file = args.ckpt_dir + "pytorch_model.bin"
     checkpoint = torch.load(ckpt_file)
@@ -142,8 +143,8 @@ if __name__ == "__main__":
     except:
         print(f"Fail to save the config in config.ini.")
 
-    for i in range(NUM_LAYERS):
-        save(checkpoint, output_dir, args.n_inference_gpus,i)
+    for i in range(args.n_layers):
+        save(checkpoint, output_dir, args.n_inference_gpus, args.n_layers, i)
     savebin(checkpoint['transformer.ln_f.weight'], output_dir + "/model.final_layernorm.weight")
     savebin(checkpoint['transformer.ln_f.bias'], output_dir + "/model.final_layernorm.bias")
     savebin(checkpoint['lm_head.weight'], output_dir + "/model.lm_head.weight")
