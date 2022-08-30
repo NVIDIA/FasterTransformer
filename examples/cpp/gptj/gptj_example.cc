@@ -487,6 +487,4 @@ void gptj_example(const INIReader reader)
     if (d_sequence_lengths != nullptr) {
         cudaFree(d_sequence_lengths);
     }
-
-    return;
 }
