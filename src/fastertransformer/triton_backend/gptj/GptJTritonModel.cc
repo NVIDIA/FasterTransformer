@@ -128,8 +128,8 @@ GptJTritonModel<T>::GptJTritonModel(size_t      tensor_para_size,
                                     std::string model_dir):
     tensor_para_size_(tensor_para_size),
     pipeline_para_size_(pipeline_para_size),
-    shared_weights_(std::vector<std::shared_ptr<ft::GptJWeight<T>>>(ft::getDeviceCount())),
     enable_custom_all_reduce_(enable_custom_all_reduce),
+    shared_weights_(std::vector<std::shared_ptr<ft::GptJWeight<T>>>(ft::getDeviceCount())),
     model_dir_(model_dir)
 {
     INIReader reader = INIReader(model_dir + "/config.ini");
@@ -212,15 +212,15 @@ GptJTritonModel<T>::GptJTritonModel(size_t                                     m
     rotary_embedding_dim_(rotary_embedding_dim),
     start_id_(start_id),
     end_id_(end_id),
-    prompt_learning_start_id_(prompt_learning_start_id),
-    prompt_learning_type_(prompt_learning_type),
-    prompt_learning_table_pair_(prompt_learning_table_pair),
     tensor_para_size_(tensor_para_size),
     pipeline_para_size_(pipeline_para_size),
-    shared_weights_(std::vector<std::shared_ptr<ft::GptJWeight<T>>>(ft::getDeviceCount())),
     enable_custom_all_reduce_(enable_custom_all_reduce),
+    shared_weights_(std::vector<std::shared_ptr<ft::GptJWeight<T>>>(ft::getDeviceCount())),
     model_name_(model_name),
-    model_dir_(model_dir)
+    model_dir_(model_dir),
+    prompt_learning_start_id_(prompt_learning_start_id),
+    prompt_learning_type_(prompt_learning_type),
+    prompt_learning_table_pair_(prompt_learning_table_pair)
 {
 }
 
