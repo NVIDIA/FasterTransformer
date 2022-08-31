@@ -53,12 +53,17 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createGptJMo
         prompt_learning_table_pair.insert({task_name, {task_name_id, prompt_length}});
     }
 
+    const size_t head_num      = reader.GetInteger(model_name, "head_num");
+    const size_t size_per_head = reader.GetInteger(model_name, "size_per_head");
+    const size_t hidden_units  = head_num * size_per_head;
+    const size_t inter_size     = 4 * hidden_units;
+
     if (data_type == "fp16") {
         return std::make_shared<GptJTritonModel<half>>(
             reader.GetInteger("ft_instance_hyperparameter", "max_seq_len"),
-            reader.GetInteger(model_name, "head_num"),
-            reader.GetInteger(model_name, "size_per_head"),
-            reader.GetInteger(model_name, "inter_size"),
+            head_num,
+            size_per_head,
+            inter_size,
             reader.GetInteger(model_name, "decoder_layers"),
             reader.GetInteger(model_name, "vocab_size"),
             reader.GetInteger(model_name, "rotary_embedding"),
@@ -76,9 +81,9 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createGptJMo
     else if (data_type == "fp32") {
         return std::make_shared<GptJTritonModel<float>>(
             reader.GetInteger("ft_instance_hyperparameter", "max_seq_len"),
-            reader.GetInteger(model_name, "head_num"),
-            reader.GetInteger(model_name, "size_per_head"),
-            reader.GetInteger(model_name, "inter_size"),
+            head_num,
+            size_per_head,
+            inter_size,
             reader.GetInteger(model_name, "decoder_layers"),
             reader.GetInteger(model_name, "vocab_size"),
             reader.GetInteger(model_name, "rotary_embedding"),
@@ -97,9 +102,9 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createGptJMo
     else if (data_type == "bf16") {
         return std::make_shared<GptJTritonModel<__nv_bfloat16>>(
             reader.GetInteger("ft_instance_hyperparameter", "max_seq_len"),
-            reader.GetInteger(model_name, "head_num"),
-            reader.GetInteger(model_name, "size_per_head"),
-            reader.GetInteger(model_name, "inter_size"),
+            head_num,
+            size_per_head,
+            inter_size,
             reader.GetInteger(model_name, "decoder_layers"),
             reader.GetInteger(model_name, "vocab_size"),
             reader.GetInteger(model_name, "rotary_embedding"),
@@ -165,7 +170,7 @@ GptJTritonModel<T>::GptJTritonModel(size_t      tensor_para_size,
     model_name_           = reader.Get("gptj", "model_name");
     head_num_             = reader.GetInteger("gptj", "head_num");
     size_per_head_        = reader.GetInteger("gptj", "size_per_head");
-    inter_size_           = reader.GetInteger("gptj", "inter_size");
+    inter_size_           = 4 * head_num_ * size_per_head_;
     num_layer_            = reader.GetInteger("gptj", "num_layer");
     vocab_size_           = reader.GetInteger("gptj", "vocab_size");
     rotary_embedding_dim_ = reader.GetInteger("gptj", "rotary_embedding");
