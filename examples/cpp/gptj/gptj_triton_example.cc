@@ -115,7 +115,7 @@ broadCastRequest(const std::vector<int>& v_start_ids,
         pointer_record->push_back(start_ids_ptr);
         pointer_record->push_back(end_ids_ptr);
 
-        request_list.push_back(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>(
+        std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors(
             new std::unordered_map<std::string, triton::Tensor>{
                 {"input_ids",
                  triton::Tensor{triton::MEMORY_GPU,
@@ -135,13 +135,24 @@ broadCastRequest(const std::vector<int>& v_start_ids,
                                 triton::TYPE_UINT32,
                                 std::vector<size_t>{(size_t)request_batch_size},
                                 request_output_len_ptr}},
-                {"bad_words_list",
-                 triton::Tensor{
-                     triton::MEMORY_GPU, triton::TYPE_INT32, {2, v_input_bad_words.size() / 2}, d_input_bad_words}},
                 {"start_id",
-                 triton::Tensor{triton::MEMORY_CPU, triton::TYPE_INT32, {(size_t)request_batch_size}, start_ids_ptr}},
+                 triton::Tensor{triton::MEMORY_CPU,
+                                triton::TYPE_INT32,
+                                {(size_t)request_batch_size},
+                                start_ids_ptr}},
                 {"end_id",
-                 triton::Tensor{triton::MEMORY_CPU, triton::TYPE_INT32, {(size_t)request_batch_size}, end_ids_ptr}}}));
+                 triton::Tensor{triton::MEMORY_CPU,
+                                triton::TYPE_INT32,
+                                {(size_t)request_batch_size},
+                                end_ids_ptr}}});
+        if (!v_input_bad_words.empty()) {
+            input_tensors->insert({"bad_words_list",
+                                   triton::Tensor{triton::MEMORY_GPU,
+                                                  triton::TYPE_INT32,
+                                                  {2, v_input_bad_words.size() / 2},
+                                                  d_input_bad_words}});
+        }
+        request_list.push_back(input_tensors);
 
         int* beam_width_ptr = new int(param.beam_width);
         pointer_record->push_back(beam_width_ptr);
