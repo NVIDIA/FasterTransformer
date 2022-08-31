@@ -104,7 +104,7 @@ void gptj_example(const INIReader reader)
     const int    end_id               = reader.GetInteger(model_name, "end_id");
 
     const size_t hidden_units = head_num * size_per_head;
-    const size_t inter_size   = 4 * hidden_units;
+    const size_t inter_size   = reader.GetInteger(model_name, "inter_size");
 
     const size_t request_batch_size = reader.GetInteger("request", "request_batch_size");
     // The length of tokens we hope this model to generate
