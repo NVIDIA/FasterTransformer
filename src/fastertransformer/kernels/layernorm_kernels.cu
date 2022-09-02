@@ -1449,7 +1449,7 @@ __global__ void layernorm_shift_partition_v2(T2* out_ptr,
         int col_id = i * blockDim.x + tid;
         if (col_id < n) {
             out_ptr[output_offset + col_id] =
-                fma(out_ptr[output_offset + col_id], s_var_2, ldg(&gamma_ptr[col_id]), ldg(&beta_ptr[col_id]));
+                fma(local_out_half2[i], s_var_2, ldg(&gamma_ptr[col_id]), ldg(&beta_ptr[col_id]));
         }
     }
 }
