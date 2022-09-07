@@ -133,7 +133,7 @@ if __name__ == "__main__":
         config["gptj"]["inter_size"] = str(n_embd * 4)
         config["gptj"]["num_layer"] = str(hf_config["n_layer"])
         rotary_dim = n_embd // hf_config["n_head"] if hf_config["rotary_dim"] is None else hf_config["rotary_dim"]
-        config["gptj"]["rotary_embedding_dim"] = str(hf_config["rotary_dim"])
+        config["gptj"]["rotary_embedding"] = str(hf_config["rotary_dim"])
         config["gptj"]["vocab_size"] = str(hf_config["vocab_size"])
         config["gptj"]["start_id"] = str(hf_config["bos_token_id"])
         config["gptj"]["end_id"] = str(hf_config["eos_token_id"])
