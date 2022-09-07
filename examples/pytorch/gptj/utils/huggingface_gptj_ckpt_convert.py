@@ -138,6 +138,7 @@ if __name__ == "__main__":
         config["gptj"]["start_id"] = str(hf_config["bos_token_id"])
         config["gptj"]["end_id"] = str(hf_config["eos_token_id"])
         config["gptj"]["weight_data_type"] = "fp32"
+        Path(output_dir).mkdir(exist_ok=True, parents=True)
         with open(output_dir + "/config.ini", 'w') as configfile:
             config.write(configfile)
     except:
