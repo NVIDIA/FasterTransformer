@@ -44,7 +44,7 @@ def save(w, save_dir, n_inference_gpus, n_layers, layer_id):
 
     savebin(w['transformer.wte.weight'], save_dir + "/model.wte")
     l = layer_id
-    print(f"Saving layer {l} / {n_layers}")
+    print(f"Saving layer {l + 1} / {n_layers}")
     base_k = "transformer.h." + str(l) + "."
     param2file(
         w[base_k + "ln_1.bias"],
