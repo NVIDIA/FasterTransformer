@@ -119,7 +119,7 @@ if __name__ == "__main__":
     output_dir = out_path + f"/{args.n_inference_gpus}-gpu/"
     print(f"saving to {output_dir}")
 
-    config_file = args.ckpt_dir + "config.json"
+    config_file = args.ckpt_dir + "/config.json"
     hf_config = PretrainedConfig.from_json_file(config_file).to_dict()
 
     # NOTE: save parameters to config files (loaded by triton backends)
