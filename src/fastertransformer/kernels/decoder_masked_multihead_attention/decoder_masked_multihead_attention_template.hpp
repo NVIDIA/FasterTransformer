@@ -727,7 +727,8 @@ inline size_t smem_size_in_bytes(const Multihead_attention_params<T, DO_CROSS_AT
 #ifndef MMHA_USE_FP32_ACUM_FOR_LOGITS
     if (sizeof(T) != 4) {
         // TDOD
-        logits_sz = div_up(max_timesteps, 4) * 4 * sizeof(T);
+        logits_sz = (DO_CROSS_ATTENTION) ? div_up(params.memory_max_len + 1, 4) * 4 * sizeof(T) :
+            div_up(max_timesteps + 1, 4) * 4 * sizeof(T);
     }
 #endif
 
