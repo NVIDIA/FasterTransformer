@@ -44,7 +44,7 @@ def save(w, save_dir, n_inference_gpus, n_layers, layer_id):
 
     savebin(w['transformer.wte.weight'], save_dir + "/model.wte")
     l = layer_id
-    print(f"Saving layer {l} / {n_layers}")
+    print(f"Saving layer {l + 1} / {n_layers}")
     base_k = "transformer.h." + str(l) + "."
     param2file(
         w[base_k + "ln_1.bias"],
@@ -133,11 +133,12 @@ if __name__ == "__main__":
         config["gptj"]["inter_size"] = str(n_embd * 4)
         config["gptj"]["num_layer"] = str(hf_config["n_layer"])
         rotary_dim = n_embd // hf_config["n_head"] if hf_config["rotary_dim"] is None else hf_config["rotary_dim"]
-        config["gptj"]["rotary_embedding_dim"] = str(hf_config["rotary_dim"])
+        config["gptj"]["rotary_embedding"] = str(hf_config["rotary_dim"])
         config["gptj"]["vocab_size"] = str(hf_config["vocab_size"])
         config["gptj"]["start_id"] = str(hf_config["bos_token_id"])
         config["gptj"]["end_id"] = str(hf_config["eos_token_id"])
         config["gptj"]["weight_data_type"] = "fp32"
+        Path(output_dir).mkdir(exist_ok=True, parents=True)
         with open(output_dir + "/config.ini", 'w') as configfile:
             config.write(configfile)
     except:
