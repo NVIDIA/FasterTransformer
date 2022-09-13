@@ -119,6 +119,21 @@ void check(T result, char const* const func, const char* const file, int const l
 
 inline void syncAndCheck(const char* const file, int const line)
 {
+    // When FT_DEBUG_LEVEL=DEBUG, must check error
+    static char* level_name = std::getenv("FT_DEBUG_LEVEL");
+    if (level_name != nullptr) {
+        static std::string level = std::string(level_name);
+        if (level == "DEBUG") {
+            cudaDeviceSynchronize();
+            cudaError_t result = cudaGetLastError();
+            if (result) {
+                throw std::runtime_error(std::string("[FT][ERROR] CUDA runtime error: ") + (_cudaGetErrorEnum(result))
+                                         + " " + file + ":" + std::to_string(line) + " \n");
+            }
+            FT_LOG_DEBUG("run syncAndCheck");
+        }
+    }
+
 #ifndef NDEBUG
     cudaDeviceSynchronize();
     cudaError_t result = cudaGetLastError();

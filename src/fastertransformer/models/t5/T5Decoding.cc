@@ -366,7 +366,10 @@ void T5Decoding<T>::forward(std::unordered_map<std::string, Tensor>*       outpu
     const DataType data_type        = getTensorType<T>();
     int*           sequence_lengths = (int*)output_tensors->at("sequence_length").data;
 
-    cudaMemset((int*)output_tensors->at("output_ids").data, 0, sizeof(int) * batch_size * beam_width * max_seq_len);
+    cudaMemsetAsync(
+        output_tensors->at("output_ids").getPtr<int>(), 0, output_tensors->at("output_ids").sizeBytes(), stream_);
+    cudaMemsetAsync(output_ids_buf_, 0, sizeof(int) * batch_size * beam_width * (max_seq_len + 1), stream_);
+    cudaMemsetAsync(parent_ids_buf_, 0, sizeof(int) * batch_size * beam_width * (max_seq_len + 1), stream_);
     if (beam_width > 1) {
         cudaMemsetAsync(
             cache_indirections_[0], 0, 2 * sizeof(int) * batch_size * beam_width * (max_seq_len + 1), stream_);
