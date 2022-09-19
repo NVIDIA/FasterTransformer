@@ -144,7 +144,7 @@ def handle_layer(chkpt_dir, in_filename, key_mapping, save_dir,
                 scatter_tensors = [gather_tensor for i in out_range]
             elif "split" in scatter:
                 axis = int(scatter.partition("_")[2])
-                if gather_tensor.shape[axis] % out_range != 0:
+                if gather_tensor.shape[axis] % len(out_range) != 0:
                     raise ValueError(f"{key} cannot be divided in {len(out_range)} along axis {axis}")
 
                 scatter_tensors = np.split(gather_tensor, len(out_range), axis=axis)
@@ -154,7 +154,7 @@ def handle_layer(chkpt_dir, in_filename, key_mapping, save_dir,
                 raise NotImplementedError(f"Scatter strategy {scatter} is not supported")
 
         for tensor, idx in zip(scatter_tensors, out_range):
-            output_name = key_templ.format(out_range[0])
+            output_name = key_templ.format(idx)
             for weight_name in weights_skip_tensor_split:
                 if weight_name in output_name:
                     output_name = output_name.split('.')
