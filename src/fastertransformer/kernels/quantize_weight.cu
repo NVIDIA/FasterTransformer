@@ -15,6 +15,8 @@
  */
 
 #include "src/fastertransformer/kernels/quantize_weight.h"
+#include <cstdio>
+
 namespace fastertransformer {
 
 __device__ __host__ int index_CUBLASLT_ORDER_COL4_4R2_8C(int col_id, int row_id, int m_32)

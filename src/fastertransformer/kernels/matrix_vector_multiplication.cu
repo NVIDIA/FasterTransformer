@@ -17,6 +17,7 @@
 #include <cassert>
 #include <cmath>
 #include <cuda_fp16.h>
+#include "stdio.h"
 
 #include "bfloat16_fallback_kenrels.cuh"
 #include "matrix_vector_multiplication.h"

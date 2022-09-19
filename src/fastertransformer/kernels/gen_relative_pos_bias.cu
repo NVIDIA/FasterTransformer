@@ -16,6 +16,7 @@
 
 #include "gen_relative_pos_bias.h"
 #include "reduce_kernel_utils.cuh"
+#include <cstdio>
 
 namespace fastertransformer {
 

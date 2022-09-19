@@ -16,6 +16,7 @@
 
 #include "reduce_kernel_utils.cuh"
 #include "transform_mask_kernels.h"
+#include <cstdio>
 
 namespace fastertransformer {
 

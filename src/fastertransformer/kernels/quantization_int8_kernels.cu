@@ -15,6 +15,8 @@
  */
 
 #include "src/fastertransformer/kernels/quantization_int8_kernels.h"
+#include <cstdio>
+
 namespace fastertransformer {
 
 __global__ void quantized_kernel(char4* dst, const float4* src, const int size_div_4, const float* scale_ptr)

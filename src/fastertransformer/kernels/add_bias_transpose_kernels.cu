@@ -17,7 +17,7 @@
 #include <cassert>
 #include <cmath>
 #include <cuda_fp16.h>
-
+#include <stdint.h>
 #include "add_bias_transpose_kernels.h"
 #include "src/fastertransformer/kernels/bfloat16_fallback_kenrels.cuh"
 
