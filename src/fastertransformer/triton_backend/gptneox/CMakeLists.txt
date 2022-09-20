@@ -20,5 +20,5 @@ set(parallel_gpt_triton_backend_files
 )
 
 add_library(GptNeoXTritonBackend SHARED ${parallel_gpt_triton_backend_files})
-target_link_libraries(GptNeoXTritonBackend PRIVATE TransformerTritonBackend GptNeoX)
+target_link_libraries(GptNeoXTritonBackend PRIVATE TransformerTritonBackend GptNeoX -lcublasLt)
 target_compile_features(GptNeoXTritonBackend PRIVATE cxx_std_14)
