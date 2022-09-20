@@ -40,7 +40,7 @@ private:
     bool                   qkv_bias_           = true;
     int                    patches_resolution_ = 56;
     int                    layer_num_          = 4;
-    int                    qk_scale_           = 1.0f;
+    float                  qk_scale_           = 1.0f;
     static constexpr float layernorm_eps_      = 1e-6f;
     size_t                 max_buf_size_       = 0;
     IAllocator*            allocator_          = nullptr;

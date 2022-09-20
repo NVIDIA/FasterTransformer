@@ -201,7 +201,11 @@ void WindowAttention<T>::forward(std::vector<fastertransformer::Tensor>*       o
     if (use_trt_) {
         if (dispatcher_fp16_.get() && num_head == dispatcher_fp16_num_head_) {}
         else {
-            dispatcher_fp16_.reset(new FusedMHARunnerFP16v2(num_head, size_per_head, sm, 1.0f));
+            scale = 1.0f;
+            if (fabs(qk_scale_ - 1.0f) > 0.0001) {
+                scale = 1.0f / sqrt(size_per_head) / qk_scale_;
+            }
+            dispatcher_fp16_.reset(new FusedMHARunnerFP16v2(num_head, size_per_head, sm, scale));
             dispatcher_fp16_num_head_ = num_head;
         }
     }

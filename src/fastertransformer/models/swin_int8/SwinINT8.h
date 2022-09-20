@@ -42,7 +42,7 @@ private:
     bool                   qkv_bias_                      = true;
     int                    patches_resolution_            = 56;
     int                    layer_num_                     = 4;
-    int                    qk_scale_                      = 1.0f;
+    float                  qk_scale_                      = 1.0f;
     size_t                 max_buf_size_                  = 0;
     size_t                 max_basic_layer_buf_size_      = 0;
     size_t                 max_block_buf_size_            = 0;
