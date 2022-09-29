@@ -805,7 +805,9 @@ size_t calT5GemmTestBufSizeInByte(int            batch_size,
                         + m * decoder_vocab_size_padded / tensor_para_size);
 
     size_t buf_size_in_byte = 0;
-    int    wordSize         = (data_type == FLOAT_DATATYPE ? sizeof(float) : sizeof(half));
+    // int wordSize = (data_type == FLOAT_DATATYPE ? sizeof(float) : sizeof(half));
+    // Because we always use float for some buffer, set the wordSize to float directly.
+    int wordSize = sizeof(float);
     for (auto t : buff_size) {
         buf_size_in_byte = buf_size_in_byte > t ? buf_size_in_byte : t;
     }

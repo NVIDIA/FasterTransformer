@@ -360,8 +360,9 @@ size_t calDecodingGemmTestBufSizeInByte(int            batch_size,
     const size_t local_head_num     = head_num / tensor_para_size;
     const size_t local_hidden_units = local_head_num * size_per_head;
 
-    // TODO need to add bfloat16 here
-    int wordSize = (data_type == FLOAT_DATATYPE ? sizeof(float) : sizeof(half));
+    // int wordSize = (data_type == FLOAT_DATATYPE ? sizeof(float) : sizeof(half));
+    // Because we always use float for some buffer, set the wordSize to float directly.
+    int wordSize = sizeof(float);
 
     size_t              m = batch_size * beam_width;
     std::vector<size_t> buff_size;
