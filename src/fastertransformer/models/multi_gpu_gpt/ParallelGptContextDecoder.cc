@@ -390,6 +390,7 @@ void ParallelGptContextDecoder<T>::forward(
             }
             sync_check_cuda_error();
 
+            const T* attention_ptr = use_shared_contexts ? compact_attention_mask_ : (const T*)input_tensors->at(1).data;
             std::vector<Tensor> self_attention_input_tensors{
                 Tensor{MEMORY_GPU,
                        data_type,
@@ -398,7 +399,7 @@ void ParallelGptContextDecoder<T>::forward(
                 Tensor{MEMORY_GPU,
                        data_type,
                        {local_batch_size, 1, seq_len, seq_len},
-                       (const T*)input_tensors->at(1).data + local_batch_size * ite * seq_len * seq_len},
+                       attention_ptr + local_batch_size * ite * seq_len * seq_len},
                 Tensor{MEMORY_CPU, TYPE_BOOL, {1}, &is_final},
                 Tensor{MEMORY_GPU,
                        data_type,
