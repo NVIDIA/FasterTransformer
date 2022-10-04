@@ -4,30 +4,34 @@ labels: [ "bug" ]
 body:
   - type: input
     id: branch
-    label: Branch/Tag/Commit
-    description:
-    placeholder: ex,. main
+    attributes:
+      label: Branch/Tag/Commit
+      description:
+      placeholder: ex,. main
     validations:
       required: true
   - type: input
     id: docker_image_version
-    label: Docker Image Version
-    description:
-    placeholder: ex,. nvcr.io/nvidia/pytorch:22.08-py3
+    attributes:
+      label: Docker Image Version
+      description:
+      placeholder: ex,. nvcr.io/nvidia/pytorch:22.08-py3
     validations:
       required: true
   - type: input
     id: gpu_name
-    label: GPU name
-    description:
-    placeholder: ex,. A100
+    attributes:
+      label: GPU name
+      description:
+      placeholder: ex,. A100
     validations:
       required: true
   - type: input
     id: cuda_driver
-    label: CUDA Driver
-    description:
-    placeholder: ex,. 515.65.01
+    attributes:
+      label: CUDA Driver
+      description:
+      placeholder: ex,. 515.65.01
     validations:
       required: true
 
