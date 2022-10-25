@@ -679,6 +679,7 @@ void Bert<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, const
         // throw errors when detected
         ftNcclStreamSynchronize(tensor_para_, pipeline_para_, stream_);
     }
+    cudaStreamSynchronize(stream_);
 }
 
 template class Bert<float>;
