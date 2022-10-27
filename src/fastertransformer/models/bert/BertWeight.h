@@ -139,7 +139,7 @@ struct BertWeight {
         FtCudaDataType model_file_type = getModelFileType(dir_path + "/config.ini", "bert");
         for (uint l = 0; l < num_layer_; l++) {
             if (isValidLayerParallelId(l)) {
-                bert_layer_weights[l].loadModel(dir_path + "model.encoder.layer." + std::to_string(l) + ".",
+                bert_layer_weights[l].loadModel(dir_path + "/model.encoder.layer." + std::to_string(l) + ".",
                                                 model_file_type);
             }
         }
