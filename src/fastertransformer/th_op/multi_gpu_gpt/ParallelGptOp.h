@@ -216,7 +216,7 @@ public:
             cublas_wrapper.setFP32GemmConfig();
         }
 
-        const size_t request_batch_size = (size_t)input_ids.size(0) / beam_width;
+        const size_t request_batch_size = (size_t)input_ids.size(0);
         const size_t max_input_length   = (size_t)input_ids.size(1);
         const int    total_output_len   = (int)(max_input_length + request_output_len);
 
