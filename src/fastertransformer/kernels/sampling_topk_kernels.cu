@@ -225,8 +225,9 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
     __shared__ float                                     s_max;
     T*                                                   s_val = topk_tmp_val_buf + batch_id * stride;
     int*                                                 s_id  = reinterpret_cast<int*>(array);
-    s_max                                                      = 0.0f;
-    s_sum                                                      = 0.0f;
+    if (tid == 0) {
+        s_sum = 0.0f;
+    }
     TopK_2<float> partial;
 
     if (finished != nullptr && finished[batch_id] == true) {
@@ -244,11 +245,10 @@ __global__ void topk_stage2_sampling(const int* __restrict topk_tmp_id_buf,
 
         TopK_2<float> total = BlockReduce(temp_storage).Reduce(partial, reduce_topk_op_2<float>);
 
-        if (ite == 0) {
-            s_max = total.u;
-        }
-
         if (tid == 0) {
+            if (ite == 0) {
+                s_max = total.u;
+            }
             s_id[ite]      = total.p;
             s_val[total.p] = -MAX_T_VAL;
 
