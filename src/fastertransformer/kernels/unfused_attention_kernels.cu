@@ -529,11 +529,8 @@ void invokeMaskedSoftMax(T*           buffer,
     bool is_half2 = sizeof(T) == 2 && sizeof(T_IN) == 2 && seq_len_2 % 2 == 0;
     dim3 block((seq_len_2 / (is_half2 ? 2 : 1) + 31) / 32 * 32);
 
-    if (block.x > 3072 && block.x <= 4096) {
+    if (block.x > 2048 && block.x <= 4096) {
         SOFTMAX_KERNEL(4)
-    }
-    if (block.x > 2048) {
-        SOFTMAX_KERNEL(3)
     }
     else if (block.x > 1024) {
         SOFTMAX_KERNEL(2)
@@ -568,11 +565,8 @@ void invokeMaskedSoftMax(__nv_bfloat16*       buffer,
     bool is_half2 = seq_len_2 % 2 == 0;
     dim3 block((seq_len_2 / (is_half2 ? 2 : 1) + 31) / 32 * 32);
 
-    if (block.x > 3072 && block.x <= 4096) {
+    if (block.x > 2048 && block.x <= 4096) {
         SOFTMAX_KERNEL_BF16(4)
-    }
-    if (block.x > 2048) {
-        SOFTMAX_KERNEL_BF16(3)
     }
     else if (block.x > 1024) {
         SOFTMAX_KERNEL_BF16(2)
@@ -605,11 +599,8 @@ void invokeMaskedSoftMax(__nv_bfloat16*       buffer,
     bool is_half2 = false;
     dim3 block((seq_len_2 / (is_half2 ? 2 : 1) + 31) / 32 * 32);
 
-    if (block.x > 3072 && block.x <= 4096) {
+    if (block.x > 2048 && block.x <= 4096) {
         SOFTMAX_KERNEL_BF16(4)
-    }
-    if (block.x > 2048) {
-        SOFTMAX_KERNEL_BF16(3)
     }
     else if (block.x > 1024) {
         SOFTMAX_KERNEL_BF16(2)
