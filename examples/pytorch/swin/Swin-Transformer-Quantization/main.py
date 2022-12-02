@@ -22,6 +22,7 @@ import os
 import time
 import argparse
 import datetime
+import json
 import numpy as np
 
 import torch
@@ -87,16 +88,20 @@ def parse_option():
     parser.add_argument('--accumulation-steps', type=int, help="gradient accumulation steps")
     parser.add_argument('--use-checkpoint', action='store_true',
                         help="whether to use gradient checkpointing to save memory")
-    parser.add_argument('--amp-opt-level', type=str, default='O0', choices=['O0', 'O1', 'O2'],
-                        help='mixed precision opt level, if O0, no amp is used')
+    parser.add_argument('--disable_amp', action='store_true', help='Disable pytorch amp')
+    parser.add_argument('--amp-opt-level', type=str, choices=['O0', 'O1', 'O2'],
+                        help='mixed precision opt level, if O0, no amp is used (deprecated!)')
     parser.add_argument('--output', default='output', type=str, metavar='PATH',
                         help='root of output folder, the full path is <output>/<model_name>/<tag> (default: output)')
     parser.add_argument('--tag', help='tag of experiment')
     parser.add_argument('--eval', action='store_true', help='Perform evaluation only')
+    parser.add_argument('--throughput', action='store_true', help='Test throughput only')
+    parser.add_argument("--engine", type=str, help="The directory of swin tensorrt engine.")
+
+    # Calibration
     parser.add_argument('--calib', action='store_true', help='Perform calibration only')
     parser.add_argument('--train', action='store_true', help='Perform training only')
     parser.add_argument('--int8-mode', type=int, required=True, help='int8 mode', choices=[1, 2])
-    parser.add_argument('--throughput', action='store_true', help='Test throughput only')
     parser.add_argument('--num-calib-batch', type=int, default=4, help='Number of batches for calibration. 0 will disable calibration.')
     parser.add_argument('--calib-batchsz', type=int, default=8, help='Batch size when doing calibration')
     parser.add_argument('--calib-output-path', type=str, help='Output directory to save calibrated model')
@@ -109,10 +114,12 @@ def parse_option():
     parser.add_argument("--teacher", type=str, help='teacher model path')
     parser.add_argument('--distillation_loss_scale', type=float, default=10000., help="scale applied to distillation component of loss")
 
+    # for acceleration
+    parser.add_argument('--fused_window_process', action='store_true', help='Fused window shift & window partition, similar for reversed part.')
+
     quant_utils.add_arguments(parser)
     args, unparsed = parser.parse_known_args()
-    if args.quant_mode is not None:
-        args = quant_utils.set_args(args)
+    args = quant_utils.set_args(args)
     quant_utils.set_default_quantizers(args)
 
     config = get_config(args)
@@ -130,8 +137,6 @@ def main(config, args):
     # logger.info(str(model))
 
     optimizer = build_optimizer(config, model)
-    if config.AMP_OPT_LEVEL != "O0":
-        model, optimizer = amp.initialize(model, optimizer, opt_level=config.AMP_OPT_LEVEL)
     model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[config.LOCAL_RANK], broadcast_buffers=False)
     model_without_ddp = model.module
 
@@ -177,8 +182,7 @@ def main(config, args):
         
         # Evaluate calibrated model
         quant_utils.configure_model(model, args, calib=False)
-        acc1, acc5, loss = validate(config, data_loader_val, model)
-        logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
+        
 
         # Save calibrated checkpoint
         model_to_save = model.module if hasattr(model, 'module') else model
@@ -187,6 +191,8 @@ def main(config, args):
             os.mkdir(args.calib_output_path)
         torch.save(model_to_save.state_dict(), output_model_path)
         print(f'Model is saved to {output_model_path}')
+        acc1, acc5, loss = validate(config, data_loader_val, model)
+        logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
 
     if args.train:
         teacher = None
@@ -226,7 +232,10 @@ def main(config, args):
 
     if args.eval:
         quant_utils.configure_model(model, args, calib=False)
-        acc1, acc5, loss = validate(config, data_loader_val, model)
+        if args.engine:
+            acc1, acc5, loss = validate_trt(config, data_loader_val, model, args.engine)
+        else:
+            acc1, acc5, loss = validate(config, data_loader_val, model)
         logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
 
 
@@ -333,6 +342,74 @@ def validate(config, data_loader, model):
     logger.info(f' * Acc@1 {acc1_meter.avg:.3f} Acc@5 {acc5_meter.avg:.3f}')
     return acc1_meter.avg, acc5_meter.avg, loss_meter.avg
 
+@torch.no_grad()
+def validate_trt(config, data_loader, model, engine):
+    criterion = torch.nn.CrossEntropyLoss()
+    model.eval()
+
+    batch_time = AverageMeter()
+    loss_meter = AverageMeter()
+    acc1_meter = AverageMeter()
+    acc5_meter = AverageMeter()
+
+    end = time.time()
+
+    import tensorrt as trt
+    with open(engine, 'rb') as f, trt.Runtime(trt.Logger(trt.Logger.INFO)) as runtime,\
+        runtime.deserialize_cuda_engine(f.read()) as engine, engine.create_execution_context() as context:
+        if engine is None:
+            print('Engine is none')
+            exit(-1)
+        
+        context.active_optimization_profile = 0
+        stream = 0
+
+        context.set_binding_shape(0, (config.DATA.BATCH_SIZE, 3, config.DATA.IMG_SIZE, config.DATA.IMG_SIZE))
+
+        output_shape = tuple(context.get_binding_shape(1))
+        print(output_shape)
+
+        d_output = torch.empty(output_shape, dtype=torch.float32).cuda()
+        for idx, (images, target) in enumerate(data_loader):
+            images = images.half().cuda(non_blocking=True)
+            target = target.cuda(non_blocking=True)
+
+            # compute output
+            # output = model(images)
+            context.execute_async_v2([images.data_ptr()] + [d_output.data_ptr()], stream)
+            torch.cuda.synchronize()
+
+            with torch.no_grad():
+                output = model.module.head(d_output)
+
+            # measure accuracy and record loss
+            loss = criterion(output, target)
+            acc1, acc5 = accuracy(output, target, topk=(1, 5))
+
+            acc1 = reduce_tensor(acc1)
+            acc5 = reduce_tensor(acc5)
+            loss = reduce_tensor(loss)
+
+            loss_meter.update(loss.item(), target.size(0))
+            acc1_meter.update(acc1.item(), target.size(0))
+            acc5_meter.update(acc5.item(), target.size(0))
+
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
+
+            if idx % config.PRINT_FREQ == 0:
+                memory_used = torch.cuda.max_memory_allocated() / (1024.0 * 1024.0)
+                logger.info(
+                    f'Test: [{idx}/{len(data_loader)}]\t'
+                    f'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                    f'Loss {loss_meter.val:.4f} ({loss_meter.avg:.4f})\t'
+                    f'Acc@1 {acc1_meter.val:.3f} ({acc1_meter.avg:.3f})\t'
+                    f'Acc@5 {acc5_meter.val:.3f} ({acc5_meter.avg:.3f})\t'
+                    f'Mem {memory_used:.0f}MB')
+        logger.info(f' * Acc@1 {acc1_meter.avg:.3f} Acc@5 {acc5_meter.avg:.3f}')
+
+    return acc1_meter.avg, acc5_meter.avg, loss_meter.avg
 
 @torch.no_grad()
 def throughput(data_loader, model, logger):
@@ -356,9 +433,6 @@ def throughput(data_loader, model, logger):
 
 if __name__ == '__main__':
     args, config = parse_option()
-
-    if config.AMP_OPT_LEVEL != "O0":
-        assert amp is not None, "amp not installed!"
 
     if 'RANK' in os.environ and 'WORLD_SIZE' in os.environ:
         rank = int(os.environ["RANK"])
@@ -400,8 +474,5 @@ if __name__ == '__main__':
         with open(path, "w") as f:
             f.write(config.dump())
         logger.info(f"Full config saved to {path}")
-
-    # print config
-    #logger.info(config.dump())
 
     main(config, args)

@@ -279,8 +279,8 @@ def xnli_task(args_dict):
         weight_data_type=weight_data_type,
     )
 
-    ft_encoder_weight.load_from_bin(args_dict["ckpt_path"])
-    ft_decoding_weight.load_from_bin(args_dict["ckpt_path"])
+    ft_encoder_weight.load_from_bin(args_dict["ckpt_path"], "Megatron")
+    ft_decoding_weight.load_from_bin(args_dict["ckpt_path"], "Megatron")
 
     if args_dict['data_type'] == 'fp16':
         ft_encoder_weight.to_half()
@@ -297,7 +297,9 @@ def xnli_task(args_dict):
                             encoder_config.d_kv, encoder_config.d_ff,
                             encoder_config.d_model, remove_padding, encoder_config.num_layers,
                             encoder_config.relative_attention_num_buckets,
-                            128, False, q_scaling, tensor_para_size, pipeline_para_size, t5_with_bias, position_embedding_type, activation_type)
+                            0, # num_experts
+                            [], # moe_layer_index
+                            128, False, q_scaling, tensor_para_size, pipeline_para_size, t5_with_bias, position_embedding_type, 0, activation_type)
     ft_decoding = FTT5Decoding(ft_decoding_weight.w, lib_path,
                             decoder_config.num_heads, decoder_config.d_kv,
                             decoder_config.d_ff, encoder_config.d_model,
@@ -305,9 +307,12 @@ def xnli_task(args_dict):
                             decoder_config.decoder_start_token_id, decoder_config.decoder_end_token_id,
                             decoder_config.vocab_size,
                             q_scaling,
-                            decoder_config.relative_attention_num_buckets, max_distance=128,
+                            decoder_config.relative_attention_num_buckets,
+                            0, # num_experts
+                            [], # moe_layer_index
+                            max_distance=128,
                             tensor_para_size=tensor_para_size, pipeline_para_size=pipeline_para_size,
-                            t5_with_bias=t5_with_bias, activation_type=activation_type, position_embedding_type=position_embedding_type)
+                            t5_with_bias=t5_with_bias, moe_k=0, activation_type=activation_type, position_embedding_type=position_embedding_type)
 
     ft_t5 = FTT5(ft_encoder, ft_decoding)
     
@@ -390,7 +395,7 @@ if __name__ == "__main__":
     parser.add_argument('-s', '--max_output_len', type=int, default=10, metavar='NUMBER',
                         help='max output length (default: 10)')
     parser.add_argument('-diversity_rate', '--beam_search_diversity_rate', type=float, default=0.0, metavar='NUMBER',
-                        help='deviersity rate of beam search. default is 0. When diversity rate = 0, it is equivalent to the naive beams earch.')
+                        help='deviersity rate of beam search. default is 0. When diversity rate = 0, it is equivalent to the naive beam search.')
     parser.add_argument('-topk', '--sampling_topk', type=int, default=1, metavar='NUMBER',
                         help='Candidate (k) value of top k sampling in decoding. Default is 1.')
     parser.add_argument('-topp', '--sampling_topp', type=float, default=0.0, metavar='NUMBER',

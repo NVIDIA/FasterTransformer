@@ -20,33 +20,40 @@
 namespace fastertransformer {
 
 template<typename T>
-void UnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                                       const std::vector<fastertransformer::Tensor>* input_tensors,
-                                       const AttentionWeight<T>*                     attention_weights)
+void UnfusedAttentionLayer<T>::forward(TensorMap*                output_tensors,
+                                       TensorMap*                input_tensors,
+                                       const AttentionWeight<T>* attention_weights)
 {
     // input_tensors:
-    //      input_query (token_num, d_model),
-    //      attention_mask (batch, 1, seqlen, seqlen),
-    //      padding_offset (token_num)
-    //      relative_attention_bias (optional)
+    //      input_query [token_num, d_model],
+    //      attention_mask [batch, 1, seqlen, seqlen],
+    //      padding_offset [token_num] (optional)
+    //      relative_attention_bias [head_num, seq_len, seq_len] (optional)
+    //      linear_bias_slopes [head_num] (optional)
+    //      ia3_tasks [batch] (optional)
+    //  output_tensors:
+    //      hidden_features  [token_num, hidden_units]
+    //      attentions [batch, num_layer, head_num, seqlen, seqlen] (optional)
     // If padding_offset.data is nullptr, then not remove padding
 
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    FT_CHECK(input_tensors->size() == 3 || input_tensors->size() == 4);
-    const int request_batch_size = input_tensors->at(1).shape[0];
-    const int request_seq_len    = input_tensors->at(1).shape[2];
+    const size_t request_batch_size = input_tensors->at("attention_mask").shape[0];
+    const size_t request_seq_len    = input_tensors->at("attention_mask").shape[2];
+    const bool   output_attentions  = output_tensors->isExist("attentions");
     allocateBuffer(request_batch_size, request_seq_len);
 
-    T*         attention_out           = (T*)output_tensors->at(0).data;
-    const T*   from_tensor             = (const T*)input_tensors->at(0).data;
-    const T*   attention_mask          = (const T*)input_tensors->at(1).data;
-    const int* padding_offset          = (const int*)input_tensors->at(2).data;
-    const T*   relative_attention_bias = input_tensors->size() == 4 ? (const T*)input_tensors->at(3).data : nullptr;
+    T*         hidden_features         = output_tensors->getPtr<T>("hidden_features");
+    const T*   from_tensor             = input_tensors->getPtr<T>("input_query");
+    const T*   attention_mask          = input_tensors->getPtr<T>("attention_mask");
+    const int* padding_offset          = input_tensors->getPtr<int>("padding_offset", nullptr);
+    const T*   relative_attention_bias = input_tensors->getPtr<T>("relative_attention_bias", nullptr);
+    const T*   linear_bias_slopes      = input_tensors->getPtr<T>("linear_bias_slopes", nullptr);
+    const int* ia3_tasks               = input_tensors->getPtr<int>("ia3_tasks", nullptr);
 
     bool with_bias                  = attention_weights->query_weight.bias != nullptr ? true : false;
     bool use_relative_position_bias = relative_attention_bias != nullptr ? true : false;
 
-    const int m = input_tensors->at(0).shape[0];
+    const int m = input_tensors->at("input_query").shape[0];
     int       k = d_model_;
     int       n = hidden_units_;
 #ifdef SPARSITY_ENABLED
@@ -78,7 +85,8 @@ void UnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>*  
                           nullptr,
                           q_buf_,
                           k_buf_,
-                          v_buf_};
+                          v_buf_,
+                          nullptr};
             // Note: Here, we assume the weights of each time may be different.
             // If we can preprocess these weights before inference, we can reduce the overhead
             // caused by cudaMemcpyAsync
@@ -129,41 +137,47 @@ void UnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>*  
 #endif
 
     if (padding_offset == nullptr) {
-        invokeAddQKVBiasTranspose(q_buf_2_,
-                                  k_buf_2_,
-                                  v_buf_2_,
-                                  q_buf_,
-                                  attention_weights->query_weight.bias,
-                                  k_buf_,
-                                  attention_weights->key_weight.bias,
-                                  v_buf_,
-                                  attention_weights->value_weight.bias,
-                                  request_batch_size,
-                                  request_seq_len,
-                                  head_num_,
-                                  size_per_head_,
-                                  stream_);
+        invokeAddQKVBiasIA3Transpose(q_buf_2_,
+                                     k_buf_2_,
+                                     v_buf_2_,
+                                     q_buf_,
+                                     attention_weights->query_weight.bias,
+                                     k_buf_,
+                                     attention_weights->key_weight.bias,
+                                     v_buf_,
+                                     attention_weights->value_weight.bias,
+                                     request_batch_size,
+                                     request_seq_len,
+                                     head_num_,
+                                     size_per_head_,
+                                     ia3_tasks,
+                                     attention_weights->ia3_key_weight.kernel,
+                                     attention_weights->ia3_value_weight.kernel,
+                                     stream_);
         sync_check_cuda_error();
     }
     else {
         cudaMemsetAsync(q_buf_2_, 0, 3 * request_batch_size * request_seq_len * hidden_units_ * sizeof(T), stream_);
         sync_check_cuda_error();
-        invokeAddQKVBiasRebuildPadding(q_buf_,
-                                       attention_weights->query_weight.bias,
-                                       k_buf_,
-                                       attention_weights->key_weight.bias,
-                                       v_buf_,
-                                       attention_weights->value_weight.bias,
-                                       q_buf_2_,
-                                       k_buf_2_,
-                                       v_buf_2_,
-                                       request_batch_size,
-                                       request_seq_len,
-                                       head_num_,
-                                       size_per_head_,
-                                       m,
-                                       padding_offset,
-                                       stream_);
+        invokeAddQKVBiasIA3RebuildPadding(q_buf_,
+                                          attention_weights->query_weight.bias,
+                                          k_buf_,
+                                          attention_weights->key_weight.bias,
+                                          v_buf_,
+                                          attention_weights->value_weight.bias,
+                                          q_buf_2_,
+                                          k_buf_2_,
+                                          v_buf_2_,
+                                          request_batch_size,
+                                          request_seq_len,
+                                          head_num_,
+                                          size_per_head_,
+                                          m,
+                                          padding_offset,
+                                          ia3_tasks,
+                                          attention_weights->ia3_key_weight.kernel,
+                                          attention_weights->ia3_value_weight.kernel,
+                                          stream_);
         sync_check_cuda_error();
     }
 
@@ -192,15 +206,27 @@ void UnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>*  
             qk_buf_, relative_attention_bias, request_batch_size, head_num_, request_seq_len, stream_);
     }
 
-    invokeMaskedSoftMax(qk_buf_,
-                        qk_buf_,
-                        attention_mask,
-                        request_batch_size,
-                        request_seq_len,
-                        request_seq_len,
-                        head_num_,
-                        (T)1.0f,
-                        stream_);
+    MaskedSoftmaxParam<T, T> param;
+    param.attention_score    = qk_buf_;         // (batch_size, head_num, q_length, k_length)
+    param.qk                 = qk_buf_;         // (batch_size, head_num, q_length, k_length)
+    param.attention_mask     = attention_mask;  // (batch_size, q_length, k_length)
+    param.batch_size         = request_batch_size;
+    param.q_length           = request_seq_len;
+    param.k_length           = request_seq_len;
+    param.num_heads          = head_num_;
+    param.qk_scale           = 1.0f;
+    param.linear_bias_slopes = linear_bias_slopes;  // (head_num,), optional
+    invokeMaskedSoftmax(param, stream_);
+    sync_check_cuda_error();
+
+    if (output_attentions) {
+        invokeTransposeAttentions<T>(output_tensors->at("attentions"),
+                                     {MEMORY_GPU,
+                                      getTensorType<T>(),
+                                      {request_batch_size, head_num_, request_seq_len, request_seq_len},
+                                      qk_buf_},
+                                     stream_);
+    }
     sync_check_cuda_error();
 
     cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_N,
@@ -220,8 +246,15 @@ void UnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>*  
                                         request_batch_size * head_num_);
 
     if (padding_offset == nullptr) {
-        invokeTransposeQKV(
-            qkv_buf_2_, qkv_buf_, request_batch_size, request_seq_len, head_num_, size_per_head_, stream_);
+        invokeTransposeQKV(qkv_buf_2_,
+                           qkv_buf_,
+                           request_batch_size,
+                           request_seq_len,
+                           head_num_,
+                           size_per_head_,
+                           (float*)nullptr,
+                           0,
+                           stream_);
         sync_check_cuda_error();
     }
     else {
@@ -233,6 +266,8 @@ void UnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>*  
                                                  head_num_,
                                                  size_per_head_,
                                                  padding_offset,
+                                                 (float*)nullptr,
+                                                 0,
                                                  stream_);
     }
 
@@ -248,7 +283,7 @@ void UnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>*  
                                 k,
                                 attention_weights->attention_output_weight.sp_kernel,
                                 qkv_buf_2_,
-                                attention_out);
+                                hidden_features);
     }
     else {
 #endif
@@ -261,7 +296,7 @@ void UnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>*  
                               n,
                               qkv_buf_2_,
                               k,
-                              attention_out,
+                              hidden_features,
                               n);
 #ifdef SPARSITY_ENABLED
     }

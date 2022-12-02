@@ -15,6 +15,7 @@
  */
 
 #include "src/fastertransformer/models/gptneox/GptNeoXContextDecoder.h"
+#include "src/fastertransformer/kernels/bert_preprocess_kernels.h"
 #include "src/fastertransformer/kernels/gpt_kernels.h"
 
 #include "src/fastertransformer/layers/TensorParallelGeluFfnLayer.h"
@@ -39,6 +40,7 @@ void GptNeoXContextDecoder<T>::initialize()
                                                                           is_free_buffer_after_forward_,
                                                                           is_qk_buf_float_,
                                                                           false,
+                                                                          0,
                                                                           custom_all_reduce_comm_,
                                                                           enable_custom_all_reduce_);
 
@@ -46,6 +48,7 @@ void GptNeoXContextDecoder<T>::initialize()
                                                    0,  // max_seq_len
                                                    head_num_,
                                                    size_per_head_,
+                                                   0,  // expert_num
                                                    inter_size_,
                                                    tensor_para_,
                                                    stream_,
@@ -77,6 +80,10 @@ void GptNeoXContextDecoder<T>::allocateBuffer(size_t batch_size, size_t seq_len)
         allocator_->reMalloc(ffn_output_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
     decoder_layer_output_ = reinterpret_cast<T*>(
         allocator_->reMalloc(decoder_layer_output_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
+    token_num_ = reinterpret_cast<size_t*>(allocator_->reMalloc(token_num_, sizeof(size_t) * 1, false));
+    padding_offset_ =
+        reinterpret_cast<int*>(allocator_->reMalloc(padding_offset_, sizeof(int) * batch_size * seq_len, false));
+    cu_seqlens_ = reinterpret_cast<int*>(allocator_->reMalloc(cu_seqlens_, sizeof(int) * (batch_size + 1), false));
     is_allocate_buffer_ = true;
 }
 
@@ -88,6 +95,9 @@ void GptNeoXContextDecoder<T>::freeBuffer()
         allocator_->free((void**)(&self_attn_output_));
         allocator_->free((void**)(&ffn_output_));
         allocator_->free((void**)(&decoder_layer_output_));
+        allocator_->free((void**)(&token_num_));
+        allocator_->free((void**)(&padding_offset_));
+        allocator_->free((void**)(&cu_seqlens_));
         is_allocate_buffer_ = false;
     }
 }
@@ -137,6 +147,7 @@ GptNeoXContextDecoder<T>::GptNeoXContextDecoder(size_t                          
                                                 IAllocator*                         allocator,
                                                 bool                                is_free_buffer_after_forward,
                                                 bool                                is_qk_buf_float,
+                                                AttentionType                       attention_type,
                                                 std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
                                                 int                                 enable_custom_all_reduce):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
@@ -152,6 +163,7 @@ GptNeoXContextDecoder<T>::GptNeoXContextDecoder(size_t                          
     tensor_para_(tensor_para),
     pipeline_para_(pipeline_para),
     is_qk_buf_float_(is_qk_buf_float),
+    attention_type_(attention_type),
     custom_all_reduce_comm_(custom_all_reduce_comm),
     enable_custom_all_reduce_(enable_custom_all_reduce)
 {
@@ -173,6 +185,7 @@ GptNeoXContextDecoder<T>::GptNeoXContextDecoder(GptNeoXContextDecoder<T> const& 
     tensor_para_(decoder.tensor_para_),
     pipeline_para_(decoder.pipeline_para_),
     is_qk_buf_float_(decoder.is_qk_buf_float_),
+    attention_type_(decoder.attention_type_),
     custom_all_reduce_comm_(decoder.custom_all_reduce_comm_),
     enable_custom_all_reduce_(decoder.enable_custom_all_reduce_)
 {
@@ -236,11 +249,11 @@ void GptNeoXContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>* 
     const DataType data_type = getTensorType<T>();
     allocateBuffer(batch_size, seq_len);
 
-    T*         decoder_input           = (T*)input_tensors->at("decoder_input").data;
-    T*         decoder_output          = (T*)output_tensors->at("decoder_output").data;
-    const T*   attention_mask          = (const T*)input_tensors->at("attention_mask").data;
-    const T**  d_prefix_prompt_batch   = (const T**)input_tensors->at("d_prefix_prompt_batch").data;
-    const int* d_prefix_prompt_lengths = (const int*)input_tensors->at("d_prefix_prompt_lengths").data;
+    T*         decoder_input           = input_tensors->at("decoder_input").getPtr<T>();
+    T*         decoder_output          = output_tensors->at("decoder_output").getPtr<T>();
+    const T*   attention_mask          = input_tensors->at("attention_mask").getPtr<const T>();
+    const T**  d_prefix_prompt_batch   = input_tensors->at("d_prefix_prompt_batch").getPtr<const T*>();
+    const int* d_prefix_prompt_lengths = input_tensors->at("d_prefix_prompt_lengths").getPtr<const int>();
 
     const int local_batch_size = getLocalBatchSize(batch_size, seq_len, pipeline_para_.world_size_);
     FT_CHECK(batch_size % local_batch_size == 0);
@@ -259,20 +272,53 @@ void GptNeoXContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>* 
         self_v_cache_size.push_back(*t);
     }
 
+    AttentionType attention_type =
+        d_prefix_prompt_lengths != nullptr ? getUnfusedAttentionType(attention_type_) : attention_type_;
+    const bool is_unpadded_mha = isUnPaddedMHA(attention_type);
+
     for (int ite = 0; ite < iteration_num; ite++) {
+        size_t h_token_num = local_batch_size * seq_len;
+        if (is_unpadded_mha) {
+            const int* base_input_lengths = input_tensors->at("input_lengths").getPtr<int>();
+            invokeGetPaddingOffsetAndCuSeqLens(&h_token_num,
+                                               token_num_,
+                                               padding_offset_,
+                                               cu_seqlens_,
+                                               base_input_lengths + ite * local_batch_size,
+                                               local_batch_size,
+                                               seq_len,
+                                               stream_);
+        }
         for (int l = 0; l < num_layer_; l++) {
             if (isValidLayerParallelId(l) == false) {
                 continue;
             }
 
-            const bool is_final = false;  // TODO(bhsueh) remove this flag
-            T*         layer_input =
-                ((l == 0) ? decoder_input : decoder_layer_output_) + ite * local_batch_size * seq_len * hidden_units_;
-            T* layer_output = ((l == num_layer_ - 1) ? decoder_output : decoder_layer_output_)
-                              + ite * local_batch_size * seq_len * hidden_units_;
+            if (l == 0 && is_unpadded_mha) {
+                invokeRemovePadding(decoder_layer_output_,
+                                    decoder_input + ite * local_batch_size * seq_len * hidden_units_,
+                                    padding_offset_,
+                                    h_token_num,
+                                    hidden_units_,
+                                    stream_);
+            }
+
+            const bool is_final     = false;  // TODO(bhsueh) remove this flag
+            T*         layer_input  = decoder_layer_output_;
+            T*         layer_output = decoder_layer_output_;
+            if (!is_unpadded_mha) {
+                if (l == 0) {
+                    layer_input = decoder_input;
+                    layer_input += ite * local_batch_size * seq_len * hidden_units_;
+                }
+                if (l == num_layer_ - 1) {
+                    layer_output = decoder_output;
+                    layer_output += ite * local_batch_size * seq_len * hidden_units_;
+                }
+            }
 
             if (isFirstLayerParallelId(l) && pipeline_para_.rank_ != 0 && pipeline_para_.world_size_ > 1) {
-                int data_size = local_batch_size * seq_len * hidden_units_ / tensor_para_.world_size_;
+                int data_size = h_token_num * hidden_units_ / tensor_para_.world_size_;
                 ftNcclRecv(layer_input + data_size * tensor_para_.rank_,
                            data_size,
                            pipeline_para_.rank_ - 1,
@@ -288,30 +334,44 @@ void GptNeoXContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>* 
                                    gpt_decoder_layer_weight->at(l)->pre_layernorm_weights.gamma,
                                    gpt_decoder_layer_weight->at(l)->pre_layernorm_weights.beta,
                                    layernorm_eps_,
-                                   local_batch_size * seq_len,
+                                   h_token_num,
                                    hidden_units_,
+                                   (float*)nullptr,
+                                   0,
                                    stream_);
             sync_check_cuda_error();
 
-            std::vector<Tensor> self_attention_input_tensors{
-                Tensor{MEMORY_GPU,
-                       data_type,
-                       {(size_t)(local_batch_size * seq_len), (size_t)hidden_units_},
-                       decoder_normed_input_},
-                Tensor{MEMORY_GPU,
-                       data_type,
-                       {(size_t)local_batch_size, (size_t)1, (size_t)seq_len, (size_t)(seq_len + max_prompt_length)},
-                       attention_mask + local_batch_size * ite * seq_len * (seq_len + max_prompt_length)},
-                Tensor{MEMORY_CPU, TYPE_BOOL, {(size_t)1}, &is_final},
+            TensorMap self_attention_input_tensors{
+                {"input_query",
+                 Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, decoder_normed_input_}},
+                {"attention_mask",
+                 Tensor{MEMORY_GPU,
+                        data_type,
+                        {(size_t)local_batch_size, (size_t)1, (size_t)seq_len, (size_t)(seq_len + max_prompt_length)},
+                        attention_mask + local_batch_size * ite * seq_len * (seq_len + max_prompt_length)}},
+                {"attention_type", Tensor{MEMORY_CPU, TYPE_VOID, {1}, &attention_type}},
+                {"is_final_layer", Tensor{MEMORY_CPU, TYPE_BOOL, {(size_t)1}, &is_final}},
+                {"layer_id", Tensor{MEMORY_CPU, TYPE_INT32, {(size_t)1}, &l}}};
+            self_attention_input_tensors.insertIfValid(
+                "d_prefix_prompt_batch",
                 Tensor{MEMORY_GPU,
                        data_type,
                        {(size_t)local_batch_size},
-                       d_prefix_prompt_batch != nullptr ? d_prefix_prompt_batch + ite * local_batch_size : nullptr},
-                Tensor{MEMORY_GPU,
-                       TYPE_INT32,
-                       {(size_t)local_batch_size},
-                       d_prefix_prompt_lengths != nullptr ? d_prefix_prompt_lengths + ite * local_batch_size : nullptr},
-                Tensor{MEMORY_CPU, TYPE_INT32, {(size_t)1}, &l}};
+                       d_prefix_prompt_batch != nullptr ? d_prefix_prompt_batch + ite * local_batch_size : nullptr});
+            self_attention_input_tensors.insertIfValid("d_prefix_prompt_lengths",
+                                                       Tensor{MEMORY_GPU,
+                                                              TYPE_INT32,
+                                                              {(size_t)local_batch_size},
+                                                              d_prefix_prompt_lengths != nullptr ?
+                                                                  d_prefix_prompt_lengths + ite * local_batch_size :
+                                                                  nullptr});
+
+            if (is_unpadded_mha) {
+                self_attention_input_tensors.insert("padding_offset",
+                                                    Tensor{MEMORY_GPU, TYPE_INT32, {h_token_num}, padding_offset_});
+                self_attention_input_tensors.insert(
+                    "cu_seqlens", Tensor{MEMORY_GPU, TYPE_INT32, {size_t(local_batch_size + 1)}, cu_seqlens_});
+            }
 
             size_t cache_offset = l - getFirstLayerParallelId();
             for (auto t = k_cache.shape.begin() + 1; t != k_cache.shape.end(); ++t) {
@@ -323,13 +383,12 @@ void GptNeoXContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>* 
             }
             cache_offset += ite_cache_offset;
 
-            std::vector<Tensor> self_attention_output_tensors{
-                Tensor{MEMORY_GPU,
-                       data_type,
-                       {(size_t)(local_batch_size * seq_len), (size_t)hidden_units_},
-                       self_attn_output_},
-                Tensor{MEMORY_GPU, data_type, self_k_cache_size, ((const T*)k_cache.data) + cache_offset},
-                Tensor{MEMORY_GPU, data_type, self_v_cache_size, ((const T*)v_cache.data) + cache_offset}};
+            TensorMap self_attention_output_tensors{
+                {"hidden_features",
+                 Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, self_attn_output_}},
+                {"key_cache", Tensor{MEMORY_GPU, data_type, self_k_cache_size, k_cache.getPtrWithOffset(cache_offset)}},
+                {"value_cache",
+                 Tensor{MEMORY_GPU, data_type, self_v_cache_size, v_cache.getPtrWithOffset(cache_offset)}}};
 
             self_attention_layer_->forward(&self_attention_output_tensors,
                                            &self_attention_input_tensors,
@@ -342,34 +401,39 @@ void GptNeoXContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>* 
                                            gpt_decoder_layer_weight->at(l)->post_attention_layernorm_weights.gamma,
                                            gpt_decoder_layer_weight->at(l)->post_attention_layernorm_weights.beta,
                                            layernorm_eps_,
-                                           local_batch_size * seq_len,
+                                           h_token_num,
                                            hidden_units_,
+                                           (float*)nullptr,
+                                           0,
                                            stream_);
                 }
                 else {
                     invokeGeneralAddBiasResidualPreLayerNorm(
                         self_attn_output_,
                         decoder_normed_input_,
+                        self_attn_output_,
                         layer_input,
                         gpt_decoder_layer_weight->at(l)->post_attention_layernorm_weights.gamma,
                         gpt_decoder_layer_weight->at(l)->post_attention_layernorm_weights.beta,
                         gpt_decoder_layer_weight->at(l)->self_attention_weights.attention_output_weight.bias,
                         layernorm_eps_,
-                        local_batch_size * seq_len,
+                        h_token_num,
                         hidden_units_,
+                        (float*)nullptr,
+                        (float*)nullptr,
+                        (float*)nullptr,
+                        0,
                         stream_);
                 }
 
-                std::vector<Tensor> ffn_input_tensors{
-                    Tensor{MEMORY_GPU,
-                           data_type,
-                           {(size_t)(local_batch_size * seq_len), (size_t)hidden_units_},
-                           decoder_normed_input_}};
-                std::vector<Tensor> ffn_output_tensors{
-                    Tensor{MEMORY_GPU,
-                           data_type,
-                           {(size_t)(local_batch_size * seq_len), (size_t)hidden_units_},
-                           use_gptj_residual_ ? ffn_output_ : layer_output}};
+                TensorMap ffn_input_tensors(
+                    {{"ffn_input",
+                      Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, decoder_normed_input_}}});
+                TensorMap ffn_output_tensors({{"ffn_output",
+                                               Tensor{MEMORY_GPU,
+                                                      data_type,
+                                                      {h_token_num, (size_t)hidden_units_},
+                                                      use_gptj_residual_ ? ffn_output_ : layer_output}}});
                 ffn_layer_->forward(
                     &ffn_output_tensors, &ffn_input_tensors, &gpt_decoder_layer_weight->at(l)->ffn_weights);
 
@@ -386,23 +450,20 @@ void GptNeoXContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>* 
                                                       self_attn_output_,
                                                       layer_input,
                                                       gpt_decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
-                                                      local_batch_size * seq_len,
+                                                      h_token_num,
                                                       hidden_units_,
                                                       tensor_para_.world_size_,
                                                       stream_);
                     if (tensor_para_.world_size_ > 1) {
-                        ftNcclAllReduceSum(layer_output,
-                                           layer_output,
-                                           local_batch_size * seq_len * hidden_units_,
-                                           tensor_para_,
-                                           stream_);
+                        ftNcclAllReduceSum(
+                            layer_output, layer_output, h_token_num * hidden_units_, tensor_para_, stream_);
                     }
                 }
                 else {
                     invokeAddBiasResidual(layer_output,
                                           self_attn_output_,
                                           gpt_decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
-                                          local_batch_size * seq_len,
+                                          h_token_num,
                                           hidden_units_,
                                           stream_);
                 }
@@ -411,21 +472,30 @@ void GptNeoXContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>* 
 
                 if (isLastLayerParallelId(l) && pipeline_para_.rank_ != pipeline_para_.world_size_ - 1
                     && pipeline_para_.world_size_ > 1) {
-                    int data_size = local_batch_size * seq_len * hidden_units_ / tensor_para_.world_size_;
+                    int data_size = h_token_num * hidden_units_ / tensor_para_.world_size_;
                     ftNcclSend(layer_output + data_size * tensor_para_.rank_,
                                data_size,
                                pipeline_para_.rank_ + 1,
                                pipeline_para_,
                                stream_);
                 }
+
+                if ((l == num_layer_ - 1) && is_unpadded_mha) {
+                    invokeRebuildPadding(decoder_output + ite * local_batch_size * seq_len * hidden_units_,
+                                         decoder_layer_output_,
+                                         padding_offset_,
+                                         h_token_num,
+                                         head_num_ * size_per_head_,
+                                         stream_);
+                }
             }
         }
     }
 
     // TODO(bhsueh) We could optimize this point by only computing the last token for the last layer
-    invokeLookupHiddenStateOfLastToken((T*)output_tensors->at("last_token_hidden_units").data,
-                                       (T*)output_tensors->at("decoder_output").data,
-                                       (int*)input_tensors->at("input_lengths").data,
+    invokeLookupHiddenStateOfLastToken(output_tensors->at("last_token_hidden_units").getPtr<T>(),
+                                       output_tensors->at("decoder_output").getPtr<T>(),
+                                       input_tensors->at("input_lengths").getPtr<int>(),
                                        seq_len,
                                        batch_size,
                                        hidden_units_,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,34 +15,48 @@
  */
 #pragma once
 
+#include "src/fastertransformer/utils/Tensor.h"
+
 namespace fastertransformer {
 
 template<typename T>
-void invokeAddQKVBiasTranspose(T*           q_buf,
-                               T*           k_buf,
-                               T*           v_buf,
-                               T*           Q,
-                               const T*     bias_Q,
-                               T*           K,
-                               const T*     bias_K,
-                               T*           V,
-                               const T*     bias_V,
-                               const int    batch_size,
-                               const int    seq_len,
-                               const int    head_num,
-                               const int    size_per_head,
-                               cudaStream_t stream);
+void invokeAddQKVBiasIA3Transpose(T*           q_buf,
+                                  T*           k_buf,
+                                  T*           v_buf,
+                                  T*           Q,
+                                  const T*     bias_Q,
+                                  T*           K,
+                                  const T*     bias_K,
+                                  T*           V,
+                                  const T*     bias_V,
+                                  const int    batch_size,
+                                  const int    seq_len,
+                                  const int    head_num,
+                                  const int    size_per_head,
+                                  const int*   ia3_tasks,
+                                  const T*     ia3_key_weights,
+                                  const T*     ia3_value_weights,
+                                  cudaStream_t stream);
 
 template<typename T, typename T_IN>
-void invokeMaskedSoftMax(T*           buffer,
-                         const T_IN*  buffer_src,
-                         const T*     attr_mask,
-                         const int    batch_size,
-                         const int    seq_len_1,
-                         const int    seq_len_2,
-                         const int    head_num,
-                         const T      scalar,
-                         cudaStream_t stream);
+struct MaskedSoftmaxParam {
+    // Common parameters.
+    T*          attention_score = nullptr;  // (batch_size, head_num, q_length, k_length)
+    const T_IN* qk              = nullptr;  // (batch_size, head_num, q_length, k_length)
+    const T*    attention_mask  = nullptr;  // (batch_size, q_length, k_length)
+    int         batch_size      = 0;
+    int         q_length        = 0;
+    int         k_length        = 0;
+    int         num_heads       = 0;
+    T           qk_scale        = T(0.0f);
+
+    // Optional parameters that depend on the type of attention.
+    // The slopes of the linear position bias of ALiBi.
+    const T* linear_bias_slopes = nullptr;  // (head_num,), optional
+};
+
+template<typename T, typename T_IN>
+void invokeMaskedSoftmax(MaskedSoftmaxParam<T, T_IN>& param, cudaStream_t stream);
 
 template<typename T>
 void invokeTransposeQKV(T*           dst,
@@ -51,25 +65,30 @@ void invokeTransposeQKV(T*           dst,
                         const int    seq_len,
                         const int    head_num,
                         const int    size_per_head,
+                        const float* scale,
+                        const int    int8_mode,
                         cudaStream_t stream);
 
 template<typename T>
-void invokeAddQKVBiasRebuildPadding(T*           Q,
-                                    const T*     bias_Q,
-                                    T*           K,
-                                    const T*     bias_K,
-                                    T*           V,
-                                    const T*     bias_V,
-                                    T*           q_buf,
-                                    T*           k_buf,
-                                    T*           v_buf,
-                                    const int    batch_size,
-                                    const int    seq_len,
-                                    const int    head_num,
-                                    const int    size_per_head,
-                                    const int    valid_word_num,
-                                    const int*   mask_offset,
-                                    cudaStream_t stream);
+void invokeAddQKVBiasIA3RebuildPadding(T*           Q,
+                                       const T*     bias_Q,
+                                       T*           K,
+                                       const T*     bias_K,
+                                       T*           V,
+                                       const T*     bias_V,
+                                       T*           q_buf,
+                                       T*           k_buf,
+                                       T*           v_buf,
+                                       const int    batch_size,
+                                       const int    seq_len,
+                                       const int    head_num,
+                                       const int    size_per_head,
+                                       const int    valid_word_num,
+                                       const int*   mask_offset,
+                                       const int*   ia3_tasks,
+                                       const T*     ia3_key_weights,
+                                       const T*     ia3_value_weights,
+                                       cudaStream_t stream);
 
 template<typename T>
 void invokeTransposeAttentionOutRemovePadding(T*           src,
@@ -80,6 +99,8 @@ void invokeTransposeAttentionOutRemovePadding(T*           src,
                                               const int    head_num,
                                               const int    size_per_head,
                                               const int*   mask_offset,
+                                              const float* scale,
+                                              const int    int8_mode,
                                               cudaStream_t stream);
 
 // Prefix Prompt Parameters
@@ -120,6 +141,8 @@ void invokeAddFusedQKVBiasTranspose(T*           q_buf,
                                    size_per_head,
                                    0,
                                    false,
+                                   (float*)nullptr,
+                                   0,
                                    stream);
 }
 
@@ -138,6 +161,8 @@ void invokeAddFusedQKVBiasTranspose(T*                               q_buf,
                                     const int                        size_per_head,
                                     const int                        rotary_embedding_dim,
                                     const int                        neox_rotary_style,
+                                    const float*                     scale,
+                                    const int                        int8_mode,
                                     cudaStream_t                     stream);
 
 template<typename T>
@@ -195,5 +220,8 @@ void invokeMaskedSoftMaxWithRelPosBias(T*           qk_buf,
                                        const int    window_len,
                                        const float  qk_scale,
                                        cudaStream_t stream);
+
+template<typename T>
+void invokeTransposeAttentions(Tensor& attentions_out, const Tensor& attentions_in, cudaStream_t stream = 0);
 
 }  // namespace fastertransformer

@@ -255,7 +255,7 @@ public:
         return (mValidSequences.find(s) != mValidSequences.end());
     }
 
-    virtual void run(TKernelParam& params, cudaStream_t ss) const
+    virtual void run(TKernelParam& params, cudaStream_t ss, bool flash_attention = false, bool causal_mask = false) const
     {
         const auto findIter = mFunctions.find(hashID(params.s, params.d));
         // ASSERT(findIter != mFunctions.end()); //TODO check the ASSERT

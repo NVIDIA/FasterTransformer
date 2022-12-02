@@ -49,3 +49,8 @@ ft::Tensor as_GPU_tensor(const triton::Tensor& tensor, T* d_ptr)
                       tensor.shape,
                       tensor.where == triton::MEMORY_CPU ? d_ptr : tensor.data};
 }
+
+inline ft::Tensor as_CPU_tensor(const triton::Tensor& tensor)
+{
+    return ft::Tensor{ft::MEMORY_CPU, triton::Tensor::convertTritonTypeToFt(tensor.type), tensor.shape, tensor.data};
+}

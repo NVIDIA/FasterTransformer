@@ -38,13 +38,12 @@ public:
     ~DynamicDecodeBaseLayer() = default;
     DynamicDecodeBaseLayer(DynamicDecodeBaseLayer const& dynamic_decode_layer): BaseLayer(dynamic_decode_layer){};
 
-    virtual void setup(const size_t                                   batch_size,
-                       const size_t                                   beam_width,
-                       const std::unordered_map<std::string, Tensor>* runtime_args)    = 0;
+    virtual void setup(const size_t batch_size, const size_t beam_width, TensorMap* runtime_args) = 0;
     virtual void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                         const std::vector<fastertransformer::Tensor>* input_tensors)  = 0;
+                         const std::vector<fastertransformer::Tensor>* input_tensors)             = 0;
     virtual void forward(std::unordered_map<std::string, Tensor>*       output_tensors,
-                         const std::unordered_map<std::string, Tensor>* input_tensors) = 0;
+                         const std::unordered_map<std::string, Tensor>* input_tensors)            = 0;
+    virtual void forward(TensorMap* output_tensors, TensorMap* input_tensors)                     = 0;
 };
 
 }  // namespace fastertransformer

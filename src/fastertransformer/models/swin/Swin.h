@@ -26,23 +26,18 @@ template<typename T>
 class SwinTransformer {
 
 private:
-    int                    max_batch_   = 1;
-    int                    img_size_    = 224;
-    int                    patch_size_  = 4;
-    int                    in_chans_    = 3;
-    int                    embed_dim_   = 96;
-    int                    window_size_ = 7;
+    int                    max_batch_  = 1;
+    int                    img_size_   = 224;
+    int                    patch_size_ = 4;
+    int                    in_chans_   = 3;
+    int                    embed_dim_  = 96;
     int*                   depths_;
     int*                   num_heads_;
     bool                   ape_                = false;
     bool                   patch_norm_         = true;
-    float                  mlp_ratio_          = 4.0f;
-    bool                   qkv_bias_           = true;
     int                    patches_resolution_ = 56;
     int                    layer_num_          = 4;
-    float                  qk_scale_           = 1.0f;
     static constexpr float layernorm_eps_      = 1e-6f;
-    size_t                 max_buf_size_       = 0;
     IAllocator*            allocator_          = nullptr;
     cudnnHandle_t          cudnn_handle_;
     cudaStream_t           stream_;
@@ -59,8 +54,6 @@ private:
     SwinTransformerBasicLayer<T>* basic_layer_ = nullptr;
 
 public:
-    static size_t getBufSize(const int batch, const int patches_resolution, const int layer_num, const int embed_dim);
-
     void allocateBuffer();
 
     SwinTransformer(int              max_batch,
@@ -81,7 +74,8 @@ public:
                     IAllocator*      allocator,
                     bool             is_free_buffer_after_forward,
                     bool             qkv_bias = true,
-                    float            qk_scale = 1.0f);
+                    float            qk_scale = 1.0f,
+                    int              version  = 1);
 
     void freeBuffer();
 
@@ -89,23 +83,10 @@ public:
 
     // input is [B, C_in, H, W]
     // output is [B, H, W, C_out]
-    void patchEmbed(T*         output,
-                    const T*   input,
-                    const T*   kernel,
-                    const T*   bias,
-                    const T*   gamma,
-                    const T*   beta,
-                    const int  batch,
-                    const int  img_size,
-                    const int  patch_size,
-                    const int  patches_resolution,
-                    const int  in_chans,
-                    const int  embed_dim,
-                    const bool patch_norm);
+    void patchEmbed(
+        T* output, const T* input, const T* kernel, const T* bias, const T* gamma, const T* beta, const int batch);
 
-    void forward(std::vector<Tensor>*       output_tensors,
-                 const std::vector<Tensor>* input_tensors,
-                 SwinTransformerWeight<T>&  swin_weights);
+    void forward(TensorMap* output_tensors, TensorMap* input_tensors, SwinTransformerWeight<T>& swin_weights);
 
 };  // class SwinTransformer
 }  // namespace fastertransformer

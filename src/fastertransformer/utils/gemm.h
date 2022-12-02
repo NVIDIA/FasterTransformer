@@ -487,7 +487,7 @@ public:
     std::string toString() override;
     void        loadGemmConfig(std::string config_file, std::string spconfig_file);
 
-    // Template method cannot be overrided.
+    // Template method cannot be overridden.
     void gemm(const GemmOp              transa,
               const GemmOp              transb,
               const size_t              m,

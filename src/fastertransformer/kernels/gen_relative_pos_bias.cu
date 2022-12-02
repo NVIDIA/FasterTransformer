@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +14,12 @@
  * limitations under the License.
  */
 
+#include "cublas_v2.h"
 #include "gen_relative_pos_bias.h"
 #include "reduce_kernel_utils.cuh"
+#include "src/fastertransformer/kernels/activation_kernels.h"
+#include "src/fastertransformer/utils/cuda_utils.h"
+#include <cstdio>
 
 namespace fastertransformer {
 
@@ -25,11 +29,6 @@ namespace fastertransformer {
 // grid(window_size*window_size, head_num)
 // block(window_size*window_size)
 
-// relative_position_bias_table is [(2*window_size-1)*(2*window_size-1), headNum]
-// relative_position_bias_index is [window_size^2, window_size^2]
-// relative_position_bias is [head_num, window_size^2, window_size^2]
-// grid(window_size*window_size, head_num)
-// block(window_size*window_size)
 template<typename T, typename Tindex>
 __global__ void gen_relative_pos_bias(T*            relative_position_bias,
                                       const T*      relative_position_bias_table,
@@ -73,6 +72,101 @@ void invokeGenRelativePosBias(T*            relative_position_bias,
         relative_position_bias, relative_position_bias_table, relative_position_bias_index, window_size, head_num);
 }
 
+/*******************  invokeGenRelativePosBiasV2  ***********************/
+template<typename T, typename Tindex>
+void invokeGenRelativePosBiasV2(T*            relative_position_bias,
+                                const T*      relative_coords_table,
+                                const Tindex* relative_position_bias_index,
+                                const T*      cpb_mlp_weight1,
+                                const T*      cpb_mlp_bias1,
+                                const T*      cpb_mlp_weight2,
+                                const int     window_size,
+                                const int     cpb_mlp_in_dim,
+                                const int     cpb_mlp_out_dim,
+                                const int     head_num,
+                                cudaStream_t  stream)
+{
+
+    dim3 grid(window_size * window_size, head_num);
+    dim3 block(window_size * window_size);
+
+    if (block.x > 1024) {
+        printf("[ERROR][invokeGenRelativePosBias] window_size*window_size > 1024.\n");
+        exit(-1);
+    }
+
+    T* relative_position_bias_table;
+    check_cuda_error(cudaMalloc(&relative_position_bias_table,
+                                ((2 * window_size - 1) * (2 * window_size - 1) * head_num) * sizeof(T)));
+    T* cpb_mlp_1;
+    check_cuda_error(
+        cudaMalloc(&cpb_mlp_1, ((2 * window_size - 1) * (2 * window_size - 1) * cpb_mlp_out_dim) * sizeof(T)));
+    cublasHandle_t cublas_handle;
+    check_cuda_error(cublasCreate(&cublas_handle));
+
+    int            m     = (2 * window_size - 1) * (2 * window_size - 1);
+    T              alpha = (T)1.0f;
+    T              beta  = (T)0.0f;
+    cudaDataType_t type  = std::is_same<float, T>::value ? CUDA_R_32F : CUDA_R_16F;
+#if (CUDART_VERSION >= 11000)
+    cublasComputeType_t compute_type = std::is_same<float, T>::value ? CUBLAS_COMPUTE_32F : CUBLAS_COMPUTE_16F;
+#else
+    cudaDataType_t compute_type = std::is_same<float, T>::value ? CUDA_R_32F : CUDA_R_16F;
+#endif
+    cublasGemmAlgo_t algo = std::is_same<float, T>::value ? CUBLAS_GEMM_DEFAULT : CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+    check_cuda_error(cublasGemmEx(cublas_handle,
+                                  CUBLAS_OP_T,
+                                  CUBLAS_OP_N,
+                                  cpb_mlp_out_dim,
+                                  m,
+                                  cpb_mlp_in_dim,
+                                  &alpha,
+                                  cpb_mlp_weight1,
+                                  type,
+                                  cpb_mlp_in_dim,
+                                  relative_coords_table,
+                                  type,
+                                  cpb_mlp_in_dim,
+                                  &beta,
+                                  cpb_mlp_1,
+                                  type,
+                                  cpb_mlp_out_dim,
+                                  compute_type,
+                                  algo));
+
+    invokeGenericActivation<ReluActivation, T, T>(
+        cpb_mlp_1, cpb_mlp_bias1, nullptr, nullptr, nullptr, nullptr, m, cpb_mlp_out_dim, 0, nullptr, nullptr, stream);
+
+    check_cuda_error(cublasGemmEx(cublas_handle,
+                                  CUBLAS_OP_T,
+                                  CUBLAS_OP_N,
+                                  head_num,
+                                  m,
+                                  cpb_mlp_out_dim,
+                                  &alpha,
+                                  cpb_mlp_weight2,
+                                  type,
+                                  cpb_mlp_out_dim,
+                                  cpb_mlp_1,
+                                  type,
+                                  cpb_mlp_out_dim,
+                                  &beta,
+                                  relative_position_bias_table,
+                                  type,
+                                  head_num,
+                                  compute_type,
+                                  algo));
+
+    gen_relative_pos_bias<<<grid, block, 0, stream>>>(
+        relative_position_bias, relative_position_bias_table, relative_position_bias_index, window_size, head_num);
+
+    invokeSigmoid(
+        relative_position_bias, window_size * window_size * window_size * window_size * head_num, 16.0f, stream);
+    check_cuda_error(cudaFree(relative_position_bias_table));
+    check_cuda_error(cudaFree(cpb_mlp_1));
+    check_cuda_error(cublasDestroy(cublas_handle));
+}
+
 /*******************  instantiation  ***********************/
 
 template void invokeGenRelativePosBias(float*       relative_position_bias,
@@ -103,4 +197,106 @@ template void invokeGenRelativePosBias(half*          relative_position_bias,
                                        const int      head_num,
                                        cudaStream_t   stream);
 
+__host__ __device__ uint32_t pow2_roundup(uint32_t x)
+{
+    --x;
+    x |= x >> 1;
+    x |= x >> 2;
+    x |= x >> 4;
+    x |= x >> 8;
+    x |= x >> 16;
+    return x + 1;
+}
+
+template<typename T>
+__global__ void generate_alibi_slopes(T* alibi_slopes, const size_t num_heads)
+{
+    if (threadIdx.x < num_heads) {
+        // The nearest power of 2 greater than num_heads followed by HF's implementation.
+        int num_heads_pow2 = pow2_roundup(num_heads);
+        // Loop over the attention head.
+        for (int h = threadIdx.x; h < num_heads; h += blockDim.x) {
+            // The slope of linear bias of the attention head: 2^(- 8 / num_heads * (h + 1)) where h=0...(num_heads-1)
+            alibi_slopes[h] = static_cast<T>(powf(0.5f, 8.0f / num_heads_pow2 * (h + 1)));
+        }
+    }
+}
+
+template<typename T>
+void invokeBuildAlibiSlopes(T* alibi_slopes, const size_t num_heads, cudaStream_t stream)
+{
+    // Generate the slopes of a linear attention linear bias.
+    //
+    // Paper: https://arxiv.org/abs/2108.12409
+    // HF's implementation
+    //   https://github.com/huggingface/transformers/blob/56ef0ba44765162f830873c140bd40bdc975cc34/src/transformers/models/bloom/modeling_bloom.py#L86
+    // Author's implementation
+    //   https://github.com/ofirpress/attention_with_linear_biases/blob/02aa87e7a29e9340efd28d6d169018eafb3aa57a/fairseq/models/transformer.py#L760
+    //
+    // alibi_slopes: [num_heads],
+    //     The slopes of the linear position bias. A position bias will be
+    //          position_bias[h, i, j] = 2^(-8/H * h) * (i - j) if i < j otherwise 0.
+    //     according to what the paper expalined. This is not matched with neither HF's
+    //     nor author's implementation, but it will be mathematically equivalent due to
+    //     the invariance of softmax function to translation unless masked.
+    // num_heads: the number of attention heads.
+    // stream: a cuda stream.
+
+    dim3 block(min((int)num_heads, 512));
+    generate_alibi_slopes<<<1, block, 0, stream>>>(alibi_slopes, num_heads);
+}
+
+template void invokeBuildAlibiSlopes(float* alibi_slopes, const size_t num_heads, cudaStream_t stream);
+template void invokeBuildAlibiSlopes(half* alibi_slopes, const size_t num_heads, cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeBuildAlibiSlopes(__nv_bfloat16* alibi_slopes, const size_t num_heads, cudaStream_t stream);
+#endif
+
+template void invokeGenRelativePosBiasV2(float*       relative_position_bias,
+                                         const float* relative_coords_table,
+                                         const int*   relative_position_bias_index,
+                                         const float* cpb_mlp_weight1,
+                                         const float* cpb_mlp_bias1,
+                                         const float* cpb_mlp_weight2,
+                                         const int    window_size,
+                                         const int    cpb_mlp_in_dim,
+                                         const int    cpb_mlp_out_dim,
+                                         const int    head_num,
+                                         cudaStream_t stream);
+
+template void invokeGenRelativePosBiasV2(half*        relative_position_bias,
+                                         const half*  relative_coords_table,
+                                         const int*   relative_position_bias_index,
+                                         const half*  cpb_mlp_weight1,
+                                         const half*  cpb_mlp_bias1,
+                                         const half*  cpb_mlp_weight2,
+                                         const int    window_size,
+                                         const int    cpb_mlp_in_dim,
+                                         const int    cpb_mlp_out_dim,
+                                         const int    head_num,
+                                         cudaStream_t stream);
+
+template void invokeGenRelativePosBiasV2(float*         relative_position_bias,
+                                         const float*   relative_coords_table,
+                                         const int64_t* relative_position_bias_index,
+                                         const float*   cpb_mlp_weight1,
+                                         const float*   cpb_mlp_bias1,
+                                         const float*   cpb_mlp_weight2,
+                                         const int      window_size,
+                                         const int      cpb_mlp_in_dim,
+                                         const int      cpb_mlp_out_dim,
+                                         const int      head_num,
+                                         cudaStream_t   stream);
+
+template void invokeGenRelativePosBiasV2(half*          relative_position_bias,
+                                         const half*    relative_coords_table,
+                                         const int64_t* relative_position_bias_index,
+                                         const half*    cpb_mlp_weight1,
+                                         const half*    cpb_mlp_bias1,
+                                         const half*    cpb_mlp_weight2,
+                                         const int      window_size,
+                                         const int      cpb_mlp_in_dim,
+                                         const int      cpb_mlp_out_dim,
+                                         const int      head_num,
+                                         cudaStream_t   stream);
 }  // namespace fastertransformer

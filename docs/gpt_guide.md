@@ -23,6 +23,7 @@
     - [Run GPT](#run-gpt)
     - [Run GPT with prompts](#run-gpt-with-prompts)
     - [Run Meta OPT](#run-meta-opt)
+    - [Run BLOOM](#run-bloom)
     - [gpt with triton backend](#gpt-with-triton-backend)
     - [Advanced features](#advanced-features)
       - [generate different sentences and enable shared context](#generate-different-sentences-and-enable-shared-context)
@@ -39,9 +40,9 @@
 
 ## Introduction
 
-This document describes what FasterTransformer provides for the GPT model, explaining the workflow and optimization. We also provide a guide to help users to run the GPT model on FasterTransformer. Finally, we provide benchmark to demonstrate the speed of FasterTransformer on GPT. 
+This document describes what FasterTransformer provides for the GPT model, explaining the workflow and optimization. We also provide a guide to help users to run the GPT model on FasterTransformer. Finally, we provide benchmark to demonstrate the speed of FasterTransformer on GPT.
 
-GPT is a variant of Decoding model, which does not have the encoder module, cross multi-head attention, and uses GeLU as the activation. In 2020, OpenAI shows that using very giant model and lots of training data can significantly improve the capacity of GPT model in [their paper](https://arxiv.org/abs/2005.14165). However, it is impossible to put such model into a single GPU. For example, the largest model, GPT-3, has 175 billion parameters, which takes about 350 GBs under half data type. Therefore, multi-gpus, even multi-nodes, is necessary. To solve the bottleneck of latency and memory due to the model size, FasterTransformer provides kernels with high efficiency, optimized memory usage, and model parallelism on multiple frameworks. 
+GPT is a variant of Decoding model, which does not have the encoder module, cross multi-head attention, and uses GeLU as the activation. In 2020, OpenAI shows that using very giant model and lots of training data can significantly improve the capacity of GPT model in [their paper](https://arxiv.org/abs/2005.14165). However, it is impossible to put such model into a single GPU. For example, the largest model, GPT-3, has 175 billion parameters, which takes about 350 GBs under half data type. Therefore, multi-gpus, even multi-nodes, is necessary. To solve the bottleneck of latency and memory due to the model size, FasterTransformer provides kernels with high efficiency, optimized memory usage, and model parallelism on multiple frameworks.
 
 ### Supported features
 
@@ -54,7 +55,15 @@ GPT is a variant of Decoding model, which does not have the encoder module, cros
   * FP32
   * FP16
   * BF16
-  * INT8 weight only PTQ for bs 1 and 2
+  * INT8 weight only PTQ.
+    * Limitations:
+      * Hidden sizes must be a multiple of 64 after weights are split for TP.
+      * The kernel typically only gives performance benefits for small batch (typically less than 32 or 64) and when weight matrices are large.
+      * Weight only PTQ only works for FP16/BF16 compute.
+      * Only supported on Volta and newer architectures.
+    * Note:
+      * Weights are preprocessed offline based on the current GPU to optimize the weight alignment for consumption by tensorcores. Currently, we directly consume FP32/BF16/FP16 weights and quantize them just before inference. If we want to store quantized weights, they MUST be preprocessed for the GPU intended to be used with inference.
+      * When using the torch APIs, int8 mode is only available via the Parallel GPT Op. The Parallel GPT Op can also be used on single GPU.
 * Feature
   * Multi-GPU multi-node inference
   * Dynamic random seed
@@ -75,15 +84,15 @@ GPT is a variant of Decoding model, which does not have the encoder module, cros
 <div align=center> Fig 1. Workflow of GPT model.</div>
 <br/><br/>
 
-Fig 1 demonstrates the workflow of FasterTransformer GPT. Different from BERT and encoder-decoder structure, GPT receive some input ids as context, and generates the respective output ids as response. In this workflow, the major bottleneck is the GptDecoderLayer (transformer block) because the time increase linearly when we increase the number of layers. In GPT-3, the GptDecoderLayer takes about 95% of total time. 
+Fig 1 demonstrates the workflow of FasterTransformer GPT. Different from BERT and encoder-decoder structure, GPT receive some input ids as context, and generates the respective output ids as response. In this workflow, the major bottleneck is the GptDecoderLayer (transformer block) because the time increase linearly when we increase the number of layers. In GPT-3, the GptDecoderLayer takes about 95% of total time.
 
-FasterTransformer splits the whole workflow into 2 parts. The first one is “computing the k/v cache of context (input ids), and the second part is “auto-regressive generating the output ids”. The operations of these two parts are similar, but the shapes of tensors in the `SelfAttention` is different. So, we use 2 different implementations to handle two different cases, as demonstrating in Fig 2. In `DecoderSelfAttention`, the sequence length of query is always 1, so we used customed fused masked multi-head attention kernel to handle. On the other hand, the sequence length of query in the `ContextSelfAttention` is maximum input length, so we use cuBLAS to leverage the tensor core. 
+FasterTransformer splits the whole workflow into 2 parts. The first one is “computing the k/v cache of context (input ids), and the second part is “auto-regressive generating the output ids”. The operations of these two parts are similar, but the shapes of tensors in the `SelfAttention` is different. So, we use 2 different implementations to handle two different cases, as demonstrating in Fig 2. In `DecoderSelfAttention`, the sequence length of query is always 1, so we used customed fused masked multi-head attention kernel to handle. On the other hand, the sequence length of query in the `ContextSelfAttention` is maximum input length, so we use cuBLAS to leverage the tensor core.
 
 <div align=center>
   <img width=400 src ="images/gpt/gpt_context.png "/> &ensp;&ensp;&ensp;&ensp;&ensp;
   <img width=400 src ="images/gpt/parallelgpt.png "/>
 </div>
-<div align=center> 
+<div align=center>
   Fig 2. Comparison between different self attention. &ensp;&ensp;&ensp;&ensp;&ensp;&ensp;&ensp;&ensp;&ensp;&ensp;&ensp;
   Fig 3. Workflow of GPT with tensor parallelism.
 </div>
@@ -100,7 +109,7 @@ In summary, the workflow to run the GPT model is:
 3.	Create the instance of `ParalelGpt` by the ranks of tensor parallel, pipeline parallel and other model hyper-parameters.
 4.	Receive the request from client and convert the request to the format of input tensors for ParallelGpt.
 5.	Run forward
-6.	Convert the output tensors of ParallelGpt to response of client and return the response. 
+6.	Convert the output tensors of ParallelGpt to response of client and return the response.
 In c++ example codes, we skip the step 4 and step 6, loading the request by `examples/cpp/multi_gpu_gpt/start_ids.csv`. In PyTorch example codes, the request comes from the PyTorch side. In Triton example codes, we have a completed examples from step 1 to step 6.
 
 The source codes are put in `src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.cc`. The arguments, input tensors and output tensors of GPT:
@@ -138,7 +147,7 @@ The source codes are put in `src/fastertransformer/models/multi_gpu_gpt/Parallel
 |      [26]      | is_free_buffer_after_forward |        bool        |              If setting to be `true`, FasterTransformer will allocate buffer before forward, and free buffer after forward. When the allocator is based on memory pool, setting to `true` may help reducing the memory usage during inference.               |
 |      [27]      |       cuda_device_prop       |  cudaDeviceProp*   |                                                                        Pointer of CUDA device properties, which is used to get the properties of hardware like size of shared memory                                                                         |
 |      [28]      |            sparse            |        bool        |                                                                                                         Is using sparsity. **Experimental feature**                                                                                                          |
-|      [29]      |          int8_mode           |        int         |                                                                                             Using int8 weight only quantization or not. **Experimental feature**                                                                                             |
+|      [29]      |          int8_mode           |        int         |                                                      0 means no quantization. 1 means use weight-only PTQ **Experimental feature**. 2 for weight and activation quantization **Experimental feature**.                                                       |
 |      [30]      |    custom_all_reduce_comm    | AbstractCustomComm |                                                              Custom all reduction communication for custom all reduction in model parallelism. It is only supported in 8-way tensor parallelism                                                              |
 |      [31]      |   enable_custom_all_reduce   |        int         |                                                                                                         Flag of enabling custom all reduction or not                                                                                                         |
 |      [32]      |        remove_padding        |        bool        |                                                                                                   Remove the padding of input ids or not in context phase.                                                                                                   |
@@ -146,39 +155,44 @@ The source codes are put in `src/fastertransformer/models/multi_gpu_gpt/Parallel
 
 * Input of GPT
 
-|              Name               |            Tensor/Parameter Shape             | Location |       Data Type        |                                                                                         Description                                                                                         |
-| :-----------------------------: | :-------------------------------------------: | :------: | :--------------------: | :-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
-|            input_ids            |        [batch_size, max_input_length]         |   GPU    |          int           |                                                                                   The input ids (context)                                                                                   |
-|          input_lengths          |                 [batch_size]                  |   GPU    |          int           |                                                                                  The lengths of input ids                                                                                   |
-|  prompt_learning_task_name_ids  |                 [batch_size]                  |   CPU    |          int           |                                                                      **Optional**. Task name ids for prompt learning.                                                                       |
-|         output_seq_len          |                 [batch_size]                  |   CPU    |        uint32_t        |                                                  The largest number of tokens you hope for results. Note that it contains the input length                                                  |
-|         stop_words_list         |      [batch_size, 2, stop_words_length]       |   GPU    |          int           |                                          **Optional**. When FT generates words in this list, it will stop the generation. An extension of stop id                                           |
-|         bad_words_list          |       [batch_size, 2, bad_words_length]       |   GPU    |          int           |                           **Optional**. The words in the list will be When FT generates words in this list, it will stop the generation. An extension of stop id                            |
-|            start_id             |                 [batch_size]                  |   CPU    |          int           |                                                       **Optional**. If FT receives this input, FT will replace default start id by it                                                       |
-|             end_id              |                 [batch_size]                  |   CPU    |          int           |                                                        **Optional**. If FT receives this input, FT will replace default end id by it                                                        |
-|          runtime_top_k          |              [1] or [batch_size]              |   CPU    |          uint          |                                                                        **Optional**. top_k value for top k sampling                                                                         |
-|          runtime_top_p          |              [1] or [batch_size]              |   CPU    |         float          |                                                                        **Optional**. top_p value for top p sampling                                                                         |
-|   beam_search_diversity_rate    |              [1] or [batch_size]              |   CPU    |         float          |                                          **Optional**. A hyper hyper-parameter for [simple diverse decoding](https://arxiv.org/pdf/1611.08562.pdf)                                          |
-|           temperature           |              [1] or [batch_size]              |   CPU    |         float          |                                                        **Optional**. Temperature applied to logits for both beam search and sampling                                                        |
-|           len_penalty           |              [1] or [batch_size]              |   CPU    |         float          |                                                             **Optional**. Length penalty applied to logits for only beam search                                                             |
-|       repetition_penalty        |              [1] or [batch_size]              |   CPU    |         float          |                                                    **Optional**. Repetition penalty applied to logits for both beam search and sampling                                                     |
-|           random_seed           |              [1] or [batch_size]              |   CPU    | unsigned long long int |                                                            **Optional**. Random seed to initialize the random table in sampling.                                                            |
-|     request_prompt_lengths      |                 [batch_size],                 |   CPU    |          int           |                               **Optional**. Length of prefix soft prompt embedding. This describes how many tokens of soft prompt embedding in each sentence.                               |
-|    request_prompt_embedding     | [batch_size, max_prompt_length, hidden_units] |   GPU    |  float/half/bfloat16   | **Optional**. FT will concat them with results of embedding lookup kernel. For prefix soft prompt embedding, the type must be float; for p/prompt tuning, the type is same to weight. |
-|       request_prompt_type       |                 [batch_size]                  |   CPU    |          int           |                                            **Optional**. Prompt type of request. This is necessary when user pass the prompt embedding by input                                             |
-| is_return_context_cum_log_probs |                      [1]                      |   CPU    |          bool          |                                                            **Optional**. Return the cumulative log probability of context or not                                                            |
-|           session_len           |                      [1]                      |   CPU    |         uint32         |                             **Optional**. The maximum time length allowed during the whole interactive generation. Only used for interactive generation feature                             |
-|          continue_gen           |                      [1]                      |   CPU    |          bool          |   **Optional**. A flag to tell FasterTransformer to not discard previous tokens and continue producing token based on previous generations. Only used for interactive generation feature    |
-|           memory_len            |                      [1]                      |   CPU    |         uint32         |                           **Optional**. The maximum time memory used in attention modules. Reduces the memory footprint but quality of generation might degrades.                           |
+|              Name               |            Tensor/Parameter Shape             | Location |       Data Type        |                                                                                      Description                                                                                       |
+| :-----------------------------: | :-------------------------------------------: | :------: | :--------------------: | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------: |
+|            input_ids            |        [batch_size, max_input_length]         |   GPU    |          int           |                                                                                The input ids (context)                                                                                 |
+|          input_lengths          |                 [batch_size]                  |   GPU    |          int           |                                                                                The lengths of input ids                                                                                |
+|  prompt_learning_task_name_ids  |                 [batch_size]                  |   CPU    |          int           |                                                                    **Optional**. Task name ids for prompt learning.                                                                    |
+|         output_seq_len          |                 [batch_size]                  |   CPU    |        uint32_t        |                                               The largest number of tokens you hope for results. Note that it contains the input length                                                |
+|         stop_words_list         |      [batch_size, 2, stop_words_length]       |   GPU    |          int           |                                        **Optional**. When FT generates words in this list, it will stop the generation. An extension of stop id                                        |
+|         bad_words_list          |       [batch_size, 2, bad_words_length]       |   GPU    |          int           |                                                               **Optional**. The words in the list will never be sampled.                                                               |
+|            start_id             |                 [batch_size]                  |   CPU    |          int           |                                                    **Optional**. If FT receives this input, FT will replace default start id by it                                                     |
+|             end_id              |                 [batch_size]                  |   CPU    |          int           |                                                     **Optional**. If FT receives this input, FT will replace default end id by it                                                      |
+|          runtime_top_k          |              [1] or [batch_size]              |   CPU    |          uint          |                                                                      **Optional**. top_k value for top k sampling                                                                      |
+|          runtime_top_p          |              [1] or [batch_size]              |   CPU    |         float          |                                                                      **Optional**. top_p value for top p sampling                                                                      |
+|   beam_search_diversity_rate    |              [1] or [batch_size]              |   CPU    |         float          |                                       **Optional**. A hyper hyper-parameter for [simple diverse decoding](https://arxiv.org/pdf/1611.08562.pdf)                                        |
+|           temperature           |              [1] or [batch_size]              |   CPU    |         float          |                                                     **Optional**. Temperature applied to logits for both beam search and sampling                                                      |
+|           len_penalty           |              [1] or [batch_size]              |   CPU    |         float          |                                                          **Optional**. Length penalty applied to logits for only beam search                                                           |
+|       repetition_penalty        |              [1] or [batch_size]              |   CPU    |         float          |                                                  **Optional**. Repetition penalty applied to logits for both beam search and sampling                                                  |
+|           random_seed           |              [1] or [batch_size]              |   CPU    | unsigned long long int |                                                         **Optional**. Random seed to initialize the random table in sampling.                                                          |
+|     request_prompt_lengths      |                 [batch_size],                 |   GPU    |          int           |                            **Optional**. Length of prefix soft prompt embedding. This describes how many tokens of soft prompt embedding in each sentence.                             |
+|    request_prompt_embedding     | [batch_size, max_prompt_length, hidden_units] |   GPU    |  float/half/bfloat16   | **Optional**. FT will concat them with results of embedding lookup kernel. For prefix soft prompt embedding, the type must be float; for p/prompt tuning, the type is same to weight.  |
+|       request_prompt_type       |                 [batch_size]                  |   CPU    |          int           |                                          **Optional**. Prompt type of request. This is necessary when user pass the prompt embedding by input                                          |
+| is_return_context_cum_log_probs |                      [1]                      |   CPU    |          bool          |                                                         **Optional**. Return the cumulative log probability of context or not                                                          |
+|  is_return_context_embeddings   |                      [1]                      |   CPU    |          bool          |                                                            **Optional**. Return the sum of context tokens encodings or not                                                             |
+|           session_len           |                      [1]                      |   CPU    |         uint32         |                          **Optional**. The maximum time length allowed during the whole interactive generation. Only used for interactive generation feature                           |
+|          continue_gen           |                      [1]                      |   CPU    |          bool          | **Optional**. A flag to tell FasterTransformer to not discard previous tokens and continue producing token based on previous generations. Only used for interactive generation feature |
+|           memory_len            |                      [1]                      |   CPU    |         uint32         |                        **Optional**. The maximum time memory used in attention modules. Reduces the memory footprint but quality of generation might degrades.                         |
+|           top_p_decay           |                 [batch_size]                  |   GPU    |         float          |                                                                     **Optional**. decay values for top_p sampling                                                                      |
+|            top_p_min            |                 [batch_size]                  |   GPU    |         float          |                                                                   **Optional**. min top_p values for top p sampling                                                                    |
+|         top_p_reset_ids         |                 [batch_size]                  |   GPU    |         uint32         |                                                         **Optional**. reset ids for resetting top_p values for top p sampling                                                          |
 
 * Output of GPT
 
-|       Name       |              Tensor/Parameter Shape              | Location | Data Type |                                    Description                                    |
-| :--------------: | :----------------------------------------------: | :------: | :-------: | :-------------------------------------------------------------------------------: |
-|    output_ids    |   [batch_size, beam_width, max_output_seq_len]   |   GPU    |    int    |            The output ids. It contains the input_ids and generated ids            |
-| sequence_length  |             [batch_size, beam_width]             |   GPU    |    int    |                             The lengths of output ids                             |
-| output_log_probs | [batch_size, beam_width, request_output_seq_len] |   GPU    |   float   | **Optional**. It records the log probability of logits at each step for sampling. |
-|  cum_log_probs   |             [batch_size, beam_width]             |   GPU    |   float   |          **Optional**. Cumulative log probability of generated sentences          |
+|        Name        |              Tensor/Parameter Shape              | Location | Data Type |                                    Description                                    |
+| :----------------: | :----------------------------------------------: | :------: | :-------: | :-------------------------------------------------------------------------------: |
+|     output_ids     |   [batch_size, beam_width, max_output_seq_len]   |   GPU    |    int    |            The output ids. It contains the input_ids and generated ids            |
+|  sequence_length   |             [batch_size, beam_width]             |   GPU    |    int    |                             The lengths of output ids                             |
+|  output_log_probs  | [batch_size, beam_width, request_output_seq_len] |   GPU    |   float   | **Optional**. It records the log probability of logits at each step for sampling. |
+|   cum_log_probs    |             [batch_size, beam_width]             |   GPU    |   float   |          **Optional**. Cumulative log probability of generated sentences          |
+| context_embeddings |      [batch_size, beam_width, hidden_units]      |   GPU    |   float   |                  **Optional**. Sum of context tokens encodings.                   |
 
 The `beam_width` value is set by the output shape directly. When the `beam_width` of `output_ids` is larger than 1, FT will use beam search to generate tokens; otherwise, FT will use topk or topp sampling. When the inputs of beam search and sampling is invalid, like beam width 1, top k 0, top p 0.0, FT will run greedy search automatically.
 
@@ -202,13 +216,13 @@ The following guide demonstrates how to run the examples of c++, PyTorch and Tri
 - Tensorflow: Verify on 1.15, 1.13 and 1.14 should work.
 - PyTorch: Verify on 1.8.0, >= 1.5.0 should work.
 
-Recommend use nvcr image like `nvcr.io/nvidia/tensorflow:22.07-tf1-py3` or `nvcr.io/nvidia/pytorch:22.07-py3`.
+Recommend use nvcr image like `nvcr.io/nvidia/tensorflow:22.09-tf1-py3` or `nvcr.io/nvidia/pytorch:22.09-py3`.
 
 These components are readily available within the NGC TensorFlow Docker image below.
 
 Ensure you have the following components:
 - [NVIDIA Docker](https://github.com/NVIDIA/nvidia-docker) and NGC container are recommended
-- [NVIDIA Pascal](https://www.nvidia.com/en-us/data-center/pascal-gpu-architecture/) or [Volta](https://www.nvidia.com/en-us/data-center/volta-gpu-architecture/) or [Turing](https://www.nvidia.com/en-us/geforce/turing/) or [Ampere](https://www.nvidia.com/en-us/data-center/nvidia-ampere-gpu-architecture/) based GPU 
+- [NVIDIA Pascal](https://www.nvidia.com/en-us/data-center/pascal-gpu-architecture/) or [Volta](https://www.nvidia.com/en-us/data-center/volta-gpu-architecture/) or [Turing](https://www.nvidia.com/en-us/geforce/turing/) or [Ampere](https://www.nvidia.com/en-us/data-center/nvidia-ampere-gpu-architecture/) based GPU
 
 For more information about how to get started with NGC containers, see the following sections from the NVIDIA GPU Cloud Documentation and the Deep Learning Documentation:
 
@@ -226,10 +240,10 @@ For those unable to use the NGC container, to set up the required environment or
 
     You can choose the tensorflow version and python version you want. Here, we list some possible images:
 
-    To achieve best performance, we recommend to use the latest image. For example, running image `nvcr.io/nvidia/tensorflow:22.07-tf1-py3` by 
+    To achieve best performance, we recommend to use the latest image. For example, running image `nvcr.io/nvidia/tensorflow:22.09-tf1-py3` by
 
     ```bash
-    nvidia-docker run -ti --rm nvcr.io/nvidia/tensorflow:22.07-tf1-py3 bash
+    nvidia-docker run -ti --shm-size 5g --rm nvcr.io/nvidia/tensorflow:22.09-tf1-py3 bash
     git clone https://github.com/NVIDIA/FasterTransformer.git
     mkdir -p FasterTransformer/build
     cd FasterTransformer/build
@@ -256,23 +270,23 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
 
     ```bash
     cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_MULTI_GPU=ON ..
-    make
+    make -j12
     ```
 
-2. build with TensorFlow 
+2. build with TensorFlow
 
-    Uses need to set the path of TensorFlow. For example, if we use `nvcr.io/nvidia/tensorflow:22.07-tf1-py3`, then
+    Uses need to set the path of TensorFlow. For example, if we use `nvcr.io/nvidia/tensorflow:22.09-tf1-py3`, then
 
     ```bash
     cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_TF=ON -DTF_PATH=/usr/local/lib/python3.8/dist-packages/tensorflow_core/ -DBUILD_MULTI_GPU=ON ..
-    make 
+    make -j12
     ```
 
 3. build with PyTorch
 
     ```bash
     cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON -DBUILD_MULTI_GPU=ON ..
-    make
+    make -j12
     ```
 
     This will build the TorchScript custom class. Please make sure that the `PyTorch >= 1.5.0`.
@@ -300,7 +314,7 @@ wget https://s3.amazonaws.com/models.huggingface.co/bert/gpt2-merges.txt -P ../m
 
 #### Download openai-gpt model and convert
 
-To convert the OpenAI GPT model to binary, FasterTransformer provides a tool `sample/tensorflow/utils/openai_gpt_ckpt_convert.py` to convert the checkpoint. The converter requires the following arguments: 
+To convert the OpenAI GPT model to binary, FasterTransformer provides a tool `sample/tensorflow/utils/openai_gpt_ckpt_convert.py` to convert the checkpoint. The converter requires the following arguments:
 
 1. `-i`: The path of megatron model
 2. `-o`: The output path of converted model
@@ -383,11 +397,16 @@ python ../examples/pytorch/gpt/utils/huggingface_gpt_convert.py -i gpt2-xl/ -o .
     Data Type = 0 (FP32) or 1 (FP16) or 2 (BF16)
 
     ```bash
-    ./bin/gpt_gemm <batch_size> <beam_width> <max_input_len> <head_number> <size_per_head> <inter_size> <vocab_size> <data_type> <tensor_para_size>
-    E.g., ./bin/gpt_gemm 8 1 32 12 128 6144 51200 1 1
+    ./bin/gpt_gemm <batch_size> <beam_width> <max_input_len> <head_number> <size_per_head> <inter_size> <vocab_size> <data_type> <tensor_para_size> <is_append>
+    E.g., ./bin/gpt_gemm 8 1 32 12 128 6144 51200 1 1 1
     ```
 
-    Note: We remove the `local_batch_size` argument since v5.0. When users use pipeline parallelism, FT will determine the `local_batch_size` automatically. 
+    If the application may have multiple different shapes (like different batch size), users can run multiple time and set `is_append` to be true. For example
+
+    ```bash
+    ./bin/gpt_gemm 8 1 32 12 128 6144 51200 1 1 0 # bs 8, not append, will create a new gemm_config.ini
+    ./bin/gpt_gemm 16 1 32 12 128 6144 51200 1 1 1 # bs 16, append results in existed gemm_config.ini
+    ```
 
     1.2 Run GPT on C++
 
@@ -420,13 +439,13 @@ python ../examples/pytorch/gpt/utils/huggingface_gpt_convert.py -i gpt2-xl/ -o .
 
     ```bash
     srun -N2 -n2 -t 600 --pty bash # Assume we get 2 nodes: prm-dgx-09 and prm-dgx-10
-    srun -N2 -n2 docker pull nvcr.io/nvidia/tensorflow:22.07-tf1-py3 
+    srun -N2 -n2 docker pull nvcr.io/nvidia/tensorflow:22.09-tf1-py3
 
-    srun -N2 -n2  nvidia-docker run -itd --rm --privileged --network=host --pid=host --cap-add=IPC_LOCK --device=/dev/infiniband -v $PWD:$PWD -w $PWD --name ft-test nvcr.io/nvidia/tensorflow:22.07-tf1-py3 /bin/bash
+    srun -N2 -n2  nvidia-docker run -itd --shm-size 5g --rm --privileged --network=host --pid=host --cap-add=IPC_LOCK --device=/dev/infiniband -v $PWD:$PWD -w $PWD --name ft-test nvcr.io/nvidia/tensorflow:22.09-tf1-py3 /bin/bash
 
     srun -N2 -n2  nvidia-docker exec -i --env SLURM_NTASKS --env SLURM_NODEID --env SLURM_PROCID --env SLURM_STEP_NODELIST --env SLURMD_NODENAME --privileged ft-test bash -c "mkdir /root/.ssh && cp $PWD/ssh/* /root/.ssh && chmod 700 /root/.ssh && chmod 640 /root/.ssh/authorized_keys2 && chmod 400 /root/.ssh/id_rsa && apt-get update && apt-get install ssh -y && mkdir /run/sshd/ && /usr/sbin/sshd -p 11068 && nvidia-smi -lgc 1530"
 
-    nvidia-docker exec -ti ft-test bash 
+    nvidia-docker exec -ti ft-test bash
     cd FasterTransformer/build
     mpirun --allow-run-as-root -np 2 -H prm-dgx-09:1,prm-dgx-10:1 -mca plm_rsh_args "-p 11068" ./bin/multi_gpu_gpt_example
     srun -N2 -n2 docker stop ft-test
@@ -462,7 +481,7 @@ python ../examples/pytorch/gpt/utils/huggingface_gpt_convert.py -i gpt2-xl/ -o .
     #### Set up in interactive mode
 
     ```bash
-    srun -A devtech -J devtech-gpt:gpt -p luna -N1 --mpi=pmix --ntasks-per-node=8 --container-image nvcr.io/nvidia/pytorch:22.07-py3 --container-mounts /lustre/fsw/devtech/hpc-devtech/dahn/FasterTransformer:/workspace/fastertransformer --container-workdir /workspace/fastertransformer --pty bash
+    srun -A devtech -J devtech-gpt:gpt -p luna -N1 --mpi=pmix --ntasks-per-node=8 --container-image nvcr.io/nvidia/pytorch:22.09-py3 --container-mounts /lustre/fsw/devtech/hpc-devtech/dahn/FasterTransformer:/workspace/fastertransformer --container-workdir /workspace/fastertransformer --pty bash
 
     mkdir build && cd build
     cmake -DSM=80 -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON .. && make -j12
@@ -472,14 +491,14 @@ python ../examples/pytorch/gpt/utils/huggingface_gpt_convert.py -i gpt2-xl/ -o .
     * tensor_para_size=8, pipeline_para_size=1
 
     ```bash
-    srun -A devtech -p luna -N1 --mpi=pmix --ntasks-per-node=8 --container-image nvcr.io/nvidia/pytorch:22.07-py3 --container-mounts /lustre/fsw/devtech/hpc-devtech/dahn/FasterTransformer:/workspace/fastertransformer --container-workdir /workspace/fastertransformer/build python ../examples/pytorch/gpt/multi_gpu_gpt_example.py --tensor_para_size=8 --pipeline_para_size=1 --ckpt_path="/workspace/fastertransformer/models/megatron-models/c-model/345m/8-gpu"
+    srun -A devtech -p luna -N1 --mpi=pmix --ntasks-per-node=8 --container-image nvcr.io/nvidia/pytorch:22.09-py3 --container-mounts /lustre/fsw/devtech/hpc-devtech/dahn/FasterTransformer:/workspace/fastertransformer --container-workdir /workspace/fastertransformer/build python ../examples/pytorch/gpt/multi_gpu_gpt_example.py --tensor_para_size=8 --pipeline_para_size=1 --ckpt_path="/workspace/fastertransformer/models/megatron-models/c-model/345m/8-gpu"
     ```
 
     #### Run on multi-node
     * tensor_para_size=8, pipeline_para_size=2
 
     ```bash
-    srun -A devtech -p luna -N2 --mpi=pmix --ntasks-per-node=8 --container-image nvcr.io/nvidia/pytorch:22.07-py3 --container-mounts /lustre/fsw/devtech/hpc-devtech/dahn/FasterTransformer:/workspace/fastertransformer --container-workdir /workspace/fastertransformer/build python ../examples/pytorch/gpt/multi_gpu_gpt_example.py --tensor_para_size=8 --pipeline_para_size=2 --ckpt_path="/workspace/fastertransformer/models/megatron-models/c-model/345m/8-gpu"
+    srun -A devtech -p luna -N2 --mpi=pmix --ntasks-per-node=8 --container-image nvcr.io/nvidia/pytorch:22.09-py3 --container-mounts /lustre/fsw/devtech/hpc-devtech/dahn/FasterTransformer:/workspace/fastertransformer --container-workdir /workspace/fastertransformer/build python ../examples/pytorch/gpt/multi_gpu_gpt_example.py --tensor_para_size=8 --pipeline_para_size=2 --ckpt_path="/workspace/fastertransformer/models/megatron-models/c-model/345m/8-gpu"
     ```
 
    2.2 Run LAMBADA test on PyTorch
@@ -503,7 +522,7 @@ python ../examples/pytorch/gpt/utils/huggingface_gpt_convert.py -i gpt2-xl/ -o .
            --batch-size 64 \
            --checkpoint-path ../models/megatron-models/c-model/345m/1-gpu/ \
            --lib-path lib/libth_parallel_gpt.so \
-           --lambada-path ../models/megatron-models/lambada_test.jsonl 
+           --lambada-path ../models/megatron-models/lambada_test.jsonl
     ```
 
 3. Run GPT on tensorflow
@@ -528,7 +547,7 @@ GPT now supports p/prompt-tuning. It works with [nemo checkpoint and prompt lear
 
 1.  Convert the prompt weights
 
-    Use the `examples/pytorch/gpt/utils/nemo_ckpt_convert.py` to convert the NeMo Megatron Prompt Weights. 
+    Use the `examples/pytorch/gpt/utils/nemo_ckpt_convert.py` to convert the NeMo Megatron Prompt Weights.
     It will automatically generate configuration needed for triton backend inference.
 
     Note that you need to specify `start_id`, `end_id` by yourself in order to make sure that it is consistent with the tokenizer.
@@ -595,12 +614,30 @@ You need to convert the Huggingface Meta Opt models to fastertransformer format 
     There are two model types: opt-pre = [pre_layernorm](https://github.com/huggingface/transformers/blob/main/src/transformers/models/opt/modeling_opt.py#L332), opt_post = [post_layernorm](https://github.com/huggingface/transformers/blob/main/src/transformers/models/opt/modeling_opt.py#L323)\
     **Note that:** [the model has post decoder layernorm when layernorm_type is pre_layernorm](https://github.com/huggingface/transformers/blob/main/src/transformers/models/opt/modeling_opt.py#L498).
 
+    1.1 Support for w8a8 int8 mode with OPT (preview)
+
+    FasterTransformer supports having certain operations with both weights and activations in int8. To keep high accuracy with your model, we recommend [SmoothQuant](https://arxiv.org/pdf/2211.10438.pdf) models. Fig 4 shows the workflow, except that the batched gemm of multi-head attention is under half. You can convert a regular OPT model to a SmoothQuant one with this [repo](https://github.com/mit-han-lab/smoothquant). You must also generate activation records for calibrating the scaling factors. With these, you can convert the SmoothQuant model for w8a8 inference in FT:
+    
+    ```
+    python3 examples/pytorch/gpt/utils/huggingface_opt_convert.py -i ../smoothquant/opt-1.3b-smooth/ -o ../nlp-models/ft/test/opt-1.3b-int8/ -i_g 1 -act_scale ../smoothquant/opt-1.3b-smooth.scales.pt
+    ```
+
+    Then, set the `int8_mode` to `2` in `examples/cpp/gpt/gpt_config.ini` and run `bin/multi_gpu_gpt_example`. Note that this optimization only supports OPT with per-layernorm (`opt-pre`).
+
+    <div align=center>
+    <img width=600 src ="images/gpt/SmoothQuant_workflow.png "/> &ensp;&ensp;&ensp;&ensp;&ensp;
+    </div>
+    <div align=center>
+    Fig 4. SmoothQuant workflow.
+    </div>
+    <br/><br/>
+
 2. Run OPT on PyTorch
 
     We can run summarization task examples of meta opt models. See `examples/pytorch/gpt/opt_summarization.py`.
 
     Note that the summarization test are ran by topk = 2, so the rouge score of HF and FT are often different.
-    
+
     * Run on opt-125m model
 
     ```bash
@@ -664,6 +701,34 @@ You need to convert the Huggingface Meta Opt models to fastertransformer format 
     rougeLsum : 24.372302912676407
     ```
 
+    We can also run OPT summarization with int8
+
+    ```bash
+    python3 ../examples/pytorch/gpt/opt_summarization.py \
+            --summarize \
+            --test_hf \
+            --max_ite 20 \
+            --ft_model_location opt-350m/c-model \
+            --hf_model_name opt-350m \
+            --data_type fp16
+            --int8_mode 1
+    ```
+
+    The results are similar to (from RTX 3090):
+
+    ```
+    Hugging Face (total latency: 17.364539 sec)
+    rouge1 : 29.781707569865045
+    rouge2 : 10.400027824789843
+    rougeL : 20.295983024772482
+    rougeLsum : 26.529982852324874
+    Faster Transformers (total latency: 6.088986 sec)
+    rouge1 : 26.744781183506355
+    rouge2 : 7.118945671926842
+    rougeL : 17.357590762660852
+    rougeLsum : 24.31072167607998
+    ```
+
 3. Run OPT with Triton Backends
 
     Model configurations have been automatically generated when converting the [meta opt models](https://huggingface.co/docs/transformers/model_doc/opt).\
@@ -686,6 +751,81 @@ You need to convert the Huggingface Meta Opt models to fastertransformer format 
     end_id = 2
     weight_data_type = fp32
     ```
+
+### Run BLOOM
+
+BLOOM is a variant of GPT model leveraging [ALiBi](https://arxiv.org/abs/2108.12409), which does not need a learnt positional encoding and allows the model to generate sequences longer than the sequence length used in training.
+BLOOM has also similar structure to OpenAI GPT, so like OPT FT provides BLOOM model through the GPT classes as a variation.
+Users can convert a pretrained Huggingface BLOOM model into fastertransformer format by using `examples/pytorch/gpt/utils/huggingface_bloom_convert.py`.
+
+1. Run BLOOM under on C++ with multiple gpu
+
+    Users can find the details of parameters from `examples/cpp/multi_gpu_gpt/gpt_config.ini`, which controls the checkpoint path, model size, tensor parallelism size, as well as the other hyper-parameters.
+    Like OPT, we need to set an additional configuration `model_variant=bloom`.
+    For example, the bloom-560m model configuraitons would be like:
+    ```ini
+    [bloom_560M]
+    head_num=16
+    size_per_head=64
+    vocab_size=250880
+    decoder_layers=24
+    start_id=1
+    end_id=3
+    inter_size=4096
+    model_variant=bloom ; define variant structure
+    ```
+
+2. Run BLOOM on PyTorch
+
+    We provide a LAMBADA task example for BLOOM model. Please see `examples/pytorch/gpt/bloom_lambada.py`.
+
+    * Run on bloom-560m model
+
+    ```bash
+    git clone https://huggingface.co/bigscience/bloom-560m
+    python ../examples/pytorch/gpt/utils/huggingface_bloom_convert.py \
+        --input-dir bloom-560m \
+        --output-dir bloom-560m/c-model \
+        -tp 1 -p 4 -v
+    wget https://github.com/cybertronai/bflm/raw/master/lambada_test.jsonl -P ../datasets/lambada
+    # Run HF benchmark
+    python ../examples/pytorch/gpt/bloom_lambada.py \
+        --tokenizer-path bloom-560m \
+        --dataset-path ../datasets/lambada/lambada_test.jsonl \
+        --test-hf --show-progress
+    # Run FT benchmark
+    python ../examples/pytorch/gpt/bloom_lambada.py \
+        --checkpoint-path bloom-560m/c-model/1-gpu \
+        --tokenizer-path bloom-560m \
+        --dataset-path ../datasets/lambada/lambada_test.jsonl \
+        --show-progress
+    ```
+    The result accuracy will be around 35.3% in both cases.
+    ```
+    (HF) Accuracy: 35.3775% (1823/5153) (elapsed time: 23.3663 sec)
+    (FT) Accuracy: 35.3386% (1821/5153) (elapsed time: 10.8444 sec)
+    ```
+
+3. Run BLOOM with Triton Backends
+
+    Same as OPT, when converting into FT checkpoint, configurations have been automatically generated,
+    allowing us to run the model through a triton server without any further step.
+    Example of the `config.ini` when converting the model:
+    ```ini
+      [gpt]
+      model_name=bloom-560m/
+      num_layer=24
+      head_num=16
+      inter_size=4096
+      size_per_head=64
+      vocab_size=250880
+      layernorm_eps=1e-05
+      weight_data_type=fp32
+      tensor_para_size=1
+      start_id=1
+      end_id=2
+    ```
+
 
 ### gpt with triton backend
 
@@ -754,37 +894,37 @@ You can see the inference is faster than original one like:
 Notes:
 1. The results of enabling `shared_context` and disabling `shared_context` may be different because the shape of GEMM are changed. But it does not affect the qualities of generation.
 2. We use short `output_len` in this example to demonstarte the benefit of `shared_context`. In real application, the more duplicated input, longer input length compared to output length, the more speedup `shared_context` brings.
-3. Since the additional overhead of enabling `shared_context` is ignorable, we enable it by default. 
+3. Since the additional overhead of enabling `shared_context` is ignorable, we enable it by default.
 
 #### Interactive generation
 
 <div align=center>
   <img width=1000 src ="images/gpt/gpt_interactive_generation.0.png "/> &ensp;&ensp;&ensp;&ensp;&ensp;
 </div>
-<div align=center> 
-  Fig 4. GPT generate some outputs by some inputs
+<div align=center>
+  Fig 5. GPT generate some outputs by some inputs
 </div>
 <br/><br/>
 
 <div align=center>
   <img width=600 src ="images/gpt/gpt_interactive_generation.1.png "/> &ensp;&ensp;&ensp;&ensp;&ensp;
 </div>
-<div align=center> 
-  Fig 5. New inputs with previous texts and some additional new input ids.
+<div align=center>
+  Fig 6. New inputs with previous texts and some additional new input ids.
 </div>
 <br/><br/>
 
-In some scenarios (like chatting), the new requests are related to previous requests. Currently, users can pass all previous inputs and outputs as a new inputs into FT to make FT generate new reply from these previous texts, like what we see in Fig 4 and Fig 5. However, this means that we need to re-compute the k/v cache of all previous inputs and outputs again, which is time wasting when the context is very long.
+In some scenarios (like chatting), the new requests are related to previous requests. Currently, users can pass all previous inputs and outputs as a new inputs into FT to make FT generate new reply from these previous texts, like what we see in Fig 5 and Fig 6. However, this means that we need to re-compute the k/v cache of all previous inputs and outputs again, which is time wasting when the context is very long.
 
 <div align=center>
   <img width=1000 src ="images/gpt/gpt_interactive_generation.2.png "/> &ensp;&ensp;&ensp;&ensp;&ensp;
 </div>
-<div align=center> 
-  Fig 6. The workflow of generation with interactive generation
+<div align=center>
+  Fig 7. The workflow of generation with interactive generation
 </div>
 <br/><br/>
 
-To achieve better performance and prevent useless computing, we add a new flag `continue_gen` into GPT. When this flag is on, FT keeps all results during generation and assume the users will provide some more texts. And FT would not compute the k/v cache of the results it already has, but only compute the k/v cache of new ids. The workflow would become what we demonstrate in Fig 6. To prevent allocate the memory buffer again, users also need to set the `session_len` to be the maximum sequence length of the final sentence, but not only for intermediate sentence.
+To achieve better performance and prevent useless computing, we add a new flag `continue_gen` into GPT. When this flag is on, FT keeps all results during generation and assume the users will provide some more texts. And FT would not compute the k/v cache of the results it already has, but only compute the k/v cache of new ids. The workflow would become what we demonstrate in Fig 7. To prevent allocate the memory buffer again, users also need to set the `session_len` to be the maximum sequence length of the final sentence, but not only for intermediate sentence.
 
 We will use `multi_gpu_gpt_interactive_example` to demonstarte how to use this feature. In this example, we load the `examples/cpp/multi_gpu_gpt/start_ids.csv` first (the input length are all 8):
 
@@ -802,14 +942,14 @@ We will use `multi_gpu_gpt_interactive_example` to demonstarte how to use this f
 then generates 32 tokens with setting `continue_gen=true` to get an intermediate results (the results are saved in `out.interm`):
 
 ```
-818 262 938 3155 286 1528 11 257 1256 286 661 423 587 4737 502 546 262 649 1492 11 290 314 1053 587 2111 284 3280 617 286 262 2683 326 661 423 587 4737 502 13 198 198 
-198 464 968 8221 2732 286 15198 318 1762 351 262 1181 338 9358 5011 284 5004 262 1266 835 284 1445 262 4979 13 198 1 1135 821 1016 284 307 2045 379 262 1266 835 284 1445 262 
-464 968 1971 12056 423 257 649 1182 3985 11 290 339 338 257 3516 508 338 587 1088 262 4652 329 257 890 640 13 679 338 257 3516 508 338 587 1088 262 4652 329 257 890 640 
-464 968 1971 3782 468 3199 663 5079 1351 286 262 995 338 749 14212 661 13 198 464 1351 11 543 373 14102 416 262 968 1971 3782 11 318 1912 319 257 5526 286 517 621 352 11 
-818 257 1445 326 481 1884 787 340 4577 329 262 1664 284 3677 663 7303 11 262 1664 468 4987 284 3677 663 10171 287 262 1664 284 257 1448 286 7713 2957 416 262 2839 13598 4081 309 
-464 968 1971 12056 6 5859 41683 423 587 257 1263 636 286 262 1074 338 1943 428 1622 13 198 464 12056 423 587 1498 284 1057 262 2613 6840 11 290 484 423 587 1498 284 1057 262 
-198 198 464 5398 4332 628 628 198 198 464 5398 4332 628 628 198 198 464 5398 4332 628 628 198 198 464 5398 4332 628 628 198 198 464 5398 4332 628 628 198 198 464 5398 4332 
-464 717 640 314 2497 262 3807 11 314 373 588 11 705 5812 616 1793 11 428 318 523 3608 2637 314 373 588 11 705 40 765 284 307 287 428 3807 2637 314 373 588 11 705 
+818 262 938 3155 286 1528 11 257 1256 286 661 423 587 4737 502 546 262 649 1492 11 290 314 1053 587 2111 284 3280 617 286 262 2683 326 661 423 587 4737 502 13 198 198
+198 464 968 8221 2732 286 15198 318 1762 351 262 1181 338 9358 5011 284 5004 262 1266 835 284 1445 262 4979 13 198 1 1135 821 1016 284 307 2045 379 262 1266 835 284 1445 262
+464 968 1971 12056 423 257 649 1182 3985 11 290 339 338 257 3516 508 338 587 1088 262 4652 329 257 890 640 13 679 338 257 3516 508 338 587 1088 262 4652 329 257 890 640
+464 968 1971 3782 468 3199 663 5079 1351 286 262 995 338 749 14212 661 13 198 464 1351 11 543 373 14102 416 262 968 1971 3782 11 318 1912 319 257 5526 286 517 621 352 11
+818 257 1445 326 481 1884 787 340 4577 329 262 1664 284 3677 663 7303 11 262 1664 468 4987 284 3677 663 10171 287 262 1664 284 257 1448 286 7713 2957 416 262 2839 13598 4081 309
+464 968 1971 12056 6 5859 41683 423 587 257 1263 636 286 262 1074 338 1943 428 1622 13 198 464 12056 423 587 1498 284 1057 262 2613 6840 11 290 484 423 587 1498 284 1057 262
+198 198 464 5398 4332 628 628 198 198 464 5398 4332 628 628 198 198 464 5398 4332 628 628 198 198 464 5398 4332 628 628 198 198 464 5398 4332 628 628 198 198 464 5398 4332
+464 717 640 314 2497 262 3807 11 314 373 588 11 705 5812 616 1793 11 428 318 523 3608 2637 314 373 588 11 705 40 765 284 307 287 428 3807 2637 314 373 588 11 705
 ```
 
 Next, we load another inputs from `examples/cpp/multi_gpu+gpt/interactive_inputs_ids` (the input length are all 8 again):
@@ -828,14 +968,14 @@ Next, we load another inputs from `examples/cpp/multi_gpu+gpt/interactive_inputs
 and pass into FT again (note that we only need to pass new ids because FT already records all previous ids). Then FT will concatenate these new ids into output ids, compute k/v caches for only these new ids, and then generate another 32 tokens as a new response (the results are saved in `out`):
 
 ```
-818 262 938 3155 286 1528 11 257 1256 286 661 423 587 4737 502 546 262 649 1492 11 290 314 1053 587 2111 284 3280 617 286 262 2683 326 661 423 587 4737 502 13 198 198 5962 11 314 561 588 284 910 326 314 1101 407 257 4336 286 262 1492 13 314 892 340 338 257 1310 1165 881 286 257 366 10919 611 1 1492 13 314 892 340 338 257 1310 1165 
-198 464 968 8221 2732 286 15198 318 1762 351 262 1181 338 9358 5011 284 5004 262 1266 835 284 1445 262 4979 13 198 1 1135 821 1016 284 307 2045 379 262 1266 835 284 1445 262 11125 286 2844 291 5028 422 262 7627 7784 15296 284 262 7421 7784 15296 553 531 42743 6523 3899 1024 33246 271 13 198 464 42743 318 635 2045 379 262 5885 286 3867 262 4979 422 262 7421 
-464 968 1971 12056 423 257 649 1182 3985 11 290 339 338 257 3516 508 338 587 1088 262 4652 329 257 890 640 13 679 338 257 3516 508 338 587 1088 262 4652 329 257 890 640 392 257 1913 1998 351 1353 12 28282 18370 13 679 338 257 3516 508 338 587 1088 262 4652 329 257 890 640 13 679 338 257 3516 508 338 587 1088 262 4652 329 257 890 640 13 
-464 968 1971 3782 468 3199 663 5079 1351 286 262 995 338 749 14212 661 13 198 464 1351 11 543 373 14102 416 262 968 1971 3782 11 318 1912 319 257 5526 286 517 621 352 11 830 34643 11 7602 11 4708 6332 1938 290 584 14212 661 13 198 464 1351 318 14102 416 262 968 1971 3782 290 318 3199 319 262 3052 286 262 7533 13 198 464 1351 318 20633 416 262 
-818 257 1445 326 481 1884 787 340 4577 329 262 1664 284 3677 663 7303 11 262 1664 468 4987 284 3677 663 10171 287 262 1664 284 257 1448 286 7713 2957 416 262 2839 13598 4081 309 5 38328 763 13 1119 481 2148 257 2472 286 720 16 13 20 2997 287 5003 290 4283 13 198 464 1730 318 2938 284 1969 287 262 1218 2063 286 428 614 13 198 464 1664 531 340 
-464 968 1971 12056 6 5859 41683 423 587 257 1263 636 286 262 1074 338 1943 428 1622 13 198 464 12056 423 587 1498 284 1057 262 2613 6840 11 290 484 423 587 1498 284 1057 262 3245 355 257 22080 1074 13 4042 286 262 640 11 262 12056 423 587 1498 284 1057 262 2613 6840 11 290 484 423 587 1498 284 1057 262 3245 355 257 22080 1074 13 198 464 12056 423 
-198 198 464 5398 4332 628 628 198 198 464 5398 4332 628 628 198 198 464 5398 4332 628 628 198 198 464 5398 4332 628 628 198 198 464 5398 4332 628 628 198 198 464 5398 4332 14150 26443 262 1230 338 1410 284 3958 262 779 286 262 1573 366 16991 1 287 262 1499 338 1743 3303 13 198 198 464 1230 338 1410 284 3958 262 779 286 262 1573 366 16991 1 287 
-464 717 640 314 2497 262 3807 11 314 373 588 11 705 5812 616 1793 11 428 318 523 3608 2637 314 373 588 11 705 40 765 284 307 287 428 3807 2637 314 373 588 11 705 5195 4398 470 314 7342 340 2961 30 4162 4398 470 314 1775 340 878 8348 314 373 588 11 705 40 765 284 307 287 428 3807 2637 314 373 588 11 705 40 765 284 307 287 428 
+818 262 938 3155 286 1528 11 257 1256 286 661 423 587 4737 502 546 262 649 1492 11 290 314 1053 587 2111 284 3280 617 286 262 2683 326 661 423 587 4737 502 13 198 198 5962 11 314 561 588 284 910 326 314 1101 407 257 4336 286 262 1492 13 314 892 340 338 257 1310 1165 881 286 257 366 10919 611 1 1492 13 314 892 340 338 257 1310 1165
+198 464 968 8221 2732 286 15198 318 1762 351 262 1181 338 9358 5011 284 5004 262 1266 835 284 1445 262 4979 13 198 1 1135 821 1016 284 307 2045 379 262 1266 835 284 1445 262 11125 286 2844 291 5028 422 262 7627 7784 15296 284 262 7421 7784 15296 553 531 42743 6523 3899 1024 33246 271 13 198 464 42743 318 635 2045 379 262 5885 286 3867 262 4979 422 262 7421
+464 968 1971 12056 423 257 649 1182 3985 11 290 339 338 257 3516 508 338 587 1088 262 4652 329 257 890 640 13 679 338 257 3516 508 338 587 1088 262 4652 329 257 890 640 392 257 1913 1998 351 1353 12 28282 18370 13 679 338 257 3516 508 338 587 1088 262 4652 329 257 890 640 13 679 338 257 3516 508 338 587 1088 262 4652 329 257 890 640 13
+464 968 1971 3782 468 3199 663 5079 1351 286 262 995 338 749 14212 661 13 198 464 1351 11 543 373 14102 416 262 968 1971 3782 11 318 1912 319 257 5526 286 517 621 352 11 830 34643 11 7602 11 4708 6332 1938 290 584 14212 661 13 198 464 1351 318 14102 416 262 968 1971 3782 290 318 3199 319 262 3052 286 262 7533 13 198 464 1351 318 20633 416 262
+818 257 1445 326 481 1884 787 340 4577 329 262 1664 284 3677 663 7303 11 262 1664 468 4987 284 3677 663 10171 287 262 1664 284 257 1448 286 7713 2957 416 262 2839 13598 4081 309 5 38328 763 13 1119 481 2148 257 2472 286 720 16 13 20 2997 287 5003 290 4283 13 198 464 1730 318 2938 284 1969 287 262 1218 2063 286 428 614 13 198 464 1664 531 340
+464 968 1971 12056 6 5859 41683 423 587 257 1263 636 286 262 1074 338 1943 428 1622 13 198 464 12056 423 587 1498 284 1057 262 2613 6840 11 290 484 423 587 1498 284 1057 262 3245 355 257 22080 1074 13 4042 286 262 640 11 262 12056 423 587 1498 284 1057 262 2613 6840 11 290 484 423 587 1498 284 1057 262 3245 355 257 22080 1074 13 198 464 12056 423
+198 198 464 5398 4332 628 628 198 198 464 5398 4332 628 628 198 198 464 5398 4332 628 628 198 198 464 5398 4332 628 628 198 198 464 5398 4332 628 628 198 198 464 5398 4332 14150 26443 262 1230 338 1410 284 3958 262 779 286 262 1573 366 16991 1 287 262 1499 338 1743 3303 13 198 198 464 1230 338 1410 284 3958 262 779 286 262 1573 366 16991 1 287
+464 717 640 314 2497 262 3807 11 314 373 588 11 705 5812 616 1793 11 428 318 523 3608 2637 314 373 588 11 705 40 765 284 307 287 428 3807 2637 314 373 588 11 705 5195 4398 470 314 7342 340 2961 30 4162 4398 470 314 1775 340 878 8348 314 373 588 11 705 40 765 284 307 287 428 3807 2637 314 373 588 11 705 40 765 284 307 287 428
 ```
 
 ## Performance
@@ -861,19 +1001,19 @@ We demonstrate the inference time of Megatron and FasterTransformer on Triton, a
 TP means tensor parallelism, PP means pipeline parallelism.
 
 <div align=center><img width=800 src ="images/gpt/Megatron_530B_benchmark_1.png "/></div>
-<div align=center> Fig 7. Latency on input length 60, output length 20. TP means tensor parallelism and PP means pipeline parallelism. </div>
+<div align=center> Fig 8. Latency on input length 60, output length 20. TP means tensor parallelism and PP means pipeline parallelism. </div>
 <br/><br/>
 
 <div align=center><img width=800 src ="images/gpt/Megatron_530B_benchmark_2.png "/></div>
-<div align=center> Fig 8. Throughput per GPU on input length 60, output length 20. TP means tensor parallelism and PP means pipeline parallelism. </div>
+<div align=center> Fig 9. Throughput per GPU on input length 60, output length 20. TP means tensor parallelism and PP means pipeline parallelism. </div>
 <br/><br/>
 
 <div align=center><img width=800 src ="images/gpt/Megatron_530B_benchmark_3.png "/></div>
-<div align=center> Fig 9. Latency on fixing output length 20, 16 ways tensor parallelism, different input length and batch size. </div>
+<div align=center> Fig 10. Latency on fixing output length 20, 16 ways tensor parallelism, different input length and batch size. </div>
 <br/><br/>
 
 <div align=center><img width=800 src ="images/gpt/Megatron_530B_benchmark_4.png "/></div>
-<div align=center> Fig 10. Latency on fixing input length 128, 16 ways tensor parallelism, different output length and batch size. </div>
+<div align=center> Fig 11. Latency on fixing input length 128, 16 ways tensor parallelism, different output length and batch size. </div>
 <br/><br/>
 
 | Batch Size | Input Length | Output Length | Latency of TP-16, PP-1 (ms) | Latency of TP-32, PP-1 (ms) | Latency of TP-8, PP-3 (ms) |
@@ -898,15 +1038,15 @@ TP means tensor parallelism, PP means pipeline parallelism.
 |    128     |      60      |      20       |            5406             |            4099             |            5319            |
 |    256     |      60      |      20       |             OOM             |            7203             |            8318            |
 |            |              |               |                             |                             |                            |
-|     1      |     128      |       8       |             585             |            451             |             866             |
-|     2      |     128      |       8       |             667             |            508             |             932             |
-|     4      |     128      |       8       |             765             |            606             |            1097             |
-|     8      |     128      |       8       |             990             |            766             |            1434             |
-|     16     |     128      |       8       |            1377             |            1074            |            2104             |
-|     32     |     128      |       8       |            2251             |            1741            |            2623             |
-|     64     |     128      |       8       |            4002             |            3114            |            3578             |
-|    128     |     128      |       8       |             OOM             |            5784            |            5512             |
-|    256     |     128      |       8       |             OOM             |           11232            |            9614             |
+|     1      |     128      |       8       |             585             |             451             |            866             |
+|     2      |     128      |       8       |             667             |             508             |            932             |
+|     4      |     128      |       8       |             765             |             606             |            1097            |
+|     8      |     128      |       8       |             990             |             766             |            1434            |
+|     16     |     128      |       8       |            1377             |            1074             |            2104            |
+|     32     |     128      |       8       |            2251             |            1741             |            2623            |
+|     64     |     128      |       8       |            4002             |            3114             |            3578            |
+|    128     |     128      |       8       |             OOM             |            5784             |            5512            |
+|    256     |     128      |       8       |             OOM             |            11232            |            9614            |
 
 #### Performance of GPT-175B
 

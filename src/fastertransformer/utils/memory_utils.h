@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "src/fastertransformer/utils/Tensor.h"
 #include "src/fastertransformer/utils/cuda_utils.h"
 
 namespace fastertransformer {
@@ -53,11 +54,22 @@ int loadWeightFromBin(T*                  ptr,
                       std::string         filename,
                       FtCudaDataType      model_file_type = FtCudaDataType::FP32);
 
+template<typename T>
+int loadWeightFromBinAndQuantizeForWeightOnly(int8_t*             quantized_weight_ptr,
+                                              T*                  scale_ptr,
+                                              std::vector<size_t> shape,
+                                              std::string         filename,
+                                              FtCudaDataType      model_file_type = FtCudaDataType::FP32);
+
 void invokeCudaD2DcpyHalf2Float(float* dst, half* src, const int size, cudaStream_t stream);
 void invokeCudaD2DcpyFloat2Half(half* dst, float* src, const int size, cudaStream_t stream);
 
 template<typename T_IN, typename T_OUT>
 void invokeCudaD2DcpyConvert(T_OUT* tgt, const T_IN* src, const int size, cudaStream_t stream = 0);
+
+template<typename T_IN, typename T_OUT>
+void invokeCudaD2DScaleCpyConvert(
+    T_OUT* tgt, const T_IN* src, const float* scale, bool invert_scale, const int size, cudaStream_t stream = 0);
 
 inline bool checkIfFileExist(const std::string& file_path)
 {
@@ -74,5 +86,10 @@ void saveToBinary(const T* ptr, const int size, std::string filename);
 
 template<typename T_IN, typename T_fake_type>
 void invokeFakeCast(T_IN* input_ptr, const size_t size, cudaStream_t stream);
+
+size_t cuda_datatype_size(FtCudaDataType dt);
+
+template<typename T>
+bool invokeCheckRange(T* buffer, const size_t size, T min, T max, bool* d_within_range, cudaStream_t stream);
 
 }  // namespace fastertransformer

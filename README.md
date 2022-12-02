@@ -43,18 +43,23 @@ FasterTransformer is built on top of CUDA, cuBLAS, cuBLASLt and C++. We provide 
 | Decoding         | TensorFlow     | Yes  | -                   | -                       | -               | -                 |
 | Decoding         | PyTorch        | Yes  | -                   | -                       | -               | -                 |
 | GPT              | TensorFlow     | Yes  | -                   | -                       | -               | -                 |
-| GPT              | PyTorch        | Yes  | -                   | -                       | Yes             | Yes               |
-| GPT              | Triton backend | Yes  | -                   | -                       | Yes             | Yes               |
+| GPT/OPT          | PyTorch        | Yes  | -                   | -                       | Yes             | Yes               |
+| GPT/OPT          | Triton backend | Yes  | -                   | -                       | Yes             | Yes               |
+| BLOOM            | PyTorch        | Yes  | -                   | -                       | Yes             | Yes               |
+| BLOOM            | Triton backend | Yes  | -                   | -                       | Yes             | Yes               |
 | GPT-J            | Triton backend | Yes  | -                   | -                       | Yes             | Yes               |
 | Longformer       | PyTorch        | Yes  | -                   | -                       | -               | -                 |
-| T5               | PyTorch        | Yes  | -                   | -                       | Yes             | Yes               |
-| T5               | Triton backend | Yes  | -                   | -                       | Yes             | Yes               |
+| T5/UL2           | PyTorch        | Yes  | -                   | -                       | Yes             | Yes               |
+| T5               | TensorFlow 2   | Yes  | -                   | -                       | -               | -                 |
+| T5/UL2           | Triton backend | Yes  | -                   | -                       | Yes             | Yes               |
 | T5               | TensorRT       | Yes  | -                   | -                       | Yes             | Yes               |
 | Swin Transformer | PyTorch        | Yes  | Yes                 | -                       | -               | -                 |
 | Swin Transformer | TensorRT       | Yes  | Yes                 | -                       | -               | -                 |
 | ViT              | PyTorch        | Yes  | Yes                 | -                       | -               | -                 |
 | ViT              | TensorRT       | Yes  | Yes                 | -                       | -               | -                 |
 | GPT-NeoX         | Triton backend | Yes  | -                   | -                       | Yes             | Yes               |
+| BART/mBART       | PyTorch        | Yes  | -                   | -                       | Yes             | Yes               |
+| WeNet            | C++            | Yes  | -                   | -                       | -               | -                 |
 
 * Note that the FasterTransformer supports the models above on C++ because all source codes are built on C++.
 
@@ -64,11 +69,12 @@ More details of specific models are put in `xxx_guide.md` of [`docs/`](docs), wh
 
 The following code lists the directory structure of FasterTransformer:
 
-```bash
+```
 /src/fastertransformer: source code of FasterTransformer
-    |--/models: Implementation of different models, like BERT, GPT.
-    |--/layers: Implementation of layer modules, like attention layer, ffn layer.
+    |--/cutlass_extensions: Implementation of cutlass gemm/kernels.
     |--/kernels: CUDA kernels for different models/layers and operations, like addBiasResiual.
+    |--/layers: Implementation of layer modules, like attention layer, ffn layer.
+    |--/models: Implementation of different models, like BERT, GPT.
     |--/tensorrt_plugin: encapluate FasterTransformer into TensorRT plugin.
     |--/tf_op: custom Tensorflow OP implementation
     |--/th_op: custom PyTorch OP implementation
@@ -78,7 +84,7 @@ The following code lists the directory structure of FasterTransformer:
     |--/cpp: C++ interface examples
     |--/pytorch: PyTorch OP examples
     |--/tensorflow: TensorFlow OP examples
-    |--tensorrt: TensorRT examples
+    |--/tensorrt: TensorRT examples
 /docs: Documents to explain the details of implementation of different models, and show the benchmark
 /benchmark: Contains the scripts to run the benchmarks of different models
 /tests: Unit tests
@@ -191,7 +197,22 @@ In the experiments of decoding, we updated the following parameters:
 
 ### Changelog
 
+Nov 2022
+- Support T5 Tensorflow 2 custom op.
+- Support WeNet
+- Support BART & mBART
+- Support SwinV2
+- Initial support for w8a8 int8 mode with GPT (preview)
+
+Oct 2022
+- Support BLOOM
+
+Sep 2022
+- Support factual sampling ([link](https://arxiv.org/pdf/2206.04624.pdf)) in gpt
+- Support for IA3 adapting scheme in T5
+
 Aug 2022
+- Support returning context tokens embeddings in GPT
 - **Release the FasterTransformer 5.1**
 - Support for interactive generation
 - Support for attention time-limited memory
@@ -359,6 +380,7 @@ July 2019
 
 ### Known issues
 
+- Cannot compile on tensorflow 2.10 due to undefined symbol issue.
 - Undefined symbol errors when import the extension
   - Please `import torch` first. If this has been done, it is due to the incompatible C++ ABI. You may need to check the PyTorch used during compilation and execution are the same, or you need to check how your PyTorch is compiled, or the version of your GCC, etc.
 - Results of TensorFlow and OP would be different in decoding. This problem is caused by the accumulated log probability, and we do not avoid this problem.

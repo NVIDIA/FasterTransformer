@@ -157,13 +157,10 @@ For those unable to use the NGC container, to set up the required environment or
 
     You can choose the tensorflow version and python version you want. Here, we list some possible images:
 
-    - `nvcr.io/nvidia/tensorflow:20.12-tf1-py3` contains the TensorFlow 1.15 and python 3.8. 
-    - `nvcr.io/nvidia/pytorch:20.12-py3` contains the PyTorch 1.8.0 and python 3.8
-
-    To achieve best performance, we recommend to use the latest image. For example, running image `nvcr.io/nvidia/tensorflow:22.04-tf1-py3` by 
+    To achieve best performance, we recommend to use the latest image. For example, running image `nvcr.io/nvidia/tensorflow:22.09-tf1-py3` by 
 
     ```bash
-    nvidia-docker run -ti --rm nvcr.io/nvidia/tensorflow:22.04-tf1-py3 bash
+    nvidia-docker run -ti --shm-size 5g --rm nvcr.io/nvidia/tensorflow:22.09-tf1-py3 bash
     git clone https://github.com/NVIDIA/FasterTransformer.git
     mkdir -p FasterTransformer/build
     cd FasterTransformer/build
@@ -173,7 +170,7 @@ For those unable to use the NGC container, to set up the required environment or
     For pytorch, it is similar
 
     ```bash
-    nvidia-docker run -ti --rm nvcr.io/nvidia/pytorch:22.04-py3 bash
+    nvidia-docker run -ti --shm-size 5g --rm nvcr.io/nvidia/pytorch:22.09-py3 bash
     git clone https://github.com/NVIDIA/FasterTransformer.git
     mkdir -p FasterTransformer/build
     cd FasterTransformer/build
@@ -200,23 +197,23 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
 
     ```bash
     cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release ..
-    make
+    make -j12
     ```
 
 2. build with TensorFlow 
 
-    Uses need to set the path of TensorFlow. For example, if we use `nvcr.io/nvidia/tensorflow:22.04-tf1-py3`, then
+    Uses need to set the path of TensorFlow. For example, if we use `nvcr.io/nvidia/tensorflow:22.09-tf1-py3`, then
 
     ```bash
     cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_TF=ON -DTF_PATH=/usr/local/lib/python3.8/dist-packages/tensorflow_core/ ..
-    make 
+    make -j12 
     ```
 
 3. build with PyTorch
 
     ```bash
     cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON -DBUILD_MULTI_GPU=ON ..
-    make
+    make -j12
     ```
 
     This will build the TorchScript custom class. Please make sure that the `PyTorch >= 1.5.0`.
@@ -227,26 +224,14 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     wget https://developer.download.nvidia.com/compute/libcusparse-lt/0.1.0/local_installers/libcusparse_lt-linux-x86_64-0.1.0.2.tar.gz
     tar -xzvf libcusparse_lt-linux-x86_64-0.1.0.2.tar.gz
     cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON -DSPARSITY_SUPPORT=ON -DCUSPARSELT_PATH=/the_extracted_cusparselt_path ..
-    make
+    make -j12
     ```
 
 ## How to use
 
 ### Run FasterTransformer BERT on C++
 
-    1. Generate the `gemm_config.in` file for FP32/FP16/BF16 and the `igemm_config.in` file for INT8
-
-    There are two methods to generate the best GEMM configuration
-    
-    1.1 Using `./bin/bert_gemm` to generate the best GEMM configuration. 
-
-    Data Type = 0 (FP32) or 1 (FP16) or 2 (BF16) 
-
-    ```bash
-    ./bin/bert_gemm <batch_size> <sequence_length> <head_number> <size_per_head> <data_type> <int8_mode>
-    ```
-
-    1.2 Generate the best GEMM configuration when running BERT.
+1. Generate the `gemm_config.in` file for FP32/FP16/BF16 and the `igemm_config.in` file for INT8
 
     The generation of best GEMM configuration is recommended no matter what platform we use when we use FasterTransformer. If we do not generate the configure file, the FasterTransformer will use the default configuration and the inference speed may be slower. 
 
@@ -262,13 +247,19 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     Then the following scripts can generate the best GEMM configuration under such settings and record the configuration into the `gemm_config.in` file.
 
     ```bash
-    ## Method 1
-    ./bin/bert_gemm 32 32 12 64 0 0
+    ./bin/bert_gemm 32 32 12 64 0 0 1 0
     ``` 
+
+    If the application may have multiple different shapes (like different batch size), users can run multiple time and set `is_append` to be true. For example
+
+    ```bash
+    ./bin/bert_gemm 32 32 12 64 0 0 1 0 # bs 32, not append, will create a new gemm_config.ini
+    ./bin/bert_gemm 64 32 12 64 0 0 1 1 # bs 64, append results in existed gemm_config.ini
+    ```
 
     In the following subsection, we use the same settings and 12 transformer layers unless specified. 
 
-    2 Run FasterTransformer BERT under FP32 on C++
+2. Run FasterTransformer BERT under FP32 on C++
 
     `./bin/bert_example` runs the BERT in the `C++`. The arguments of `bert_example` is:
 
@@ -292,7 +283,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     [INFO] batch_size 32 seq_len 32 layer 12 FT-CPP-time 16.51 ms (100 iterations)
     ```
 
-    3 Run FasterTransformer BERT under FP16/BF16 on C++
+3. Run FasterTransformer BERT under FP16/BF16 on C++
 
     So far, we use the FP32 to run the FasterTransformer. If we use the volta or newer NVIDIA GPU, we can use tensor core when we use the FP16. BF16 is only supported after Ampere NVIDIA GPU (SM 80).
 
@@ -316,7 +307,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     [INFO] batch_size 32 seq_len 32 layer 12 FT-CPP-time 4.00 ms 
     ```
     
-    4 Run FasterTransformer BERT under INT8 on C++
+4. Run FasterTransformer BERT under INT8 on C++
 
     If we use the Turing or newer NVIDIA GPUs, we can use tensor core when we use the INT8.    
 
@@ -352,7 +343,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     [INFO] batch_size 32 seq_len 32 layer 12 FT-CPP-time 4.79 ms ( 50 iterations)
     ```
 
-    5 Run Effective FasterTransformer under FP32 on C++
+5. Run Effective FasterTransformer under FP32 on C++
 
     To use the Effective FasterTransformer, we only need to set the `<is_remove_padding>` flag to 1 like following:
 
@@ -370,7 +361,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     [INFO] batch_size 32 seq_len 32 layer 12 FT-CPP-time 9.77 ms 
     ```
     
-    6 Run Effective FasterTransformer under INT8 on C++
+6. Run Effective FasterTransformer under INT8 on C++
     
     To use the Effective FasterTransformer under INT8, we need to set the `<is_remove_padding>` flag to 1 and `<int8_mode>` flag to 1 or 2 like following. Since the sequence length in INT8 should be a multiple of 32, Effective FasterTransformer could be a good choice for INT8.
     
@@ -405,7 +396,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
 
 ### Run FasterTransformer BERT on TensorFlow
 
-    1 Run FasterTransformer encoder under FP32 on TensorFlow
+1. Run FasterTransformer encoder under FP32 on TensorFlow
 
     ```bash
     ./bin/bert_gemm 32 32 12 64 0 0
@@ -436,7 +427,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     Note: We can also generate the best GEMM configuration when running encoder by setting `--allow_gemm_test True`.
     Note: If users use Ampere GPUs, then TensorFlow will uses TF32 by default, and hence TensorFlow will be faster than FasterTransformer, and have large value differences.
 
-    2 Run FasterTransformer BERT under FP16 on TensorFlow
+2. Run FasterTransformer BERT under FP16 on TensorFlow
 
     To use the FP16 in TensorFlow, we only need to set the `--data_type fp16` like following:
 
@@ -466,7 +457,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     [INFO] batch_size 32 max_seq_len 32 precision FP16 12 layer EFF-OP-while-time   4.98 ms ( 50 iterations)
     ```
 
-    3 Run FasterTransformer and Effective FasterTransformer encoder under INT8 on TensorFlow
+3. Run FasterTransformer and Effective FasterTransformer encoder under INT8 on TensorFlow
 
     To use the INT8 in TensorFlow, we only need to set the `--int8_mode 1` or `--int8_mode 2` like following:
 
@@ -524,11 +515,11 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     
     Note: since we do not use the correct scales for quantization in this test, the Cross Check between TF and FT should fail.
 
-    4 Run FasterTransformer for GLUE dataset
+4. Run FasterTransformer for GLUE dataset
 
     This subsection demonstrates how to integrate the FasterTransformer in TensorFlow and evaluate the accuracy of FasterTransformer on GLUE dataset. To evaluate on GLUE dataset, it requires the repo of [BERT](https://github.com/google-research/bert).
 
-    4.1 Prepare the BERT codes, Download the BERT pretrained model.
+    1. Prepare the BERT codes, Download the BERT pretrained model.
 
     ```bash
     git clone https://github.com/google-research/bert.git tensorflow/tensorflow_bert/bert
@@ -536,7 +527,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     unzip uncased_L-12_H-768_A-12.zip
     ```
 
-    4.2 Download the GLUE MRPC dataset. Note that the file `download_glue_data.py` can only executed under python3. 
+    2. Download the GLUE MRPC dataset. Note that the file `download_glue_data.py` can only executed under python3. 
 
     ```bash
     wget https://gist.githubusercontent.com/W4ngatang/60c2bdb54d156a41194446737ce03e2e/raw/1502038877f6a88c225a34450793fbc3ea87eaba/download_glue_data.py
@@ -545,7 +536,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
 
     Note: If the `download_glue_data.py` has some issues, try to use [this](https://gist.github.com/vlasenkoalexey/fef1601580f269eca73bf26a198595f3).
 
-    4.3 Finetune the pretrained model on MRPC datasets. This takes some minutes. 
+    3. Finetune the pretrained model on MRPC datasets. This takes some minutes. 
 
     ```bash
     export BERT_BASE_DIR=${PWD}/uncased_L-12_H-768_A-12
@@ -582,7 +573,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
 
     ```
 
-    4.4 Evaluate the accuracy of FasterTransformer under FP32
+    4. Evaluate the accuracy of FasterTransformer under FP32
 
     To evaluate the accuracy of FasterTransformer, we can use `tensorflow/tensorflow_bert/run_classifier_wrap.py`. This file uses `run_classifier.py` of BERT repo, replacing the transformer model by FasterTransformer and add some additional arguments like `--floatx`. 
 
@@ -616,7 +607,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     I1204 01:25:59.203072 140314814412608 run_classifier.py:925]   loss = 0.50261945
     ```
 
-    4.5 Convert the finetuned checkpoint to FP16 and evaluate the accuracy of FasterTransformer under FP16. 
+    5. Convert the finetuned checkpoint to FP16 and evaluate the accuracy of FasterTransformer under FP16. 
 
     To convert the checkpoint from FP32 to FP16, we can use `../examples/tensorflow/bert/tensorflow_bert/ckpt_type_convert.py` to convert the checkpoint. This file requires two arguments, the location of FP32 checkpoint, and the location putting the FP16 checkpoint.
 
@@ -653,7 +644,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     I1204 01:27:49.962604 139736813242176 run_classifier.py:925]   loss = 0.5103358
     ```
 
-    4.6 Compare the speed of BERT of TensorFlow and FasterTransformer under both FP32 and FP16.
+    6. Compare the speed of BERT of TensorFlow and FasterTransformer under both FP32 and FP16.
 
     To compare the speed of TensorFlow and FasterTransformer on BERT model directly, we can use `../examples/tensorflow/bert/tensorflow_bert/profile_transformer_inferece.py`. 
 
@@ -690,11 +681,11 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     average time (seconds) elapsed fast transformer: 0.009342837333679199 sec
     ```
 
-    5 Run FasterTransformer for SQuAD 1.1 dataset
+5. Run FasterTransformer for SQuAD 1.1 dataset
 
     This subsection demonstrates how to integrate the FasterTransformer in TensorFlow and evaluates the accuracy of FasterTransformer on SQuAD 1.1 dataset. To evaluate on SQuAD 1.1 dataset, it requires the repo of [BERT](https://github.com/google-research/bert).
 
-    5.1 Prepare the BERT codes and download the fine-tuned model of SQuAD 1.1 from NGC
+    1. Prepare the BERT codes and download the fine-tuned model of SQuAD 1.1 from NGC
 
     Because the training time of SQuAD is longer, and the NVIDIA NGC has provided the fine-tuned BERT model, we download the fine-tuned model directly.
 
@@ -704,7 +695,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     unzip bert_tf_ckpt_base_qa_squad11_amp_128_19.03.1.zip -d squad_model
     ```
 
-    5.2 Download the SQuAD dataset. 
+    2. Download the SQuAD dataset. 
 
     ```bash
     mkdir squad_data
@@ -712,7 +703,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     wget -P squad_data https://rajpurkar.github.io/SQuAD-explorer/dataset/dev-v1.1.json
     ```
 
-    5.3 Evaluate the accuracy of TensorFlow under FP32
+    3. Evaluate the accuracy of TensorFlow under FP32
 
     ```bash
     python ../examples/tensorflow/bert/tensorflow_bert/bert/run_squad.py \
@@ -735,7 +726,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     {"exact_match": 78.9120151371807, "f1": 86.22012390507868}
     ```
 
-    5.4 Evaluate the accuracy of FasterTransformer under FP32
+    4. Evaluate the accuracy of FasterTransformer under FP32
 
     To evaluate the accuracy of FasterTransformer, we can use `../examples/tensorflow/bert/tensorflow_bert/run_squad_wrap.py`. This file uses `run_squad.py` of BERT repo, replacing the transformer model by FasterTransformer, and add some additional arguments like `--floatx`. 
 
@@ -763,7 +754,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     {"exact_match": 78.9120151371807, "f1": 86.22012390507868}
     ```
 
-    5.5 Convert the checkpoint to FP16 and evaluate the accuracy of TensorFlow and FasterTransformer under FP16
+    5.  Convert the checkpoint to FP16 and evaluate the accuracy of TensorFlow and FasterTransformer under FP16
 
     To convert the checkpoint from FP32 to FP16, we can use `tensorflow/tensorflow_bert/ckpt_type_convert.py` to convert the checkpoint. This file requires two arguments, the location of FP32 checkpoint, and the location putting the FP16 checkpoint.
 
@@ -793,7 +784,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     {"exact_match": 79.03500473036897, "f1": 86.23027825772257}
     ```
 
-    5.6 Evaluate the accuracy of Effective FasterTransformer under FP16
+    6.  Evaluate the accuracy of Effective FasterTransformer under FP16
 
     Since the total sequence length is not fixed, we recommend using the default gemm configuration directly for Effective FasterTransformer.
 
@@ -821,7 +812,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     {"exact_match": 79.04446546830653, "f1": 86.23343183703513}
     ```
 
-    5.7 Evaluate the accuracy of FasterTransformer under INT8
+    7.  Evaluate the accuracy of FasterTransformer under INT8
 
     Please refer to the directory `examples/tensorflow/bert/bert-quantization` first for how to get a quantized model. In `section 5.7` and `section 5.8`, to keep consistent with the procedures described in `examples/tensorflow/bert/bert-quantization`, we use `https://storage.googleapis.com/bert_models/2020_02_20/uncased_L-12_H-768_A-12.zip` as initial checkpoint with finetuned accuracy of <f1, exact_match> == <89.57, 82.44>. 
     
@@ -860,7 +851,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     {"exact_match": 83.85052034058657, "f1": 90.46351799300075}
     ```
     
-    5.8 Evaluate the accuracy of Effective FasterTransformer under INT8
+    8.  Evaluate the accuracy of Effective FasterTransformer under INT8
     
     To evaluate the accuracy of Effective FasterTransformer under INT8, we follow the steps described in above section to get the correct checkpoint, and then run `../examples/tensorflow/bert/tensorflow_bert/run_squad_wrap.py` with `--remove_padding True` flag.
     
@@ -898,7 +889,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     pip install transformers==2.5.1
     ```
 
-    1 Generate the `gemm_config.in` file:
+1. Generate the `gemm_config.in` file:
 
     ```bash
     ./bin/bert_gemm <batch_size> <sequence_length> <head_number> <size_per_head> <data_type> <int8_mode>
@@ -908,7 +899,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
 
     If you want to use the library in other directory, please generate this file according to your setting and copy it to your working directory.
 
-    2 Run the PyTorch BERT sample: 
+2. Run the PyTorch BERT sample: 
 
     ```bash
     python ../examples/pytorch/bert/bert_example.py <batch_size> <layer_num> <sequence_length> <head_number> <size_per_head> <--data_type fp32/fp16/bf16> <--int8_mode 0/1/2/3> <--sparse> <--time>
@@ -931,7 +922,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     [INFO] EFF-FasterTransformer time costs: 1.33 ms
     ```
 
-    3 Run the BERT MRPC sample code:
+3. Run the BERT MRPC sample code:
 
     ```bash
     bash ../examples/pytorch/bert/scripts/run_mrpc.sh <model_type> <data_type>
@@ -975,7 +966,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     06/28/2020 07:30:19 - INFO - __main__ -     f1 = 0.8829431438127091
     ```
 
-    4 Run the BERT SQuAD sample code:
+4. Run the BERT SQuAD sample code:
 
     ```bash
     bash ../examples/pytorch/bert/scripts/run_squad.sh --mtype <model_type> --dtype <date_type> --path <model_path> --head_num <head_num> --head_size <head_size> --bs <batch_size> --seqlen <max_seq_len> --sparse <if_use_sparse> --remove_padding <if_remove_padding>

@@ -178,7 +178,7 @@ class FakeQuantizer():
     with tf.compat.v1.variable_scope(None, default_name=self._scope_name):
       self._quant_min = tf.compat.v1.get_variable("quant_min", shape=quant_shape, trainable=False)
       self._quant_max = tf.compat.v1.get_variable("quant_max", shape=quant_shape, trainable=False)
-      # add tensor to collection `quantization_variables` to convinient initializing from checkpoint
+      # add tensor to collection `quantization_variables` to convenient initializing from checkpoint
       tf.compat.v1.add_to_collection('quantization_variables', self._quant_min)
       tf.compat.v1.add_to_collection('quantization_variables', self._quant_max)
       # add tensor name to collections for calibration

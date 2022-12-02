@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,8 +42,8 @@ void FfnLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>*       outp
     const int m_padded = m_tmp;
 #endif
 
-    int32_t*      output_tensor = (int32_t*)output_tensors->at(0).data;
-    const int8_t* input_tensor  = (const int8_t*)input_tensors->at(0).data;
+    int32_t*      output_tensor = output_tensors->at(0).getPtr<int32_t>();
+    const int8_t* input_tensor  = input_tensors->at(0).getPtr<const int8_t>();
 
     PUSH_RANGE("FFN gemm 1");
     if (int8_mode_ == 1) {

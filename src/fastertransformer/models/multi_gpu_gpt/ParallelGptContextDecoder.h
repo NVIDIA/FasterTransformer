@@ -61,7 +61,8 @@ private:
 
     std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm_;
     int                                 enable_custom_all_reduce_;
-    bool                                remove_padding_;
+    AttentionType                       attention_type_;
+    int                                 int8_mode_ = 0;
 
     bool is_qk_buf_float_;
 
@@ -77,12 +78,15 @@ private:
     bool isLastLayerParallelId(uint l);
     int  getFirstLayerParallelId();
 
-    T*      decoder_normed_input_    = nullptr;
-    T*      self_attn_output_        = nullptr;
-    T*      normed_self_attn_output_ = nullptr;
-    T*      decoder_layer_output_    = nullptr;
-    size_t* token_num_               = nullptr;
-    int*    padding_offset_          = nullptr;
+    T*       decoder_normed_input_       = nullptr;
+    T*       self_attn_output_           = nullptr;
+    T*       normed_self_attn_output_    = nullptr;
+    T*       decoder_layer_output_       = nullptr;
+    int32_t* self_attn_output_int32_     = nullptr;
+    int32_t* decoder_layer_output_int32_ = nullptr;
+    size_t*  token_num_                  = nullptr;
+    int*     padding_offset_             = nullptr;
+    int*     cu_seqlens_                 = nullptr;
 
     T*   compact_decoder_features_ = nullptr;
     T*   compact_attention_mask_   = nullptr;
@@ -107,17 +111,18 @@ public:
                               IAllocator*                         allocator,
                               bool                                is_free_buffer_after_forward,
                               bool                                is_qk_buf_float,
+                              AttentionType                       attention_type           = AttentionType::UNFUSED_MHA,
                               bool                                sparse                   = false,
+                              int                                 int8_mode                = 0,
                               std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
-                              int                                 enable_custom_all_reduce = 0,
-                              bool                                remove_padding           = true);
+                              int                                 enable_custom_all_reduce = 0);
 
     ParallelGptContextDecoder(ParallelGptContextDecoder<T> const& decoder);
 
     ~ParallelGptContextDecoder();
 
-    void forward(std::vector<Tensor>*                                  output_tensors,
-                 const std::vector<Tensor>*                            input_tensors,
+    void forward(TensorMap*                                            output_tensors,
+                 const TensorMap*                                      input_tensors,
                  const std::vector<ParallelGptDecoderLayerWeight<T>*>* decoder_layer_weights);
 };
 

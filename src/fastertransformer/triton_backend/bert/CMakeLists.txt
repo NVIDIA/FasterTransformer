@@ -20,5 +20,5 @@ set(bert_triton_backend_files
 )
 
 add_library(BertTritonBackend SHARED ${bert_triton_backend_files})
-target_link_libraries(BertTritonBackend PRIVATE Bert TransformerTritonBackend)
+target_link_libraries(BertTritonBackend PRIVATE Bert TransformerTritonBackend -lcublasLt)
 target_compile_features(BertTritonBackend PRIVATE cxx_std_14)

@@ -133,6 +133,8 @@ void ftNcclBroadCast(T* buff, const int data_size, const int root, NcclParam ncc
 }
 
 template void
+ftNcclBroadCast(char* buff, const int data_size, const int root, NcclParam nccl_param, cudaStream_t stream);
+template void
 ftNcclBroadCast(bool* buff, const int data_size, const int root, NcclParam nccl_param, cudaStream_t stream);
 template void
 ftNcclBroadCast(int* buff, const int data_size, const int root, NcclParam nccl_param, cudaStream_t stream);
@@ -150,6 +152,9 @@ template void ftNcclAllReduceSum(
 
 template void ftNcclAllReduceSum(
     const half* send_buf, half* recv_buf, const int data_size, NcclParam nccl_param, cudaStream_t stream);
+
+template void ftNcclAllReduceSum(
+    const int32_t* send_buf, int32_t* recv_buf, const int data_size, NcclParam nccl_param, cudaStream_t stream);
 
 #ifdef ENABLE_BF16
 template void ftNcclAllReduceSum(const __nv_bfloat16* send_buf,

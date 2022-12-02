@@ -44,17 +44,14 @@ int main(int argc, char** argv)
     const CublasDataType data_type         = static_cast<CublasDataType>(atoi(argv[6]));  // 0 FP32, 1 FP16, 2 BF 16
 
     if (data_type == FLOAT_DATATYPE) {
-        return bertExample<float>(
-            batch_size, num_layers, seq_len, head_num, size_per_head, is_remove_padding);
+        return bertExample<float>(batch_size, num_layers, seq_len, head_num, size_per_head, is_remove_padding);
     }
     else if (data_type == HALF_DATATYPE) {
-        return bertExample<half>(
-            batch_size, num_layers, seq_len, head_num, size_per_head, is_remove_padding);
+        return bertExample<half>(batch_size, num_layers, seq_len, head_num, size_per_head, is_remove_padding);
     }
 #ifdef ENABLE_BF16
     else if (data_type == BFLOAT16_DATATYPE) {
-        return bertExample<__nv_bfloat16>(
-            batch_size, num_layers, seq_len, head_num, size_per_head, is_remove_padding);
+        return bertExample<__nv_bfloat16>(batch_size, num_layers, seq_len, head_num, size_per_head, is_remove_padding);
     }
 #endif
     else {
@@ -64,12 +61,8 @@ int main(int argc, char** argv)
 }
 
 template<typename T>
-int bertExample(size_t batch_size,
-                size_t num_layers,
-                size_t seq_len,
-                size_t head_num,
-                size_t size_per_head,
-                bool   is_remove_padding)
+int bertExample(
+    size_t batch_size, size_t num_layers, size_t seq_len, size_t head_num, size_t size_per_head, bool is_remove_padding)
 {
     printf("[INFO] Device: %s \n", getDeviceName().c_str());
     print_mem_usage("Before loading model");

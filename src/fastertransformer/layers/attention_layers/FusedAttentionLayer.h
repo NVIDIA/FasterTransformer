@@ -25,7 +25,7 @@ namespace fastertransformer {
 
 // This class is only used when we satisfy the following conditions:
 // 1. FP16
-// 2. Temporally add seqlen <= 384 limitation because the
+// 2. Temporally add seqlen <= 512 limitation because the
 template<typename T>
 class FusedAttentionLayer: public BaseAttentionLayer<T> {
 private:
@@ -86,9 +86,8 @@ public:
 
     ~FusedAttentionLayer();
 
-    void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                 const std::vector<fastertransformer::Tensor>* input_tensors,
-                 const AttentionWeight<T>*                     attention_weights) override;
+    void
+    forward(TensorMap* output_tensors, TensorMap* input_tensors, const AttentionWeight<T>* attention_weights) override;
 
     void invokeTrtAddQkvBias(size_t token_num, const AttentionWeight<T>* attention_weights);
     bool isValidSeqLen(const size_t seq_len) override;

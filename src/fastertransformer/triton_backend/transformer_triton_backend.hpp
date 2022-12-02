@@ -33,6 +33,20 @@ namespace triton {
 
 #include "triton/core/tritonbackend.h"
 #include "triton/core/tritonserver.h"
+
+#ifndef TRITONSERVER_API_VERSION_MAJOR
+#error TRITONSERVER_API_VERSION_MAJOR Undefined!
+#endif
+
+#ifndef TRITONSERVER_API_VERSION_MINOR
+#error TRITONSERVER_API_VERSION_MINOR Undefined!
+#endif
+
+#if (TRITONSERVER_API_VERSION_MAJOR == 1 && TRITONSERVER_API_VERSION_MINOR >= 17)                                      \
+    || (TRITONSERVER_API_VERSION_MAJOR > 1)
+#define ENABLE_TRITON_BF16 1
+#endif
+
 typedef TRITONSERVER_DataType   DataType;
 typedef TRITONSERVER_MemoryType MemoryType;
 
@@ -50,7 +64,10 @@ constexpr TRITONSERVER_DataType TYPE_FP16    = TRITONSERVER_TYPE_FP16;
 constexpr TRITONSERVER_DataType TYPE_FP32    = TRITONSERVER_TYPE_FP32;
 constexpr TRITONSERVER_DataType TYPE_FP64    = TRITONSERVER_TYPE_FP64;
 constexpr TRITONSERVER_DataType TYPE_BYTES   = TRITONSERVER_TYPE_BYTES;
-// constexpr TRITONSERVER_DataType TYPE_BF16 = TRITONSERVER_TYPE_BF16; // BF16 is not supported in Triton
+
+#ifdef ENABLE_TRITON_BF16
+constexpr TRITONSERVER_DataType TYPE_BF16 = TRITONSERVER_TYPE_BF16;
+#endif
 constexpr TRITONSERVER_MemoryType MEMORY_CPU        = TRITONSERVER_MEMORY_CPU;
 constexpr TRITONSERVER_MemoryType MEMORY_CPU_PINNED = TRITONSERVER_MEMORY_CPU_PINNED;
 constexpr TRITONSERVER_MemoryType MEMORY_GPU        = TRITONSERVER_MEMORY_GPU;
@@ -60,21 +77,21 @@ constexpr TRITONSERVER_MemoryType MEMORY_GPU        = TRITONSERVER_MEMORY_GPU;
 typedef ft::DataType   DataType;
 typedef ft::MemoryType MemoryType;
 
-constexpr DataType TYPE_INVALID = ft::TYPE_INVALID;
-constexpr DataType TYPE_BOOL    = ft::TYPE_BOOL;
-constexpr DataType TYPE_UINT8   = ft::TYPE_UINT8;
-constexpr DataType TYPE_UINT16  = ft::TYPE_UINT16;
-constexpr DataType TYPE_UINT32  = ft::TYPE_UINT32;
-constexpr DataType TYPE_UINT64  = ft::TYPE_UINT64;
-constexpr DataType TYPE_INT8    = ft::TYPE_INT8;
-constexpr DataType TYPE_INT16   = ft::TYPE_INT16;
-constexpr DataType TYPE_INT32   = ft::TYPE_INT32;
-constexpr DataType TYPE_INT64   = ft::TYPE_INT64;
-constexpr DataType TYPE_FP16    = ft::TYPE_FP16;
-constexpr DataType TYPE_FP32    = ft::TYPE_FP32;
-constexpr DataType TYPE_FP64    = ft::TYPE_FP64;
-constexpr DataType TYPE_BYTES   = ft::TYPE_BYTES;
-// constexpr DataType TYPE_BF16 = ft::TYPE_BF16;
+constexpr DataType   TYPE_INVALID      = ft::TYPE_INVALID;
+constexpr DataType   TYPE_BOOL         = ft::TYPE_BOOL;
+constexpr DataType   TYPE_UINT8        = ft::TYPE_UINT8;
+constexpr DataType   TYPE_UINT16       = ft::TYPE_UINT16;
+constexpr DataType   TYPE_UINT32       = ft::TYPE_UINT32;
+constexpr DataType   TYPE_UINT64       = ft::TYPE_UINT64;
+constexpr DataType   TYPE_INT8         = ft::TYPE_INT8;
+constexpr DataType   TYPE_INT16        = ft::TYPE_INT16;
+constexpr DataType   TYPE_INT32        = ft::TYPE_INT32;
+constexpr DataType   TYPE_INT64        = ft::TYPE_INT64;
+constexpr DataType   TYPE_FP16         = ft::TYPE_FP16;
+constexpr DataType   TYPE_FP32         = ft::TYPE_FP32;
+constexpr DataType   TYPE_FP64         = ft::TYPE_FP64;
+constexpr DataType   TYPE_BYTES        = ft::TYPE_BYTES;
+constexpr DataType   TYPE_BF16         = ft::TYPE_BF16;
 constexpr MemoryType MEMORY_CPU        = ft::MEMORY_CPU;
 constexpr MemoryType MEMORY_CPU_PINNED = ft::MEMORY_CPU_PINNED;
 constexpr MemoryType MEMORY_GPU        = ft::MEMORY_GPU;
@@ -135,6 +152,11 @@ struct Tensor {
             case TYPE_FP64:
                 ft_data_type = ft::DataType::TYPE_FP64;
                 break;
+#ifdef ENABLE_TRITON_BF16
+            case TYPE_BF16:
+                ft_data_type = ft::DataType::TYPE_BF16;
+                break;
+#endif
             case TYPE_BYTES:
                 ft_data_type = ft::DataType::TYPE_BYTES;
                 break;
@@ -206,6 +228,11 @@ struct Tensor {
             case TYPE_FP64:
                 triton_data_type = TYPE_FP64;
                 break;
+#ifdef ENABLE_TRITON_BF16
+            case TYPE_BF16:
+                triton_data_type = TYPE_BF16;
+                break;
+#endif
             case TYPE_BYTES:
                 triton_data_type = TYPE_BYTES;
                 break;
@@ -264,6 +291,7 @@ struct AbstractTransformerModel {
     static std::shared_ptr<AbstractTransformerModel> createGptJModel(std::string inifile);
     static std::shared_ptr<AbstractTransformerModel> createGptNeoXModel(std::string inifile);
     static std::shared_ptr<AbstractTransformerModel> createT5Model(std::string model_dir);
+    static std::shared_ptr<AbstractTransformerModel> createT5EncoderModel(std::string model_dir);
 
     std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>>
     createNcclParams(const int node_id, const int device_id_start = 0, const bool multi_node = false);

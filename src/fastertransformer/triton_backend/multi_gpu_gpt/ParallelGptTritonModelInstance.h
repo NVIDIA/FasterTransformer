@@ -62,17 +62,23 @@ private:
                         const size_t request_output_len);
     void freeBuffer();
 
-    int* d_input_ids_                = nullptr;
-    int* d_input_lengths_            = nullptr;
-    int* d_request_prompt_lengths_   = nullptr;
-    int* d_input_bad_words_          = nullptr;
-    int* d_input_stop_words_         = nullptr;
-    T*   d_request_prompt_embedding_ = nullptr;
+    int*   d_input_ids_                = nullptr;
+    int*   d_input_lengths_            = nullptr;
+    int*   d_request_prompt_lengths_   = nullptr;
+    int*   d_input_bad_words_          = nullptr;
+    int*   d_input_stop_words_         = nullptr;
+    T*     d_request_prompt_embedding_ = nullptr;
+    float* d_top_p_decay_              = nullptr;
+    float* d_top_p_min_                = nullptr;
+    int*   d_top_p_reset_ids_          = nullptr;
 
-    int*   d_output_ids_       = nullptr;
-    int*   d_sequence_lengths_ = nullptr;
-    float* d_output_log_probs_ = nullptr;
-    float* d_cum_log_probs_    = nullptr;
+    int*   d_output_ids_             = nullptr;
+    int*   d_sequence_lengths_       = nullptr;
+    int*   d_response_input_lengths_ = nullptr;
+    float* d_output_log_probs_       = nullptr;
+    float* d_cum_log_probs_          = nullptr;
+    float* d_output_ctx_emb_         = nullptr;
+    bool*  d_is_finished_            = nullptr;
 
     uint32_t* h_total_output_lengths_ = nullptr;
 };

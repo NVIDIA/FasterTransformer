@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -41,6 +41,7 @@ void Decoder<T>::initialize()
                                      1,
                                      head_num_,
                                      size_per_head_,
+                                     0,  // expert_num
                                      inter_size_,
                                      stream_,
                                      cublas_wrapper_,
@@ -188,8 +189,8 @@ void Decoder<T>::forward(std::vector<Tensor>*                      output_tensor
     const DataType data_type       = getTensorType<T>();
 
     for (uint l = 0; l < num_layer_; l++) {
-        const T* decoder_input  = (const T*)((l == 0) ? input_tensors->at(0).data : decoder_layer_output_);
-        T*       decoder_output = (T*)((l == num_layer_ - 1) ? output_tensors->at(0).data : decoder_layer_output_);
+        const T* decoder_input = (const T*)((l == 0) ? input_tensors->at(0).getPtr<const T>() : decoder_layer_output_);
+        T* decoder_output = (T*)((l == num_layer_ - 1) ? output_tensors->at(0).getPtr<T>() : decoder_layer_output_);
 
         size_t self_key_cache_offset = l;
         for (auto t = output_tensors->at(1).shape.begin() + 1; t != output_tensors->at(1).shape.end(); ++t) {
@@ -208,31 +209,31 @@ void Decoder<T>::forward(std::vector<Tensor>*                      output_tensor
                                layernorm_eps_,
                                batch_size,
                                hidden_units_,
+                               (float*)nullptr,
+                               0,
                                stream_);
         sync_check_cuda_error();
 
-        int                 tmp_0 = 0;
-        std::vector<Tensor> self_attention_input_tensors{
-            Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, decoder_normed_input_},
-            input_tensors->at(3),
-            input_tensors->at(5),
-            Tensor{MEMORY_GPU, TYPE_INT32, {batch_size}, nullptr},
-            Tensor{MEMORY_GPU, data_type, {batch_size}, nullptr},
-            Tensor{MEMORY_CPU, TYPE_INT32, {1}, &tmp_0},
-            Tensor{MEMORY_CPU, TYPE_INT32, {1}, &tmp_0},
-            input_tensors->at(4),
-            input_tensors->at(6),
-            Tensor{MEMORY_GPU, TYPE_BOOL, {batch_size}, (const bool*)nullptr}};
-        std::vector<Tensor> self_attention_output_tensors{
-            Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, self_attn_output_},
-            Tensor{MEMORY_GPU,
-                   data_type,
-                   std::vector<size_t>(output_tensors->at(1).shape.begin() + 1, output_tensors->at(1).shape.end()),
-                   ((const T*)output_tensors->at(1).data) + (int)self_key_cache_offset},
-            Tensor{MEMORY_GPU,
-                   data_type,
-                   std::vector<size_t>(output_tensors->at(2).shape.begin() + 1, output_tensors->at(2).shape.end()),
-                   ((const T*)output_tensors->at(2).data) + (int)self_value_cache_offset}};
+        int tmp_0 = 0;
+
+        TensorMap self_attention_input_tensors{
+            {"input_query", Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, decoder_normed_input_}},
+            {"finished", input_tensors->at(3)},
+            {"sequence_lengths", input_tensors->at(5)},
+            {"step", input_tensors->at(4)}};
+        self_attention_input_tensors.insertIfValid("cache_indirection", input_tensors->at(6));
+        TensorMap self_attention_output_tensors{
+            {"hidden_features", Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, self_attn_output_}},
+            {"key_cache",
+             Tensor{MEMORY_GPU,
+                    data_type,
+                    std::vector<size_t>(output_tensors->at(1).shape.begin() + 1, output_tensors->at(1).shape.end()),
+                    output_tensors->at(1).getPtrWithOffset(self_key_cache_offset)}},
+            {"value_cache",
+             Tensor{MEMORY_GPU,
+                    data_type,
+                    std::vector<size_t>(output_tensors->at(2).shape.begin() + 1, output_tensors->at(2).shape.end()),
+                    output_tensors->at(2).getPtrWithOffset<T>(self_value_cache_offset)}}};
         self_attention_layer_->forward(&self_attention_output_tensors,
                                        &self_attention_input_tensors,
                                        &decoder_layer_weight->at(l).self_attention_weights);
@@ -240,6 +241,7 @@ void Decoder<T>::forward(std::vector<Tensor>*                      output_tensor
         invokeGeneralAddBiasResidualPreLayerNorm(
             self_attn_output_,
             normed_self_attn_output_,
+            self_attn_output_,
             decoder_input,
             decoder_layer_weight->at(l).self_attn_layernorm_weights.gamma,
             decoder_layer_weight->at(l).self_attn_layernorm_weights.beta,
@@ -247,25 +249,31 @@ void Decoder<T>::forward(std::vector<Tensor>*                      output_tensor
             layernorm_eps_,
             batch_size,
             hidden_units_,
+            (float*)nullptr,
+            (float*)nullptr,
+            (float*)nullptr,
+            0,
             stream_);
         sync_check_cuda_error();
 
-        std::vector<Tensor> cross_attention_input_tensors{
-            Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, normed_self_attn_output_},
-            input_tensors->at(1),
-            input_tensors->at(2),
-            input_tensors->at(3),
-            input_tensors->at(4)};
-        std::vector<Tensor> cross_attention_output_tensors{
-            Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, cross_attn_output_},
-            Tensor{MEMORY_GPU,
-                   data_type,
-                   std::vector<size_t>(output_tensors->at(3).shape.begin() + 1, output_tensors->at(3).shape.end()),
-                   ((const T*)output_tensors->at(3).data) + (int)mem_cache_offset},
-            Tensor{MEMORY_GPU,
-                   data_type,
-                   std::vector<size_t>(output_tensors->at(4).shape.begin() + 1, output_tensors->at(4).shape.end()),
-                   ((const T*)output_tensors->at(4).data) + (int)mem_cache_offset}};
+        TensorMap cross_attention_input_tensors{
+            {"input_query", Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, normed_self_attn_output_}},
+            {"encoder_output", input_tensors->at(1)},
+            {"encoder_sequence_length", input_tensors->at(2)},
+            {"finished", input_tensors->at(3)},
+            {"step", input_tensors->at(4)}};
+        TensorMap cross_attention_output_tensors{
+            {"hidden_features", Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, cross_attn_output_}},
+            {"key_cache",
+             Tensor{MEMORY_GPU,
+                    data_type,
+                    std::vector<size_t>(output_tensors->at(3).shape.begin() + 1, output_tensors->at(3).shape.end()),
+                    output_tensors->at(3).getPtrWithOffset<T>(mem_cache_offset)}},
+            {"value_cache",
+             Tensor{MEMORY_GPU,
+                    data_type,
+                    std::vector<size_t>(output_tensors->at(4).shape.begin() + 1, output_tensors->at(4).shape.end()),
+                    output_tensors->at(4).getPtrWithOffset<T>(mem_cache_offset)}}};
         cross_attention_layer_->forward(&cross_attention_output_tensors,
                                         &cross_attention_input_tensors,
                                         &decoder_layer_weight->at(l).cross_attention_weights);
@@ -273,6 +281,7 @@ void Decoder<T>::forward(std::vector<Tensor>*                      output_tensor
         invokeGeneralAddBiasResidualPreLayerNorm(
             cross_attn_output_,
             normed_cross_attn_output_,
+            cross_attn_output_,
             self_attn_output_,
             decoder_layer_weight->at(l).cross_attn_layernorm_weights.gamma,
             decoder_layer_weight->at(l).cross_attn_layernorm_weights.beta,
@@ -280,13 +289,17 @@ void Decoder<T>::forward(std::vector<Tensor>*                      output_tensor
             layernorm_eps_,
             batch_size,
             hidden_units_,
+            (float*)nullptr,
+            (float*)nullptr,
+            (float*)nullptr,
+            0,
             stream_);
         sync_check_cuda_error();
 
-        std::vector<Tensor> ffn_input_tensors{
-            Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, normed_cross_attn_output_}};
-        std::vector<Tensor> ffn_output_tensors{
-            Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, decoder_output}};
+        TensorMap ffn_input_tensors(
+            {{"ffn_input", Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, normed_cross_attn_output_}}});
+        TensorMap ffn_output_tensors(
+            {{"ffn_output", Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, decoder_output}}});
         ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &decoder_layer_weight->at(l).ffn_weights);
 
         invokeAddBiasResidual(decoder_output,

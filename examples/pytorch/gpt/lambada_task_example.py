@@ -111,10 +111,6 @@ def _get_model(args, config_reader):
     if not gpt.load(ckpt_path=args.checkpoint_path):
         print("[WARNING] Checkpoint file not found. Model loading is skipped.")
 
-    if init_parameters.data_type == "fp16":
-        gpt.half()
-    elif init_parameters.data_type == "bf16":
-        gpt.bfloat16()
     if init_parameters.sparse:
         gpt.sparse()
 
@@ -132,7 +128,7 @@ def main():
         type=str,
         help="Path to config.ini file. If not provided <checkpoint_path>/config.ini will be used.",
     )
-    parser.add_argument("--lambada-path", type=str, required=True, help="LAMBADA task data path")
+    parser.add_argument("--lambada-path", type=str, help="LAMBADA task data path")
     parser.add_argument("--output-path", type=str, help="Path to sample output file.")
     parser.add_argument("--batch-size", type=int, default=1, help="Batch size")
 
@@ -158,7 +154,12 @@ def main():
 
     tokenizer = transformers.GPT2TokenizerFast(vocab_path.as_posix(), merges_path.as_posix())
     tokenizer.add_special_tokens({"pad_token": tokenizer.eos_token})
-    dataset = LambadaDataset(args.lambada_path, tokenizer=tokenizer, seq_len=max_seq_len)
+    if args.lambada_path:
+        dataset = LambadaDataset(args.lambada_path, tokenizer=tokenizer, seq_len=max_seq_len)
+    else:
+        from datasets import load_dataset
+        dataset = load_dataset("lambada", split="validation")
+
     data_loader = torch.utils.data.DataLoader(dataset, batch_size=args.batch_size)
 
     runtime_parameters = GptRuntimeModelParameters.from_args(args, config_reader)

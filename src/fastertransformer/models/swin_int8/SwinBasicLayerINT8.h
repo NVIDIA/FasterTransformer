@@ -16,29 +16,26 @@
 
 #pragma once
 
+#include "src/fastertransformer/kernels/image_merge_kernels.h"
 #include "src/fastertransformer/models/swin_int8/SwinBlockINT8.h"
 
 namespace fastertransformer {
 template<typename T>
 class SwinTransformerINT8BasicLayer: public BaseLayer {
 private:
-    int          int8_mode           = 0;
-    int          max_batch_          = 1;
-    int          patches_resolution_ = 64;
-    int          embed_dim_          = 96;
-    int          window_size_        = 7;
-    float        mlp_ratio_          = 4.0f;
-    bool         qkv_bias_           = true;
-    float        qk_scale_           = 1.0f;
-    float        layernorm_eps_;
-    const size_t max_buf_size_ = 0;
+    int   int8_mode    = 0;
+    int   max_batch_   = 1;
+    int   window_size_ = 7;
+    float layernorm_eps_;
+    int   version_ = 1;
 
     // T* buf_ = nullptr;
     T*                           block_output_ = nullptr;
     int8_t*                      gemm_out_buf_ = nullptr;
     SwinTransformerINT8Block<T>* block_        = nullptr;
 
-    void allocateBuffer();
+    void allocateBuffer() override;
+    void allocateBuffer(int batch, int input_resolution, int dim);
 
     void freeBuffer();
 
@@ -63,12 +60,11 @@ public:
     SwinTransformerINT8BasicLayer(int              int8_mode,
                                   int              max_batch,
                                   int              window_size,
-                                  int              patches_resolution,
-                                  int              embed_dim,
                                   float            mlp_ratio,
                                   float            layernorm_eps,
                                   bool             qkv_bias,
                                   float            qk_scale,
+                                  int              version,
                                   cudaStream_t     stream,
                                   cublasMMWrapper* cublas_wrapper,
                                   IAllocator*      allocator,
@@ -76,8 +72,8 @@ public:
 
     ~SwinTransformerINT8BasicLayer();
 
-    void forward(std::vector<Tensor>*                    output_tensors,
-                 std::vector<Tensor>*                    input_tensors,
+    void forward(TensorMap*                              output_tensors,
+                 TensorMap*                              input_tensors,
                  SwinTransformerINT8BasicLayerWeight<T>& swin_basic_layer_weights);
 
 };  // class SwinTransformerINT8BasicLayer

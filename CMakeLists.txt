@@ -21,15 +21,45 @@ if(${CUDA_VERSION_MAJOR} VERSION_GREATER_EQUAL "11")
   message("CUDA_VERSION ${CUDA_VERSION_MAJOR} is greater or equal than 11, enable -DENABLE_BF16 flag")
 endif()
 
+option(BUILD_CUTLASS_MOE "Builds CUTLASS kernels supporting MoE GEMM" ON)
+if(BUILD_CUTLASS_MOE)
+  message(STATUS "Add DBUILD_CUTLASS_MOE, requires CUTLASS. Increases compilation time")
+  add_definitions("-DBUILD_CUTLASS_MOE")
+endif()
+
+option(BUILD_CUTLASS_MIXED_GEMM "Builds CUTLASS kernels supporting mixed gemm" ON)
+if(BUILD_CUTLASS_MIXED_GEMM)
+  message(STATUS "Add DBUILD_CUTLASS_MIXED_GEMM, requires CUTLASS. Increases compilation time")
+  add_definitions("-DBUILD_CUTLASS_MIXED_GEMM")
+endif()
+
 option(BUILD_TF "Build in TensorFlow mode" OFF)
+option(BUILD_TF2 "Build in TensorFlow2 mode" OFF)
 option(BUILD_PYT "Build in PyTorch TorchScript class mode" OFF)
 option(BUILD_TRT "Build projects about TensorRT" OFF)
+option(GIT_AUTOCLONE_CUTLASS "Check submodules during build" ON)
 if(NOT BUILD_MULTI_GPU)
   option(BUILD_MULTI_GPU "Build project about multi-GPU" OFF)
 endif()
 if(NOT USE_TRITONSERVER_DATATYPE)
   option(USE_TRITONSERVER_DATATYPE "Build triton backend for triton server" OFF)
 endif()
+
+find_package(Git QUIET)
+if(GIT_FOUND AND EXISTS "${PROJECT_SOURCE_DIR}/.git")
+  if(GIT_AUTOCLONE_CUTLASS)
+    message(STATUS "Running submodule update to fetch cutlass")
+    execute_process(COMMAND ${GIT_EXECUTABLE} submodule update --init 3rdparty/cutlass
+                    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                    RESULT_VARIABLE GIT_SUBMOD_RESULT)
+    if(NOT GIT_SUBMOD_RESULT EQUAL "0")
+      message(FATAL_ERROR "git submodule update --init 3rdparty/cutlass failed with ${GIT_SUBMOD_RESULT}, please checkout cutlass submodule")
+    endif()
+  endif()
+endif()
+
+set(CUTLASS_HEADER_DIR ${PROJECT_SOURCE_DIR}/3rdparty/cutlass/include)
+set(CUTLASS_EXTENSIONS_DIR ${PROJECT_SOURCE_DIR}/src/fastertransformer/cutlass_extensions/include)
 
 option(SPARSITY_SUPPORT "Build project with Ampere sparsity feature support" OFF)
 
@@ -70,8 +100,8 @@ set(CUDA_PATH ${CUDA_TOOLKIT_ROOT_DIR})
 set(TF_PATH "" CACHE STRING "TensorFlow path")
 set(CUSPARSELT_PATH "" CACHE STRING "cuSPARSELt path")
 
-if(BUILD_TF AND NOT TF_PATH)
-  message(FATAL_ERROR "TF_PATH must be set if BUILD_TF(=TensorFlow mode) is on.")
+if((BUILD_TF OR BUILD_TF2) AND NOT TF_PATH)
+  message(FATAL_ERROR "TF_PATH must be set if BUILD_TF or BUILD_TF2 (=TensorFlow mode) is on.")
 endif()
 
 list(APPEND CMAKE_MODULE_PATH ${CUDA_PATH}/lib64)
@@ -85,8 +115,8 @@ endif()
 
 # setting compiler flags
 set(CMAKE_C_FLAGS    "${CMAKE_C_FLAGS}")
-set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS}")
-set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS}  -Xcompiler -Wall -ldl")
+set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -std=c++17")
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler -Wall -ldl") # -Xptxas -v
 
 set(SM_SETS 52 60 61 70 75 80 86)
 set(USING_WMMA False)
@@ -111,7 +141,7 @@ foreach(SM_NUM IN LISTS SM_SETS)
       set(ENV{TORCH_CUDA_ARCH_LIST} "$ENV{TORCH_CUDA_ARCH_LIST}\;${SM_MAJOR}.${SM_MINOR}")
     endif()
 
-    set(CMAKE_CUDA_ARCHITECTURES ${SM_NUM})
+    list(APPEND CMAKE_CUDA_ARCHITECTURES ${SM_NUM})
     message("-- Assign GPU architecture (sm=${SM_NUM})")
   endif()
 endforeach()
@@ -171,6 +201,8 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 set(COMMON_HEADER_DIRS
   ${PROJECT_SOURCE_DIR}
   ${CUDA_PATH}/include
+  ${CUTLASS_HEADER_DIR}
+  ${CUTLASS_EXTENSIONS_DIR}
 )
 message("-- COMMON_HEADER_DIRS: ${COMMON_HEADER_DIRS}")
 
@@ -188,6 +220,12 @@ if(BUILD_TF)
   list(APPEND COMMON_HEADER_DIRS ${TF_PATH}/include)
   list(APPEND COMMON_LIB_DIRS ${TF_PATH})
   add_definitions(-D_GLIBCXX_USE_CXX11_ABI=0)
+endif()
+
+if(BUILD_TF2)
+  list(APPEND COMMON_HEADER_DIRS ${TF_PATH}/include)
+  list(APPEND COMMON_LIB_DIRS ${TF_PATH})
+  add_definitions(-D_GLIBCXX_USE_CXX11_ABI=1)
 endif()
 
 set(PYTHON_PATH "python" CACHE STRING "Python path")
@@ -253,6 +291,7 @@ link_directories(
 add_subdirectory(3rdparty)
 add_subdirectory(src)
 add_subdirectory(examples)
+
 add_subdirectory(tests)
 
 # # Mesaure the compile time
@@ -303,6 +342,7 @@ add_library(transformer-static STATIC
   $<TARGET_OBJECTS:T5Decoding>
   $<TARGET_OBJECTS:T5Encoder>
   $<TARGET_OBJECTS:T5TritonBackend>
+  $<TARGET_OBJECTS:T5EncoderTritonBackend>
   $<TARGET_OBJECTS:TensorParallelDecoderCrossAttentionLayer>
   $<TARGET_OBJECTS:TensorParallelDecoderSelfAttentionLayer>
   $<TARGET_OBJECTS:TensorParallelGeluFfnLayer>
@@ -310,9 +350,7 @@ add_library(transformer-static STATIC
   $<TARGET_OBJECTS:TensorParallelGptContextAttentionLayer>
   $<TARGET_OBJECTS:TensorParallelReluFfnLayer>
   $<TARGET_OBJECTS:TensorParallelUnfusedAttentionLayer>
-  $<TARGET_OBJECTS:tensor>
   $<TARGET_OBJECTS:TopKSamplingLayer>
-  $<TARGET_OBJECTS:TopKTopPSamplingLayer>
   $<TARGET_OBJECTS:TopPSamplingLayer>
   $<TARGET_OBJECTS:TransformerTritonBackend>
   $<TARGET_OBJECTS:UnfusedAttentionLayer>
@@ -327,19 +365,27 @@ add_library(transformer-static STATIC
   $<TARGET_OBJECTS:calibrate_quantize_weight_kernels>
   $<TARGET_OBJECTS:cublasAlgoMap>
   $<TARGET_OBJECTS:cublasMMWrapper>
+  $<TARGET_OBJECTS:cuda_utils>
   $<TARGET_OBJECTS:custom_ar_comm>
   $<TARGET_OBJECTS:custom_ar_kernels>
+  $<TARGET_OBJECTS:cutlass_heuristic>
+  $<TARGET_OBJECTS:cutlass_preprocessors>
   $<TARGET_OBJECTS:decoder_masked_multihead_attention>
   $<TARGET_OBJECTS:decoding_kernels>
+  $<TARGET_OBJECTS:fpA_intB_gemm>
+  $<TARGET_OBJECTS:gen_relative_pos_bias>
   $<TARGET_OBJECTS:gpt_kernels>
   $<TARGET_OBJECTS:layernorm_int8_kernels>
   $<TARGET_OBJECTS:layernorm_kernels>
   $<TARGET_OBJECTS:layout_transformer_int8_kernels>
   $<TARGET_OBJECTS:logprob_kernels>
+  $<TARGET_OBJECTS:logger>
   $<TARGET_OBJECTS:longformer_kernels>
   $<TARGET_OBJECTS:matrix_transpose_kernels>
   $<TARGET_OBJECTS:matrix_vector_multiplication>
   $<TARGET_OBJECTS:memory_utils>
+  $<TARGET_OBJECTS:moe_gemm_kernels>
+  $<TARGET_OBJECTS:moe_kernels>
   $<TARGET_OBJECTS:mpi_utils>
   $<TARGET_OBJECTS:nccl_utils>
   $<TARGET_OBJECTS:online_softmax_beamsearch_kernels>
@@ -394,6 +440,7 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:T5Decoding>
   $<TARGET_OBJECTS:T5Encoder>
   $<TARGET_OBJECTS:T5TritonBackend>
+  $<TARGET_OBJECTS:T5EncoderTritonBackend>
   $<TARGET_OBJECTS:TensorParallelDecoderCrossAttentionLayer>
   $<TARGET_OBJECTS:TensorParallelDecoderSelfAttentionLayer>
   $<TARGET_OBJECTS:TensorParallelGeluFfnLayer>
@@ -401,9 +448,7 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:TensorParallelGptContextAttentionLayer>
   $<TARGET_OBJECTS:TensorParallelReluFfnLayer>
   $<TARGET_OBJECTS:TensorParallelUnfusedAttentionLayer>
-  $<TARGET_OBJECTS:tensor>
   $<TARGET_OBJECTS:TopKSamplingLayer>
-  $<TARGET_OBJECTS:TopKTopPSamplingLayer>
   $<TARGET_OBJECTS:TopPSamplingLayer>
   $<TARGET_OBJECTS:TransformerTritonBackend>
   $<TARGET_OBJECTS:UnfusedAttentionLayer>
@@ -418,19 +463,27 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:calibrate_quantize_weight_kernels>
   $<TARGET_OBJECTS:cublasAlgoMap>
   $<TARGET_OBJECTS:cublasMMWrapper>
+  $<TARGET_OBJECTS:cuda_utils>
   $<TARGET_OBJECTS:custom_ar_comm>
   $<TARGET_OBJECTS:custom_ar_kernels>
+  $<TARGET_OBJECTS:cutlass_heuristic>
+  $<TARGET_OBJECTS:cutlass_preprocessors>
   $<TARGET_OBJECTS:decoder_masked_multihead_attention>
   $<TARGET_OBJECTS:decoding_kernels>
+  $<TARGET_OBJECTS:fpA_intB_gemm>
+  $<TARGET_OBJECTS:gen_relative_pos_bias>
   $<TARGET_OBJECTS:gpt_kernels>
   $<TARGET_OBJECTS:layernorm_int8_kernels>
   $<TARGET_OBJECTS:layernorm_kernels>
   $<TARGET_OBJECTS:layout_transformer_int8_kernels>
   $<TARGET_OBJECTS:logprob_kernels>
+  $<TARGET_OBJECTS:logger>
   $<TARGET_OBJECTS:longformer_kernels>
   $<TARGET_OBJECTS:matrix_transpose_kernels>
   $<TARGET_OBJECTS:matrix_vector_multiplication>
   $<TARGET_OBJECTS:memory_utils>
+  $<TARGET_OBJECTS:moe_gemm_kernels>
+  $<TARGET_OBJECTS:moe_kernels>
   $<TARGET_OBJECTS:mpi_utils>
   $<TARGET_OBJECTS:nccl_utils>
   $<TARGET_OBJECTS:online_softmax_beamsearch_kernels>

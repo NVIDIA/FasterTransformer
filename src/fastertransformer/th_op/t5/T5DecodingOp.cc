@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,54 +20,58 @@ namespace th = torch;
 
 namespace torch_ext {
 
-FasterTransformerT5Decoding::FasterTransformerT5Decoding(int64_t     head_num,
-                                                         int64_t     size_per_head,
-                                                         int64_t     inter_size,
-                                                         int64_t     mem_d_model,
-                                                         int64_t     d_model,
-                                                         int64_t     layer_num,
-                                                         int64_t     vocab_size,
-                                                         int64_t     num_bucket,
-                                                         int64_t     max_distance,
-                                                         double      q_scaling,
-                                                         int64_t     start_id,
-                                                         int64_t     end_id,
-                                                         int64_t     tensor_para_size,
-                                                         int64_t     pipeline_para_size,
-                                                         bool        t5_with_bias,
-                                                         int64_t     position_embedding_type,
-                                                         std::string activation_type,
-                                                         bool        tie_word_embeddings,
-                                                         th::Tensor  self_layernorm_gamma,
-                                                         th::Tensor  self_kernel_q,
-                                                         th::Tensor  self_output_kernel,
-                                                         th::Tensor  cross_layernorm_gamma,
-                                                         th::Tensor  cross_kernel_q,
-                                                         th::Tensor  cross_kernel_k,
-                                                         th::Tensor  cross_kernel_v,
-                                                         th::Tensor  cross_output_kernel,
-                                                         th::Tensor  ffn_layernorm_gamma,
-                                                         th::Tensor  inter_kernel,
-                                                         th::Tensor  inter_kernel2,
-                                                         th::Tensor  output_kernel,
-                                                         th::Tensor  decoding_gamma,
-                                                         th::Tensor  embedding_table,
-                                                         th::Tensor  lm_head,
-                                                         th::Tensor  absolute_or_relative_position_embedding,
-                                                         th::Tensor  self_layernorm_beta,
-                                                         th::Tensor  self_bias_qkv,
-                                                         th::Tensor  self_output_bias,
-                                                         th::Tensor  cross_layernorm_beta,
-                                                         th::Tensor  cross_bias_q,
-                                                         th::Tensor  cross_bias_k,
-                                                         th::Tensor  cross_bias_v,
-                                                         th::Tensor  cross_output_bias,
-                                                         th::Tensor  ffn_layernorm_beta,
-                                                         th::Tensor  inter_bias,
-                                                         th::Tensor  inter_bias2,
-                                                         th::Tensor  output_bias,
-                                                         th::Tensor  decoding_beta,
-                                                         th::Tensor  embedding_bias):
+FasterTransformerT5Decoding::FasterTransformerT5Decoding(int64_t              head_num,
+                                                         int64_t              size_per_head,
+                                                         int64_t              inter_size,
+                                                         int64_t              mem_d_model,
+                                                         int64_t              d_model,
+                                                         int64_t              layer_num,
+                                                         int64_t              vocab_size,
+                                                         int64_t              num_bucket,
+                                                         int64_t              expert_num,
+                                                         int64_t              max_distance,
+                                                         double               q_scaling,
+                                                         int64_t              start_id,
+                                                         int64_t              end_id,
+                                                         int64_t              tensor_para_size,
+                                                         int64_t              pipeline_para_size,
+                                                         bool                 t5_with_bias,
+                                                         int64_t              position_embedding_type,
+                                                         int64_t              moe_k,
+                                                         std::string          activation_type,
+                                                         bool                 tie_word_embeddings,
+                                                         std::vector<int64_t> moe_layer_index,
+                                                         th::Tensor           self_layernorm_gamma,
+                                                         th::Tensor           self_kernel_q,
+                                                         th::Tensor           self_output_kernel,
+                                                         th::Tensor           cross_layernorm_gamma,
+                                                         th::Tensor           cross_kernel_q,
+                                                         th::Tensor           cross_kernel_k,
+                                                         th::Tensor           cross_kernel_v,
+                                                         th::Tensor           cross_output_kernel,
+                                                         th::Tensor           ffn_layernorm_gamma,
+                                                         th::Tensor           inter_kernel,
+                                                         th::Tensor           inter_kernel2,
+                                                         th::Tensor           output_kernel,
+                                                         th::Tensor           decoding_gamma,
+                                                         th::Tensor           embedding_table,
+                                                         th::Tensor           lm_head,
+                                                         th::Tensor           absolute_or_relative_position_embedding,
+                                                         th::Tensor           self_layernorm_beta,
+                                                         th::Tensor           self_bias_qkv,
+                                                         th::Tensor           self_output_bias,
+                                                         th::Tensor           cross_layernorm_beta,
+                                                         th::Tensor           cross_bias_q,
+                                                         th::Tensor           cross_bias_k,
+                                                         th::Tensor           cross_bias_v,
+                                                         th::Tensor           cross_output_bias,
+                                                         th::Tensor           ffn_layernorm_beta,
+                                                         th::Tensor           inter_bias,
+                                                         th::Tensor           inter_bias2,
+                                                         th::Tensor           output_bias,
+                                                         th::Tensor           decoding_beta,
+                                                         th::Tensor           embedding_bias,
+                                                         th::Tensor           moe_gate):
     _st(self_layernorm_gamma.scalar_type()),
     weights{self_layernorm_gamma,
             self_kernel_q,
@@ -98,7 +102,8 @@ FasterTransformerT5Decoding::FasterTransformerT5Decoding(int64_t     head_num,
             inter_bias2,
             output_bias,
             decoding_beta,
-            embedding_bias}
+            embedding_bias,
+            moe_gate}
 {
     CHECK_INPUT(self_layernorm_gamma, _st);                     // layer_num, d_model
     CHECK_INPUT(self_kernel_q, _st);                            // layer_num, d_model, 3 * hidden_dim
@@ -132,6 +137,9 @@ FasterTransformerT5Decoding::FasterTransformerT5Decoding(int64_t     head_num,
         CHECK_INPUT(decoding_beta, _st);         // d_model
         CHECK_INPUT(embedding_bias, _st);        // vocab_size
     }
+    if (expert_num != 0) {
+        CHECK_INPUT(moe_gate, _st);  // hidden_dim, expert_num
+    }
     switch (_st) {
         case at::ScalarType::Float:
             ftdecoding = new torch_ext::FTT5Decoding<float>(head_num,
@@ -142,6 +150,7 @@ FasterTransformerT5Decoding::FasterTransformerT5Decoding(int64_t     head_num,
                                                             layer_num,
                                                             vocab_size,
                                                             num_bucket,
+                                                            expert_num,
                                                             max_distance,
                                                             q_scaling,
                                                             start_id,
@@ -149,10 +158,12 @@ FasterTransformerT5Decoding::FasterTransformerT5Decoding(int64_t     head_num,
                                                             tensor_para_size,
                                                             pipeline_para_size,
                                                             t5_with_bias,
+                                                            moe_k,
                                                             ft::PositionEmbeddingType(position_embedding_type),
                                                             ft::getActivationType(activation_type),
                                                             tie_word_embeddings,
-                                                            weights);
+                                                            weights,
+                                                            moe_layer_index);
             break;
         case at::ScalarType::Half:
             ftdecoding = new torch_ext::FTT5Decoding<half>(head_num,
@@ -163,6 +174,7 @@ FasterTransformerT5Decoding::FasterTransformerT5Decoding(int64_t     head_num,
                                                            layer_num,
                                                            vocab_size,
                                                            num_bucket,
+                                                           expert_num,
                                                            max_distance,
                                                            q_scaling,
                                                            start_id,
@@ -170,10 +182,12 @@ FasterTransformerT5Decoding::FasterTransformerT5Decoding(int64_t     head_num,
                                                            tensor_para_size,
                                                            pipeline_para_size,
                                                            t5_with_bias,
+                                                           moe_k,
                                                            ft::PositionEmbeddingType(position_embedding_type),
                                                            ft::getActivationType(activation_type),
                                                            tie_word_embeddings,
-                                                           weights);
+                                                           weights,
+                                                           moe_layer_index);
             break;
 #ifdef ENABLE_BF16
         case at::ScalarType::BFloat16:
@@ -185,6 +199,7 @@ FasterTransformerT5Decoding::FasterTransformerT5Decoding(int64_t     head_num,
                                                                     layer_num,
                                                                     vocab_size,
                                                                     num_bucket,
+                                                                    expert_num,
                                                                     max_distance,
                                                                     q_scaling,
                                                                     start_id,
@@ -192,10 +207,12 @@ FasterTransformerT5Decoding::FasterTransformerT5Decoding(int64_t     head_num,
                                                                     tensor_para_size,
                                                                     pipeline_para_size,
                                                                     t5_with_bias,
+                                                                    moe_k,
                                                                     ft::PositionEmbeddingType(position_embedding_type),
                                                                     ft::getActivationType(activation_type),
                                                                     tie_word_embeddings,
-                                                                    weights);
+                                                                    weights,
+                                                                    moe_layer_index);
             break;
 #endif
         default:
@@ -208,20 +225,22 @@ FasterTransformerT5Decoding::~FasterTransformerT5Decoding()
     delete ftdecoding;
 }
 
-std::vector<th::Tensor> FasterTransformerT5Decoding::forward(th::optional<int64_t> beam_width,
-                                                             int64_t               max_seq_len,
-                                                             th::optional<int64_t> top_k,
-                                                             th::optional<double>  top_p,
-                                                             th::optional<double>  beam_search_diversity_rate,
-                                                             th::optional<double>  temperature,
-                                                             th::optional<double>  len_penalty,
-                                                             th::optional<double>  repetition_penalty,
-                                                             th::optional<int64_t> random_seed,
-                                                             th::optional<bool>    is_return_output_log_probs,
-                                                             th::optional<bool>    is_return_cum_log_probs,
-                                                             th::optional<bool>    is_return_cross_attentions,
-                                                             th::Tensor            memory,
-                                                             th::Tensor            memory_seq_lens)
+std::vector<th::Tensor> FasterTransformerT5Decoding::forward(th::optional<int64_t>    beam_width,
+                                                             int64_t                  max_seq_len,
+                                                             th::optional<int64_t>    top_k,
+                                                             th::optional<double>     top_p,
+                                                             th::optional<double>     beam_search_diversity_rate,
+                                                             th::optional<double>     temperature,
+                                                             th::optional<double>     len_penalty,
+                                                             th::optional<double>     repetition_penalty,
+                                                             th::optional<int64_t>    random_seed,
+                                                             th::Tensor               memory,
+                                                             th::Tensor               memory_seq_lens,
+                                                             th::optional<bool>       is_return_output_log_probs,
+                                                             th::optional<bool>       is_return_cum_log_probs,
+                                                             th::optional<bool>       is_return_cross_attentions,
+                                                             th::optional<th::Tensor> bad_words_list,
+                                                             th::optional<th::Tensor> stop_words_list)
 {
     CHECK_INPUT(memory, _st);
     CHECK_TH_CUDA(memory_seq_lens);
@@ -237,11 +256,13 @@ std::vector<th::Tensor> FasterTransformerT5Decoding::forward(th::optional<int64_
                                        len_penalty,
                                        repetition_penalty,
                                        random_seed,
+                                       memory,
+                                       memory_seq_lens,
                                        is_return_output_log_probs,
                                        is_return_cum_log_probs,
                                        is_return_cross_attentions,
-                                       memory,
-                                       memory_seq_lens);
+                                       bad_words_list,
+                                       stop_words_list);
     return results;
 }
 
@@ -268,6 +289,7 @@ static auto fasterTransformerT5DecodingTHS =
                               int64_t,
                               int64_t,
                               int64_t,
+                              int64_t,
                               double,
                               int64_t,
                               int64_t,
@@ -275,8 +297,11 @@ static auto fasterTransformerT5DecodingTHS =
                               int64_t,
                               bool,
                               int64_t,
+                              int64_t,
                               std::string,
                               bool,
+                              std::vector<int64_t>,
+                              th::Tensor,
                               th::Tensor,
                               th::Tensor,
                               th::Tensor,

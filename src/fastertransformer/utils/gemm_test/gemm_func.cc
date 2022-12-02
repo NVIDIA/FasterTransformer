@@ -222,7 +222,7 @@ int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
     int                  nbAlgoIds     = 0;                // Number of algorithms actually returned by
                                                            // cublasLtMatmulAlgoGetIds function.
 #define ALGO_IDS 100                                       // Number of algorithms requested.
-    int algoIdA[ALGO_IDS];                                 // 	Array containing the algorithm IDs returned by
+    int algoIdA[ALGO_IDS];                                 // Array containing the algorithm IDs returned by
                                                            // cublasLtMatmulAlgoGetIds function.
     cudaDataType_t Atype, Btype, Ctype, scaleType;
 #if (CUDART_VERSION >= 11000)

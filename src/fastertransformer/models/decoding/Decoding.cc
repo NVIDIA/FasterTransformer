@@ -280,37 +280,78 @@ void Decoding<T>::forward(std::vector<Tensor>*       output_tensors,
     // When step = k,  we put output ids and caches at step k, and the sequence_length would be k - 1 before
     // complete this step.
 
-    FT_CHECK(input_tensors->size() == 2);
-    FT_CHECK(output_tensors->size() == 3);
-    isValidSeqLen(output_tensors->at(0).shape[0]);
-    isValidBatchSize(output_tensors->at(0).shape[1]);
-    isValidMemSeqLen(input_tensors->at(0).shape[1]);
+    std::unordered_map<std::string, Tensor> input_tensors_map{{"encoder_output", input_tensors->at(0)},
+                                                              {"encoder_sequence_length", input_tensors->at(1)}};
+
+    std::unordered_map<std::string, Tensor> output_tensors_map{{"output_ids", output_tensors->at(0)},
+                                                               {"parent_ids", output_tensors->at(1)},
+                                                               {"sequence_length", output_tensors->at(2)}};
+    forward(&output_tensors_map, &input_tensors_map, decoding_weights);
+}
+
+template<typename T>
+void Decoding<T>::forward(std::unordered_map<std::string, Tensor>*       output_tensors,
+                          const std::unordered_map<std::string, Tensor>* input_tensors,
+                          const DecodingWeight<T>*                       decoding_weights)
+{
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TensorMap input_map(*input_tensors);
+    TensorMap output_map(*output_tensors);
+    forward(&output_map, &input_map, decoding_weights);
+}
+
+template<typename T>
+void Decoding<T>::forward(TensorMap*               output_tensors,
+                          TensorMap*               input_tensors,
+                          const DecodingWeight<T>* decoding_weights)
+{
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    // input_tensors:
+    //      encoder_output [batch_size * beam, mem_max_seq_len, memory_hidden_dimension]
+    //      encoder_sequence_length [batch_size * beam]
+
+    // output_tensors:
+    //      output_ids [max_seq_len, batch_size, beam]
+    //      parent_ids [max_seq_len, batch_size, beam]
+    //      sequence_length [batch_size, beam], record the number of generated token, except the start token
+    //      cum_log_probs [batch_size, beam], optional, must be float*.
+
+    // Step is from 1 ~ max_seq_len,
+    // When step = k,  we put output ids and caches at step k, and the sequence_length would be k - 1 before
+    // complete this step.
+
+    FT_CHECK(input_tensors->size() >= 2);
+    FT_CHECK(output_tensors->size() >= 3);
+    isValidSeqLen(output_tensors->at("output_ids").shape[0]);
+    isValidBatchSize(output_tensors->at("output_ids").shape[1]);
+    isValidMemSeqLen(input_tensors->at("encoder_output").shape[1]);
     allocateBuffer();
 
-    const size_t   batch_size       = output_tensors->at(0).shape[1];
+    const size_t   batch_size       = output_tensors->at("output_ids").shape[1];
     const int      max_input_length = 0;
     const DataType data_type        = getTensorType<T>();
-    const size_t   mem_max_seq_len  = input_tensors->at(0).shape[1];
+    const size_t   mem_max_seq_len  = input_tensors->at("encoder_output").shape[1];
 
     deviceFill(start_ids_buf_, batch_size, start_id_);
     deviceFill(end_ids_buf_, batch_size, end_id_);
 
-    const unsigned long long int            random_seed = 0;
-    std::unordered_map<std::string, Tensor> runtime_args{
-        {"random_seed", Tensor{MEMORY_CPU, TYPE_UINT64, {1}, &random_seed}},
-        {"beam_search_diversity_rate", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &beam_search_diversity_rate_}},
-        {"temperature", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &temperature_}},
-        {"len_penalty", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &len_penalty_}},
-        {"repetition_penalty", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &repetition_penalty_}},
-        {"runtime_top_k", Tensor{MEMORY_CPU, TYPE_UINT32, {1}, &top_k_}},
-        {"runtime_top_p", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &top_p_}}};
+    const unsigned long long int random_seed = 0;
+
+    TensorMap runtime_args(
+        {{"random_seed", Tensor{MEMORY_CPU, TYPE_UINT64, {1}, &random_seed}},
+         {"beam_search_diversity_rate", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &beam_search_diversity_rate_}},
+         {"temperature", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &temperature_}},
+         {"len_penalty", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &len_penalty_}},
+         {"repetition_penalty", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &repetition_penalty_}},
+         {"runtime_top_k", Tensor{MEMORY_CPU, TYPE_UINT32, {1}, &top_k_}},
+         {"runtime_top_p", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &top_p_}}});
     dynamic_decode_layer_->setup(batch_size, beam_width_, &runtime_args);
     if (beam_width_ > 1) {
         cudaMemsetAsync(cache_indirections_[0], 0, 2 * sizeof(int) * batch_size * beam_width_ * max_seq_len_, stream_);
     }
 
     invokeDecodingInitialize(finished_buf_,
-                             (int*)output_tensors->at(2).data,
+                             output_tensors->at("sequence_length").getPtr<int>(),
                              output_ids_buf_,
                              cum_log_probs_,
                              start_ids_buf_,
@@ -378,11 +419,11 @@ void Decoding<T>::forward(std::vector<Tensor>*       output_tensors,
 
         std::vector<Tensor> decoder_input_tensors{
             Tensor{MEMORY_GPU, data_type, {batch_size * beam_width_, hidden_units_}, decoder_input_buf_},
-            input_tensors->at(0),
-            input_tensors->at(1),
+            input_tensors->at("encoder_output"),
+            input_tensors->at("encoder_sequence_length"),
             Tensor{MEMORY_GPU, TYPE_BOOL, {batch_size * beam_width_}, finished_buf_},
             Tensor{MEMORY_CPU, TYPE_INT32, {1}, &step},
-            output_tensors->at(2),
+            output_tensors->at("sequence_length"),
             Tensor{MEMORY_GPU,
                    TYPE_INT32,
                    {(size_t)local_batch_size, beam_width_, max_seq_len_},
@@ -409,6 +450,8 @@ void Decoding<T>::forward(std::vector<Tensor>*       output_tensors,
                                layernorm_eps_,
                                batch_size * beam_width_,
                                hidden_units_,
+                               (float*)nullptr,
+                               0,
                                stream_);
         sync_check_cuda_error();
 
@@ -441,8 +484,18 @@ void Decoding<T>::forward(std::vector<Tensor>*       output_tensors,
                                   CUDA_R_32F,
                                   cublasGemmAlgo_t(-1));
 
-            invokeAddBias(
-                logits_buf_, padded_embedding_bias_ptr_, batch_size * beam_width_, vocab_size_padded_, stream_);
+            invokeGenericActivation<IdentityActivation, DynamicDecodeType, T>(logits_buf_,
+                                                                              padded_embedding_bias_ptr_,
+                                                                              nullptr,
+                                                                              nullptr,
+                                                                              nullptr,
+                                                                              nullptr,
+                                                                              batch_size * beam_width_,
+                                                                              vocab_size_padded_,
+                                                                              0,
+                                                                              nullptr,
+                                                                              nullptr,
+                                                                              stream_);
 #endif
         }
         else {
@@ -462,25 +515,23 @@ void Decoding<T>::forward(std::vector<Tensor>*       output_tensors,
         const int tmp_ite              = 0;
         const int tmp_local_batch_size = batch_size;
 
-        std::unordered_map<std::string, Tensor> dynamic_decode_input_tensors{
-            {"logits", Tensor{MEMORY_GPU, data_type, {batch_size, beam_width_, vocab_size_padded_}, logits_buf_}},
-            {"embedding_bias",
-             Tensor{MEMORY_GPU, data_type, {vocab_size_padded_}, is_bf16 ? nullptr : padded_embedding_bias_ptr_}},
-            {"end_id", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size}, end_ids_buf_}},
-            {"step", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &step}},
-            {"max_input_length", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &max_input_length}},
-            {"input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size, beam_width_}, nullptr}},
-            {"ite", Tensor{MEMORY_CPU, TYPE_UINT32, {1}, &tmp_ite}},
-            {"src_key_cache", Tensor{MEMORY_GPU, data_type, self_k_cache_size, key_cache_}},
-            {"src_value_cache", Tensor{MEMORY_GPU, data_type, self_v_cache_size, value_cache_}},
-            {"src_cache_indirection",
-             Tensor{
-                 MEMORY_GPU, TYPE_INT32, {batch_size, beam_width_, max_seq_len_}, cache_indirections_[src_indir_idx]}},
-            {"local_batch_size", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &tmp_local_batch_size}},
-            {"beam_search_diversity_rate", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &beam_search_diversity_rate_}},
-            {"temperature", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &temperature_}},
-            {"len_penalty", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &len_penalty_}},
-            {"repetition_penalty", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &repetition_penalty_}}};
+        TensorMap dynamic_decode_input_tensors(
+            {{"logits", Tensor{MEMORY_GPU, data_type, {batch_size, beam_width_, vocab_size_padded_}, logits_buf_}},
+             {"embedding_bias",
+              Tensor{MEMORY_GPU, data_type, {vocab_size_padded_}, is_bf16 ? nullptr : padded_embedding_bias_ptr_}},
+             {"end_id", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size}, end_ids_buf_}},
+             {"step", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &step}},
+             {"max_input_length", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &max_input_length}},
+             // {"input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size, beam_width_}, nullptr}},
+             {"ite", Tensor{MEMORY_CPU, TYPE_UINT32, {1}, &tmp_ite}},
+             {"src_cache_indirection",
+              Tensor{
+                  MEMORY_GPU, TYPE_INT32, {batch_size, beam_width_, max_seq_len_}, cache_indirections_[src_indir_idx]}},
+             {"local_batch_size", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &tmp_local_batch_size}},
+             {"beam_search_diversity_rate", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &beam_search_diversity_rate_}},
+             {"temperature", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &temperature_}},
+             {"len_penalty", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &len_penalty_}},
+             {"repetition_penalty", Tensor{MEMORY_CPU, TYPE_FP32, {1}, &repetition_penalty_}}});
 
         // TODO(bhsueh) Need to modify the forward function to use unordered_map
         // for (auto t = input_tensors->begin(); t != input_tensors->end(); ++t) {
@@ -488,17 +539,17 @@ void Decoding<T>::forward(std::vector<Tensor>*       output_tensors,
         // }
 
         // common outputs
-        std::unordered_map<std::string, Tensor> dynamic_decode_output_tensors{
-            {"output_ids", Tensor{MEMORY_GPU, TYPE_INT32, {max_seq_len_, batch_size, beam_width_}, output_ids_buf_}},
-            {"finished", Tensor{MEMORY_GPU, TYPE_BOOL, {batch_size * beam_width_}, finished_buf_}},
-            {"cum_log_probs", Tensor{MEMORY_GPU, TYPE_FP32, {batch_size * beam_width_}, cum_log_probs_}},
-            {"parent_ids", Tensor{MEMORY_GPU, TYPE_INT32, {max_seq_len_, batch_size, beam_width_}, parent_ids_buf_}},
-            {"sequence_length", output_tensors->at(2)},
-            {"tgt_key_cache", Tensor{MEMORY_GPU, data_type, self_k_cache_size, key_cache_}},
-            {"tgt_value_cache", Tensor{MEMORY_GPU, data_type, self_v_cache_size, value_cache_}},
-            {"tgt_cache_indirection",
-             Tensor{
-                 MEMORY_GPU, TYPE_INT32, {batch_size, beam_width_, max_seq_len_}, cache_indirections_[tgt_indir_idx]}}};
+        TensorMap dynamic_decode_output_tensors(
+            {{"output_ids", Tensor{MEMORY_GPU, TYPE_INT32, {max_seq_len_, batch_size, beam_width_}, output_ids_buf_}},
+             {"finished", Tensor{MEMORY_GPU, TYPE_BOOL, {batch_size * beam_width_}, finished_buf_}},
+             {"cum_log_probs", Tensor{MEMORY_GPU, TYPE_FP32, {batch_size * beam_width_}, cum_log_probs_}},
+             {"parent_ids", Tensor{MEMORY_GPU, TYPE_INT32, {max_seq_len_, batch_size, beam_width_}, parent_ids_buf_}},
+             {"sequence_length", output_tensors->at("sequence_length")},
+             {"tgt_cache_indirection",
+              Tensor{MEMORY_GPU,
+                     TYPE_INT32,
+                     {batch_size, beam_width_, max_seq_len_},
+                     cache_indirections_[tgt_indir_idx]}}});
 
         // TODO(bhsueh) Need to modify the forward function to use unordered_map
         // for (auto t = output_tensors->begin(); t != output_tensors->end(); ++t) {
@@ -509,17 +560,18 @@ void Decoding<T>::forward(std::vector<Tensor>*       output_tensors,
     }
 
     // minus the sequence length of unfinished sentence by 1 since we start from 1.
-    invokeMinusUnfinishedSeqlen((int*)output_tensors->at(2).data, finished_buf_, batch_size * beam_width_, stream_);
+    invokeMinusUnfinishedSeqlen(
+        output_tensors->at("sequence_length").getPtr<int>(), finished_buf_, batch_size * beam_width_, stream_);
 
     if (beam_width_ > 1) {
         // For beam search, do gather_tree
         // TODO(bhsueh) remove the output of parent_ids
-        cudaD2Dcpy((int*)output_tensors->at(1).data,
+        cudaD2Dcpy(output_tensors->at("parent_ids").getPtr<int>(),
                    parent_ids_buf_ + batch_size * beam_width_,
                    batch_size * beam_width_ * (max_seq_len_ - 1));
 
-        invokeGatherTree((int*)output_tensors->at(0).data,
-                         (int*)output_tensors->at(2).data,
+        invokeGatherTree(output_tensors->at("output_ids").getPtr<int>(),
+                         output_tensors->at("sequence_length").getPtr<int>(),
                          max_seq_len_ - 1,
                          batch_size,
                          beam_width_,
@@ -530,9 +582,17 @@ void Decoding<T>::forward(std::vector<Tensor>*       output_tensors,
     }
     else {
         // For sampling, only copy the results to output_tensor
-        cudaD2Dcpy((int*)output_tensors->at(0).data,
+        cudaD2Dcpy(output_tensors->at("output_ids").getPtr<int>(),
                    output_ids_buf_ + batch_size * beam_width_,
                    batch_size * beam_width_ * (max_seq_len_ - 1));
+    }
+
+    // Return the cumulative log probability if requested.
+    if (output_tensors->isExist("cum_log_probs")) {
+        Tensor cum_log_probs = output_tensors->at("cum_log_probs");
+        FT_CHECK_WITH_INFO(cum_log_probs.size() == batch_size * beam_width_,
+                           "The shape of cum_log_probs does not match with batch_size x beam_width.");
+        cudaD2Dcpy(cum_log_probs.getPtr<float>(), cum_log_probs_, batch_size * beam_width_);
     }
 }
 

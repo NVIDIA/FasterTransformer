@@ -18,12 +18,12 @@
 # FasterTransformer.
 # -------------------------------------------------- #
 
-ARG DOCKER_VERSION=22.07
+ARG DOCKER_VERSION=22.09
 ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:${DOCKER_VERSION}-py3
 FROM ${BASE_IMAGE}
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends bc && \
+    apt-get install -y --no-install-recommends bc git-lfs&& \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -34,7 +34,7 @@ ADD . /workspace/FasterTransformer
 RUN git submodule update --init --recursive && \
     git clone https://github.com/NVIDIA/NeMo /workspace/FasterTransformer/3rdparty/NeMo && \
     cd /workspace/FasterTransformer/3rdparty/NeMo && \
-    git checkout 66c7677cd4a68d78965d4905dd1febbf5385dff3 && \
+    git checkout e01ab855422126f2fbef3aeecba95cb1a756a05d && \
     cd -
 
 # Originally, we need to re-install the apex package for NeMo.
@@ -46,7 +46,9 @@ RUN git submodule update --init --recursive && \
 #     pip install 3rdparty/NeMo[nlp]
 RUN pip install 3rdparty/NeMo[nlp]
 
+ENV NCCL_LAUNCH_MODE=GROUP
 ARG SM=80
+ARG BUILD_MIXED_GEMM=OFF
 ARG FORCE_BACKEND_REBUILD=0
 ARG SPARSITY_SUPPORT=OFF
 ARG BUILD_MULTI_GPU=ON
@@ -54,6 +56,7 @@ RUN mkdir /var/run/sshd -p && \
     mkdir build -p && cd build && \
     wget https://developer.download.nvidia.com/compute/libcusparse-lt/0.1.0/local_installers/libcusparse_lt-linux-x86_64-0.1.0.2.tar.gz && \
     tar -xzvf libcusparse_lt-linux-x86_64-0.1.0.2.tar.gz && \
-    cmake -DSM=${SM} -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON -DSPARSITY_SUPPORT=${SPARSITY_SUPPORT} -DMEASURE_BUILD_TIME=ON \ 
-        -DCUSPARSELT_PATH=/workspace/FasterTransformer/build/libcusparse_lt/ -DBUILD_MULTI_GPU=${BUILD_MULTI_GPU} -DBUILD_TRT=ON .. && \
+    cmake -DSM=${SM} -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON -DSPARSITY_SUPPORT=${SPARSITY_SUPPORT} -DMEASURE_BUILD_TIME=ON \
+      -DBUILD_CUTLASS_MIXED_GEMM=${BUILD_MIXED_GEMM} -DCUSPARSELT_PATH=/workspace/FasterTransformer/build/libcusparse_lt/ \
+      -DBUILD_MULTI_GPU=${BUILD_MULTI_GPU} -DBUILD_TRT=ON .. && \
     make -j"$(grep -c ^processor /proc/cpuinfo)"

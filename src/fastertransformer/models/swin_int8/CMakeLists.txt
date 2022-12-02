@@ -18,14 +18,16 @@ add_library(SwinBlockINT8 STATIC SwinBlockINT8.cc)
 set_property(TARGET SwinBlockINT8 PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET SwinBlockINT8 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(SwinBlockINT8 PUBLIC -lcublasLt -lcublas -lcudart 
-    WindowAttentionINT8 activation_int8_kernels add_residual_kernels tensor)
+    WindowAttentionINT8 activation_int8_kernels add_residual_kernels tensor cuda_utils logger image_shift_partition_kernels)
 
 add_library(SwinBasicLayerINT8 STATIC SwinBasicLayerINT8.cc)
 set_property(TARGET SwinBasicLayerINT8 PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET SwinBasicLayerINT8 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(SwinBasicLayerINT8 PUBLIC -lcublasLt -lcublas -lcudart SwinBlockINT8 dequantize_kernels tensor)
+target_link_libraries(SwinBasicLayerINT8 PUBLIC -lcublasLt -lcublas -lcudart
+                      SwinBlockINT8 dequantize_kernels tensor cuda_utils logger image_merge_kernels)
 
 add_library(SwinINT8 STATIC SwinINT8.cc)
 set_property(TARGET SwinINT8 PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET SwinINT8 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(SwinINT8 PUBLIC -lcudart SwinBasicLayerINT8 activation_kernels memory_utils tensor)
+target_link_libraries(SwinINT8 PUBLIC -lcudart SwinBasicLayerINT8 activation_kernels
+                      memory_utils tensor cuda_utils logger)

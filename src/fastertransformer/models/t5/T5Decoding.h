@@ -49,10 +49,13 @@ private:
     const size_t         num_layer_;
     const size_t         vocab_size_;
     const size_t         num_bucket_;
+    const size_t         expert_num_;
     const size_t         max_distance_;
+    const size_t         moe_k_;
     const ActivationType activation_type_;
     float                q_scaling_;
     const bool           tie_word_embeddings_;
+    std::vector<int64_t> moe_layer_index_;
 
     const int start_id_;
     const int end_id_;
@@ -124,6 +127,9 @@ protected:
     const T*   encoder_output_ptr_          = nullptr;
     const int* encoder_sequence_length_ptr_ = nullptr;
 
+    const bool     using_beam_hyps = true;
+    BeamHypotheses beam_hyps_;
+
 public:
     T5Decoding(size_t                              max_batch_size,
                size_t                              max_seq_len,
@@ -136,7 +142,9 @@ public:
                size_t                              num_layer,
                size_t                              vocab_size,
                size_t                              num_bucket,
+               size_t                              expert_num,
                size_t                              max_distance,
+               size_t                              moe_k,
                float                               q_scaling,
                int                                 start_id,
                int                                 end_id,
@@ -146,6 +154,7 @@ public:
                float                               temperature,
                float                               len_penalty,
                float                               repetition_penalty,
+               std::vector<int64_t>                moe_layer_index,
                cudaStream_t                        stream,
                cublasMMWrapper*                    cublas_wrapper,
                IAllocator*                         allocator,
@@ -169,6 +178,8 @@ public:
     void forward(std::unordered_map<std::string, Tensor>*       output_tensors,
                  const std::unordered_map<std::string, Tensor>* input_tensors,
                  const T5DecodingWeight<T>*                     Decoding_weights);
+
+    void forward(TensorMap* output_tensors, TensorMap* input_tensors, const T5DecodingWeight<T>* Decoding_weights);
 
     void setStream(cudaStream_t stream) override;
 };

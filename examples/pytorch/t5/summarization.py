@@ -63,8 +63,12 @@ def main():
                         help='pipeline parallel size')
     parser.add_argument('--rougeLsum_threshold', type=float,
                         help='Threshold of FT rougeLsum score')
+    parser.add_argument("--top_k", type=int, default=1, help="top k for sampling")
+    parser.add_argument("--top_p", type=float, default=0.0, help="top p for sampling")
+    parser.add_argument("--beam_width", type=int, default=1, help="beam width for beam search")
 
     args = parser.parse_args()
+    np.random.seed(0) # rouge score use sampling to compute the score
 
     if dist.is_mpi_available():
         try:
@@ -171,11 +175,11 @@ def main():
         )
 
         start_time = datetime.datetime.now()
-        ft_encoder_weight.load_from_bin(ft_model_location)
+        ft_encoder_weight.load_from_bin(ft_model_location, "Megatron")
         stop_time = datetime.datetime.now()
         print(f"[INFO] load FT encoder model spend {(stop_time - start_time).total_seconds()} sec")
         start_time = datetime.datetime.now()
-        ft_decoding_weight.load_from_bin(ft_model_location)
+        ft_decoding_weight.load_from_bin(ft_model_location, "Megatron")
         stop_time = datetime.datetime.now()
         print(f"[INFO] load FT decoding model spend {(stop_time - start_time).total_seconds()} sec")
         if args.data_type == "fp32":
@@ -197,9 +201,11 @@ def main():
                                  encoder_config.d_kv, encoder_config.d_ff,
                                  encoder_config.d_model, remove_padding, encoder_config.num_layers,
                                  encoder_config.relative_attention_num_buckets,
+                                 0, # num_experts
+                                 [], # moe_layer_index
                                  relative_attention_max_distance, False, q_scaling, tensor_para_size,
                                  pipeline_para_size, t5_with_bias,
-                                 position_embedding_type, activation_type=activation_type)
+                                 position_embedding_type, moe_k=0, activation_type=activation_type)
 
         ft_decoding = FTT5Decoding(ft_decoding_weight.w, args.lib_path,
                                    decoder_config.num_heads, decoder_config.d_kv,
@@ -207,19 +213,19 @@ def main():
                                    decoder_config.d_model, decoder_config.num_layers,
                                    decoder_config.decoder_start_token_id, decoder_config.eos_token_id,
                                    decoder_config.vocab_size, q_scaling,
-                                   decoder_config.relative_attention_num_buckets, max_distance=relative_attention_max_distance,
+                                   decoder_config.relative_attention_num_buckets,
+                                   0, # num_experts
+                                   [], # moe_layer_index
+                                   max_distance=relative_attention_max_distance,
                                    tensor_para_size=tensor_para_size, pipeline_para_size=pipeline_para_size,
                                    t5_with_bias=t5_with_bias, position_embedding_type=position_embedding_type,
-                                   activation_type=activation_type, tie_word_embeddings=tie_word_embeddings)
+                                   moe_k=0, activation_type=activation_type, tie_word_embeddings=tie_word_embeddings)
 
         ft_t5 = FTT5(ft_encoder, ft_decoding)
 
-    if disable_summarize:
-        top_k = 1
-        output_len = args.max_seq_len
-    else:
-        top_k = 1
-        output_len = args.max_seq_len
+    beam_width = args.beam_width
+    top_k = args.top_k
+    top_p = args.top_p
 
     def summarize_ft(datapoint):
         if not disable_summarize:
@@ -234,17 +240,18 @@ def main():
         with torch.no_grad():
             output, ft_output_len = ft_t5(line_tokens,
                                           None,
-                                          1,
-                                          output_len,
+                                          beam_width,
+                                          args.max_seq_len,
                                           top_k,
-                                          0.0,
+                                          top_p,
                                           beam_search_diversity_rate=0.0,
                                           is_return_output_log_probs=False,
+                                          len_penalty=1.0,
                                           is_return_cum_log_probs=False)
-        tokens = output[0][0]
+        tokens = [output[0][beam_idx][:ft_output_len[0][beam_idx]] for beam_idx in range(beam_width)]
 
-        output_lines = tokenizer.decode(output[0][0][:ft_output_len[0][0]])
-        output_lines = ".".join(output_lines.split('.')[:4]) + "."
+        output_lines = [tokenizer.decode(output[0][beam_idx][:ft_output_len[0][beam_idx]], skip_special_tokens=True) for beam_idx in range(beam_width)]
+        output_lines = [".".join(output_line.split('.')[:4]) + "." for output_line in output_lines]
         return output_lines, tokens
 
     def summarize_hf(datapoint):
@@ -259,22 +266,32 @@ def main():
         line_encoded = line_encoded.cuda()
 
         with torch.no_grad():
-            output = model.generate(line_encoded,
-                                    max_length=output_len + 1,
-                                    top_k=top_k,
-                                    eos_token_id=tokenizer.eos_token_id,
-                                    pad_token_id=tokenizer.pad_token_id)
-
-        tokens = output[0].cpu().numpy()
-        output_lines = tokenizer.decode(output[0])
-        output_lines = ".".join(output_lines.split('.')[:4]) + "."
+            if beam_width > 1:
+                output = model.generate(line_encoded,
+                                        max_length=args.max_seq_len + 1,
+                                        num_beams=beam_width,
+                                        num_return_sequences=beam_width,
+                                        early_stopping=True,
+                                        eos_token_id=tokenizer.eos_token_id,
+                                        pad_token_id=tokenizer.pad_token_id)
+            else:
+                output = model.generate(line_encoded,
+                                        max_length=args.max_seq_len + 1,
+                                        do_sample=True,
+                                        top_k=top_k if top_k > 0 else None,
+                                        top_p=top_p if top_p > 0.0 else None,
+                                        eos_token_id=tokenizer.eos_token_id,
+                                        pad_token_id=tokenizer.pad_token_id)
+        tokens = [output[beam_idx].cpu().numpy() for beam_idx in range(beam_width)]
+        output_lines = [tokenizer.decode(output[beam_idx], skip_special_tokens=True) for beam_idx in range(beam_width)]
+        output_lines = [".".join(output_line.split('.')[:4]) + "." for output_line in output_lines]
         return output_lines, tokens
 
     if disable_summarize:
         tokens = []
     else:
-        metric_ft = load_metric("rouge")
-        metric_hf = load_metric("rouge")
+        metric_fts = [load_metric("rouge") for beam_idx in range(beam_width)]
+        metric_hfs = [load_metric("rouge") for beam_idx in range(beam_width)]
 
     if not disable_summarize:
         datapoint = dataset_cnn['test'][0]
@@ -287,7 +304,8 @@ def main():
                 print('\n Highlights : ', datapoint['highlights'])
                 print('\n Summary : ', summary_ft)
                 print('---------------------------------------------------------')
-                metric_ft.add_batch(predictions=[summary_ft], references=[datapoint['highlights']])
+                for i in range(beam_width):
+                    metric_fts[i].add_batch(predictions=[summary_ft[i]], references=[[datapoint['highlights']]])
 
         if test_hf and rank == 0:
             summary_hf, _ = summarize_hf(datapoint)
@@ -297,7 +315,8 @@ def main():
             print('\n Highlights : ', datapoint['highlights'])
             print('\n Summary : ', summary_hf)
             print('---------------------------------------------------------')
-            metric_hf.add_batch(predictions=[summary_hf], references=[datapoint['highlights']])
+            for i in range(beam_width):
+                metric_hfs[i].add_batch(predictions=[summary_hf[i]], references=[[datapoint['highlights']]])
 
     ft_time = 0.0
     hf_time = 0.0
@@ -320,13 +339,15 @@ def main():
             if rank == 0:
                 if not disable_summarize:
                     if test_ft:
-                        metric_ft.add_batch(predictions=[summary_ft], references=[datapoint['highlights']])
+                        for i in range(beam_width):
+                            metric_fts[i].add_batch(predictions=[summary_ft[i]], references=[[datapoint['highlights']]])
                     if test_hf:
-                        metric_hf.add_batch(predictions=[summary_hf], references=[datapoint['highlights']])
+                        for i in range(beam_width):
+                            metric_hfs[i].add_batch(predictions=[summary_hf[i]], references=[[datapoint['highlights']]])
                 else:
                     tokens.append((tokens_ft, tokens_hf))
-        except:
-            print('Error with datapoint : ', data_point_idx)
+        except Exception as e:
+            print(f'Error with datapoint: {data_point_idx} with error {e}')
 
     def compute_exact_match(tokens, n_tokens=[1, 10, 25, 50, 100, 150, 200, 250]):
         em_metrics = []
@@ -350,21 +371,29 @@ def main():
     if rank == 0:
         if not disable_summarize:
             if test_ft:
-                computed_metrics_ft = metric_ft.compute()
+                computed_metrics_fts = [metric_ft.compute() for metric_ft in metric_fts]
 
             if test_hf:
-                computed_metrics_hf = metric_hf.compute()
+                computed_metrics_hfs = [metric_hf.compute() for metric_hf in metric_hfs]
 
                 print(f'Hugging Face (total latency: {hf_time} sec)')
-                for key in computed_metrics_hf.keys():
-                    print(f'{key} : {computed_metrics_hf[key].mid[2]*100}')
+                for i in range(beam_width):
+                    computed_metrics_hf = computed_metrics_hfs[i]
+                    print(f"beam_id: {i}")
+                    for key in computed_metrics_hf.keys():
+                        print(f'{key} : {computed_metrics_hf[key].mid[2]*100}')
+                    print()
 
             if test_ft:
                 print(f'Faster Transformers (total latency: {ft_time} sec)')
-                for key in computed_metrics_ft.keys():
-                    print(f'{key} : {computed_metrics_ft[key].mid[2]*100}')
+                for i in range(beam_width):
+                    computed_metrics_ft = computed_metrics_fts[i]
+                    print(f"beam_id: {i}")
+                    for key in computed_metrics_ft.keys():
+                        print(f'{key} : {computed_metrics_ft[key].mid[2]*100}')
+                    print()
                 if args.rougeLsum_threshold != None:
-                    assert computed_metrics_ft["rougeLsum"].mid[2] * \
+                    assert computed_metrics_fts[0]["rougeLsum"].mid[2] * \
                         100 >= args.rougeLsum_threshold, "[INFO] TEST FAIL !"
                     print(f"[INFO] TEST PASS !")
         else:

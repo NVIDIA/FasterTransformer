@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -23,32 +23,34 @@
 namespace fastertransformer {
 
 template<typename T>
-void UnfusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                                           const std::vector<fastertransformer::Tensor>* input_tensors,
-                                           const AttentionWeight<T>*                     attention_weights)
+void UnfusedAttentionLayerINT8<T>::forward(TensorMap*                output_tensors,
+                                           TensorMap*                input_tensors,
+                                           const AttentionWeight<T>* attention_weights)
 {
-
-    // input_tensors: [input (token_num, hidden_dimension),
-    //                 attention_mask (batch, 1, seqlen, seqlen),
-    //                 padding_offset (token_num)]
-    // output_tensors: [output (token_num, hidden_dimension)]
+    // input_tensors:
+    //      input_query [token_num, hidden_dimension]
+    //      attention_mask [batch, 1, seqlen, seqlen]
+    //      padding_offset [token_num], (optional)
+    //
+    // output_tensors:
+    //      hidden_features [token_num, hidden_dimension]
     // If padding_offset.data is nullptr, then not remove padding
 
     const ScaleList*     scale_list     = ((const AttentionINT8Weight<T>*)attention_weights)->scale_list_ptr;
     cublasINT8MMWrapper* cublas_wrapper = (cublasINT8MMWrapper*)cublas_wrapper_;
 
-    FT_CHECK(isValidBatchSize(input_tensors->at(1).shape[0]));
-    FT_CHECK(isValidSeqLen(input_tensors->at(1).shape[2]));
+    FT_CHECK(isValidBatchSize(input_tensors->at("attention_mask").shape[0]));
+    FT_CHECK(isValidSeqLen(input_tensors->at("attention_mask").shape[2]));
     allocateBuffer();
 
-    int32_t*      attention_out  = (int32_t*)output_tensors->at(0).data;
-    const int8_t* from_tensor    = (const int8_t*)input_tensors->at(0).data;
-    const T*      attention_mask = (const T*)input_tensors->at(1).data;
-    const int*    padding_offset = (const int*)input_tensors->at(2).data;
+    int32_t*      attention_out  = output_tensors->getPtr<int32_t>("hidden_features");
+    const int8_t* from_tensor    = input_tensors->getPtr<int8_t>("input_query");
+    const T*      attention_mask = input_tensors->getPtr<T>("attention_mask");
+    const int*    padding_offset = input_tensors->getPtr<int>("padding_offset", nullptr);
 
-    const int request_batch_size = input_tensors->at(1).shape[0];
-    const int request_seq_len    = input_tensors->at(1).shape[2];
-    const int m                  = input_tensors->at(0).shape[0];
+    const int request_batch_size = input_tensors->at("attention_mask").shape[0];
+    const int request_seq_len    = input_tensors->at("attention_mask").shape[2];
+    const int m                  = input_tensors->at("input_query").shape[0];
     const int k                  = hidden_units_;
     const int n                  = hidden_units_;
     int       m_tmp              = m;

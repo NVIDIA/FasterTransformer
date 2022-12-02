@@ -62,12 +62,15 @@ private:
                         const size_t max_request_output_len);
     void freeBuffer();
 
-    int* d_input_ids_                = nullptr;
-    int* d_input_lengths_            = nullptr;
-    int* d_input_bad_words_          = nullptr;
-    int* d_input_stop_words_         = nullptr;
-    int* d_request_prompt_lengths_   = nullptr;
-    T*   d_request_prompt_embedding_ = nullptr;
+    int*   d_input_ids_                = nullptr;
+    int*   d_input_lengths_            = nullptr;
+    int*   d_input_bad_words_          = nullptr;
+    int*   d_input_stop_words_         = nullptr;
+    int*   d_request_prompt_lengths_   = nullptr;
+    T*     d_request_prompt_embedding_ = nullptr;
+    float* d_top_p_decay_              = nullptr;
+    float* d_top_p_min_                = nullptr;
+    int*   d_top_p_reset_ids_          = nullptr;
 
     int*   d_output_ids_       = nullptr;
     int*   d_sequence_lengths_ = nullptr;

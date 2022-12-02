@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,8 @@
  */
 
 #include "src/fastertransformer/kernels/layernorm_kernels.h"
+#include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/fastertransformer/utils/logger.h"
 #include "src/fastertransformer/utils/memory_utils.h"
 #include <cuda_profiler_api.h>
 #include <sys/time.h>
@@ -137,15 +139,16 @@ void layernorm_test(const int m, const int n)
 
     // warmup
     for (int i = 0; i < 1000; i++) {
-        invokeGeneralLayerNorm<T>(output_baseline, input, gamma, beta, layernorm_eps, m, n, stream);
-        invokeGeneralLayerNorm<T>(output_opt, input, gamma, beta, layernorm_eps, m, n, stream, true);
+        invokeGeneralLayerNorm<T>(output_baseline, input, gamma, beta, layernorm_eps, m, n, (float*)nullptr, 0, stream);
+        invokeGeneralLayerNorm<T>(
+            output_opt, input, gamma, beta, layernorm_eps, m, n, (float*)nullptr, 0, stream, true);
     }
 
     struct timeval start, end;
     cudaDeviceSynchronize();
     gettimeofday(&start, NULL);
     for (int i = 0; i < ite; i++) {
-        invokeGeneralLayerNorm<T>(output_baseline, input, gamma, beta, layernorm_eps, m, n, stream);
+        invokeGeneralLayerNorm<T>(output_baseline, input, gamma, beta, layernorm_eps, m, n, (float*)nullptr, 0, stream);
     }
     cudaDeviceSynchronize();
     gettimeofday(&end, NULL);
@@ -155,7 +158,8 @@ void layernorm_test(const int m, const int n)
     cudaDeviceSynchronize();
     gettimeofday(&start_2, NULL);
     for (int i = 0; i < ite; i++) {
-        invokeGeneralLayerNorm<T>(output_opt, input, gamma, beta, layernorm_eps, m, n, stream, true);
+        invokeGeneralLayerNorm<T>(
+            output_opt, input, gamma, beta, layernorm_eps, m, n, (float*)nullptr, 0, stream, true);
     }
     cudaDeviceSynchronize();
     gettimeofday(&end_2, NULL);
@@ -196,10 +200,39 @@ void add_bias_residual_layernorm_test(const int m, const int n)
     const int ite        = 5000;  // 5000;
 
     // verify correctness
-    invokeGeneralAddBiasResidualPreLayerNorm(
-        output_baseline, normed_output_baseline, input, gamma, beta, bias, layernorm_eps, m, n, stream, 0);
-    invokeGeneralAddBiasResidualPreLayerNorm(
-        output_opt, normed_output_opt, input, gamma, beta, bias, layernorm_eps, m, n, stream, opt_version);
+    invokeGeneralAddBiasResidualPreLayerNorm(output_baseline,
+                                             normed_output_baseline,
+                                             output_baseline,
+                                             input,
+                                             gamma,
+                                             beta,
+                                             bias,
+                                             layernorm_eps,
+                                             m,
+                                             n,
+                                             (float*)nullptr,
+                                             (float*)nullptr,
+                                             (float*)nullptr,
+                                             0,
+                                             stream,
+                                             0);
+
+    invokeGeneralAddBiasResidualPreLayerNorm(output_opt,
+                                             normed_output_opt,
+                                             output_opt,
+                                             input,
+                                             gamma,
+                                             beta,
+                                             bias,
+                                             layernorm_eps,
+                                             m,
+                                             n,
+                                             (float*)nullptr,
+                                             (float*)nullptr,
+                                             (float*)nullptr,
+                                             0,
+                                             stream,
+                                             opt_version);
     float threshold = 0.0f;
     if (std::is_same<T, float>::value) {
         threshold = 1e-6f;
@@ -222,18 +255,60 @@ void add_bias_residual_layernorm_test(const int m, const int n)
 
     // warmup
     for (int i = 0; i < warmup_ite; i++) {
-        invokeGeneralAddBiasResidualPreLayerNorm(
-            output_baseline, normed_output_baseline, input, gamma, beta, bias, layernorm_eps, m, n, stream, 0);
-        invokeGeneralAddBiasResidualPreLayerNorm(
-            output_opt, normed_output_opt, input, gamma, beta, bias, layernorm_eps, m, n, stream, opt_version);
+        invokeGeneralAddBiasResidualPreLayerNorm(output_baseline,
+                                                 normed_output_baseline,
+                                                 output_baseline,
+                                                 input,
+                                                 gamma,
+                                                 beta,
+                                                 bias,
+                                                 layernorm_eps,
+                                                 m,
+                                                 n,
+                                                 (float*)nullptr,
+                                                 (float*)nullptr,
+                                                 (float*)nullptr,
+                                                 0,
+                                                 stream,
+                                                 0);
+        invokeGeneralAddBiasResidualPreLayerNorm(output_opt,
+                                                 normed_output_opt,
+                                                 output_opt,
+                                                 input,
+                                                 gamma,
+                                                 beta,
+                                                 bias,
+                                                 layernorm_eps,
+                                                 m,
+                                                 n,
+                                                 (float*)nullptr,
+                                                 (float*)nullptr,
+                                                 (float*)nullptr,
+                                                 0,
+                                                 stream,
+                                                 opt_version);
     }
 
     struct timeval start, end;
     cudaDeviceSynchronize();
     gettimeofday(&start, NULL);
     for (int i = 0; i < ite; i++) {
-        invokeGeneralAddBiasResidualPreLayerNorm(
-            output_baseline, normed_output_baseline, input, gamma, beta, bias, layernorm_eps, m, n, stream, 0);
+        invokeGeneralAddBiasResidualPreLayerNorm(output_baseline,
+                                                 normed_output_baseline,
+                                                 output_baseline,
+                                                 input,
+                                                 gamma,
+                                                 beta,
+                                                 bias,
+                                                 layernorm_eps,
+                                                 m,
+                                                 n,
+                                                 (float*)nullptr,
+                                                 (float*)nullptr,
+                                                 (float*)nullptr,
+                                                 0,
+                                                 stream,
+                                                 0);
     }
     cudaDeviceSynchronize();
     gettimeofday(&end, NULL);
@@ -243,8 +318,22 @@ void add_bias_residual_layernorm_test(const int m, const int n)
     cudaDeviceSynchronize();
     gettimeofday(&start_2, NULL);
     for (int i = 0; i < ite; i++) {
-        invokeGeneralAddBiasResidualPreLayerNorm(
-            output_opt, normed_output_opt, input, gamma, beta, bias, layernorm_eps, m, n, stream, opt_version);
+        invokeGeneralAddBiasResidualPreLayerNorm(output_opt,
+                                                 normed_output_opt,
+                                                 output_opt,
+                                                 input,
+                                                 gamma,
+                                                 beta,
+                                                 bias,
+                                                 layernorm_eps,
+                                                 m,
+                                                 n,
+                                                 (float*)nullptr,
+                                                 (float*)nullptr,
+                                                 (float*)nullptr,
+                                                 0,
+                                                 stream,
+                                                 opt_version);
     }
     cudaDeviceSynchronize();
     gettimeofday(&end_2, NULL);

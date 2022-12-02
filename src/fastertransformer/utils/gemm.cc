@@ -1015,7 +1015,7 @@ std::shared_ptr<Gemm> createGemm(IAllocator* allocator, cudaStream_t stream, boo
         }
 #else
         throw GemmNotSupportedException("Sparsity support is not enabled. To enabled sparisty, "
-                                        "please provide `-DSPARSITY_SUPPORT` flag for compliation.");
+                                        "please provide `-DSPARSITY_SUPPORT` flag for compilation.");
 #endif
     }
     return gemm;

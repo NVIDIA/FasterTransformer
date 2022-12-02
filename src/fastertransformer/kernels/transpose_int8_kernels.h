@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 #pragma once
 
 #include "int8_utils.cuh"
+#include "src/fastertransformer/utils/Tensor.h"
 #include <assert.h>
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
@@ -90,5 +91,7 @@ void invokeTransposeCOL32ToRowRebuildPadding(int8_t*       dst,
                                              const float*  bmm2_deQFactor,
                                              const float*  out_scale_ptr,
                                              cudaStream_t  stream);
+
+void invokeTransposeInt8Tensor(const Tensor& x_t, const Tensor& x, cudaStream_t stream = 0);
 
 }  // namespace fastertransformer

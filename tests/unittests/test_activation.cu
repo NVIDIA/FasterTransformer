@@ -5,6 +5,7 @@
 #include "src/fastertransformer/kernels/activation_kernels.h"
 #include "src/fastertransformer/utils/cuda_utils.h"
 #include "src/fastertransformer/utils/memory_utils.h"
+#include "src/fastertransformer/utils/logger.h"
 
 #include "unittest_utils.h"
 
@@ -46,8 +47,19 @@ void testActivationKernel(TestCase tc)
     deviceMalloc(&output_opt1, m * n);
     deviceMalloc(&bias, n);
     cudaD2Dcpy(output_opt1, output_baseline, m * n);
-    invokeAddBiasGelu(output_baseline, bias, m, n, stream);
-    invokeAddBiasGeluV2(output_opt1, bias, m, n, stream);
+    invokeGenericActivation<GeluActivation>(output_baseline,
+                                            (const T*) bias,
+                                            (const T*) nullptr,
+                                            (const T*) nullptr,
+                                            (const int*) nullptr,
+                                            (const T*) nullptr,
+                                            m,
+                                            n,
+                                            0,
+                                            (const float*) nullptr,
+                                            (const float*) nullptr,
+                                            stream);
+    invokeAddBiasGeluV2(output_opt1, bias, (const int*) nullptr, (const T*) nullptr, m, n, stream);
     bool passed = checkResult(tc.name, output_baseline, output_opt1, m * n, true, true);
     FT_CHECK(passed);
 
@@ -55,22 +67,44 @@ void testActivationKernel(TestCase tc)
     CudaTimer cuda_timer_baseline(stream);
     // warmup
     for (int i = 0; i < ite; i++) {
-        invokeAddBiasGelu(output_baseline, bias, m, n, stream);
+        invokeGenericActivation<GeluActivation>(output_baseline,
+                                                (const T*) bias,
+                                                (const T*) nullptr,
+                                                (const T*) nullptr,
+                                                (const int*) nullptr,
+                                                (const T*) nullptr,
+                                                m,
+                                                n,
+                                                0,
+                                                (const float*) nullptr,
+                                                (const float*) nullptr,
+                                                stream);
     }
     cuda_timer_baseline.start();
     for (int i = 0; i < ite; i++) {
-        invokeAddBiasGelu(output_baseline, bias, m, n, stream);
+        invokeGenericActivation<GeluActivation>(output_baseline,
+                                                (const T*) bias,
+                                                (const T*) nullptr,
+                                                (const T*) nullptr,
+                                                (const int*) nullptr,
+                                                (const T*) nullptr,
+                                                m,
+                                                n,
+                                                0,
+                                                (const float*) nullptr,
+                                                (const float*) nullptr,
+                                                stream);
     }
     float total_time_baseline = cuda_timer_baseline.stop();
 
     CudaTimer cuda_timer_opt(stream);
     // warmup
     for (int i = 0; i < ite; i++) {
-        invokeAddBiasGeluV2(output_baseline, bias, m, n, stream);
+        invokeAddBiasGeluV2(output_baseline, bias, (const int*) nullptr, (const T*) nullptr, m, n, stream);
     }
     cuda_timer_opt.start();
     for (int i = 0; i < ite; i++) {
-        invokeAddBiasGeluV2(output_baseline, bias, m, n, stream);
+        invokeAddBiasGeluV2(output_baseline, bias, (const int*) nullptr, (const T*) nullptr, m, n, stream);
     }
     float total_time_opt = cuda_timer_opt.stop();
     FT_LOG_INFO("%s baseline_time: %f us, opt_time: %f us, speedup: %f (ite: %d)",

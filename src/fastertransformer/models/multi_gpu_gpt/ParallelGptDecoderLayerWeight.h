@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,15 +27,27 @@
 
 namespace fastertransformer {
 
+// The maximum value of sequence length, a random number larger than
+// the maximum length by our kernel support length (4096). This value
+// should be meaningful only for no positional encoding case.
+#define FT_SEQ_LEN_MAX (16384)
+
 struct gptVariantParams {
     // GPT default params
-    float          layernorm_eps              = 1e-6f;
-    LayerNormType  layernorm_type             = LayerNormType::pre_layernorm;
-    ActivationType activation_type            = ActivationType::Gelu;
-    bool           has_post_decoder_layernorm = true;
+    float          layernorm_eps   = 1e-6f;
+    LayerNormType  layernorm_type  = LayerNormType::pre_layernorm;
+    ActivationType activation_type = ActivationType::Gelu;
+    // Whether to have a learnt positional encoding.
+    bool has_positional_encoding = true;
+    // A layernom just after the word embedding and before the decoder.
+    bool has_pre_decoder_layernorm = false;
+    // A layernom after the decoder.
+    bool has_post_decoder_layernorm = true;
     // detoxification adapters. refer to
     bool   has_adapters       = false;
     size_t adapter_inter_size = 0;
+    // Whether to use the attention linear positional bias
+    bool use_attention_linear_bias = false;
 };
 
 template<typename T>
@@ -57,6 +69,7 @@ public:
     void compress_weights(cublasMMWrapper& cublas_wrapper, int hidden_dim);
 #endif
     void transposeCalibrateQuantizeWeight();
+    void transposeWeight();
 
     LayerNormWeight<T> pre_layernorm_weights;
     AttentionWeight<T> self_attention_weights;
@@ -66,6 +79,7 @@ public:
     FfnWeight<T>       after_ffn_adapter_weights;
 
 private:
+    void copyFrom(const ParallelGptDecoderLayerWeight& other);
     void setWeightPtr();
     void mallocWeights();
 
@@ -82,10 +96,13 @@ protected:
 
     std::vector<T*> weights_ptr = std::vector<T*>(20, nullptr);
 
-    std::vector<int8_t*> int8_weights_ptr = std::vector<int8_t*>(8, nullptr);
+    std::vector<int8_t*> int8_weights_ptr      = std::vector<int8_t*>(8, nullptr);
+    std::vector<T*>      weight_only_scale_ptr = std::vector<T*>(8, nullptr);
 
-    std::vector<float*> scale_ptr = std::vector<float*>(8, nullptr);
-    cudaStream_t        stream_   = 0;
+    std::vector<float*> scale_ptr       = std::vector<float*>(8, nullptr);
+    std::vector<float*> scale_out_ptr   = std::vector<float*>(8, nullptr);
+    std::vector<float*> scale_inter_ptr = std::vector<float*>(8, nullptr);
+    cudaStream_t        stream_         = 0;
 
 #ifdef SPARSITY_ENABLED
     std::vector<T*> sp_weights_ptr        = std::vector<T*>(8, nullptr);

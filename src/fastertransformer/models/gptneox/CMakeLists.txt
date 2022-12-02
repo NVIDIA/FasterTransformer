@@ -17,7 +17,7 @@ cmake_minimum_required(VERSION 3.8)
 add_library(GptNeoXDecoderLayerWeight STATIC GptNeoXDecoderLayerWeight.cc)
 set_property(TARGET GptNeoXDecoderLayerWeight PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET GptNeoXDecoderLayerWeight PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(GptNeoXDecoderLayerWeight PUBLIC memory_utils)
+target_link_libraries(GptNeoXDecoderLayerWeight PUBLIC memory_utils cuda_utils logger)
 
 add_library(GptNeoXDecoder STATIC GptNeoXDecoder.cc)
 set_property(TARGET GptNeoXDecoder PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -29,7 +29,9 @@ target_link_libraries(GptNeoXDecoder PUBLIC -lcudart cublasMMWrapper
                       add_residual_kernels
                       GptNeoXDecoderLayerWeight
                       tensor
-                      nccl_utils)
+                      nccl_utils
+                      cuda_utils
+                      logger)
 
 add_library(GptNeoXContextDecoder STATIC GptNeoXContextDecoder.cc)
 set_property(TARGET GptNeoXContextDecoder PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -41,12 +43,14 @@ target_link_libraries(GptNeoXContextDecoder PUBLIC -lcudart cublasMMWrapper
                       add_residual_kernels
                       gpt_kernels
                       tensor
-                      nccl_utils)
+                      nccl_utils
+                      cuda_utils
+                      logger)
 
 add_library(GptNeoXWeight STATIC GptNeoXWeight.cc)
 set_property(TARGET GptNeoXWeight PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET GptNeoXWeight PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(GptNeoXWeight PUBLIC GptNeoXDecoderLayerWeight)
+target_link_libraries(GptNeoXWeight PUBLIC GptNeoXDecoderLayerWeight cuda_utils logger)
 
 add_library(GptNeoX STATIC GptNeoX.cc)
 set_property(TARGET GptNeoX PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -60,4 +64,6 @@ target_link_libraries(GptNeoX PUBLIC -lcudart
                       BaseBeamSearchLayer
                       bert_preprocess_kernels
                       tensor
-                      GptNeoXWeight)
+                      GptNeoXWeight
+                      cuda_utils
+                      logger)

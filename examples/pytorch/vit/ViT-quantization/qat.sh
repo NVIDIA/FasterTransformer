@@ -1,4 +1,4 @@
-python -m torch.distributed.launch --nproc_per_node 1 \
+python -m torch.distributed.launch --nproc_per_node 4 \
     --master_port 12345 main.py \
     --train \
     --name vit \
@@ -11,6 +11,6 @@ python -m torch.distributed.launch --nproc_per_node 1 \
     --teacher $CKPT_DIR/ViT-B_16.npz \
     --output qat_output \
     --quant-mode ft2\
-    --batch-size 16 \
-    --num-epochs 5 \
-    --qat-lr 1e-4
+    --batch-size 8 \
+    --num-epochs 10 \
+    --qat-lr 1e-3

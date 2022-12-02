@@ -126,9 +126,7 @@ void BaseBeamSearchLayer<T>::freeBuffer()
 }
 
 template<typename T>
-void BaseBeamSearchLayer<T>::setup(const size_t                                   batch_size,
-                                   const size_t                                   beam_width,
-                                   const std::unordered_map<std::string, Tensor>* runtime_args)
+void BaseBeamSearchLayer<T>::setup(const size_t batch_size, const size_t beam_width, TensorMap* runtime_args)
 {
     // do nothing.
 }
@@ -174,6 +172,14 @@ template<typename T>
 void BaseBeamSearchLayer<T>::forward(std::unordered_map<std::string, Tensor>*       output_tensors,
                                      const std::unordered_map<std::string, Tensor>* input_tensors)
 {
+    TensorMap input_map(*input_tensors);
+    TensorMap output_map(*output_tensors);
+    forward(&output_map, &input_map);
+}
+
+template<typename T>
+void BaseBeamSearchLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors)
+{
     // input_tensors:
     //      logits [local_batch_size, beam_width, vocab_size_padded]
     //      embedding_bias [vocab_size_padded]
@@ -181,7 +187,7 @@ void BaseBeamSearchLayer<T>::forward(std::unordered_map<std::string, Tensor>*   
     //      src_cache_indirection [local_batch_size, beam_width, max_seq_len]
     //      end_id [local_batch_size]
     //      max_input_length [1] on cpu
-    //      input_lengths [local_batch_size * beam_width]
+    //      input_lengths [local_batch_size * beam_width], optional
     //      ite [1] on cpu
     //      beam_search_diversity_rate [1] on cpu, optional
     //      temperature [1] on cpu, optional
@@ -190,47 +196,50 @@ void BaseBeamSearchLayer<T>::forward(std::unordered_map<std::string, Tensor>*   
 
     // output_tensors:
     //      output_ids [max_seq_len, batch_size, beam_width]
-    //      finished [local_batch_size * beam_width]
+    //      finished [local_batch_size * beam_width], optional
     //      cum_log_probs [local_batch_size * beam_width]
     //      parent_ids [max_seq_len, batch_size * beam_width]
-    //      sequence_length [local_batch_size * beam_width]
+    //      sequence_length [local_batch_size * beam_width], optional
     //      tgt_cache_indirection [local_batch_size, beam_width, max_seq_len]
     //      output_log_probs [local_batch_size * beam_width], optional
+    //      beam_hyps, optional
 
     FT_CHECK(input_tensors->size() >= 7);
-    FT_CHECK(output_tensors->size() >= 6);
+    FT_CHECK(output_tensors->size() >= 5);
     const int batch_size = output_tensors->at("output_ids").shape[1];
     const int beam_width = output_tensors->at("output_ids").shape[2];
     allocateBuffer(batch_size, beam_width);
 
-    const int step             = *((int*)input_tensors->at("step").data);
-    const int ite              = *((int*)input_tensors->at("ite").data);
+    const int step             = input_tensors->at("step").getVal<int>();
+    const int ite              = input_tensors->at("ite").getVal<int>();
     const int local_batch_size = input_tensors->at("logits").shape[0];
 
     const float temperature =
-        input_tensors->count("temperature") ? input_tensors->at("temperature").getVal<float>() : 1.0f;
+        input_tensors->isExist("temperature") ? input_tensors->at("temperature").getVal<float>() : 1.0f;
     const float repetition_penalty =
-        input_tensors->count("repetition_penalty") ? input_tensors->at("repetition_penalty").getVal<float>() : 1.0f;
-
-    invokeAddBiasApplyPenalties(step,
-                                (T*)input_tensors->at("logits").data,
-                                (const int*)output_tensors->at("output_ids").data + (step - 1) * batch_size * beam_width
-                                    + ite * local_batch_size * beam_width,
-                                ((const int*)output_tensors->at("output_ids").data),
-                                ((const int*)output_tensors->at("parent_ids").data),
-                                (const int*)input_tensors->at("input_lengths").data,
-                                (const T*)input_tensors->at("embedding_bias").data,
-                                ite,
-                                *(int*)input_tensors->at("max_input_length").data,
-                                local_batch_size,
-                                batch_size,
-                                beam_width,
-                                vocab_size_,
-                                vocab_size_padded_,
-                                (const int*)input_tensors->at("end_id").data,
-                                temperature,
-                                repetition_penalty,
-                                stream_);
+        input_tensors->isExist("repetition_penalty") ? input_tensors->at("repetition_penalty").getVal<float>() : 1.0f;
+    const T* embedding_bias =
+        input_tensors->isExist("embedding_bias") ? input_tensors->at("embedding_bias").getPtr<const T>() : nullptr;
+    invokeAddBiasApplyPenalties(
+        step,
+        input_tensors->at("logits").getPtr<T>(),
+        output_tensors->at("output_ids")
+            .getPtrWithOffset<const int>((step - 1) * batch_size * beam_width + ite * local_batch_size * beam_width),
+        output_tensors->at("output_ids").getPtr<const int>(),
+        output_tensors->at("parent_ids").getPtr<const int>(),
+        input_tensors->at("input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {}, nullptr}).getPtr<const int>(),
+        embedding_bias,
+        ite,
+        input_tensors->at("max_input_length").getVal<int>(),
+        local_batch_size,
+        batch_size,
+        beam_width,
+        vocab_size_,
+        vocab_size_padded_,
+        input_tensors->at("end_id").getPtr<const int>(),
+        temperature,
+        repetition_penalty,
+        stream_);
     sync_check_cuda_error();
 
     invokeSoftMax(output_tensors, input_tensors);
@@ -238,17 +247,19 @@ void BaseBeamSearchLayer<T>::forward(std::unordered_map<std::string, Tensor>*   
     if (beam_width > 1) {
         const int max_seq_len = output_tensors->at("output_ids").shape[0];
 
-        update_indir_cache_kernelLauncher((int*)output_tensors->at("tgt_cache_indirection").data,
-                                          reinterpret_cast<const int*>(input_tensors->at("src_cache_indirection").data),
-                                          reinterpret_cast<const int*>(output_tensors->at("parent_ids").data)
-                                              + step * beam_width * batch_size + ite * local_batch_size * beam_width,
-                                          reinterpret_cast<const bool*>(output_tensors->at("finished").data),
-                                          batch_size,
-                                          local_batch_size,
-                                          beam_width,
-                                          max_seq_len,
-                                          step,
-                                          stream_);
+        update_indir_cache_kernelLauncher(
+            output_tensors->at("tgt_cache_indirection").getPtr<int>(),
+            input_tensors->at("src_cache_indirection").getPtr<const int>(),
+            output_tensors->at("parent_ids")
+                .getPtrWithOffset<const int>(+step * beam_width * batch_size + ite * local_batch_size * beam_width),
+            output_tensors->at("finished").getPtr<const bool>(),
+            batch_size,
+            local_batch_size,
+            beam_width,
+            max_seq_len,
+            step,
+            stream_);
+        sync_check_cuda_error();
     }
     sync_check_cuda_error();
     if (is_free_buffer_after_forward_) {

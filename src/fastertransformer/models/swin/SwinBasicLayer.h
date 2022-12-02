@@ -17,32 +17,25 @@
 #pragma once
 
 #include "SwinBlock.h"
-
+#include "src/fastertransformer/kernels/image_merge_kernels.h"
 namespace fastertransformer {
 template<typename T>
 class SwinTransformerBasicLayer: public BaseLayer {
 
 private:
-    int   max_batch_          = 1;
-    int   patches_resolution_ = 64;
-    int   embed_dim_          = 96;
-    int   window_size_        = 7;
-    float mlp_ratio_          = 4.0f;
-    bool  qkv_bias_           = true;
-    float qk_scale_           = 1.0f;
+    int   max_batch_   = 1;
+    int   window_size_ = 7;
+    float mlp_ratio_   = 4.0f;
+    bool  qkv_bias_    = true;
+    float qk_scale_    = 1.0f;
     float layernorm_eps_;
+    int   version_ = 1;
 
     T*                       buf_          = nullptr;
     T *                      block_output_ = nullptr, *merge_layernorm_buf_ = nullptr;
     SwinTransformerBlock<T>* block_ = nullptr;
 
 public:
-    static size_t getBufSize(const int batch, const int input_resolution, const int dim)
-    {
-        size_t buf_size = 2 * batch * input_resolution * input_resolution * dim * sizeof(T);
-        return (buf_size + 31) / 32 * 32;
-    }
-
     // dim & input_resolution will be used to malloc the max buf size
     SwinTransformerBasicLayer(int              max_batch,
                               int              window_size,
@@ -53,10 +46,11 @@ public:
                               IAllocator*      allocator,
                               bool             is_free_buffer_after_forward,
                               bool             qkv_bias,
-                              float            qk_scale);
+                              float            qk_scale,
+                              int              version);
 
-    void allocateBuffer();
-
+    void allocateBuffer() override;
+    void allocateBuffer(int batch, int input_resolution, int dim);
     void freeBuffer();
 
     ~SwinTransformerBasicLayer();
@@ -74,8 +68,8 @@ public:
                     int      input_resolution,
                     int      dim);
 
-    void forward(std::vector<Tensor>*                output_tensors,
-                 std::vector<Tensor>*                input_tensors,
+    void forward(TensorMap*                          output_tensors,
+                 TensorMap*                          input_tensors,
                  SwinTransformerBasicLayerWeight<T>& swin_basic_layer_weights);
 
 };  // class SwinTransformerBasicLayer

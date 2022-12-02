@@ -52,6 +52,19 @@ private:
 
     friend class cublasINT8MMWrapper;
 
+    void _Int8Gemm(const int     m,
+                   const int     n,
+                   const int     k,
+                   const int8_t* A,
+                   const int     lda,
+                   const int8_t* B,
+                   const int     ldb,
+                   void*         C,
+                   const int     ldc,
+                   const void*   alpha,
+                   const int     mode,
+                   const bool    per_column_scaling);
+
 public:
     cublasMMWrapper(cublasHandle_t   cublas_handle_,
                     cublasLtHandle_t cublaslt_handle_,
@@ -73,6 +86,43 @@ public:
     ~cublasMMWrapper();
 
     cublasMMWrapper(const cublasMMWrapper& wrapper);
+
+    cublasStatus_t cublasLtMatmulWrapper(cublasLtHandle_t            lightHandle,
+                                         cublasLtMatmulDesc_t        computeDesc,
+                                         const void*                 alpha,
+                                         const void*                 A,
+                                         cublasLtMatrixLayout_t      Adesc,
+                                         const void*                 B,
+                                         cublasLtMatrixLayout_t      Bdesc,
+                                         const void*                 beta,
+                                         const void*                 C,
+                                         cublasLtMatrixLayout_t      Cdesc,
+                                         void*                       D,
+                                         cublasLtMatrixLayout_t      Ddesc,
+                                         const cublasLtMatmulAlgo_t* algo,
+                                         void*                       workspace,
+                                         size_t                      workspaceSizeInBytes,
+                                         cudaStream_t                stream);
+
+    std::pair<bool, cublasLtMatmulAlgo_t> findBestAlgo(cublasLtHandle_t       lightHandle,
+                                                       cublasLtMatmulDesc_t   computeDesc,
+                                                       const void*            alpha,
+                                                       const void*            A,
+                                                       cublasLtMatrixLayout_t Adesc,
+                                                       const void*            B,
+                                                       cublasLtMatrixLayout_t Bdesc,
+                                                       const void*            beta,
+                                                       const void*            C,
+                                                       cublasLtMatrixLayout_t Cdesc,
+                                                       void*                  D,
+                                                       cublasLtMatrixLayout_t Ddesc,
+                                                       cudaStream_t           stream);
+
+    using MatrixLayout = std::tuple<cudaDataType_t, cublasLtOrder_t, uint64_t, uint64_t>;
+    using cache_idx_t  = std::tuple<cublasLtMatmulDesc_t, std::array<MatrixLayout, 4>>;
+    std::map<cache_idx_t, cublasLtMatmulAlgo_t> algo_cache;
+
+    MatrixLayout createMatrixLayout(cublasLtMatrixLayout_t Mdesc);
 
     void Gemm(cublasOperation_t transa,
               cublasOperation_t transb,
@@ -118,6 +168,28 @@ public:
               const int         ldc,
               float             f_alpha,
               float             f_beta);
+
+    void Int8Gemm(const int     m,
+                  const int     n,
+                  const int     k,
+                  const int8_t* A,
+                  const int     lda,
+                  const int8_t* B,
+                  const int     ldb,
+                  int8_t*       C,
+                  const int     ldc,
+                  const float*  alpha,
+                  const bool    per_column_scaling = false);
+
+    void Int8Gemm(const int     m,
+                  const int     n,
+                  const int     k,
+                  const int8_t* A,
+                  const int     lda,
+                  const int8_t* B,
+                  const int     ldb,
+                  int32_t*      C,
+                  const int     ldc);
 
     void setFP32GemmConfig();
     void setFP16GemmConfig();

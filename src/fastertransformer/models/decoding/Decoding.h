@@ -138,6 +138,12 @@ public:
     void forward(std::vector<Tensor>*       output_tensors,
                  const std::vector<Tensor>* input_tensors,
                  const DecodingWeight<T>*   Decoding_weights);
+
+    void forward(std::unordered_map<std::string, Tensor>*       output_tensors,
+                 const std::unordered_map<std::string, Tensor>* input_tensors,
+                 const DecodingWeight<T>*                       Decoding_weights);
+
+    void forward(TensorMap* output_tensors, TensorMap* input_tensors, const DecodingWeight<T>* Decoding_weights);
 };
 
 }  // namespace fastertransformer

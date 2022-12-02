@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 #include "int8_utils.cuh"
 #include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
 #include "src/fastertransformer/kernels/softmax_int8_kernels.h"
+#include "src/fastertransformer/utils/cuda_utils.h"
 
 namespace fastertransformer {
 
@@ -950,6 +951,98 @@ __global__ void softmax_INT8IO_kernel_COL32(int8_t*      a_buf,
     }
 }
 
+// grid = (window_len/word_per_thread, window_num*num_head, batch_size)
+// block.x = (window_len / 4 + 31)/32*32
+// a_buf/qk_buf is [batch, window_num, num_head, window_len, window_len] + COL32
+// attn_mask is [window_num, window_len, window_len] + row-major
+// relative_pos_bias is [num_head, window_len, window_len] + row-major
+template<typename T4, typename T>
+__global__ void softmax_INT8IO_kernel_COL32_element4(int8_t*      a_buf,
+                                                     int8_t*      qk_buf_int8,
+                                                     const T4*    attn_mask,
+                                                     const T4*    relative_pos_bias,
+                                                     const int    batch_size,
+                                                     const int    num_head,
+                                                     const int    window_num,
+                                                     const int    window_len,
+                                                     const int    window_len_x_window_len,
+                                                     const float  scalar,
+                                                     const float* deQ_scale_ptr,
+                                                     const float* out_scale_ptr)
+{
+
+    const int   padded_winlen = (window_len + 31) / 32 * 32;
+    const int   col_id        = threadIdx.x << 2;
+    bool        qual          = col_id < window_len;
+    const T4    zero          = {T(0.0f), T(0.0f), T(0.0f), T(0.0f)};
+    const float deQ_scale     = __ldg(deQ_scale_ptr);
+    const float out_scale     = __ldg(out_scale_ptr);
+    char4*      inputPtr      = (char4*)qk_buf_int8;
+    char4*      outputPtr     = (char4*)a_buf;
+
+    for (int window_id = blockIdx.x; window_id < window_len; window_id += gridDim.x) {
+        float            tmp = -1e20f;
+        char4            qk_val;
+        float4           local_qk_val;
+        __shared__ float s_mean, s_max;
+        int              qk_offset = (blockIdx.z * gridDim.y + blockIdx.y) * window_len * padded_winlen
+                        + ((col_id >> 5) << 5) * window_len + (window_id << 5) + (col_id & 31);
+        if (qual) {
+            const int offset_in_window         = window_id * window_len + col_id;
+            const int relative_pos_bias_offset = (blockIdx.y % num_head) * window_len_x_window_len + offset_in_window;
+            const int attn_mask_offset         = (blockIdx.y / num_head) * window_len_x_window_len + offset_in_window;
+
+            const T4 bias_val = relative_pos_bias[relative_pos_bias_offset >> 2];
+            const T4 mask_val = (attn_mask == nullptr) ? zero : attn_mask[attn_mask_offset >> 2];
+            qk_val            = inputPtr[qk_offset >> 2];
+            local_qk_val.x    = static_cast<float>(qk_val.x);
+            local_qk_val.y    = static_cast<float>(qk_val.y);
+            local_qk_val.z    = static_cast<float>(qk_val.z);
+            local_qk_val.w    = static_cast<float>(qk_val.w);
+
+            local_qk_val.x =
+                scalar * local_qk_val.x * deQ_scale + static_cast<float>(mask_val.x) + static_cast<float>(bias_val.x);
+            local_qk_val.y =
+                scalar * local_qk_val.y * deQ_scale + static_cast<float>(mask_val.y) + static_cast<float>(bias_val.y);
+            local_qk_val.z =
+                scalar * local_qk_val.z * deQ_scale + static_cast<float>(mask_val.z) + static_cast<float>(bias_val.z);
+            local_qk_val.w =
+                scalar * local_qk_val.w * deQ_scale + static_cast<float>(mask_val.w) + static_cast<float>(bias_val.w);
+            tmp = local_qk_val.x > local_qk_val.y ? local_qk_val.x : local_qk_val.y;
+            tmp = tmp > local_qk_val.z ? tmp : local_qk_val.z;
+            tmp = tmp > local_qk_val.w ? tmp : local_qk_val.w;
+        }
+
+        float max_val = blockDim.x <= 32 ? warpReduceMax<float>(tmp) : blockReduceMax<float>(tmp);
+        if (threadIdx.x == 0) {
+            s_max = max_val;
+        }
+        __syncthreads();
+
+        local_qk_val.x = qual ? __expf(local_qk_val.x - s_max) : 0.0f;
+        local_qk_val.y = qual ? __expf(local_qk_val.y - s_max) : 0.0f;
+        local_qk_val.z = qual ? __expf(local_qk_val.z - s_max) : 0.0f;
+        local_qk_val.w = qual ? __expf(local_qk_val.w - s_max) : 0.0f;
+
+        float sum_val = blockDim.x <= 32 ?
+                            warpReduceSum<float>(local_qk_val.x + local_qk_val.y + local_qk_val.z + local_qk_val.w) :
+                            blockReduceSum<float>(local_qk_val.x + local_qk_val.y + local_qk_val.z + local_qk_val.w);
+        if (threadIdx.x == 0) {
+            s_mean = sum_val + 1e-6f;
+            s_mean = __fdividef(1.0f, s_mean);
+        }
+        __syncthreads();
+        if (qual) {
+            char4 outTmp;
+            outTmp.x                  = float_to_int8_rn(local_qk_val.x * s_mean * out_scale);
+            outTmp.y                  = float_to_int8_rn(local_qk_val.y * s_mean * out_scale);
+            outTmp.z                  = float_to_int8_rn(local_qk_val.z * s_mean * out_scale);
+            outTmp.w                  = float_to_int8_rn(local_qk_val.w * s_mean * out_scale);
+            outputPtr[qk_offset >> 2] = outTmp;
+        }
+    }
+}
+
 template<typename T>
 void invokeSoftmaxWithRelPosBiasCOL32(int8_t*      a_buf,
                                       int8_t*      qk_buf_int8,
@@ -965,19 +1058,57 @@ void invokeSoftmaxWithRelPosBiasCOL32(int8_t*      a_buf,
                                       cudaStream_t stream)
 {
     dim3 grid(window_len, window_num * num_head, batch_size);
-    dim3 block((window_len + 31) / 32 * 32);
-    softmax_INT8IO_kernel_COL32<<<grid, block, 0, stream>>>(a_buf,
-                                                            qk_buf_int8,
-                                                            attn_mask,
-                                                            relative_pos_bias,
-                                                            batch_size,
-                                                            num_head,
-                                                            window_num,
-                                                            window_len,
-                                                            window_len * window_len,
-                                                            scalar,
-                                                            deQ_scale_ptr,
-                                                            out_scale_ptr);
+    if (window_len % 4 == 0 && window_len / 4 >= 32) {
+        dim3 block((window_len / 4 + 31) / 32 * 32);
+        if (batch_size * window_num * num_head > 960) {
+            grid.x = ceil(float(window_len) / 32.0f);
+        }
+        if (std::is_same<T, float>::value) {
+            softmax_INT8IO_kernel_COL32_element4<float4, float>
+                <<<grid, block, 0, stream>>>(a_buf,
+                                             qk_buf_int8,
+                                             (const float4*)attn_mask,
+                                             (const float4*)relative_pos_bias,
+                                             batch_size,
+                                             num_head,
+                                             window_num,
+                                             window_len,
+                                             window_len * window_len,
+                                             scalar,
+                                             deQ_scale_ptr,
+                                             out_scale_ptr);
+        }
+        else if (std::is_same<T, half>::value) {
+            softmax_INT8IO_kernel_COL32_element4<half4, half>
+                <<<grid, block, 0, stream>>>(a_buf,
+                                             qk_buf_int8,
+                                             (const half4*)attn_mask,
+                                             (const half4*)relative_pos_bias,
+                                             batch_size,
+                                             num_head,
+                                             window_num,
+                                             window_len,
+                                             window_len * window_len,
+                                             scalar,
+                                             deQ_scale_ptr,
+                                             out_scale_ptr);
+        }
+    }
+    else {
+        dim3 block((window_len + 31) / 32 * 32);
+        softmax_INT8IO_kernel_COL32<<<grid, block, 0, stream>>>(a_buf,
+                                                                qk_buf_int8,
+                                                                attn_mask,
+                                                                relative_pos_bias,
+                                                                batch_size,
+                                                                num_head,
+                                                                window_num,
+                                                                window_len,
+                                                                window_len * window_len,
+                                                                scalar,
+                                                                deQ_scale_ptr,
+                                                                out_scale_ptr);
+    }
 }
 
 template void invokeSoftmaxWithRelPosBiasCOL32(int8_t*      a_buf,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -57,6 +57,7 @@ REGISTER_OP("Decoding")
     .Output("output_ids: int32")
     .Output("parent_ids: int32")
     .Output("sequence_length: int32")
+    .Output("cum_log_probs: float")
     .Attr("N: int")
     .Attr("T: {float, half}")
     .Attr("max_seq_len: int >= 1")
@@ -73,10 +74,13 @@ REGISTER_OP("Decoding")
     .Attr("temperature: float")
     .Attr("len_penalty: float")
     .Attr("repetition_penalty: float")
+    .Attr("return_cum_log_probs: bool = False")
     .SetShapeFn([](tf::shape_inference::InferenceContext* c) {
-        int beam_width, max_seq_len;
+        int  beam_width, max_seq_len;
+        bool return_cum_log_probs;
         c->GetAttr("beam_width", &beam_width);
         c->GetAttr("max_seq_len", &max_seq_len);
+        c->GetAttr("return_cum_log_probs", &return_cum_log_probs);
 
         int rank = c->Rank(c->input(0));
         assert(rank == 3);
@@ -92,11 +96,17 @@ REGISTER_OP("Decoding")
             c->set_output(0, c->MakeShape({max_seq_len, batch_dim, beam_width_dim}));
             c->set_output(1, c->MakeShape({max_seq_len, batch_dim, beam_width_dim}));
             c->set_output(2, c->MakeShape({batch_dim, beam_width_dim}));
+            c->set_output(3, c->MakeShape({batch_dim, beam_width_dim}));
         }
         else {
             c->set_output(0, c->MakeShape({max_seq_len, batch_dim}));
             c->set_output(1, c->MakeShape({max_seq_len, batch_dim}));
             c->set_output(2, c->MakeShape({batch_dim}));
+            c->set_output(3, c->MakeShape({batch_dim}));
+        }
+
+        if (!return_cum_log_probs) {
+            c->set_output(3, c->MakeShape({}));
         }
 
         return tf::Status::OK();
@@ -145,6 +155,7 @@ public:
             OP_REQUIRES_OK(context, context->GetAttr("temperature", &temperature_));
             OP_REQUIRES_OK(context, context->GetAttr("len_penalty", &len_penalty_));
             OP_REQUIRES_OK(context, context->GetAttr("repetition_penalty", &repetition_penalty_));
+            OP_REQUIRES_OK(context, context->GetAttr("return_cum_log_probs", &return_cum_log_probs_));
             cublas_algo_map_ = new ft::cublasAlgoMap("gemm_config.in");
             ft::check_cuda_error(cudaGetDeviceProperties(&prop_, 0));
         }
@@ -279,6 +290,7 @@ public:
         tf::Tensor* output_id_tensor       = nullptr;
         tf::Tensor* parent_id_tensor       = nullptr;
         tf::Tensor* sequence_length_tensor = nullptr;
+        tf::Tensor* cum_log_probs_tensor   = nullptr;
         if (beam_width_ > 1) {
             OP_REQUIRES_OK(context,
                            context->allocate_output(
@@ -293,6 +305,15 @@ public:
             OP_REQUIRES_OK(context,
                            context->allocate_output(
                                2, {(long long int)batch_size, (long long int)beam_width_}, &sequence_length_tensor));
+            if (return_cum_log_probs_) {
+                OP_REQUIRES_OK(context,
+                               context->allocate_output(
+                                   3, {(long long int)batch_size, (long long int)beam_width_}, &cum_log_probs_tensor));
+            }
+            else {
+                // allocate dummy variable
+                OP_REQUIRES_OK(context, context->allocate_output(3, {}, &cum_log_probs_tensor));
+            }
         }
         else {
             OP_REQUIRES_OK(context,
@@ -302,6 +323,14 @@ public:
                            context->allocate_output(
                                1, {(long long int)max_seq_len_, (long long int)batch_size}, &parent_id_tensor));
             OP_REQUIRES_OK(context, context->allocate_output(2, {(long long int)batch_size}, &sequence_length_tensor));
+            if (return_cum_log_probs_) {
+                OP_REQUIRES_OK(context,
+                               context->allocate_output(3, {(long long int)batch_size}, &cum_log_probs_tensor));
+            }
+            else {
+                // allocate dummy variable
+                OP_REQUIRES_OK(context, context->allocate_output(3, {}, &cum_log_probs_tensor));
+            }
         }
         int* output_ids      = (int*)(output_id_tensor->flat<int>().data());
         int* parent_ids      = (int*)(parent_id_tensor->flat<int>().data());
@@ -330,15 +359,26 @@ public:
                                                                  false,
                                                                  &prop_);
 
-        std::vector<ft::Tensor> input_tensors = std::vector<ft::Tensor>{this->convert_tensor(context->input(0)),
-                                                                        this->convert_int_tensor(context->input(1))};
+        ft::TensorMap input_tensors({{"encoder_output", this->convert_tensor(context->input(0))},
+                                     {"encoder_sequence_length", this->convert_int_tensor(context->input(1))}});
 
-        std::vector<ft::Tensor> output_tensors = std::vector<ft::Tensor>{
-            ft::Tensor{
-                ft::MEMORY_GPU, ft::TYPE_INT32, {(size_t)max_seq_len_, batch_size, (size_t)beam_width_}, output_ids},
-            ft::Tensor{
-                ft::MEMORY_GPU, ft::TYPE_INT32, {(size_t)max_seq_len_, batch_size, (size_t)beam_width_}, parent_ids},
-            ft::Tensor{ft::MEMORY_GPU, ft::TYPE_INT32, {batch_size, (size_t)beam_width_}, sequence_length}};
+        ft::TensorMap output_tensors(
+            {{"output_ids",
+              ft::Tensor{
+                  ft::MEMORY_GPU, ft::TYPE_INT32, {(size_t)max_seq_len_, batch_size, (size_t)beam_width_}, output_ids}},
+             {"parent_ids",
+              ft::Tensor{
+                  ft::MEMORY_GPU, ft::TYPE_INT32, {(size_t)max_seq_len_, batch_size, (size_t)beam_width_}, parent_ids}},
+             {"sequence_length",
+              ft::Tensor{ft::MEMORY_GPU, ft::TYPE_INT32, {batch_size, (size_t)beam_width_}, sequence_length}}});
+
+        // in case cum_log_probs is requested
+        if (return_cum_log_probs_) {
+            float* cum_log_probs = (float*)(cum_log_probs_tensor->flat<float>().data());
+            output_tensors.insert(
+                "cum_log_probs",
+                ft::Tensor{ft::MEMORY_GPU, ft::TYPE_FP32, {batch_size, (size_t)beam_width_}, cum_log_probs});
+        }
 
         try {
             decoding.forward(&output_tensors, &input_tensors, &decoding_weights);
@@ -361,6 +401,7 @@ private:
     float                              temperature_;
     float                              len_penalty_;
     float                              repetition_penalty_;
+    bool                               return_cum_log_probs_;
     int                                top_k_ = 0;
     float                              top_p_ = 0.0f;
     ft::cublasAlgoMap*                 cublas_algo_map_;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -66,31 +66,44 @@ void invokeAddBiasResidualLayerNormCol32(T*            output,
                                          const float*  input2_deQFactor_ptr);
 
 template<typename T>
-void invokeAddBiasResidualLayerNormCol32_noRes(int8_t*      output,
-                                               int8_t*      input1,
-                                               T*           input2,
-                                               const T*     bias,
-                                               const T*     gamma,
-                                               const T*     beta,
-                                               int          m,
-                                               int          n,
-                                               cudaStream_t stream,
-                                               const float* input1_deQFactor_ptr,
-                                               const float* output_scale_ptr);
+void invokeAddBiasLayernormAddResCol32(int8_t*      out_int8,
+                                       int8_t*      out,
+                                       T*           residual_input,
+                                       const T*     bias,
+                                       const T*     gamma,
+                                       const T*     beta,
+                                       const float  layernorm_eps,
+                                       int          m,
+                                       int          n,
+                                       cudaStream_t stream,
+                                       const float* input_deQFactor_ptr,
+                                       const float* out_QFactor_ptr = nullptr);
+
+void invokeAddBiasResidualPreLayerNormCol32(int8_t*       output,
+                                            int8_t*       input1,
+                                            __half*       input2,
+                                            const __half* bias,
+                                            const __half* gamma,
+                                            const __half* beta,
+                                            int           m,
+                                            const int     n,
+                                            cudaStream_t  stream,
+                                            const float   dqScaleIn,
+                                            const float   qScale);
 
 template<typename T>
-void invokeAddBiasResidualLayerNormCol32_noRes(int8_t*      output,
-                                               int32_t*     input1,
-                                               T*           input2,
-                                               const T*     bias,
-                                               const T*     gamma,
-                                               const T*     beta,
-                                               int          m,
-                                               int          n,
-                                               cudaStream_t stream,
-                                               const float* weight_amax,
-                                               const float* input1_amax_ptr,
-                                               const float* output_scale_ptr);
+void invokeAddBiasResidualPreLayerNormCol32(int8_t*      output,
+                                            int32_t*     input1,
+                                            T*           input2,
+                                            const T*     bias,
+                                            const T*     gamma,
+                                            const T*     beta,
+                                            int          m,
+                                            int          n,
+                                            cudaStream_t stream,
+                                            const float* weight_amax,
+                                            const float* input1_amax_ptr,
+                                            const float* output_scale_ptr);
 
 template<typename T>
 void invokeLayernormCol32(int8_t*      out,
@@ -103,15 +116,24 @@ void invokeLayernormCol32(int8_t*      out,
                           cudaStream_t stream);
 
 template<typename T>
+void invokeLayernormCol32(T*            out,
+                          const int8_t* input,
+                          const T*      gamma,
+                          const T*      beta,
+                          int           m,
+                          int           n,
+                          const float*  input_deQ_ptr,
+                          cudaStream_t  stream);
+
 void invokeLayernormShiftPartitionCol32(int8_t*      out,
-                                        const T*     input,
-                                        const T*     gamma,
-                                        const T*     beta,
+                                        const half*  input,
+                                        const half*  gamma,
+                                        const half*  beta,
                                         int          batch,
                                         int          H,
                                         int          W,
                                         int          n,
-                                        const float* norm_scale_ptr,
+                                        const float  norm_scale,
                                         int          shift_size,
                                         int          window_size,
                                         cudaStream_t stream);

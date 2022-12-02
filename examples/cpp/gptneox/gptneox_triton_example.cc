@@ -217,7 +217,7 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
     std::vector<int> v_start_ids;
     std::vector<int> v_start_lengths;
 
-    int max_input_len = 0;
+    size_t max_input_len = 0;
     ft::read_start_ids(request_batch_size,
                        &v_start_lengths,
                        &v_start_ids,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,8 +22,7 @@ namespace fastertransformer {
 template<typename T>
 void BertLayerINT8<T>::initialize()
 {
-    if ((attention_type_ == AttentionType::FUSED_MHA || attention_type_ == AttentionType::FUSED_PADDED_MHA)
-        && max_seq_len_ <= 384) {
+    if ((attention_type_ == AttentionType::FUSED_MHA || attention_type_ == AttentionType::FUSED_PADDED_MHA)) {
         attention_layer_ = new FusedAttentionLayerINT8<T>(max_batch_size_,
                                                           max_seq_len_,
                                                           head_num_,
@@ -189,17 +188,17 @@ void BertLayerINT8<T>::forward(std::vector<Tensor>*       output_tensors,
     FT_CHECK(isValidSeqLen(input_tensors->at(1).shape[2]));
     allocateBuffer();
 
-    T* from_tensor = (T*)input_tensors->at(0).data;
-    T* out_tensor  = (T*)(output_tensors->at(0).data);
+    T* from_tensor = input_tensors->at(0).getPtr<T>();
+    T* out_tensor  = output_tensors->at(0).getPtr<T>();
 
     const size_t m = input_tensors->at(0).shape[0];
     const size_t n = hidden_units_;
 
-    const int layer_idx = *(int*)(input_tensors->at(3).data);
-    const int num_layer = *(int*)(input_tensors->at(4).data);
+    const int layer_idx = input_tensors->at(3).getVal<const int>();
+    const int num_layer = input_tensors->at(4).getVal<const int>();
 
-    std::vector<Tensor> attn_output_tensors{
-        Tensor{MEMORY_GPU, getTensorType<int>(), std::vector<size_t>{m, n}, attn_out_buf_},
+    TensorMap attn_output_tensors{
+        {"hidden_features", Tensor{MEMORY_GPU, getTensorType<int>(), std::vector<size_t>{m, n}, attn_out_buf_}},
     };
 
     if (int8_mode_ == 1) {
@@ -209,9 +208,10 @@ void BertLayerINT8<T>::forward(std::vector<Tensor>*       output_tensors,
             from_tensor = col32_from_tensor_;
         }
         invokeQuantization(int8_buf_, from_tensor, m * n, &(scale_list->d_scale_list_[3]), stream_);
-        std::vector<Tensor> int8_input_tensors{Tensor{MEMORY_GPU, TYPE_INT8, std::vector<size_t>{m, n}, int8_buf_},
-                                               input_tensors->at(1),
-                                               input_tensors->at(2)};
+        TensorMap int8_input_tensors{
+            {"input_query", Tensor{MEMORY_GPU, TYPE_INT8, std::vector<size_t>{m, n}, int8_buf_}},
+            {"attention_mask", input_tensors->at(1)},
+            {"padding_offset", input_tensors->at(2)}};
         attention_layer_->forward(
             &attn_output_tensors, &int8_input_tensors, &bert_layer_int8_weight->attention_weights);
         // int32 I ; DataType O
@@ -232,7 +232,8 @@ void BertLayerINT8<T>::forward(std::vector<Tensor>*       output_tensors,
         invokeQuantization(int8_buf_, layer_norm_tmp_buf_, m * n, &(scale_list->d_scale_list_[44 + 3]), stream_);
         std::vector<Tensor> ffn_input_tensors{Tensor{MEMORY_GPU, TYPE_INT8, std::vector<size_t>{m, n}, int8_buf_}};
         // reuse attn_output_tensors as ffn_output_tensors
-        ffn_layer_->forward(&attn_output_tensors, &ffn_input_tensors, &bert_layer_int8_weight->ffn_weights);
+        std::vector<Tensor> ffn_output_tensors{attn_output_tensors.at("hidden_features")};
+        ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &bert_layer_int8_weight->ffn_weights);
         PUSH_RANGE("post layernorm 2");
         if (layer_idx != num_layer - 1) {
             // int32 I ; DataType O
@@ -282,14 +283,19 @@ void BertLayerINT8<T>::forward(std::vector<Tensor>*       output_tensors,
 #ifdef SPARSITY_ENABLED
             }
 #endif
-            std::vector<Tensor> int8_input_tensors{Tensor{MEMORY_GPU, TYPE_INT8, std::vector<size_t>{m, n}, int8_buf_},
-                                                   input_tensors->at(1),
-                                                   input_tensors->at(2)};
+            TensorMap int8_input_tensors{
+                {"input_query", Tensor{MEMORY_GPU, TYPE_INT8, std::vector<size_t>{m, n}, int8_buf_}},
+                {"attention_mask", input_tensors->at(1)},
+                {"padding_offset", input_tensors->at(2)}};
             attention_layer_->forward(
                 &attn_output_tensors, &int8_input_tensors, &bert_layer_int8_weight->attention_weights);
         }
         else {
-            attention_layer_->forward(&attn_output_tensors, input_tensors, &bert_layer_int8_weight->attention_weights);
+            TensorMap attn_input_tensors{{"input_query", input_tensors->at(0)},
+                                         {"attention_mask", input_tensors->at(1)},
+                                         {"padding_offset", input_tensors->at(2)}};
+            attention_layer_->forward(
+                &attn_output_tensors, &attn_input_tensors, &bert_layer_int8_weight->attention_weights);
         }
         PUSH_RANGE("post layernorm 1");
         const int8_t* residual = layer_idx == 0 ? int8_buf_ : (const int8_t*)from_tensor;
@@ -330,7 +336,8 @@ void BertLayerINT8<T>::forward(std::vector<Tensor>*       output_tensors,
         std::vector<Tensor> ffn_input_tensors{
             Tensor{MEMORY_GPU, TYPE_INT8, std::vector<size_t>{m, n}, layer_norm_tmp_buf_}};
         // reuse attn_output_tensors as ffn_output_tensors
-        ffn_layer_->forward(&attn_output_tensors, &ffn_input_tensors, &bert_layer_int8_weight->ffn_weights);
+        std::vector<Tensor> ffn_output_tensors{attn_output_tensors.at("hidden_features")};
+        ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &bert_layer_int8_weight->ffn_weights);
         if (layer_idx != num_layer - 1) {
             // int8 IO
 #ifdef SPARSITY_ENABLED

@@ -44,6 +44,7 @@ void ParallelGptDecoder<T>::initialize()
                                                        1,
                                                        head_num_,
                                                        size_per_head_,
+                                                       0,  // expert_num
                                                        max_inter_size,
                                                        tensor_para_,
                                                        stream_,
@@ -62,6 +63,7 @@ void ParallelGptDecoder<T>::initialize()
                                                        1,
                                                        head_num_,
                                                        size_per_head_,
+                                                       0,  // expert_num
                                                        max_inter_size,
                                                        tensor_para_,
                                                        stream_,
@@ -70,6 +72,7 @@ void ParallelGptDecoder<T>::initialize()
                                                        true,
                                                        is_free_buffer_after_forward_,
                                                        sparse_,
+                                                       int8_mode_,
                                                        use_gated_activation,
                                                        custom_all_reduce_comm_,
                                                        enable_custom_all_reduce_);
@@ -155,6 +158,12 @@ void ParallelGptDecoder<T>::allocateBuffer(size_t batch_size)
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     decoder_layer_output_ = reinterpret_cast<T*>(
         allocator_->reMalloc(decoder_layer_output_, sizeof(T) * batch_size * hidden_units_, false));
+    if (int8_mode_ == 2) {
+        decoder_layer_output_int32_ = reinterpret_cast<int32_t*>(
+            allocator_->reMalloc(decoder_layer_output_int32_, sizeof(int32_t) * batch_size * hidden_units_, false));
+        self_attn_output_int32_ = reinterpret_cast<int32_t*>(
+            allocator_->reMalloc(self_attn_output_int32_, sizeof(int32_t) * batch_size * hidden_units_, false));
+    }
     decoder_normed_input_ = reinterpret_cast<T*>(
         allocator_->reMalloc(decoder_normed_input_, sizeof(T) * batch_size * hidden_units_, false));
     self_attn_output_ =
@@ -179,6 +188,10 @@ void ParallelGptDecoder<T>::freeBuffer()
         allocator_->free((void**)(&normed_self_attn_output_));
         if (has_adapters_) {
             allocator_->free((void**)(&after_adapter_attn_output_));
+        }
+        if (int8_mode_ == 2) {
+            allocator_->free((void**)(&self_attn_output_int32_));
+            allocator_->free((void**)(&decoder_layer_output_int32_));
         }
         is_allocate_buffer_ = false;
     }
@@ -222,8 +235,8 @@ ParallelGptDecoder<T>::~ParallelGptDecoder()
 }
 
 template<typename T>
-void ParallelGptDecoder<T>::forward(std::vector<Tensor>*                                  output_tensors,
-                                    const std::vector<Tensor>*                            input_tensors,
+void ParallelGptDecoder<T>::forward(std::unordered_map<std::string, Tensor>*              output_tensors,
+                                    const std::unordered_map<std::string, Tensor>*        input_tensors,
                                     const std::vector<ParallelGptDecoderLayerWeight<T>*>* gpt_decoder_layer_weight)
 {
     // input tensors:
@@ -235,9 +248,10 @@ void ParallelGptDecoder<T>::forward(std::vector<Tensor>*                        
     //      step [1] on cpu
     //      ite [1] on cpu
     //      cache_indirection [local_batch_size / beam_width, beam_width, memory_len]
-    //              Here, local_batch_size contains the beam_width, so local_batch_size / beam_width
-    //              is real local_batch_size.
+    //          Here, local_batch_size contains the beam_width, so local_batch_size / beam_width
+    //          is real local_batch_size. (optional.)
     //      masked_tokens [local_batch_size, memory_len]
+    //      linear_bias_slopes [head_num], optional
 
     // output tensors:
     //      decoder_output [local_batch_size, hidden_dimension],
@@ -245,141 +259,175 @@ void ParallelGptDecoder<T>::forward(std::vector<Tensor>*                        
     //      value_cache [num_layer, batch_size, head_num, memory_len, size_per_head]
 
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    FT_CHECK(input_tensors->size() == 9);
-    FT_CHECK(output_tensors->size() == 3);
-    const size_t local_batch_size = input_tensors->at(0).shape[0];
+
+    FT_CHECK(input_tensors->count("decoder_input"));
+    FT_CHECK(input_tensors->count("finished"));
+    FT_CHECK(input_tensors->count("input_lengths"));
+    FT_CHECK(input_tensors->count("total_padding_tokens"));
+    FT_CHECK(input_tensors->count("max_input_length"));
+    FT_CHECK(input_tensors->count("step"));
+    FT_CHECK(input_tensors->count("ite"));
+    FT_CHECK(input_tensors->count("masked_tokens"));
+    FT_CHECK(output_tensors->count("decoder_output"));
+    FT_CHECK(output_tensors->count("key_cache"));
+    FT_CHECK(output_tensors->count("value_cache"));
+
+    const size_t local_batch_size = input_tensors->at("decoder_input").shape[0];
     allocateBuffer(local_batch_size);
 
     const DataType data_type = getTensorType<T>();
-    const int      ite       = *((int*)(input_tensors->at(6).data));
 
-    std::vector<size_t> self_k_cache_size;
-    self_k_cache_size.push_back(local_batch_size);
-    for (auto t = output_tensors->at(1).shape.begin() + 2; t != output_tensors->at(1).shape.end(); ++t) {
-        self_k_cache_size.push_back(*t);
-    }
-    std::vector<size_t> self_v_cache_size;
-    self_v_cache_size.push_back(local_batch_size);
-    for (auto t = output_tensors->at(2).shape.begin() + 2; t != output_tensors->at(2).shape.end(); ++t) {
-        self_v_cache_size.push_back(*t);
-    }
+    const int ite = input_tensors->at("ite").getVal<int>();
+
+    Tensor k_cache = output_tensors->at("key_cache");
+    Tensor v_cache = output_tensors->at("value_cache");
+
+    // The resize of the key cache buffer by
+    //   (local_batch_size, local_head_num, size_per_head // x, max_seq_len, x) where x is constant.
+    std::vector<size_t> self_k_cache_size(k_cache.shape.begin() + 2, k_cache.shape.end());
+    self_k_cache_size.insert(self_k_cache_size.begin(), local_batch_size);
+
+    // The resize of the value cache buffer by (local_batch_size, local_head_num, max_seq_len, size_per_head).
+    std::vector<size_t> self_v_cache_size(v_cache.shape.begin() + 2, v_cache.shape.end());
+    self_v_cache_size.insert(self_v_cache_size.begin(), local_batch_size);
+
+    const auto activation_in_type  = int8_mode_ == 2 ? TYPE_INT8 : data_type;
+    const auto activation_out_type = int8_mode_ == 2 ? TYPE_INT32 : data_type;
 
     for (uint l = 0; l < num_layer_; l++) {
         if (isValidLayerParallelId(l) == false) {
             continue;
         }
-        T* decoder_input  = (T*)((l == 0) ? input_tensors->at(0).data : decoder_layer_output_);
-        T* decoder_output = (T*)((l == num_layer_ - 1) ? output_tensors->at(0).data : decoder_layer_output_);
+        T* decoder_input = (l == 0) ? input_tensors->at("decoder_input").getPtr<T>() : decoder_layer_output_;
+        T* decoder_output =
+            (l == num_layer_ - 1) ? output_tensors->at("decoder_output").getPtr<T>() : decoder_layer_output_;
 
         if (isFirstLayerParallelId(l) == true && pipeline_para_.rank_ != 0 && pipeline_para_.world_size_ > 1) {
-            // ftNcclRecv(decoder_input, local_batch_size * hidden_units_, pipeline_para_.rank_ - 1, pipeline_para_,
-            // stream_);
-
-            ftNcclRecv(decoder_input + local_batch_size * hidden_units_ / tensor_para_.world_size_ * tensor_para_.rank_,
-                       local_batch_size * hidden_units_ / tensor_para_.world_size_,
+            size_t data_size = local_batch_size * hidden_units_ / tensor_para_.world_size_;
+            ftNcclRecv(decoder_input + data_size * tensor_para_.rank_,
+                       data_size,
                        pipeline_para_.rank_ - 1,
                        pipeline_para_,
                        stream_);
             if (tensor_para_.world_size_ > 1) {
-                ftNcclAllGather(decoder_input,
-                                decoder_input,
-                                local_batch_size * hidden_units_ / tensor_para_.world_size_,
-                                tensor_para_.rank_,
-                                tensor_para_,
-                                stream_);
+                ftNcclAllGather(decoder_input, decoder_input, data_size, tensor_para_.rank_, tensor_para_, stream_);
             }
         }
 
-        size_t cache_offset = l - getFirstLayerParallelId();
-        for (auto t = output_tensors->at(1).shape.begin() + 1; t != output_tensors->at(1).shape.end(); ++t) {
-            cache_offset *= *t;
-        };
-        size_t ite_cache_offset = ite * local_batch_size;
-        for (auto t = output_tensors->at(1).shape.begin() + 2; t != output_tensors->at(1).shape.end(); ++t) {
-            ite_cache_offset *= *t;
-        }
-        cache_offset += ite_cache_offset;
+        ParallelGptDecoderLayerWeight<T>* layer_weight = gpt_decoder_layer_weight->at(l);
 
         if (layernorm_type_ == LayerNormType::pre_layernorm) {
             invokeGeneralLayerNorm(decoder_normed_input_,
                                    decoder_input,
-                                   gpt_decoder_layer_weight->at(l)->pre_layernorm_weights.gamma,
-                                   gpt_decoder_layer_weight->at(l)->pre_layernorm_weights.beta,
+                                   layer_weight->pre_layernorm_weights.gamma,
+                                   layer_weight->pre_layernorm_weights.beta,
                                    layernorm_eps_,
                                    local_batch_size,
                                    hidden_units_,
+                                   layer_weight->self_attention_weights.query_weight.scale,
+                                   int8_mode_,
                                    stream_);
         }
         sync_check_cuda_error();
 
-        const int           max_prefix_prompt_length = 0;
-        std::vector<Tensor> self_attention_input_tensors{
-            Tensor{MEMORY_GPU,
-                   data_type,
-                   {local_batch_size, hidden_units_},
-                   layernorm_type_ == LayerNormType::pre_layernorm ? decoder_normed_input_ : decoder_input},
-            input_tensors->at(1),
-            input_tensors->at(2),
-            input_tensors->at(3),
-            Tensor{
-                MEMORY_GPU, data_type, {(size_t)local_batch_size, (size_t)l}, nullptr},  // prefix prompt weight batch
-            Tensor{MEMORY_CPU, TYPE_INT32, {(size_t)1}, &max_prefix_prompt_length},      // max prefix prompt length
-            input_tensors->at(4),
-            input_tensors->at(5),
-            input_tensors->at(7),
-            input_tensors->at(8)};
+        TensorMap self_attention_input_tensors{
+            {"input_query",
+             Tensor{MEMORY_GPU,
+                    activation_in_type,
+                    {local_batch_size, hidden_units_},
+                    layernorm_type_ == LayerNormType::pre_layernorm ? decoder_normed_input_ : decoder_input}},
+            {"finished", input_tensors->at("finished")},
+            {"sequence_lengths", input_tensors->at("input_lengths")},
+            {"total_padding_tokens", input_tensors->at("total_padding_tokens")},
+            {"max_input_length", input_tensors->at("max_input_length")},
+            {"step", input_tensors->at("step")},
+            {"masked_tokens", input_tensors->at("masked_tokens")}};
+        if (input_tensors->count("cache_indirection")) {
+            self_attention_input_tensors.insert("cache_indirection", input_tensors->at("cache_indirection"));
+        }
+        if (input_tensors->count("linear_bias_slopes")) {
+            self_attention_input_tensors.insert("linear_bias_slopes", input_tensors->at("linear_bias_slopes"));
+        }
 
-        std::vector<Tensor> self_attention_output_tensors{
-            Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, self_attn_output_},
-            Tensor{MEMORY_GPU, data_type, self_k_cache_size, ((const T*)output_tensors->at(1).data) + cache_offset},
-            Tensor{MEMORY_GPU, data_type, self_v_cache_size, ((const T*)output_tensors->at(2).data) + cache_offset}};
+        size_t cache_offset = l - getFirstLayerParallelId();
+        for (auto t = k_cache.shape.begin() + 1; t != k_cache.shape.end(); ++t) {
+            cache_offset *= *t;
+        };
+        size_t ite_cache_offset = ite * local_batch_size;
+        for (auto t = k_cache.shape.begin() + 2; t != k_cache.shape.end(); ++t) {
+            ite_cache_offset *= *t;
+        }
+        cache_offset += ite_cache_offset;
 
-        self_attention_layer_->forward(&self_attention_output_tensors,
-                                       &self_attention_input_tensors,
-                                       &gpt_decoder_layer_weight->at(l)->self_attention_weights);
+        T*        attention_out = (int8_mode_ == 2) ? reinterpret_cast<T*>(self_attn_output_int32_) : self_attn_output_;
+        TensorMap self_attention_output_tensors{
+            {"hidden_features",
+             Tensor(MEMORY_GPU, activation_out_type, {local_batch_size, hidden_units_}, attention_out)},
+            {"key_cache", Tensor(MEMORY_GPU, data_type, self_k_cache_size, k_cache.getPtrWithOffset<T>(cache_offset))},
+            {"value_cache",
+             Tensor(MEMORY_GPU, data_type, self_v_cache_size, v_cache.getPtrWithOffset<T>(cache_offset))}};
+
+        self_attention_layer_->forward(
+            &self_attention_output_tensors, &self_attention_input_tensors, &layer_weight->self_attention_weights);
 
         // the adapter after attention
         if (has_adapters_) {
-            invokeAddBias(self_attn_output_,
-                          gpt_decoder_layer_weight->at(l)->self_attention_weights.attention_output_weight.bias,
-                          local_batch_size,
-                          hidden_units_,
-                          stream_);
+            invokeGenericActivation<IdentityActivation, T, T>(
+                self_attn_output_,
+                layer_weight->self_attention_weights.attention_output_weight.bias,
+                nullptr,
+                nullptr,
+                nullptr,
+                nullptr,
+                local_batch_size,
+                hidden_units_,
+                0,
+                nullptr,
+                nullptr,
+                stream_);
 
-            std::vector<Tensor> ffn_input_tensors{
-                Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, self_attn_output_}};
-            std::vector<Tensor> ffn_output_tensors{
-                Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, after_adapter_attn_output_}};
+            TensorMap ffn_input_tensors(
+                {{"ffn_input", Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, self_attn_output_}}});
+            TensorMap ffn_output_tensors(
+                {{"ffn_output",
+                  Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, after_adapter_attn_output_}}});
 
             ffn_layer_->resetInterSize(adapter_inter_size_ / tensor_para_.world_size_);
-            ffn_layer_->forward(&ffn_output_tensors,
-                                &ffn_input_tensors,
-                                &gpt_decoder_layer_weight->at(l)->after_attention_adapter_weights);
+            ffn_layer_->forward(
+                &ffn_output_tensors, &ffn_input_tensors, &layer_weight->after_attention_adapter_weights);
         }
 
         if (layernorm_type_ == LayerNormType::pre_layernorm) {
             invokeGeneralAddBiasResidualPreLayerNorm(
-                after_adapter_attn_output_,
+                // in case of has_adaptor false isn't it self_attn_output_? i.e.
+                //   has_adapters_ ? after_adapter_attn_outpu_ : self_attn_output_,
+                has_adapters_ ? after_adapter_attn_output_ : self_attn_output_,
                 normed_self_attn_output_,
+                has_adapters_ ? after_adapter_attn_output_ : attention_out,
                 decoder_input,
                 has_adapters_ ? self_attn_output_ : nullptr,
-                gpt_decoder_layer_weight->at(l)->self_attn_layernorm_weights.gamma,
-                gpt_decoder_layer_weight->at(l)->self_attn_layernorm_weights.beta,
-                has_adapters_ ? gpt_decoder_layer_weight->at(l)->after_attention_adapter_weights.output_weight.bias :
-                                gpt_decoder_layer_weight->at(l)->self_attention_weights.attention_output_weight.bias,
+                layer_weight->self_attn_layernorm_weights.gamma,
+                layer_weight->self_attn_layernorm_weights.beta,
+                has_adapters_ ? layer_weight->after_attention_adapter_weights.output_weight.bias :
+                                layer_weight->self_attention_weights.attention_output_weight.bias,
                 layernorm_eps_,
                 local_batch_size,
                 hidden_units_,
+                layer_weight->self_attention_weights.attention_output_weight.scale_inter,
+                layer_weight->self_attention_weights.attention_output_weight.scale_out,
+                layer_weight->ffn_weights.intermediate_weight.scale,
+                int8_mode_,
                 stream_);
         }
         else if (layernorm_type_ == LayerNormType::post_layernorm) {
             invokeAddBiasResidualLayerNorm(
+                // check correctness.
                 after_adapter_attn_output_,
                 decoder_input,
-                has_adapters_ ? gpt_decoder_layer_weight->at(l)->after_attention_adapter_weights.output_weight.bias :
-                                gpt_decoder_layer_weight->at(l)->self_attention_weights.attention_output_weight.bias,
-                gpt_decoder_layer_weight->at(l)->pre_layernorm_weights.gamma,
-                gpt_decoder_layer_weight->at(l)->pre_layernorm_weights.beta,
+                has_adapters_ ? layer_weight->after_attention_adapter_weights.output_weight.bias :
+                                layer_weight->self_attention_weights.attention_output_weight.bias,
+                layer_weight->pre_layernorm_weights.gamma,
+                layer_weight->pre_layernorm_weights.beta,
                 layernorm_eps_,
                 local_batch_size,
                 hidden_units_,
@@ -388,60 +436,80 @@ void ParallelGptDecoder<T>::forward(std::vector<Tensor>*                        
 
         sync_check_cuda_error();
 
-        T* ffn_output_ptr = has_adapters_ ? self_attn_output_ : decoder_output;
+        T* ffn_output_ptr;
+        if (int8_mode_ == 2) {
+            ffn_output_ptr = reinterpret_cast<T*>(decoder_layer_output_int32_);
+        }
+        else if (has_adapters_) {
+            ffn_output_ptr = self_attn_output_;
+        }
+        else {
+            ffn_output_ptr = decoder_output;
+        }
 
-        std::vector<Tensor> ffn_input_tensors{Tensor{
-            MEMORY_GPU,
-            data_type,
-            {local_batch_size, hidden_units_},
-            layernorm_type_ == LayerNormType::pre_layernorm ? normed_self_attn_output_ : after_adapter_attn_output_}};
-        std::vector<Tensor> ffn_output_tensors{
-            Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, ffn_output_ptr}};
+        TensorMap ffn_input_tensors(
+            {{"ffn_input",
+              Tensor{MEMORY_GPU,
+                     activation_in_type,
+                     {local_batch_size, hidden_units_},
+                     layernorm_type_ == LayerNormType::pre_layernorm ? normed_self_attn_output_ :
+                                                                       after_adapter_attn_output_}}});
+        TensorMap ffn_output_tensors(
+            {{"ffn_output",
+              Tensor{MEMORY_GPU, activation_out_type, {local_batch_size, hidden_units_}, ffn_output_ptr}}});
 
         ffn_layer_->resetInterSize(inter_size_ / tensor_para_.world_size_);
-        ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &gpt_decoder_layer_weight->at(l)->ffn_weights);
+        ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &layer_weight->ffn_weights);
 
         // the adapter after ffn
         if (has_adapters_) {
-            invokeAddBias(ffn_output_ptr,
-                          gpt_decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
-                          local_batch_size,
-                          hidden_units_,
-                          stream_);
+            invokeGenericActivation<IdentityActivation, T, T>(ffn_output_ptr,
+                                                              layer_weight->ffn_weights.output_weight.bias,
+                                                              nullptr,
+                                                              nullptr,
+                                                              nullptr,
+                                                              nullptr,
+                                                              local_batch_size,
+                                                              hidden_units_,
+                                                              0,
+                                                              nullptr,
+                                                              nullptr,
+                                                              stream_);
 
-            std::vector<Tensor> ffn_input_tensors{
-                Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, ffn_output_ptr}};
-            std::vector<Tensor> ffn_output_tensors{
-                Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, decoder_output}};
+            TensorMap ffn_input_tensors(
+                {{"ffn_input", Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, ffn_output_ptr}}});
+            TensorMap ffn_output_tensors(
+                {{"ffn_output", Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, decoder_output}}});
 
             ffn_layer_->resetInterSize(adapter_inter_size_ / tensor_para_.world_size_);
-            ffn_layer_->forward(
-                &ffn_output_tensors, &ffn_input_tensors, &gpt_decoder_layer_weight->at(l)->after_ffn_adapter_weights);
+            ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &layer_weight->after_ffn_adapter_weights);
         }
 
         if (layernorm_type_ == LayerNormType::pre_layernorm) {
             invokeAddBiasResidual(decoder_output,
+                                  int8_mode_ == 2 ? reinterpret_cast<T*>(decoder_layer_output_int32_) : decoder_output,
                                   after_adapter_attn_output_,
                                   has_adapters_ ? ffn_output_ptr : nullptr,
-                                  has_adapters_ ?
-                                      gpt_decoder_layer_weight->at(l)->after_ffn_adapter_weights.output_weight.bias :
-                                      gpt_decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
+                                  has_adapters_ ? layer_weight->after_ffn_adapter_weights.output_weight.bias :
+                                                  layer_weight->ffn_weights.output_weight.bias,
+                                  int8_mode_ == 2 ? layer_weight->ffn_weights.output_weight.scale_inter : nullptr,
+                                  int8_mode_ == 2 ? layer_weight->ffn_weights.output_weight.scale_out : nullptr,
                                   local_batch_size,
                                   hidden_units_,
+                                  int8_mode_,
                                   stream_);
         }
         else if (layernorm_type_ == LayerNormType::post_layernorm) {
-            invokeAddBiasResidualLayerNorm(
-                decoder_output,
-                after_adapter_attn_output_,
-                has_adapters_ ? gpt_decoder_layer_weight->at(l)->after_ffn_adapter_weights.output_weight.bias :
-                                gpt_decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
-                gpt_decoder_layer_weight->at(l)->self_attn_layernorm_weights.gamma,
-                gpt_decoder_layer_weight->at(l)->self_attn_layernorm_weights.beta,
-                layernorm_eps_,
-                local_batch_size,
-                hidden_units_,
-                stream_);
+            invokeAddBiasResidualLayerNorm(decoder_output,
+                                           after_adapter_attn_output_,
+                                           has_adapters_ ? layer_weight->after_ffn_adapter_weights.output_weight.bias :
+                                                           layer_weight->ffn_weights.output_weight.bias,
+                                           layer_weight->self_attn_layernorm_weights.gamma,
+                                           layer_weight->self_attn_layernorm_weights.beta,
+                                           layernorm_eps_,
+                                           local_batch_size,
+                                           hidden_units_,
+                                           stream_);
         }
         sync_check_cuda_error();
 

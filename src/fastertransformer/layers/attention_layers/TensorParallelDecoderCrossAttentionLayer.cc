@@ -86,12 +86,12 @@ TensorParallelDecoderCrossAttentionLayer<T>::TensorParallelDecoderCrossAttention
 }
 
 template<typename T>
-void TensorParallelDecoderCrossAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                                                          const std::vector<fastertransformer::Tensor>* input_tensors,
+void TensorParallelDecoderCrossAttentionLayer<T>::forward(TensorMap*                output_tensors,
+                                                          TensorMap*                input_tensors,
                                                           const AttentionWeight<T>* attention_weights)
 {
     // input tensors:
-    //      attention_input [batch_size, hidden_dimension],
+    //      input_query [batch_size, hidden_dimension],
     //      finished [batch_size],
     //      sequence_lengths [batch_size]
     //      input_lengths [batch_size]
@@ -99,32 +99,28 @@ void TensorParallelDecoderCrossAttentionLayer<T>::forward(std::vector<fastertran
     //      step [1] on cpu
 
     // output tensors:
-    //      attention_output [batch_size, hidden_dimension],
+    //      hidden_features [batch_size, hidden_dimension],
     //      key_cache [batch, head_num, size_per_head // x, max_seq_len, x]
     //      value_cache [batch, head_num, max_seq_len, size_per_head]
 
-    const size_t batch_size   = output_tensors->at(0).shape[0];
-    const size_t hidden_units = output_tensors->at(0).shape[1];
+    const size_t size = output_tensors->at("hidden_features").size();
 
     bool use_custom_all_reduce_kernel = false;
     if (enable_custom_all_reduce_ && custom_all_reduce_comm_ != nullptr) {
-        use_custom_all_reduce_kernel =
-            custom_all_reduce_comm_->swapInternalBuffer(output_tensors, batch_size * hidden_units);
+        std::vector<Tensor> reduce_tensor{output_tensors->at("hidden_features")};
+        use_custom_all_reduce_kernel = custom_all_reduce_comm_->swapInternalBuffer(&reduce_tensor, size);
     }
 
     DecoderCrossAttentionLayer<T>::forward(output_tensors, input_tensors, attention_weights);
 
-    T* attention_out = (T*)(output_tensors->at(0).data);
+    T* attention_out = output_tensors->getPtr<T>("hidden_features");
     if (tensor_para_.world_size_ > 1) {
         if (!use_custom_all_reduce_kernel) {
-            ftNcclAllReduceSum(attention_out,
-                               attention_out,
-                               batch_size * hidden_units,
-                               tensor_para_,
-                               DecoderCrossAttentionLayer<T>::stream_);
+            ftNcclAllReduceSum(
+                attention_out, attention_out, size, tensor_para_, DecoderCrossAttentionLayer<T>::stream_);
         }
         else {
-            custom_all_reduce_comm_->customAllReduce(batch_size * hidden_units, DecoderCrossAttentionLayer<T>::stream_);
+            custom_all_reduce_comm_->customAllReduce(size, DecoderCrossAttentionLayer<T>::stream_);
         }
         sync_check_cuda_error();
     }

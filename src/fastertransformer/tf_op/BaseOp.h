@@ -32,6 +32,7 @@
 #include "tensorflow/core/framework/types.h"
 #include "tensorflow/core/lib/core/errors.h"
 #include "third_party/eigen3/unsupported/Eigen/CXX11/Tensor"
+#include <type_traits>
 
 #include <cuda_fp16.h>
 

@@ -31,7 +31,10 @@ void T5Decoding<T>::initialize()
                                 inter_size_,
                                 d_model_,
                                 num_layer_,
+                                expert_num_,
+                                moe_k_,
                                 layernorm_eps_,
+                                moe_layer_index_,
                                 stream_,
                                 cublas_wrapper_,
                                 allocator_,
@@ -124,6 +127,18 @@ void T5Decoding<T>::allocateBuffer(
         (int*)(allocator_->reMalloc(output_ids_transpose_buf_, sizeof(int) * batchxbeam * max_seq_len, false));
     output_log_probs_buf_ =
         (float*)(allocator_->reMalloc(output_log_probs_buf_, sizeof(float) * batchxbeam * max_seq_len, false));
+
+    if (using_beam_hyps) {
+        beam_hyps_.output_ids_tgt = (int*)allocator_->reMalloc(
+            beam_hyps_.output_ids_tgt, sizeof(int) * batch_size * beam_width * (max_seq_len + 1), true);
+        beam_hyps_.sequence_lengths_tgt =
+            (int*)allocator_->reMalloc(beam_hyps_.sequence_lengths_tgt, sizeof(int) * batch_size * beam_width, true);
+        beam_hyps_.normed_scores =
+            (float*)allocator_->reMalloc(beam_hyps_.normed_scores, sizeof(float) * batch_size * beam_width, true);
+        beam_hyps_.min_normed_scores =
+            (float*)allocator_->reMalloc(beam_hyps_.min_normed_scores, sizeof(float) * batch_size, true);
+        beam_hyps_.num_beams = (int*)allocator_->reMalloc(beam_hyps_.num_beams, sizeof(int) * batch_size, true);
+    }
     is_allocate_buffer_ = true;
 }
 
@@ -166,6 +181,14 @@ void T5Decoding<T>::freeBuffer()
         allocator_->free((void**)(&parent_ids_buf_));
         allocator_->free((void**)(&output_ids_transpose_buf_));
         allocator_->free((void**)(&output_log_probs_buf_));
+
+        if (using_beam_hyps) {
+            allocator_->free((void**)(&beam_hyps_.output_ids_tgt));
+            allocator_->free((void**)(&beam_hyps_.sequence_lengths_tgt));
+            allocator_->free((void**)(&beam_hyps_.normed_scores));
+            allocator_->free((void**)(&beam_hyps_.min_normed_scores));
+            allocator_->free((void**)(&beam_hyps_.num_beams));
+        }
         is_allocate_buffer_ = false;
     }
 }
@@ -190,7 +213,9 @@ T5Decoding<T>::T5Decoding(size_t                              max_batch_size,
                           size_t                              num_layer,
                           size_t                              vocab_size,
                           size_t                              num_bucket,
+                          size_t                              expert_num,
                           size_t                              max_distance,
+                          size_t                              moe_k,
                           float                               q_scaling,
                           int                                 start_id,
                           int                                 end_id,
@@ -200,6 +225,7 @@ T5Decoding<T>::T5Decoding(size_t                              max_batch_size,
                           float                               temperature,
                           float                               len_penalty,
                           float                               repetition_penalty,
+                          std::vector<int64_t>                moe_layer_index,
                           cudaStream_t                        stream,
                           cublasMMWrapper*                    cublas_wrapper,
                           IAllocator*                         allocator,
@@ -219,7 +245,9 @@ T5Decoding<T>::T5Decoding(size_t                              max_batch_size,
     num_layer_(num_layer),
     vocab_size_(vocab_size),
     num_bucket_(num_bucket),
+    expert_num_(expert_num),
     max_distance_(max_distance),
+    moe_k_(moe_k),
     q_scaling_(q_scaling),
     start_id_(start_id),
     end_id_(end_id),
@@ -230,6 +258,7 @@ T5Decoding<T>::T5Decoding(size_t                              max_batch_size,
     temperature_(temperature),
     len_penalty_(len_penalty),
     repetition_penalty_(repetition_penalty),
+    moe_layer_index_(moe_layer_index),
     tensor_para_(tensor_para),
     pipeline_para_(pipeline_para),
     activation_type_(activation_type),
@@ -255,7 +284,9 @@ T5Decoding<T>::T5Decoding(T5Decoding<T> const& decoding):
     num_layer_(decoding.num_layer_),
     vocab_size_(decoding.vocab_size_),
     num_bucket_(decoding.num_bucket_),
+    expert_num_(decoding.expert_num_),
     max_distance_(decoding.max_distance_),
+    moe_k_(decoding.moe_k_),
     q_scaling_(decoding.q_scaling_),
     start_id_(decoding.start_id_),
     end_id_(decoding.end_id_),
@@ -266,6 +297,7 @@ T5Decoding<T>::T5Decoding(T5Decoding<T> const& decoding):
     temperature_(decoding.temperature_),
     len_penalty_(decoding.len_penalty_),
     repetition_penalty_(decoding.repetition_penalty_),
+    moe_layer_index_(decoding.moe_layer_index_),
     vocab_size_padded_(decoding.vocab_size_padded_),
     tensor_para_(decoding.tensor_para_),
     pipeline_para_(decoding.pipeline_para_),
@@ -315,6 +347,17 @@ void T5Decoding<T>::forward(std::unordered_map<std::string, Tensor>*       outpu
                             const std::unordered_map<std::string, Tensor>* input_tensors,
                             const T5DecodingWeight<T>*                     decoding_weights)
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    TensorMap input_map(*input_tensors);
+    TensorMap output_map(*output_tensors);
+    forward(&output_map, &input_map, decoding_weights);
+}
+
+template<typename T>
+void T5Decoding<T>::forward(TensorMap*                 output_tensors,
+                            TensorMap*                 input_tensors,
+                            const T5DecodingWeight<T>* decoding_weights)
+{
     // input_tensors:
     //      encoder_output [batch_size, mem_max_seq_len, memory_hidden_dimension]
     //      encoder_sequence_length [batch_size]
@@ -329,6 +372,10 @@ void T5Decoding<T>::forward(std::unordered_map<std::string, Tensor>*       outpu
     //      len_penalty [1] or [batch_size] on cpu, optional, float.
     //      repetition_penalty [1] or [batch_size] on cpu, optional, float.
     //      random_seed [1] or [batch_size] on cpu, optional, unsigned long long int.
+    //      top_p_decay [batch_size] on gpu, float, optional
+    //      top_p_min [batch_size] on gpu, float, optional
+    //      top_p_reset_ids [batch_size] on gpu, uint32, optional
+    //      ia3_tasks [batch_size], optional
 
     // output_tensors:
     //      output_ids [batch_size, beam, max_seq_len]
@@ -350,21 +397,31 @@ void T5Decoding<T>::forward(std::unordered_map<std::string, Tensor>*       outpu
     const size_t beam_width      = output_tensors->at("output_ids").shape[1];
     const size_t max_seq_len     = output_tensors->at("output_ids").shape[2];
     const size_t mem_max_seq_len = input_tensors->at("encoder_output").shape[1];
+    const bool   has_ia3_tasks   = input_tensors->isExist("ia3_tasks");
     allocateBuffer(batch_size, beam_width, max_seq_len, mem_max_seq_len, input_tensors->at("encoder_output").shape[2]);
 
-    dynamic_decode_layer_->setup(batch_size, beam_width, input_tensors);
-    handleOptArg(input_tensors, "start_id", start_ids_buf_, start_id_, batch_size);
-    handleOptArg(input_tensors, "end_id", end_ids_buf_, end_id_, batch_size);
+    {
+        TensorMap input_map(*input_tensors);
+        dynamic_decode_layer_->setup(batch_size, beam_width, &input_map);
+        handleOptArg(&input_map, "start_id", start_ids_buf_, start_id_, batch_size);
+        handleOptArg(&input_map, "end_id", end_ids_buf_, end_id_, batch_size);
+    }
 
     FT_CHECK_WITH_INFO(input_tensors->at("encoder_output").shape[2] == d_model_,
                        fmtstr("expect input_tensors->at(\"encoder_output\").shape[2] == d_model_, "
                               "but get input_tensors->at(\"encoder_output\").shape[2] = %d, d_model_ = %d",
                               input_tensors->at("encoder_output").shape[2],
                               d_model_));
+    if (has_ia3_tasks) {
+        FT_CHECK_WITH_INFO(batch_size == input_tensors->at("ia3_tasks").shape[0],
+                           fmtstr("\"ia3_tasks\" tensor has shape [%d], expected [%d]\n",
+                                  input_tensors->at("ia3_tasks").shape[0],
+                                  batch_size));
+    }
 
     const int      max_input_length = 1;
     const DataType data_type        = getTensorType<T>();
-    int*           sequence_lengths = (int*)output_tensors->at("sequence_length").data;
+    int*           sequence_lengths = output_tensors->at("sequence_length").getPtr<int>();
 
     cudaMemsetAsync(
         output_tensors->at("output_ids").getPtr<int>(), 0, output_tensors->at("output_ids").sizeBytes(), stream_);
@@ -378,8 +435,8 @@ void T5Decoding<T>::forward(std::unordered_map<std::string, Tensor>*       outpu
     if (beam_width > 1) {
         invokeTileEncoderResults(tiled_encoder_output_,
                                  tiled_encoder_sequence_length_,
-                                 (const T*)(input_tensors->at("encoder_output").data),
-                                 (const int*)(input_tensors->at("encoder_sequence_length").data),
+                                 input_tensors->at("encoder_output").getPtr<T>(),
+                                 input_tensors->at("encoder_sequence_length").getPtr<const int>(),
                                  batch_size,
                                  beam_width,
                                  mem_max_seq_len,
@@ -390,8 +447,8 @@ void T5Decoding<T>::forward(std::unordered_map<std::string, Tensor>*       outpu
         encoder_sequence_length_ptr_ = tiled_encoder_sequence_length_;
     }
     else {
-        encoder_output_ptr_          = (const T*)(input_tensors->at("encoder_output").data);
-        encoder_sequence_length_ptr_ = (const int*)(input_tensors->at("encoder_sequence_length").data);
+        encoder_output_ptr_          = input_tensors->at("encoder_output").getPtr<const T>();
+        encoder_sequence_length_ptr_ = input_tensors->at("encoder_sequence_length").getPtr<const int>();
     }
 
     invokeDecodingInitialize(finished_buf_,
@@ -428,8 +485,12 @@ void T5Decoding<T>::forward(std::unordered_map<std::string, Tensor>*       outpu
                                      vocab_size_padded_,
                                      stream_);
         sync_check_cuda_error();
-        FT_CHECK(decoding_weights->post_decoder_embedding.bias != nullptr);
-        cudaD2Dcpy(padded_post_decoder_embedding_bias_, decoding_weights->post_decoder_embedding.bias, vocab_size_);
+        if (decoding_weights->post_decoder_embedding.bias != nullptr) {
+            cudaAutoCpy(padded_post_decoder_embedding_bias_,
+                        decoding_weights->post_decoder_embedding.bias,
+                        vocab_size_,
+                        stream_);
+        }
     }
 
     const std::vector<size_t> self_k_cache_shape = {num_layer_ / pipeline_para_.world_size_,
@@ -452,6 +513,7 @@ void T5Decoding<T>::forward(std::unordered_map<std::string, Tensor>*       outpu
     FT_CHECK(batch_size % local_batch_size == 0);
     const size_t iteration_num = batch_size / local_batch_size;
     for (int step = max_input_length; step <= (int)max_seq_len; step++) {
+        FT_LOG_DEBUG("%s::step: %d", __PRETTY_FUNCTION__, step);
         const int src_indir_idx = beam_width > 1 ? (step - 1) & 0x1 : 0;
         const int tgt_indir_idx = 1 - src_indir_idx;
 
@@ -508,6 +570,9 @@ void T5Decoding<T>::forward(std::unordered_map<std::string, Tensor>*       outpu
                        TYPE_INT32,
                        {local_batch_size, beam_width, max_seq_len + 1},
                        beam_width > 1 ? cache_indirections_[src_indir_idx] + id_offset * (max_seq_len + 1) : nullptr}};
+            if (has_ia3_tasks) {
+                decoder_input_tensors.push_back(input_tensors->at("ia3_tasks").slice({local_batch_size}, id_offset));
+            }
 
             std::vector<Tensor> decoder_output_tensors{
                 Tensor{MEMORY_GPU,
@@ -519,7 +584,7 @@ void T5Decoding<T>::forward(std::unordered_map<std::string, Tensor>*       outpu
                 Tensor{MEMORY_GPU, data_type, mem_cache_shape, key_mem_cache_},
                 Tensor{MEMORY_GPU, data_type, mem_cache_shape, value_mem_cache_}};
 
-            if (output_tensors->count("cross_attentions")) {
+            if (output_tensors->isExist("cross_attentions")) {
                 decoder_output_tensors.push_back(Tensor{
                     MEMORY_GPU,
                     TYPE_FP32,
@@ -551,14 +616,14 @@ void T5Decoding<T>::forward(std::unordered_map<std::string, Tensor>*       outpu
 
                 // bf16 logits computation fallback to fp32
                 if (tensor_para_.world_size_ == 1) {
+                    float alpha = (!t5_with_bias && tie_word_embeddings_) ? 1.0f / sqrt(d_model_) : 1.0f;
+                    float beta  = 0.0f;
 #ifdef ENABLE_BF16
                     if (std::is_same<T, __nv_bfloat16>::value) {
                         logits_data_type = TYPE_FP32;
 #else
                     if (false) {
 #endif
-                        float alpha = t5_with_bias ? 1.0f : (tie_word_embeddings_ ? 1.0f / sqrt(d_model_) : 1.0f);
-                        float beta  = 0.0f;
                         cublas_wrapper_->Gemm(CUBLAS_OP_T,
                                               CUBLAS_OP_N,
                                               vocab_size_padded_,  // n
@@ -590,20 +655,20 @@ void T5Decoding<T>::forward(std::unordered_map<std::string, Tensor>*       outpu
                                               d_model_,  // k
                                               logits_buf_ + vocab_size_units_offset,
                                               vocab_size_padded_ /* n */,
-                                              t5_with_bias ? 1.0f : 1.0f / sqrt(d_model_),
-                                              0.0f);
+                                              alpha,
+                                              beta);
                     }
                 }
                 else {
                     const int local_vocab_size = vocab_size_padded_ / tensor_para_.world_size_;
+                    float     alpha            = (!t5_with_bias && tie_word_embeddings_) ? 1.0f / sqrt(d_model_) : 1.0f;
+                    float     beta             = 0.0f;
 #ifdef ENABLE_BF16
                     if (std::is_same<T, __nv_bfloat16>::value) {
                         logits_data_type = TYPE_FP32;
 #else
                     if (false) {
 #endif
-                        float alpha = t5_with_bias ? 1.0f : (tie_word_embeddings_ ? 1.0f / sqrt(d_model_) : 1.0f);
-                        float beta  = 0.0f;
                         cublas_wrapper_->Gemm(
                             CUBLAS_OP_T,
                             CUBLAS_OP_N,
@@ -639,8 +704,8 @@ void T5Decoding<T>::forward(std::unordered_map<std::string, Tensor>*       outpu
                             nccl_logits_buf_ + vocab_size_units_offset
                                 + tensor_para_.rank_ * local_batch_size * beam_width * local_vocab_size,
                             local_vocab_size /* n */,
-                            t5_with_bias ? 1.0f : 1.0f / sqrt(d_model_),
-                            0.0f);
+                            alpha,
+                            beta);
                     }
                     ftNcclAllGather(nccl_logits_buf_ + vocab_size_units_offset,
                                     nccl_logits_buf_ + vocab_size_units_offset,
@@ -657,68 +722,82 @@ void T5Decoding<T>::forward(std::unordered_map<std::string, Tensor>*       outpu
                 }
 
                 if (t5_with_bias) {
-                    invokeAddBias(logits_buf_ + vocab_size_units_offset,
-                                  padded_post_decoder_embedding_bias_ptr_,
-                                  local_batch_size * beam_width,
-                                  vocab_size_padded_,
-                                  stream_);
+                    invokeGenericActivation<IdentityActivation, DynamicDecodeType, T>(
+                        logits_buf_ + vocab_size_units_offset,
+                        padded_post_decoder_embedding_bias_ptr_,
+                        nullptr,
+                        nullptr,
+                        nullptr,
+                        nullptr,
+                        local_batch_size * beam_width,
+                        vocab_size_padded_,
+                        0,
+                        nullptr,
+                        nullptr,
+                        stream_);
                 }
 
-                int                                     tmp_local_batch_size       = local_batch_size;
-                bool                                    is_initialize_random_table = step == 1;
-                std::unordered_map<std::string, Tensor> dynamic_decode_input_tensors{
-                    {"logits",
-                     Tensor{MEMORY_GPU, logits_data_type, {batch_size, beam_width, vocab_size_padded_}, logits_buf_}},
-                    {"embedding_bias", Tensor{MEMORY_GPU, data_type, {vocab_size_padded_}, nullptr}},
-                    {"step", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &step}},
-                    {"max_input_length", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &max_input_length}},
-                    {"input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size, beam_width}, nullptr}},
-                    {"ite", Tensor{MEMORY_CPU, TYPE_UINT32, {1}, &ite}},
-                    {"end_id", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size}, end_ids_buf_}},
-                    {"src_key_cache", Tensor{MEMORY_GPU, data_type, self_k_cache_shape, key_cache_}},
-                    {"src_value_cache", Tensor{MEMORY_GPU, data_type, self_v_cache_shape, value_cache_}},
-                    {"src_cache_indirection",
-                     Tensor{MEMORY_GPU,
-                            TYPE_INT32,
-                            {local_batch_size, beam_width, (max_seq_len + 1)},
-                            cache_indirections_[src_indir_idx] + id_offset * (max_seq_len + 1)}},
-                    {"local_batch_size", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &tmp_local_batch_size}},
-                    {"is_initialize_random_table", Tensor{MEMORY_CPU, TYPE_BOOL, {1}, &is_initialize_random_table}}};
+                int       tmp_local_batch_size       = local_batch_size;
+                bool      is_initialize_random_table = step == 1;
+                TensorMap dynamic_decode_input_tensors(
+                    {{"logits",
+                      Tensor{MEMORY_GPU, logits_data_type, {batch_size, beam_width, vocab_size_padded_}, logits_buf_}},
+                     {"step", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &step}},
+                     {"max_input_length", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &max_input_length}},
+                     {"ite", Tensor{MEMORY_CPU, TYPE_UINT32, {1}, &ite}},
+                     {"end_id", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size}, end_ids_buf_}},
+                     {"local_batch_size", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &tmp_local_batch_size}},
+                     {"is_initialize_random_table", Tensor{MEMORY_CPU, TYPE_BOOL, {1}, &is_initialize_random_table}}});
+
+                if (cache_indirections_[src_indir_idx] != nullptr) {
+                    dynamic_decode_input_tensors.insert(
+                        "src_cache_indirection",
+                        Tensor{MEMORY_GPU,
+                               TYPE_INT32,
+                               {local_batch_size, beam_width, (max_seq_len + 1)},
+                               cache_indirections_[src_indir_idx] + id_offset * (max_seq_len + 1)});
+                }
 
                 for (auto t = input_tensors->begin(); t != input_tensors->end(); ++t) {
-                    if (dynamic_decode_input_tensors.find(t->first) == dynamic_decode_input_tensors.end()) {
+                    if (!dynamic_decode_input_tensors.isExist(t->first)) {
                         dynamic_decode_input_tensors.insert(*t);
                     }
                 }
 
                 // common outputs
-                std::unordered_map<std::string, Tensor> dynamic_decode_output_tensors{
-                    {"output_ids",
-                     Tensor{MEMORY_GPU, TYPE_INT32, {(max_seq_len + 1), batch_size, beam_width}, output_ids_buf_}},
-                    {"finished", Tensor{MEMORY_GPU, TYPE_BOOL, {batch_size * beam_width}, finished_buf_}},
-                    // cum_log_probs is necessary for beam search, while it is optional for sampling.
-                    {"cum_log_probs",
-                     Tensor{MEMORY_GPU,
-                            TYPE_FP32,
-                            {batch_size * beam_width},
-                            ((beam_width > 1) || (output_tensors->count("cum_log_probs") > 0)) ? cum_log_probs_ :
-                                                                                                 nullptr}},
-                    {"output_log_probs",
-                     Tensor{MEMORY_GPU,
-                            TYPE_FP32,
-                            {(max_seq_len + 1), batch_size, beam_width},
-                            output_tensors->count("output_log_probs") > 0
-                                    && output_tensors->at("output_log_probs").data != nullptr ?
-                                output_log_probs_buf_ :
-                                nullptr}},
-                    {"parent_ids",
-                     Tensor{MEMORY_GPU, TYPE_INT32, {(max_seq_len + 1), batch_size, beam_width}, parent_ids_buf_}},
-                    {"sequence_length", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size * beam_width}, sequence_lengths}},
-                    {"tgt_cache_indirection",
-                     Tensor{MEMORY_GPU,
-                            TYPE_INT32,
-                            {local_batch_size, beam_width, (max_seq_len + 1)},
-                            cache_indirections_[tgt_indir_idx] + id_offset * (max_seq_len + 1)}}};
+                TensorMap dynamic_decode_output_tensors(
+                    {{"output_ids",
+                      Tensor{MEMORY_GPU, TYPE_INT32, {(max_seq_len + 1), batch_size, beam_width}, output_ids_buf_}},
+                     {"finished", Tensor{MEMORY_GPU, TYPE_BOOL, {batch_size * beam_width}, finished_buf_}},
+                     {"parent_ids",
+                      Tensor{MEMORY_GPU, TYPE_INT32, {(max_seq_len + 1), batch_size, beam_width}, parent_ids_buf_}},
+                     {"sequence_length", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size * beam_width}, sequence_lengths}}});
+
+                if (using_beam_hyps) {
+                    dynamic_decode_output_tensors.insert("beam_hyps", Tensor{MEMORY_GPU, TYPE_VOID, {1}, &beam_hyps_});
+                }
+
+                // cum_log_probs is necessary for beam search, while it is optional for sampling.
+                if (beam_width > 1 || output_tensors->isExist("cum_log_probs")) {
+                    dynamic_decode_output_tensors.insert(
+                        "cum_log_probs", Tensor{MEMORY_GPU, TYPE_FP32, {batch_size * beam_width}, cum_log_probs_});
+                }
+
+                if (output_tensors->getPtr<float>("output_log_probs", nullptr) != nullptr) {
+                    dynamic_decode_output_tensors.insert(
+                        "output_log_probs",
+                        Tensor{
+                            MEMORY_GPU, TYPE_FP32, {(max_seq_len + 1), batch_size, beam_width}, output_log_probs_buf_});
+                }
+
+                if (cache_indirections_[tgt_indir_idx] != nullptr) {
+                    dynamic_decode_output_tensors.insert(
+                        "tgt_cache_indirection",
+                        Tensor{MEMORY_GPU,
+                               TYPE_INT32,
+                               {local_batch_size, beam_width, (max_seq_len + 1)},
+                               cache_indirections_[tgt_indir_idx] + id_offset * (max_seq_len + 1)});
+                }
 
                 for (auto t = output_tensors->begin(); t != output_tensors->end(); ++t) {
                     // Handle exceptions.
@@ -771,35 +850,58 @@ void T5Decoding<T>::forward(std::unordered_map<std::string, Tensor>*       outpu
 
     if (pipeline_para_.rank_ == pipeline_para_.world_size_ - 1) {
         if (beam_width > 1) {
-            // For beam search, do gather_tree
-            invokeGatherTree(output_ids_transpose_buf_,
-                             (int*)output_tensors->at("sequence_length").data,
-                             max_seq_len,
-                             batch_size,
-                             beam_width,
-                             output_ids_buf_ + batch_size * beam_width,
-                             parent_ids_buf_ + batch_size * beam_width,
-                             end_ids_buf_,
-                             stream_);
+            if (using_beam_hyps) {
+                beam_hyps_.sequence_lengths_src = sequence_lengths;
+                beam_hyps_.parent_ids_src       = parent_ids_buf_;
+                beam_hyps_.output_ids_src       = output_ids_buf_;
+                beam_hyps_.max_seq_len          = max_seq_len;
+                beam_hyps_.length_penalty       = input_tensors->at("len_penalty").getVal<float>();
 
-            // transpose and take output_parent_ids as inter buffer
-            invokeTransposeAxis01((int*)output_tensors->at("output_ids").data,
-                                  output_ids_transpose_buf_,
-                                  max_seq_len,
-                                  batch_size * beam_width,
-                                  1,
-                                  stream_);
+                invokeInsertUnfinishedPath(beam_hyps_, finished_buf_, cum_log_probs_, batch_size, beam_width, stream_);
+                sync_check_cuda_error();
+
+                invokeFinalize(output_tensors->at("output_ids").getPtr<int>(),
+                               output_tensors->at("sequence_length").getPtr<int>(),
+                               beam_hyps_.output_ids_tgt,
+                               beam_hyps_.sequence_lengths_tgt,
+                               beam_hyps_.normed_scores,
+                               beam_width,
+                               max_seq_len,
+                               batch_size,
+                               stream_);
+                sync_check_cuda_error();
+            }
+            else {
+                // For beam search, do gather_tree
+                invokeGatherTree(output_ids_transpose_buf_,
+                                 output_tensors->at("sequence_length").getPtr<int>(),
+                                 max_seq_len,
+                                 batch_size,
+                                 beam_width,
+                                 output_ids_buf_ + batch_size * beam_width,
+                                 parent_ids_buf_ + batch_size * beam_width,
+                                 end_ids_buf_,
+                                 stream_);
+
+                // transpose and take output_parent_ids as inter buffer
+                invokeTransposeAxis01(output_tensors->at("output_ids").getPtr<int>(),
+                                      output_ids_transpose_buf_,
+                                      max_seq_len,
+                                      batch_size * beam_width,
+                                      1,
+                                      stream_);
+            }
         }
         else {
             // For sampling, only transpose the results to output_tensor
-            invokeTransposeAxis01((int*)output_tensors->at("output_ids").data,
+            invokeTransposeAxis01(output_tensors->at("output_ids").getPtr<int>(),
                                   output_ids_buf_ + batch_size * beam_width,
                                   max_seq_len,
                                   batch_size * beam_width,
                                   1,
                                   stream_);
         }
-        if (output_tensors->find("output_log_probs") != output_tensors->end()) {
+        if (output_tensors->isExist("output_log_probs")) {
             invokeTransposeAxis01(output_tensors->at("output_log_probs").getPtr<float>(),
                                   output_log_probs_buf_,
                                   max_seq_len,
@@ -809,7 +911,7 @@ void T5Decoding<T>::forward(std::unordered_map<std::string, Tensor>*       outpu
         }
 
         // Return the cumulative log probability if requested.
-        if (output_tensors->count("cum_log_probs") > 0) {
+        if (output_tensors->isExist("cum_log_probs")) {
             Tensor cum_log_probs = output_tensors->at("cum_log_probs");
             FT_CHECK_WITH_INFO(cum_log_probs.size() == batch_size * beam_width,
                                "The shape of cum_log_probs does not match with batch_size x beam_width.");
@@ -832,7 +934,7 @@ void T5Decoding<T>::forward(std::unordered_map<std::string, Tensor>*       outpu
                        pipeline_para_,
                        stream_);
 
-            if (output_tensors->count("cum_log_probs") > 0 && output_tensors->at("cum_log_probs").data != nullptr) {
+            if (output_tensors->isExist("cum_log_probs") && output_tensors->at("cum_log_probs").data != nullptr) {
                 ftNcclSend(output_tensors->at("cum_log_probs").getPtr<float>(),
                            batch_size * beam_width,
                            0,
@@ -840,8 +942,7 @@ void T5Decoding<T>::forward(std::unordered_map<std::string, Tensor>*       outpu
                            stream_);
             }
 
-            if (output_tensors->count("output_log_probs") > 0
-                && output_tensors->at("output_log_probs").data != nullptr) {
+            if (output_tensors->isExist("output_log_probs") && output_tensors->at("output_log_probs").data != nullptr) {
                 ftNcclSend(output_tensors->at("output_log_probs").getPtr<float>(),
                            batch_size * beam_width * max_seq_len,
                            0,
@@ -862,7 +963,7 @@ void T5Decoding<T>::forward(std::unordered_map<std::string, Tensor>*       outpu
                        pipeline_para_,
                        stream_);
 
-            if (output_tensors->count("cum_log_probs") > 0 && output_tensors->at("cum_log_probs").data != nullptr) {
+            if (output_tensors->isExist("cum_log_probs") && output_tensors->at("cum_log_probs").data != nullptr) {
                 ftNcclRecv(output_tensors->at("cum_log_probs").getPtr<float>(),
                            batch_size * beam_width,
                            pipeline_para_.world_size_ - 1,
@@ -870,8 +971,7 @@ void T5Decoding<T>::forward(std::unordered_map<std::string, Tensor>*       outpu
                            stream_);
             }
 
-            if (output_tensors->count("output_log_probs") > 0
-                && output_tensors->at("output_log_probs").data != nullptr) {
+            if (output_tensors->isExist("output_log_probs") && output_tensors->at("output_log_probs").data != nullptr) {
                 ftNcclRecv(output_tensors->at("output_log_probs").getPtr<float>(),
                            batch_size * beam_width * max_seq_len,
                            pipeline_para_.world_size_ - 1,

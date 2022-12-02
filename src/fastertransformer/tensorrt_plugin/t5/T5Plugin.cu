@@ -165,9 +165,12 @@ T5EncoderPlugin::T5EncoderPlugin(const std::string& name,
                                               m_.d_model,
                                               m_.num_layer,
                                               m_.num_bucket,
+                                              0,  // expert_num
                                               m_.max_distance,
+                                              0,  // moe_k
                                               m_.sm,
                                               m_.q_scaling,
+                                              {},
                                               0,  // stream placeholder
                                               pCublasWrapper_,
                                               pAllocator_,
@@ -191,9 +194,12 @@ T5EncoderPlugin::T5EncoderPlugin(const std::string& name,
                                                 m_.d_model,
                                                 m_.num_layer,
                                                 m_.num_bucket,
+                                                0,  // expert_num
                                                 m_.max_distance,
+                                                0,  // moe_k
                                                 m_.sm,
                                                 m_.q_scaling,
+                                                {},
                                                 0,  // stream placeholder
                                                 pCublasWrapper_,
                                                 pAllocator_,
@@ -322,9 +328,12 @@ T5EncoderPlugin::T5EncoderPlugin(const std::string& name, const void* buffer, si
                                               m_.d_model,
                                               m_.num_layer,
                                               m_.num_bucket,
+                                              0,  // expert_num
                                               m_.max_distance,
+                                              0,  // moe_k
                                               m_.sm,
                                               m_.q_scaling,
+                                              {},
                                               0,  // stream placeholder
                                               pCublasWrapper_,
                                               pAllocator_,
@@ -348,9 +357,12 @@ T5EncoderPlugin::T5EncoderPlugin(const std::string& name, const void* buffer, si
                                                 m_.d_model,
                                                 m_.num_layer,
                                                 m_.num_bucket,
+                                                0,  // expert_num
                                                 m_.max_distance,
+                                                0,  // moe_k
                                                 m_.sm,
                                                 m_.q_scaling,
+                                                {},
                                                 0,  // stream placeholder
                                                 pCublasWrapper_,
                                                 pAllocator_,
@@ -576,26 +588,26 @@ int T5EncoderPlugin::enqueue(const PluginTensorDesc* inputDesc,
     cublasSetStream(cublasHandle_, stream);
     pCublasWrapper_->setStream(stream);
 
-    std::unordered_map<std::string, Tensor> inputTensor{
-        {"input_ids", Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{m_.batch_size, m_.seq_len}, (int*)inputs[0]}},
-        {"sequence_length", Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{m_.batch_size}, (int*)inputs[1]}}};
+    TensorMap inputTensor(
+        {{"input_ids", Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{m_.batch_size, m_.seq_len}, (int*)inputs[0]}},
+         {"sequence_length", Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{m_.batch_size}, (int*)inputs[1]}}});
     if (m_.useFP16) {
-        std::unordered_map<std::string, Tensor> outputTensor{
-            {"output_hidden_state",
-             Tensor{MEMORY_GPU,
-                    TYPE_FP16,
-                    std::vector<size_t>{m_.batch_size, m_.seq_len, (size_t)(m_.head_num * m_.size_per_head)},
-                    (half*)outputs[0]}}};
+        TensorMap outputTensor(
+            {{"output_hidden_state",
+              Tensor{MEMORY_GPU,
+                     TYPE_FP16,
+                     std::vector<size_t>{m_.batch_size, m_.seq_len, (size_t)(m_.head_num * m_.size_per_head)},
+                     (half*)outputs[0]}}});
         pT5EncoderHalf_->setStream(stream);
         pT5EncoderHalf_->forward(&outputTensor, &inputTensor, pT5EncoderWeightHalf_);
     }
     else {
-        std::unordered_map<std::string, Tensor> outputTensor{
-            {"output_hidden_state",
-             Tensor{MEMORY_GPU,
-                    TYPE_FP32,
-                    std::vector<size_t>{m_.batch_size, m_.seq_len, (size_t)(m_.head_num * m_.size_per_head)},
-                    (float*)outputs[0]}}};
+        TensorMap outputTensor(
+            {{"output_hidden_state",
+              Tensor{MEMORY_GPU,
+                     TYPE_FP32,
+                     std::vector<size_t>{m_.batch_size, m_.seq_len, (size_t)(m_.head_num * m_.size_per_head)},
+                     (float*)outputs[0]}}});
         pT5EncoderFloat_->setStream(stream);
         pT5EncoderFloat_->forward(&outputTensor, &inputTensor, pT5EncoderWeightFloat_);
     }
@@ -833,7 +845,9 @@ T5DecodingPlugin::T5DecodingPlugin(const std::string& name,
                                                 m_.num_layer,
                                                 m_.vocab_size,
                                                 m_.num_bucket,
+                                                0,  // expert_num
                                                 m_.max_distance,
+                                                0,  // moe_k
                                                 m_.q_scaling,
                                                 m_.start_id,
                                                 m_.end_id,
@@ -843,7 +857,8 @@ T5DecodingPlugin::T5DecodingPlugin(const std::string& name,
                                                 0.0f,  // don't need to pass temperature in constructor
                                                 0.0f,  // don't need to pass len_penalty in constructor
                                                 0.0f,  // don't need to pass repetition_penalty in constructor
-                                                0,     // stream placeholder
+                                                {},
+                                                0,  // stream placeholder
                                                 pCublasWrapper_,
                                                 pAllocator_,
                                                 m_.is_free_buffer_after_forward,
@@ -866,7 +881,9 @@ T5DecodingPlugin::T5DecodingPlugin(const std::string& name,
                                                   m_.num_layer,
                                                   m_.vocab_size,
                                                   m_.num_bucket,
+                                                  0,  // expert_num
                                                   m_.max_distance,
+                                                  0,  // moe_k
                                                   m_.q_scaling,
                                                   m_.start_id,
                                                   m_.end_id,
@@ -876,7 +893,8 @@ T5DecodingPlugin::T5DecodingPlugin(const std::string& name,
                                                   0.0f,  // don't need to pass temperature in constructor
                                                   0.0f,  // don't need to pass len_penalty in constructor
                                                   0.0f,  // don't need to pass repetition_penalty in constructor
-                                                  0,     // stream placeholder
+                                                  {},
+                                                  0,  // stream placeholder
                                                   pCublasWrapper_,
                                                   pAllocator_,
                                                   m_.is_free_buffer_after_forward,
@@ -992,7 +1010,9 @@ T5DecodingPlugin::T5DecodingPlugin(const std::string& name, const void* buffer, 
                                                 m_.num_layer,
                                                 m_.vocab_size,
                                                 m_.num_bucket,
+                                                0,  // expert_num
                                                 m_.max_distance,
+                                                0,  // moe_k
                                                 m_.q_scaling,
                                                 m_.start_id,
                                                 m_.end_id,
@@ -1002,6 +1022,7 @@ T5DecodingPlugin::T5DecodingPlugin(const std::string& name, const void* buffer, 
                                                 m_.temperature,
                                                 m_.len_penalty,
                                                 m_.repetition_penalty,
+                                                {},
                                                 0,  // stream placeholder
                                                 pCublasWrapper_,
                                                 pAllocator_,
@@ -1025,7 +1046,9 @@ T5DecodingPlugin::T5DecodingPlugin(const std::string& name, const void* buffer, 
                                                   m_.num_layer,
                                                   m_.vocab_size,
                                                   m_.num_bucket,
+                                                  0,  // expert_num
                                                   m_.max_distance,
+                                                  0,  // moe_k
                                                   m_.q_scaling,
                                                   m_.start_id,
                                                   m_.end_id,
@@ -1035,6 +1058,7 @@ T5DecodingPlugin::T5DecodingPlugin(const std::string& name, const void* buffer, 
                                                   m_.temperature,
                                                   m_.len_penalty,
                                                   m_.repetition_penalty,
+                                                  {},
                                                   0,  // stream placeholder
                                                   pCublasWrapper_,
                                                   pAllocator_,
@@ -1320,70 +1344,70 @@ int T5DecodingPlugin::enqueue(const PluginTensorDesc* inputDesc,
     cudaMemcpyAsync(
         pRepetition_penalty, (float*)inputs[7], sizeof(float) * nRepetition_penalty, cudaMemcpyDeviceToHost, stream);
 
-    std::unordered_map<std::string, Tensor> outputTensor{
-        {"output_ids",
-         Tensor{MEMORY_GPU,
-                TYPE_INT32,
-                std::vector<size_t>{(size_t)m_.batch_size, (size_t)m_.beam_width, (size_t)m_.max_seq_len},
-                (int*)outputs[0]}},
-        {"sequence_length",
-         Tensor{MEMORY_GPU,
-                TYPE_INT32,
-                std::vector<size_t>{(size_t)m_.batch_size, (size_t)m_.beam_width},
-                (int*)outputs[1]}}};
+    TensorMap outputTensor(
+        {{"output_ids",
+          Tensor{MEMORY_GPU,
+                 TYPE_INT32,
+                 std::vector<size_t>{(size_t)m_.batch_size, (size_t)m_.beam_width, (size_t)m_.max_seq_len},
+                 (int*)outputs[0]}},
+         {"sequence_length",
+          Tensor{MEMORY_GPU,
+                 TYPE_INT32,
+                 std::vector<size_t>{(size_t)m_.batch_size, (size_t)m_.beam_width},
+                 (int*)outputs[1]}}});
     if (m_.useFP16) {
-        std::unordered_map<std::string, Tensor> inputTensor{
-            {"encoder_output",
-             Tensor{MEMORY_GPU,
-                    TYPE_FP16,
-                    std::vector<size_t>{(size_t)m_.batch_size, (size_t)m_.seq_len, (size_t)m_.mem_d_model},
-                    (half*)inputs[0]}},
-            {"encoder_sequence_length",
-             Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{(size_t)m_.batch_size}, (int*)inputs[1]}},
-            {"runtime_top_k", Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<size_t>{(size_t)nTopK}, (int*)pTopK}},
-            {"runtime_top_p", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{(size_t)nTopP}, (float*)pTopP}},
-            {"beam_search_diversity_rate",
-             Tensor{MEMORY_CPU,
-                    TYPE_FP32,
-                    std::vector<size_t>{(size_t)nBeam_search_diversity_rate},
-                    (float*)pBeam_search_diversity_rate}},
-            {"temperature",
-             Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{(size_t)nTemperature}, (float*)pTemperature}},
-            {"len_penalty",
-             Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{(size_t)nLen_penalty}, (float*)pLen_penalty}},
-            {"repetition_penalty",
-             Tensor{MEMORY_CPU,
-                    TYPE_FP32,
-                    std::vector<size_t>{(size_t)nRepetition_penalty},
-                    (float*)pRepetition_penalty}}};
+        TensorMap inputTensor(
+            {{"encoder_output",
+              Tensor{MEMORY_GPU,
+                     TYPE_FP16,
+                     std::vector<size_t>{(size_t)m_.batch_size, (size_t)m_.seq_len, (size_t)m_.mem_d_model},
+                     (half*)inputs[0]}},
+             {"encoder_sequence_length",
+              Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{(size_t)m_.batch_size}, (int*)inputs[1]}},
+             {"runtime_top_k", Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<size_t>{(size_t)nTopK}, (int*)pTopK}},
+             {"runtime_top_p", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{(size_t)nTopP}, (float*)pTopP}},
+             {"beam_search_diversity_rate",
+              Tensor{MEMORY_CPU,
+                     TYPE_FP32,
+                     std::vector<size_t>{(size_t)nBeam_search_diversity_rate},
+                     (float*)pBeam_search_diversity_rate}},
+             {"temperature",
+              Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{(size_t)nTemperature}, (float*)pTemperature}},
+             {"len_penalty",
+              Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{(size_t)nLen_penalty}, (float*)pLen_penalty}},
+             {"repetition_penalty",
+              Tensor{MEMORY_CPU,
+                     TYPE_FP32,
+                     std::vector<size_t>{(size_t)nRepetition_penalty},
+                     (float*)pRepetition_penalty}}});
         pT5DecodingHalf_->setStream(stream);
         pT5DecodingHalf_->forward(&outputTensor, &inputTensor, pT5DecodingWeightHalf_);
     }
     else {
-        std::unordered_map<std::string, Tensor> inputTensor{
-            {"encoder_output",
-             Tensor{MEMORY_GPU,
-                    TYPE_FP32,
-                    std::vector<size_t>{(size_t)m_.batch_size, (size_t)m_.seq_len, (size_t)m_.mem_d_model},
-                    (float*)inputs[0]}},
-            {"encoder_sequence_length",
-             Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{(size_t)m_.batch_size}, (int*)inputs[1]}},
-            {"runtime_top_k", Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<size_t>{(size_t)nTopK}, (int*)pTopK}},
-            {"runtime_top_p", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{(size_t)nTopP}, (float*)pTopP}},
-            {"beam_search_diversity_rate",
-             Tensor{MEMORY_CPU,
-                    TYPE_FP32,
-                    std::vector<size_t>{(size_t)nBeam_search_diversity_rate},
-                    (float*)pBeam_search_diversity_rate}},
-            {"temperature",
-             Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{(size_t)nTemperature}, (float*)pTemperature}},
-            {"len_penalty",
-             Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{(size_t)nLen_penalty}, (float*)pLen_penalty}},
-            {"repetition_penalty",
-             Tensor{MEMORY_CPU,
-                    TYPE_FP32,
-                    std::vector<size_t>{(size_t)nRepetition_penalty},
-                    (float*)pRepetition_penalty}}};
+        TensorMap inputTensor(
+            {{"encoder_output",
+              Tensor{MEMORY_GPU,
+                     TYPE_FP32,
+                     std::vector<size_t>{(size_t)m_.batch_size, (size_t)m_.seq_len, (size_t)m_.mem_d_model},
+                     (float*)inputs[0]}},
+             {"encoder_sequence_length",
+              Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{(size_t)m_.batch_size}, (int*)inputs[1]}},
+             {"runtime_top_k", Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<size_t>{(size_t)nTopK}, (int*)pTopK}},
+             {"runtime_top_p", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{(size_t)nTopP}, (float*)pTopP}},
+             {"beam_search_diversity_rate",
+              Tensor{MEMORY_CPU,
+                     TYPE_FP32,
+                     std::vector<size_t>{(size_t)nBeam_search_diversity_rate},
+                     (float*)pBeam_search_diversity_rate}},
+             {"temperature",
+              Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{(size_t)nTemperature}, (float*)pTemperature}},
+             {"len_penalty",
+              Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{(size_t)nLen_penalty}, (float*)pLen_penalty}},
+             {"repetition_penalty",
+              Tensor{MEMORY_CPU,
+                     TYPE_FP32,
+                     std::vector<size_t>{(size_t)nRepetition_penalty},
+                     (float*)pRepetition_penalty}}});
         pT5DecodingFloat_->setStream(stream);
         pT5DecodingFloat_->forward(&outputTensor, &inputTensor, pT5DecodingWeightFloat_);
     }

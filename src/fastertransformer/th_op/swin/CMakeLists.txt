@@ -28,5 +28,6 @@ if(BUILD_PYT)
                         CUDA_RESOLVE_DEVICE_SYMBOLS ON)
   target_link_libraries(${LIB_NAME} "${TORCH_LIBRARIES}" Swin SwinINT8 
     cublasINT8MMWrapper cublasAlgoMap trt_fused_multi_head_attention 
-    gen_relative_pos_bias quantize_weight -lcudnn -lcublas -lcudart)
+    gen_relative_pos_bias quantize_weight transform_mask_kernels
+    -lcudnn -lcublas -lcudart)
 endif()

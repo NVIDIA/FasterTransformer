@@ -17,7 +17,7 @@ cmake_minimum_required(VERSION 3.8)
 add_library(GptJDecoderLayerWeight STATIC GptJDecoderLayerWeight.cc)
 set_property(TARGET GptJDecoderLayerWeight PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET GptJDecoderLayerWeight PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(GptJDecoderLayerWeight PUBLIC memory_utils)
+target_link_libraries(GptJDecoderLayerWeight PUBLIC memory_utils cuda_utils logger)
 
 add_library(GptJDecoder STATIC GptJDecoder.cc)
 set_property(TARGET GptJDecoder PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -29,7 +29,9 @@ target_link_libraries(GptJDecoder PUBLIC -lcudart cublasMMWrapper
                       add_residual_kernels
                       GptJDecoderLayerWeight
                       tensor
-                      nccl_utils)
+                      nccl_utils
+                      cuda_utils
+                      logger)
 
 add_library(GptJContextDecoder STATIC GptJContextDecoder.cc)
 set_property(TARGET GptJContextDecoder PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -41,12 +43,14 @@ target_link_libraries(GptJContextDecoder PUBLIC -lcudart cublasMMWrapper
                       add_residual_kernels
                       gpt_kernels
                       tensor
-                      nccl_utils)
+                      nccl_utils
+                      cuda_utils
+                      logger)
 
 add_library(GptJWeight STATIC GptJWeight.cc)
 set_property(TARGET GptJWeight PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET GptJWeight PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(GptJWeight PUBLIC GptJDecoderLayerWeight)
+target_link_libraries(GptJWeight PUBLIC GptJDecoderLayerWeight cuda_utils logger)
 
 add_library(GptJ STATIC GptJ.cc)
 set_property(TARGET GptJ PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -60,4 +64,6 @@ target_link_libraries(GptJ PUBLIC -lcudart
                       BaseBeamSearchLayer
                       bert_preprocess_kernels
                       tensor
-                      GptJWeight)
+                      GptJWeight
+                      cuda_utils
+                      logger)

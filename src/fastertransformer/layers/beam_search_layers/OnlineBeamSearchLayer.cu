@@ -22,15 +22,16 @@ static const int SMALL_TOP_K_SOFTMAX_MAX_VOC_PARTS = 128;
 static const int MAX_K                             = 4;
 
 template<typename T>
-__global__ void update_kernel(bool*      finished,
-                              int*       parent_ids,
-                              int*       sequence_length,
-                              int*       word_ids,
-                              int*       output_ids,
-                              const int  vocab_size,
-                              const int* end_ids,
-                              const int  local_batch_size,
-                              const int  beam_width)
+__global__ void update_kernel(bool*          finished,
+                              int*           parent_ids,
+                              int*           sequence_length,
+                              int*           word_ids,
+                              int*           output_ids,
+                              BeamHypotheses beam_hyps,
+                              const int      vocab_size,
+                              const int*     end_ids,
+                              const int      local_batch_size,
+                              const int      beam_width)
 {
     for (int index = blockIdx.x * blockDim.x + threadIdx.x; index < local_batch_size * beam_width;
          index += blockDim.x * gridDim.x) {
@@ -46,19 +47,28 @@ __global__ void update_kernel(bool*      finished,
         parent_ids[index]      = beam_id;
         word_ids[index]        = word_id;
         output_ids[index]      = word_id;
+
+        if (beam_hyps.num_beams != nullptr) {
+            if (beam_hyps.num_beams[beam_hyps.ite * beam_hyps.local_batch_size + batch_id] == beam_width) {
+                for (int i = 0; i < beam_width; i++) {
+                    finished[batch_id * beam_width + i] = true;
+                }
+            }
+        }
     }
 }
 
-void invokeUpdate(bool*        finished,
-                  int*         parent_ids,
-                  int*         sequence_length,
-                  int*         word_ids,
-                  int*         output_ids,
-                  const int    local_batch_size,
-                  const int    beam_width,
-                  const int    vocab_size_padded,
-                  const int*   end_ids,
-                  cudaStream_t stream)
+void invokeUpdate(bool*           finished,
+                  int*            parent_ids,
+                  int*            sequence_length,
+                  int*            word_ids,
+                  int*            output_ids,
+                  BeamHypotheses* beam_hyps,
+                  const int       local_batch_size,
+                  const int       beam_width,
+                  const int       vocab_size_padded,
+                  const int*      end_ids,
+                  cudaStream_t    stream)
 {
     dim3 grid((int)ceil(local_batch_size * beam_width * 1.0 / 256));
     dim3 block(256);
@@ -68,6 +78,7 @@ void invokeUpdate(bool*        finished,
                                                      sequence_length,
                                                      word_ids,
                                                      output_ids,
+                                                     *beam_hyps,
                                                      vocab_size_padded,
                                                      end_ids,
                                                      local_batch_size,
@@ -75,46 +86,7 @@ void invokeUpdate(bool*        finished,
 }
 
 template<typename T>
-void OnlineBeamSearchLayer<T>::invokeSoftMax(std::vector<Tensor>*       output_tensors,
-                                             const std::vector<Tensor>* input_tensors)
-{
-    // input_tensors:
-    //      logits [local_batch_size, beam_width, vocab_size_padded]
-    //      embedding_bias [vocab_size_padded]
-    //      step [1] on cpu
-    //      src_cache_indirection [local_batch_size, beam_width, max_seq_len]
-    //      max_input_length [1] on cpu
-    //      input_lengths [local_batch_size * beam_width]
-    //      ite [1] on cpu
-
-    // output_tensors:
-    //      output_ids [max_seq_len, batch_size, beam_width]
-    //      finished [local_batch_size * beam_width]
-    //      cum_log_probs [local_batch_size * beam_width]
-    //      parent_ids [max_seq_len, batch_size * beam_width]
-    //      sequence_length [local_batch_size * beam_width]
-    //      tgt_cache_indirection [local_batch_size, beam_width, max_seq_len]
-
-    std::unordered_map<std::string, Tensor> input_tensors_map{{"logits", input_tensors->at(0)},
-                                                              {"embedding_bias", input_tensors->at(1)},
-                                                              {"step", input_tensors->at(2)},
-                                                              {"src_cache_indirection", input_tensors->at(3)},
-                                                              {"max_input_length", input_tensors->at(4)},
-                                                              {"input_lengths", input_tensors->at(5)},
-                                                              {"ite", input_tensors->at(6)}};
-
-    std::unordered_map<std::string, Tensor> output_tensors_map{{"output_ids", output_tensors->at(0)},
-                                                               {"finished", output_tensors->at(1)},
-                                                               {"cum_log_probs", output_tensors->at(2)},
-                                                               {"parent_ids", output_tensors->at(3)},
-                                                               {"sequence_length", output_tensors->at(4)},
-                                                               {"tgt_cache_indirection", output_tensors->at(5)}};
-    invokeSoftMax(&output_tensors_map, &input_tensors_map);
-}
-
-template<typename T>
-void OnlineBeamSearchLayer<T>::invokeSoftMax(std::unordered_map<std::string, Tensor>*       output_tensors,
-                                             const std::unordered_map<std::string, Tensor>* input_tensors)
+void OnlineBeamSearchLayer<T>::invokeSoftMax(TensorMap* output_tensors, TensorMap* input_tensors)
 {
     // input_tensors:
     //      logits [local_batch_size, beam_width, vocab_size_padded]
@@ -143,18 +115,34 @@ void OnlineBeamSearchLayer<T>::invokeSoftMax(std::unordered_map<std::string, Ten
 
     const int   batch_size       = output_tensors->at("output_ids").shape[1];
     const int   beam_width       = output_tensors->at("output_ids").shape[2];
-    const int   step             = *((int*)input_tensors->at("step").data);
-    const int   ite              = *((int*)input_tensors->at("ite").data);
+    const int   step             = input_tensors->at("step").getVal<int>();
+    const int   ite              = input_tensors->at("ite").getVal<int>();
     const int   local_batch_size = input_tensors->at("logits").shape[0];
-    const float diversity_rate   = input_tensors->count("beam_search_diversity_rate") ?
+    const float diversity_rate   = input_tensors->isExist("beam_search_diversity_rate") ?
                                        input_tensors->at("beam_search_diversity_rate").getVal<float>() :
                                        0.0f;
     const float length_penalty =
-        input_tensors->count("len_penalty") ? input_tensors->at("len_penalty").getVal<float>() : 0.0f;
+        input_tensors->isExist("len_penalty") ? input_tensors->at("len_penalty").getVal<float>() : 0.0f;
 
     float* output_log_probs =
-        output_tensors->count("output_log_probs") ? (float*)output_tensors->at("output_log_probs").data : nullptr;
+        output_tensors->isExist("output_log_probs") ? output_tensors->at("output_log_probs").getPtr<float>() : nullptr;
     const int id_offset = step * batch_size * beam_width + local_batch_size * ite * beam_width;
+
+    BeamHypotheses beam_hyps;
+    if (output_tensors->isExist("beam_hyps")) {
+        beam_hyps                      = *((BeamHypotheses*)(output_tensors->at("beam_hyps").getPtr<void>()));
+        beam_hyps.step                 = step;
+        beam_hyps.ite                  = ite;
+        beam_hyps.local_batch_size     = local_batch_size;
+        beam_hyps.batch_size           = output_tensors->at("output_ids").shape[1];
+        beam_hyps.max_seq_len          = output_tensors->at("output_ids").shape[0];
+        beam_hyps.output_ids_src       = output_tensors->at("output_ids").getPtr<int>();
+        beam_hyps.parent_ids_src       = output_tensors->at("parent_ids").getPtr<int>();
+        beam_hyps.sequence_lengths_src = output_tensors->at("sequence_length").getPtr<int>();
+        beam_hyps.length_penalty       = length_penalty;
+        beam_hyps.end_ids              = input_tensors->at("end_id").getPtr<int>();
+    }
+
     invokeTopkSoftMax(input_tensors->at("logits").getPtr<T>(),
                       (const T*)(nullptr),
                       output_tensors->at("finished").getPtr<bool>(),
@@ -164,6 +152,7 @@ void OnlineBeamSearchLayer<T>::invokeSoftMax(std::unordered_map<std::string, Ten
                       output_tensors->at("output_ids").getPtrWithOffset<int>(id_offset),
                       topk_softmax_workspace_,
                       topk_softmax_workspace_size_,
+                      &beam_hyps,
                       local_batch_size,
                       beam_width,
                       vocab_size_padded_,
@@ -173,15 +162,16 @@ void OnlineBeamSearchLayer<T>::invokeSoftMax(std::unordered_map<std::string, Ten
                       stream_);
     sync_check_cuda_error();
 
-    invokeUpdate((bool*)output_tensors->at("finished").data,
-                 ((int*)output_tensors->at("parent_ids").data) + id_offset,
-                 (int*)output_tensors->at("sequence_length").data,
-                 ((int*)output_tensors->at("output_ids").data) + id_offset,
-                 ((int*)output_tensors->at("output_ids").data) + id_offset,
+    invokeUpdate(output_tensors->at("finished").getPtr<bool>(),
+                 output_tensors->at("parent_ids").getPtrWithOffset<int>(id_offset),
+                 output_tensors->at("sequence_length").getPtr<int>(),
+                 output_tensors->at("output_ids").getPtrWithOffset<int>(id_offset),
+                 output_tensors->at("output_ids").getPtrWithOffset<int>(id_offset),
+                 &beam_hyps,
                  local_batch_size,
                  beam_width,
                  vocab_size_padded_,
-                 (const int*)input_tensors->at("end_id").data,
+                 input_tensors->at("end_id").getPtr<const int>(),
                  stream_);
     sync_check_cuda_error();
 }

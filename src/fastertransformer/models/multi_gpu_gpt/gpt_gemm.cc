@@ -21,10 +21,18 @@ namespace ft = fastertransformer;
 
 int main(int argc, char* argv[])
 {
-    if (argc != 9 && argc != 10 && argc != 11) {
-        printf(
-            "[ERROR] gpt_gemm batch_size beam_width max_input_len head_number size_per_head inter_size vocab_size data_type tensor_para_size\n");
-        printf("e.g. ./bin/gpt_gemm 8 4 32 96 128 49152 51200 1 8\n");
+    if (argc < 9 || argc > 11) {
+        FT_LOG_ERROR("./bin/gpt_gemm batch_size \\ \n"
+                     "               beam_width \\ \n"
+                     "               max_input_len \\ \n"
+                     "               head_number \\ \n"
+                     "               size_per_head \\ \n"
+                     "               inter_size \\ \n"
+                     "               vocab_size \\ \n"
+                     "               data_type \\ \n"
+                     "               tensor_para_size \\\n"
+                     "               is_append (append new config into exist gemm_config.ini or not)");
+        FT_LOG_ERROR("e.g. ./bin/gpt_gemm 8 4 32 96 128 49152 51200 1 8 1");
         return 0;
     }
 
@@ -36,23 +44,20 @@ int main(int argc, char* argv[])
     const int                inter_size    = atoi(argv[6]);
     const int                vocab_size    = atoi(argv[7]);
     const ft::CublasDataType data_type     = static_cast<ft::CublasDataType>(atoi(argv[8]));  // 0 FP32, 1 FP16, 2 BF 16
-    const int                tensor_para_size     = argc < 10 ? 1 : atoi(argv[9]);
-    int                      is_fp16_compute_type = argc < 11 ? 0 : atoi(argv[10]);
-    if (data_type == ft::BFLOAT16_DATATYPE && is_fp16_compute_type != 0) {
-        printf("[ERROR] BFLOAT16_DATATYPE does not support is_fp16_compute_type = True\n");
-        return 0;
-    }
+    const int                tensor_para_size = argc < 10 ? 1 : atoi(argv[9]);
+    const bool               is_append        = argc < 11 ? false : (bool)(atoi(argv[10]));
 
-    printf("[INFO] arguments: \n");
-    printf("  batch_size: %d \n", batch_size);
-    printf("  beam_width: %d \n", beam_width);
-    printf("  max_input_len: %d \n", max_input_len);
-    printf("  head_num: %d \n", head_num);
-    printf("  size_per_head: %d \n", size_per_head);
-    printf("  inter_size: %d \n", inter_size);
-    printf("  vocab_size: %d \n", vocab_size);
-    printf("  data_type: %d \n", data_type);
-    printf("  tensor_para_size: %d \n", tensor_para_size);
+    FT_LOG_INFO("Arguments:");
+    FT_LOG_INFO("  batch_size: %d", batch_size);
+    FT_LOG_INFO("  beam_width: %d", beam_width);
+    FT_LOG_INFO("  max_input_len: %d", max_input_len);
+    FT_LOG_INFO("  head_num: %d", head_num);
+    FT_LOG_INFO("  size_per_head: %d", size_per_head);
+    FT_LOG_INFO("  inter_size: %d", inter_size);
+    FT_LOG_INFO("  vocab_size: %d", vocab_size);
+    FT_LOG_INFO("  data_type: %d", data_type);
+    FT_LOG_INFO("  tensor_para_size: %d", tensor_para_size);
+    FT_LOG_INFO("  is_append: %d", (int)is_append);
     std::cout << std::endl;
 
     void*  gemm_test_buf;
@@ -89,7 +94,7 @@ int main(int argc, char* argv[])
                                             vocab_size,
                                             tensor_para_size,
                                             gemm_test_buf,
-                                            false);
+                                            is_append);
     }
     else if (data_type == ft::HALF_DATATYPE) {
         ft::generate_gpt_gemm_config<half>(batch_size,
@@ -101,7 +106,7 @@ int main(int argc, char* argv[])
                                            vocab_size,
                                            tensor_para_size,
                                            gemm_test_buf,
-                                           false);
+                                           is_append);
     }
 #ifdef ENABLE_BF16
     else if (data_type == ft::BFLOAT16_DATATYPE) {
@@ -114,7 +119,7 @@ int main(int argc, char* argv[])
                                                     vocab_size,
                                                     tensor_para_size,
                                                     gemm_test_buf,
-                                                    false);
+                                                    is_append);
     }
 #endif
     else {

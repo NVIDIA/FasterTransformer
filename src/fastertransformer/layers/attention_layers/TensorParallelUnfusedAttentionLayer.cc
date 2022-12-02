@@ -19,30 +19,34 @@
 namespace fastertransformer {
 
 template<typename T>
-void TensorParallelUnfusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                                                     const std::vector<fastertransformer::Tensor>* input_tensors,
-                                                     const AttentionWeight<T>*                     attention_weights)
+void TensorParallelUnfusedAttentionLayer<T>::forward(TensorMap*                output_tensors,
+                                                     TensorMap*                input_tensors,
+                                                     const AttentionWeight<T>* attention_weights)
 {
+
+    // Mandatory tensors:
+    //
     // input_tensors:
     //      input_query [token_num, d_model],
     //      attention_mask [batch, 1, seqlen, seqlen],
     //      padding_offset [token_num]
-    //      relative_attention_bias (optional)
-    // If padding_offset.data is nullptr, then not remove padding
-
+    //
     // output_tensors:
-    //      attention_out [token_num, d_model]
+    //      hidden_features [token_num, d_model]
+    //
+    // For more information, please refer to UnfusedAttentionLayer
 
-    const size_t size = output_tensors->at(0).shape[0] * output_tensors->at(0).shape[1];
+    const size_t size = output_tensors->at("hidden_features").size();
 
     bool use_custom_all_reduce_kernel = false;
     if (enable_custom_all_reduce_ && custom_all_reduce_comm_ != nullptr) {
-        use_custom_all_reduce_kernel = custom_all_reduce_comm_->swapInternalBuffer(output_tensors, size);
+        std::vector<Tensor> hidden_features_reduce = {output_tensors->at("hidden_features")};
+        use_custom_all_reduce_kernel = custom_all_reduce_comm_->swapInternalBuffer(&hidden_features_reduce, size);
     }
 
     UnfusedAttentionLayer<T>::forward(output_tensors, input_tensors, attention_weights);
 
-    T* attention_out = (T*)(output_tensors->at(0).data);
+    T* attention_out = output_tensors->getPtr<T>("hidden_features");
     if (tensor_para_.world_size_ > 1) {
         if (!use_custom_all_reduce_kernel) {
             ftNcclAllReduceSum(attention_out, attention_out, size, tensor_para_, UnfusedAttentionLayer<T>::stream_);

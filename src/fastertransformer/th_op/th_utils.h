@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,6 +36,18 @@
     CHECK_TH_CUDA(x);                                                                                                  \
     CHECK_CONTIGUOUS(x);                                                                                               \
     CHECK_TYPE(x, st)
+#define CHECK_CPU_INPUT(x, st)                                                                                         \
+    CHECK_CPU(x);                                                                                                      \
+    CHECK_CONTIGUOUS(x);                                                                                               \
+    CHECK_TYPE(x, st)
+#define CHECK_OPTIONAL_INPUT(x, st)                                                                                    \
+    if (x.has_value()) {                                                                                               \
+        CHECK_INPUT(x.value(), st);                                                                                    \
+    }
+#define CHECK_OPTIONAL_CPU_INPUT(x, st)                                                                                \
+    if (x.has_value()) {                                                                                               \
+        CHECK_CPU_INPUT(x.value(), st);                                                                                \
+    }
 #define PRINT_TENSOR(x) std::cout << #x << ":\n" << x << std::endl
 #define PRINT_TENSOR_SIZE(x) std::cout << "size of " << #x << ": " << x.sizes() << std::endl
 
@@ -54,5 +66,7 @@ fastertransformer::Tensor convert_tensor(torch::Tensor tensor);
 
 template<typename T>
 fastertransformer::Tensor convert_tensor(torch::Tensor tensor, fastertransformer::MemoryType memory_type);
+
+size_t sizeBytes(torch::Tensor tensor);
 
 }  // namespace torch_ext

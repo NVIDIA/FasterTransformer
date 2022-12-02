@@ -14,9 +14,14 @@
  * limitations under the License.
  */
 
+#include "src/fastertransformer/kernels/cutlass_kernels/cutlass_preprocessors.h"
+#include "src/fastertransformer/utils/Tensor.h"
+#include "src/fastertransformer/utils/cuda_type_utils.cuh"
 #include "src/fastertransformer/utils/logger.h"
 #include "src/fastertransformer/utils/memory_utils.h"
 #include <curand_kernel.h>
+#include <sys/stat.h>
+#include <unordered_map>
 
 namespace fastertransformer {
 
@@ -105,6 +110,7 @@ template void cudaD2Hcpy(int* tgt, const int* src, int size);
 template void cudaD2Hcpy(bool* tgt, const bool* src, int size);
 template void cudaD2Hcpy(unsigned long long* tgt, const unsigned long long* src, int size);
 template void cudaD2Hcpy(unsigned int* tgt, const unsigned int* src, int size);
+template void cudaD2Hcpy(int8_t* tgt, const int8_t* src, int size);
 
 template<typename T>
 void cudaH2Dcpy(T* tgt, const T* src, const int size)
@@ -121,6 +127,7 @@ template void cudaH2Dcpy(int* tgt, const int* src, int size);
 template void cudaH2Dcpy(bool* tgt, const bool* src, int size);
 template void cudaH2Dcpy(unsigned long long* tgt, const unsigned long long* src, int size);
 template void cudaH2Dcpy(unsigned int* tgt, const unsigned int* src, int size);
+template void cudaH2Dcpy(int8_t* tgt, const int8_t* src, int size);
 
 template<typename T>
 void cudaD2Dcpy(T* tgt, const T* src, const int size)
@@ -159,6 +166,7 @@ template void cudaAutoCpy(bool* tgt, const bool* src, int size, cudaStream_t str
 template void cudaAutoCpy(int8_t* tgt, const int8_t* src, int size, cudaStream_t stream);
 template void cudaAutoCpy(uint* tgt, const uint* src, int size, cudaStream_t stream);
 template void cudaAutoCpy(unsigned long long* tgt, const unsigned long long* src, int size, cudaStream_t stream);
+template void cudaAutoCpy(char* tgt, const char* src, int size, cudaStream_t stream);
 
 template void cudaAutoCpy(float const** tgt, float const* const* src, int size, cudaStream_t stream);
 template void cudaAutoCpy(half const** tgt, half const* const* src, int size, cudaStream_t stream);
@@ -224,44 +232,14 @@ template void cudaRandomUniform(int* buffer, const int size);
 template void cudaRandomUniform(bool* buffer, const int size);
 template void cudaRandomUniform(char* buffer, const int size);
 
-template<typename T_IN, typename T_OUT>
-__host__ __device__ inline T_OUT convert_to_type(T_IN val)
-{
-    return (T_OUT)val;
-}
-
-#ifdef ENABLE_BF16
-template<>
-__host__ __device__ inline __nv_bfloat16 convert_to_type<float, __nv_bfloat16>(float val)
-{
-    return __float2bfloat16(val);
-}
-
-template<>
-__host__ __device__ inline __nv_bfloat16 convert_to_type<half, __nv_bfloat16>(half val)
-{
-    return __float2bfloat16(__half2float(val));
-}
-
-template<>
-__host__ __device__ inline float convert_to_type<__nv_bfloat16, float>(__nv_bfloat16 val)
-{
-    return __bfloat162float(val);
-}
-
-template<>
-__host__ __device__ inline half convert_to_type<__nv_bfloat16, half>(__nv_bfloat16 val)
-{
-    return __float2half(__bfloat162float(val));
-}
-#endif  // ENABLE_BF16
-
-template<typename T, typename T_IN>
-int loadWeightFromBinFunc(T* ptr, std::vector<size_t> shape, std::string filename)
+// loads data from binary file. If it succeeds, returns a non-empty vector. If loading fails or
+// the product of the elements in shape is 0, this function will return an empty vector.
+template<typename T>
+std::vector<T> loadWeightFromBinHelper(std::vector<size_t> shape, std::string filename)
 {
     if (shape.size() > 2) {
         printf("[ERROR] shape should have less than two dims \n");
-        return -1;
+        return std::vector<T>();
     }
     size_t dim0 = shape[0], dim1 = 1;
     if (shape.size() == 2) {
@@ -270,16 +248,17 @@ int loadWeightFromBinFunc(T* ptr, std::vector<size_t> shape, std::string filenam
     size_t size = dim0 * dim1;
     if (size == 0) {
         FT_LOG_WARNING("shape is zero, skip loading weight from file %s \n", filename.c_str());
-        return 0;
-    }
-    std::vector<T_IN> host_array(size);
-    std::ifstream     in(filename, std::ios::in | std::ios::binary);
-    if (!in.is_open()) {
-        FT_LOG_WARNING("file %s cannot be opened, loading model fails! \n", filename.c_str());
-        return 0;
+        return std::vector<T>();
     }
 
-    size_t loaded_data_size = sizeof(T_IN) * size;
+    std::vector<T> host_array(size);
+    std::ifstream  in(filename, std::ios::in | std::ios::binary);
+    if (!in.is_open()) {
+        FT_LOG_WARNING("file %s cannot be opened, loading model fails! \n", filename.c_str());
+        return std::vector<T>();
+    }
+
+    size_t loaded_data_size = sizeof(T) * size;
     in.seekg(0, in.end);
     in.seekg(0, in.beg);
 
@@ -292,32 +271,43 @@ int loadWeightFromBinFunc(T* ptr, std::vector<size_t> shape, std::string filenam
                        filename.c_str(),
                        in_get_size,
                        loaded_data_size);
+        return std::vector<T>();
+    }
+    in.close();
+    // If we succeed, return an array with values.
+    return host_array;
+}
+
+template<typename T, typename T_IN>
+int loadWeightFromBinFunc(T* ptr, std::vector<size_t> shape, std::string filename)
+{
+    std::vector<T_IN> host_array = loadWeightFromBinHelper<T_IN>(shape, filename);
+
+    if (host_array.empty()) {
         return 0;
     }
 
     if (std::is_same<T, T_IN>::value == true) {
-        cudaH2Dcpy(ptr, (T*)host_array.data(), size);
+        cudaH2Dcpy(ptr, (T*)host_array.data(), host_array.size());
     }
     else {
         T_IN* ptr_2 = nullptr;
-        deviceMalloc(&ptr_2, size, false);
-        cudaH2Dcpy(ptr_2, host_array.data(), size);
-        invokeCudaD2DcpyConvert(ptr, ptr_2, size);
+        deviceMalloc(&ptr_2, host_array.size(), false);
+        cudaH2Dcpy(ptr_2, host_array.data(), host_array.size());
+        invokeCudaD2DcpyConvert(ptr, ptr_2, host_array.size());
         deviceFree(ptr_2);
     }
-    in.close();
     return 0;
 }
 
 template int loadWeightFromBinFunc<float, float>(float* ptr, std::vector<size_t> shape, std::string filename);
 template int loadWeightFromBinFunc<half, float>(half* ptr, std::vector<size_t> shape, std::string filename);
+template int loadWeightFromBinFunc<float, half>(float* ptr, std::vector<size_t> shape, std::string filename);
+template int loadWeightFromBinFunc<half, half>(half* ptr, std::vector<size_t> shape, std::string filename);
+template int loadWeightFromBinFunc<int8_t, int8_t>(int8_t* ptr, std::vector<size_t> shape, std::string filename);
 #ifdef ENABLE_BF16
 template int
 loadWeightFromBinFunc<__nv_bfloat16, float>(__nv_bfloat16* ptr, std::vector<size_t> shape, std::string filename);
-#endif
-template int loadWeightFromBinFunc<float, half>(float* ptr, std::vector<size_t> shape, std::string filename);
-template int loadWeightFromBinFunc<half, half>(half* ptr, std::vector<size_t> shape, std::string filename);
-#ifdef ENABLE_BF16
 template int
 loadWeightFromBinFunc<__nv_bfloat16, half>(__nv_bfloat16* ptr, std::vector<size_t> shape, std::string filename);
 template int loadWeightFromBinFunc<float, __nv_bfloat16>(float* ptr, std::vector<size_t> shape, std::string filename);
@@ -337,6 +327,9 @@ int loadWeightFromBin(T* ptr, std::vector<size_t> shape, std::string filename, F
         case FtCudaDataType::FP16:
             loadWeightFromBinFunc<T, half>(ptr, shape, filename);
             break;
+        case FtCudaDataType::INT8:
+            loadWeightFromBinFunc<T, int8_t>(ptr, shape, filename);
+            break;
 #ifdef ENABLE_BF16
         case FtCudaDataType::BF16:
             loadWeightFromBinFunc<T, __nv_bfloat16>(ptr, shape, filename);
@@ -353,16 +346,96 @@ template int
 loadWeightFromBin(float* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type);
 template int
 loadWeightFromBin(half* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type);
+template int
+loadWeightFromBin(int8_t* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type);
 #ifdef ENABLE_BF16
 template int
 loadWeightFromBin(__nv_bfloat16* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type);
+#endif
+
+template<typename T, typename T_IN>
+int loadWeightFromBinAndQuantizeForWeightOnlyFunc(int8_t*             ptr,
+                                                  T*                  scales_ptr,
+                                                  std::vector<size_t> shape,
+                                                  std::string         filename)
+{
+    FT_LOG_INFO(std::string("Loading and quantizing weight from file: ") + filename);
+    FT_CHECK_WITH_INFO(shape.size() == 2, "We can only use this function to dequantize a weight matrix.");
+    std::vector<T_IN> host_array = loadWeightFromBinHelper<T_IN>(shape, filename);
+
+    if (host_array.empty()) {
+        return 0;
+    }
+
+    const size_t        num_elts = shape[0] * shape[1];
+    std::vector<int8_t> host_quantized_weight_buf(num_elts);
+    std::vector<T>      host_scales_buf(shape[1]);
+
+    // Note: This function preprocesses the weights to a special format for weight only quant!
+    symmetric_quantize<T, T_IN>(host_quantized_weight_buf.data(),
+                                host_scales_buf.data(),
+                                host_array.data(),
+                                shape,
+                                QuantType::INT8_WEIGHT_ONLY);
+
+    cudaH2Dcpy(ptr, (int8_t*)host_quantized_weight_buf.data(), host_quantized_weight_buf.size());
+    cudaH2Dcpy(scales_ptr, (T*)host_scales_buf.data(), host_scales_buf.size());
+
+    return 0;
+}
+
+template<typename T>
+int loadWeightFromBinAndQuantizeForWeightOnly(int8_t*             quantized_weight_ptr,
+                                              T*                  scale_ptr,
+                                              std::vector<size_t> shape,
+                                              std::string         filename,
+                                              FtCudaDataType      model_file_type)
+{
+    switch (model_file_type) {
+        case FtCudaDataType::FP32:
+            loadWeightFromBinAndQuantizeForWeightOnlyFunc<T, float>(quantized_weight_ptr, scale_ptr, shape, filename);
+            break;
+        case FtCudaDataType::FP16:
+            loadWeightFromBinAndQuantizeForWeightOnlyFunc<T, half>(quantized_weight_ptr, scale_ptr, shape, filename);
+            break;
+#ifdef ENABLE_BF16
+        case FtCudaDataType::BF16:
+            loadWeightFromBinAndQuantizeForWeightOnlyFunc<T, __nv_bfloat16>(
+                quantized_weight_ptr, scale_ptr, shape, filename);
+            break;
+#endif
+        default:
+            FT_LOG_ERROR("Does not support FtCudaDataType=%d", model_file_type);
+            FT_CHECK(false);
+    }
+    return 0;
+}
+
+template<>
+int loadWeightFromBinAndQuantizeForWeightOnly(int8_t*             quantized_weight_ptr,
+                                              float*              scale_ptr,
+                                              std::vector<size_t> shape,
+                                              std::string         filename,
+                                              FtCudaDataType      model_file_type)
+{
+    FT_CHECK_WITH_INFO(false, "Weight only quant not supported with FP32 compute.");
+    return 0;
+}
+
+template int
+loadWeightFromBinAndQuantizeForWeightOnly(int8_t*, float*, std::vector<size_t>, std::string, FtCudaDataType);
+template int
+loadWeightFromBinAndQuantizeForWeightOnly(int8_t*, half*, std::vector<size_t>, std::string, FtCudaDataType);
+#ifdef ENABLE_BF16
+template int
+loadWeightFromBinAndQuantizeForWeightOnly(int8_t*, __nv_bfloat16*, std::vector<size_t>, std::string, FtCudaDataType);
 #endif
 
 template<typename T_IN, typename T_OUT>
 __global__ void cudaD2DcpyConvert(T_OUT* dst, const T_IN* src, const int size)
 {
     for (int tid = threadIdx.x + blockIdx.x * blockDim.x; tid < size; tid += blockDim.x * gridDim.x) {
-        dst[tid] = convert_to_type<T_IN, T_OUT>(src[tid]);
+        dst[tid] = cuda_cast<T_OUT>(src[tid]);
     }
 }
 
@@ -372,14 +445,52 @@ void invokeCudaD2DcpyConvert(T_OUT* tgt, const T_IN* src, const int size, cudaSt
     cudaD2DcpyConvert<<<256, 256, 0, stream>>>(tgt, src, size);
 }
 
+template void invokeCudaD2DcpyConvert(int8_t* tgt, const float* src, const int size, cudaStream_t stream);
+template void invokeCudaD2DcpyConvert(float* tgt, const int8_t* src, const int size, cudaStream_t stream);
+template void invokeCudaD2DcpyConvert(float* tgt, const int* src, const int size, cudaStream_t stream);
+template void invokeCudaD2DcpyConvert(half* tgt, const int* src, const int size, cudaStream_t stream);
 template void invokeCudaD2DcpyConvert(float* tgt, const float* src, const int size, cudaStream_t stream);
 template void invokeCudaD2DcpyConvert(half* tgt, const float* src, const int size, cudaStream_t stream);
 template void invokeCudaD2DcpyConvert(float* tgt, const half* src, const int size, cudaStream_t stream);
+template void invokeCudaD2DcpyConvert(uint* tgt, const int* src, const int size, cudaStream_t stream);
+template void invokeCudaD2DcpyConvert(int* tgt, const uint* src, const int size, cudaStream_t stream);
+template void invokeCudaD2DcpyConvert(int* tgt, const float* src, const int size, cudaStream_t stream);
+template void invokeCudaD2DcpyConvert(int* tgt, const half* src, const int size, cudaStream_t stream);
 
 #ifdef ENABLE_BF16
 template void invokeCudaD2DcpyConvert(__nv_bfloat16* tgt, const float* src, const int size, cudaStream_t stream);
+template void invokeCudaD2DcpyConvert(__nv_bfloat16* tgt, const int* src, const int size, cudaStream_t stream);
 template void invokeCudaD2DcpyConvert(float* tgt, const __nv_bfloat16* src, const int size, cudaStream_t stream);
+template void invokeCudaD2DcpyConvert(int* tgt, const __nv_bfloat16* src, const int size, cudaStream_t stream);
 #endif  // ENABLE_BF16
+
+template<typename T_IN, typename T_OUT>
+__global__ void
+cudaD2DScaleCpyConvert(T_OUT* dst, const T_IN* src, const float* scale, bool invert_scale, const int size)
+{
+    const float scale_value = invert_scale ? 1.0f / scale[0] : scale[0];
+    for (int tid = threadIdx.x + blockIdx.x * blockDim.x; tid < size; tid += blockDim.x * gridDim.x) {
+        dst[tid] = cuda_cast<T_OUT>(cuda_cast<float>(src[tid]) * scale_value);
+    }
+}
+
+template<typename T_IN, typename T_OUT>
+void invokeCudaD2DScaleCpyConvert(
+    T_OUT* tgt, const T_IN* src, const float* scale, bool invert_scale, const int size, cudaStream_t stream)
+{
+    cudaD2DScaleCpyConvert<<<256, 256, 0, stream>>>(tgt, src, scale, invert_scale, size);
+}
+
+// clang-format off
+template void invokeCudaD2DScaleCpyConvert(float* tgt, const int32_t* src, const float* scale, bool invert_scale, const int size, cudaStream_t stream);
+template void invokeCudaD2DScaleCpyConvert(int32_t* tgt, const float* src, const float* scale, bool invert_scale, const int size, cudaStream_t stream);
+template void invokeCudaD2DScaleCpyConvert(half* tgt, const int32_t* src, const float* scale, bool invert_scale, const int size, cudaStream_t stream);
+template void invokeCudaD2DScaleCpyConvert(int32_t* tgt, const half* src, const float* scale, bool invert_scale, const int size, cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeCudaD2DScaleCpyConvert(__nv_bfloat16* tgt, const int32_t* src, const float* scale, bool invert_scale, const int size, cudaStream_t stream);
+template void invokeCudaD2DScaleCpyConvert(int32_t* tgt, const __nv_bfloat16* src, const float* scale, bool invert_scale, const int size, cudaStream_t stream);
+#endif  // ENABLE_BF16
+// clang-format on
 
 void invokeCudaD2DcpyHalf2Float(float* dst, half* src, const int size, cudaStream_t stream)
 {
@@ -450,5 +561,46 @@ template void invokeFakeCast<half, __nv_bfloat16>(half* input_ptr, const size_t 
 #endif
 template void invokeFakeCast<float, half>(float* input_ptr, const size_t size, cudaStream_t stream);
 template void invokeFakeCast<float, float>(float* input_ptr, const size_t size, cudaStream_t stream);
+
+size_t cuda_datatype_size(FtCudaDataType dt)
+{
+    static const std::unordered_map<FtCudaDataType, size_t> sizes{{FtCudaDataType::FP32, sizeof(float)},
+                                                                  {FtCudaDataType::FP16, sizeof(half)}
+#ifdef ENABLE_BF16
+                                                                  ,
+                                                                  {FtCudaDataType::BF16, sizeof(__nv_bfloat16)}
+#endif
+    };
+
+    return sizes.at(dt);
+}
+
+template<typename T>
+__global__ void check_range(T* buffer, size_t size, T min, T max, bool* d_within_range)
+{
+    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < size; i += blockDim.x * gridDim.x) {
+        const T val = buffer[i];
+        if (val < min || val > max) {
+            *d_within_range = false;
+        }
+    }
+}
+
+template<typename T>
+bool invokeCheckRange(T* buffer, const size_t size, T min, T max, bool* d_within_range, cudaStream_t stream)
+{
+    cudaMemsetAsync(d_within_range, true, sizeof(bool), stream);
+
+    dim3 block(256);
+    dim3 grid((size + 255) / 256);
+    check_range<T><<<grid, block, 0, stream>>>(buffer, size, min, max, d_within_range);
+
+    bool result;
+    cudaD2Hcpy(&result, d_within_range, 1);
+    return result;
+}
+
+template bool
+invokeCheckRange<int>(int* buffer, const size_t size, int min, int max, bool* d_within_range, cudaStream_t stream);
 
 }  // namespace fastertransformer

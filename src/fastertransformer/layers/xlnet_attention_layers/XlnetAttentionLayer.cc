@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -40,11 +40,11 @@ void XlnetAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>*    
     FT_CHECK(input_tensors->at(1).shape[1] == request_seq_len);
     FT_CHECK(input_tensors->at(2).shape[1] == request_seq_len);
 
-    T* out_tensor     = (T*)output_tensors->at(0).data;
-    T* in_tensor      = (T*)input_tensors->at(0).data;
-    T* attention_mask = (T*)input_tensors->at(1).data;
-    T* seg_mat        = (T*)input_tensors->at(2).data;
-    T* attr_k_head_r  = (T*)input_tensors->at(3).data;
+    T* out_tensor     = output_tensors->at(0).getPtr<T>();
+    T* in_tensor      = input_tensors->at(0).getPtr<T>();
+    T* attention_mask = input_tensors->at(1).getPtr<T>();
+    T* seg_mat        = input_tensors->at(2).getPtr<T>();
+    T* attr_k_head_r  = input_tensors->at(3).getPtr<T>();
 
     cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_N,
                                         CUBLAS_OP_N,

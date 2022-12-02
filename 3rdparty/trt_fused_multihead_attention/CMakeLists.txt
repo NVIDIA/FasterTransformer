@@ -20,7 +20,7 @@ set(trt_fused_multi_head_attention_files
     qkvToContext.cu
 )
 
-file(GLOB trt_fused_multi_head_attention_files ${trt_fused_multi_head_attention_files} *.sm*.cpp)
+file(GLOB trt_fused_multi_head_attention_files ${trt_fused_multi_head_attention_files} *sm*.cpp)
 
 add_library(trt_fused_multi_head_attention STATIC ${trt_fused_multi_head_attention_files})
 target_link_libraries(trt_fused_multi_head_attention PUBLIC -lcublas -lcudart)

@@ -23,7 +23,7 @@ import os
 dir_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(dir_path + "/../../../../3rdparty/transformers/src/")
 
-from transformers import T5ForConditionalGeneration # transformers-4.10.0-py3
+from transformers import T5ForConditionalGeneration, T5EncoderModel
 
 import numpy as np
 import torch  # pytype: disable=import-error
@@ -149,9 +149,13 @@ def convert_checkpoint(args):
     saved_dir = Path(args.saved_dir) / f"{args.inference_tensor_para_size:d}-gpu"
     saved_dir.mkdir(parents=True, exist_ok=True)
 
-    t5_model = T5ForConditionalGeneration.from_pretrained(args.in_file)
+    if args.encoder_only:
+        t5_model = T5EncoderModel.from_pretrained(args.in_file)
+    else:
+        t5_model = T5ForConditionalGeneration.from_pretrained(args.in_file)
+
     config = configparser.ConfigParser()
-    
+
     if t5_model.encoder.config.feed_forward_proj.find("gated") != -1:
         new_configs["structure"]["use_gated_activation"] = "1"
 
@@ -160,12 +164,15 @@ def convert_checkpoint(args):
         config["encoder"][key] = f"{val}"
     config["encoder"]["weight_data_type"] = args.weight_data_type
     config["decoder"] = {}
-    for key, val in t5_model.decoder.config.to_dict().items():
-        config["decoder"][key] = f"{val}"
-    config["decoder"]["weight_data_type"] = args.weight_data_type
+    if not args.encoder_only:
+        for key, val in t5_model.decoder.config.to_dict().items():
+            config["decoder"][key] = f"{val}"
+        config["decoder"]["weight_data_type"] = args.weight_data_type
+
     for key, val in rename_mapping.items():
         config['encoder'][val] = config['encoder'].pop(key)
-        config['decoder'][val] = config['decoder'].pop(key)
+        if not args.encoder_only:
+            config['decoder'][val] = config['decoder'].pop(key)
     for key, val in new_configs.items():
         config[key] = {}
         for val_key, val_val in val.items():
@@ -178,7 +185,9 @@ def convert_checkpoint(args):
     
     for name, param in t5_model.state_dict().items():
         split_and_convert_process(name, param, i_gpu_num, saved_dir, np_weight_data_type)
-    fuse_decoder_qkv(t5_model, i_gpu_num, saved_dir, np_weight_data_type)
+
+    if not args.encoder_only:
+        fuse_decoder_qkv(t5_model, i_gpu_num, saved_dir, np_weight_data_type)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
@@ -186,6 +195,7 @@ if __name__ == "__main__":
     parser.add_argument("-in_file", "-i", type=str, help="file name of input checkpoint file", required=True)
     parser.add_argument("-inference_tensor_para_size", "-i_g", type=int, help="How many gpus for inference", required=True)
     parser.add_argument("-weight_data_type", type=str, default="fp32", choices=["fp32", "fp16"])
+    parser.add_argument("--encoder_only", "-e", action="store_true")
     parser.add_argument("--verbose", action="store_true", help="Provide verbose messages")
     args = parser.parse_args()
     log_format = "%(asctime)s %(name)s [%(levelname)s] %(message)s"

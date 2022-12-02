@@ -37,12 +37,12 @@ target_link_libraries(LongformerAttentionLayer PUBLIC -lcublas -lcudart cublasMM
 add_library(DecoderSelfAttentionLayer STATIC DecoderSelfAttentionLayer.cc)
 set_property(TARGET DecoderSelfAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET DecoderSelfAttentionLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(DecoderSelfAttentionLayer PUBLIC -lcublas -lcudart cublasMMWrapper memory_utils decoder_masked_multihead_attention matrix_vector_multiplication tensor)
+target_link_libraries(DecoderSelfAttentionLayer PUBLIC -lcublas -lcudart cublasMMWrapper memory_utils decoder_masked_multihead_attention fpA_intB_gemm tensor)
 
 add_library(GptContextAttentionLayer STATIC GptContextAttentionLayer.cc)
 set_property(TARGET GptContextAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET GptContextAttentionLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(GptContextAttentionLayer PUBLIC -lcublas -lcudart cublasMMWrapper memory_utils unfused_attention_kernels)
+target_link_libraries(GptContextAttentionLayer PUBLIC -lcublas -lcudart cublasMMWrapper memory_utils unfused_attention_kernels trt_fused_multi_head_attention fpA_intB_gemm)
 
 add_library(TensorParallelDecoderSelfAttentionLayer STATIC TensorParallelDecoderSelfAttentionLayer.cc)
 set_property(TARGET TensorParallelDecoderSelfAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -68,4 +68,4 @@ add_library(WindowAttention STATIC WindowAttention.cc)
 set_property(TARGET WindowAttention PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET WindowAttention PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(WindowAttention PUBLIC -lcublasLt -lcublas -lcudart transform_mask_kernels 
-    unfused_attention_kernels trt_fused_multi_head_attention reverse_roll_kernels activation_kernels)
+    unfused_attention_kernels trt_fused_multi_head_attention reverse_roll_kernels activation_kernels normalize_kernels)

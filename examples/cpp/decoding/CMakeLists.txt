@@ -13,7 +13,7 @@
 # limitations under the License.
 
 add_executable(decoding_example decoding_example.cc)
-target_link_libraries(decoding_example PUBLIC -lcublasLt Decoding nvtx_utils)
+target_link_libraries(decoding_example PUBLIC -lcublasLt Decoding nvtx_utils cuda_utils logger)
 
 add_executable(layernorm_test layernorm_test.cc)
-target_link_libraries(layernorm_test PUBLIC -lcublasLt layernorm_kernels memory_utils)
+target_link_libraries(layernorm_test PUBLIC -lcublasLt layernorm_kernels memory_utils cuda_utils logger)

@@ -117,6 +117,19 @@ T5TritonModel<T>::T5TritonModel(size_t      tensor_para_size,
     encoder_num_bucket_or_max_pos_seq_len_ =
         reader.GetInteger("encoder", "relative_attention_num_buckets_or_max_pos_seq_len");
 
+    // encoder prompt
+    num_tasks_                = reader.GetInteger("encoder", "num_tasks", 0);
+    prompt_learning_start_id_ = reader.GetInteger("encoder", "prompt_learning_start_id", encoder_vocab_size_ + 1);
+    prompt_learning_type_ =
+        static_cast<ft::PromptLearningType>(reader.GetInteger("encoder", "prompt_learning_type", 0));
+
+    for (int task_name_id = 0; task_name_id < num_tasks_; task_name_id++) {
+        std::string config_task_name = "task_" + std::to_string(task_name_id);
+        std::string task_name        = reader.Get(config_task_name, "task_name");
+        const int   prompt_length    = reader.GetInteger(config_task_name, "prompt_length", 0);
+        prompt_learning_table_pair_.insert({task_name, {task_name_id, prompt_length}});
+    }
+
     // decoding
     decoding_head_num_      = reader.GetInteger("decoder", "num_heads");
     decoding_size_per_head_ = reader.GetInteger("decoder", "d_kv");
@@ -130,12 +143,15 @@ T5TritonModel<T>::T5TritonModel(size_t      tensor_para_size,
     end_id_              = reader.GetInteger("decoder", "eos_token_id");
     tie_word_embeddings_ = reader.GetBoolean("decoder", "tie_word_embeddings", true);
 
+    // common settings
     t5_with_bias_         = reader.GetBoolean("structure", "t5_with_bias", false);
     use_gated_activation_ = reader.GetBoolean("structure", "use_gated_activation", false);
     activation_type_      = ft::getActivationType(reader.Get("encoder", "feed_forward_proj"));
     position_embedding_type_ =
         ft::PositionEmbeddingType(reader.Get("structure", "position_embedding_type", "relative") == "relative" ? 0 : 1);
     q_scaling_ = t5_with_bias_ ? 1.0f : (1.0f / (sqrt(encoder_size_per_head_) * 1.0f));
+
+    ia3_num_tasks_ = reader.GetInteger("structure", "ia3_num_tasks", 0);
 
     max_distance_ = 128;  // use default value of huggingface here
 }
@@ -186,6 +202,7 @@ T5TritonModel<T>::createModelInstance(int                                       
     const int sm_ = ft::getSMVersion();
 
     // TODO(bhsueh) not support fused mha
+    // NOTE: fmha doesn't support t5-style relative position bias
     ft::AttentionType attention_type =
         ft::getAttentionType<T>(encoder_size_per_head_, sm_, true, encoder_num_bucket_or_max_pos_seq_len_, false);
 
@@ -200,9 +217,12 @@ T5TritonModel<T>::createModelInstance(int                                       
                                                                        encoder_d_model_,
                                                                        encoder_num_layer_,
                                                                        encoder_num_bucket_or_max_pos_seq_len_,
+                                                                       0,  // expert_num
                                                                        max_distance_,
+                                                                       0,  // moe_k
                                                                        sm_,
                                                                        q_scaling_,
+                                                                       {},  // moe_layer_index
                                                                        stream,
                                                                        cublas_wrapper.get(),
                                                                        allocator.get(),
@@ -213,6 +233,8 @@ T5TritonModel<T>::createModelInstance(int                                       
                                                                        ft::LayerNormType::pre_layernorm,
                                                                        tensor_para_,
                                                                        pipeline_para_,
+                                                                       prompt_learning_start_id_,
+                                                                       prompt_learning_type_,
                                                                        custom_all_reduce_comm,
                                                                        enable_custom_all_reduce_));
 
@@ -227,7 +249,9 @@ T5TritonModel<T>::createModelInstance(int                                       
                                                                           decoding_num_layer_,
                                                                           decoding_vocab_size_,
                                                                           decoding_num_bucket_or_max_pos_seq_len_,
+                                                                          0,  // expert_num
                                                                           max_distance_,
+                                                                          0,  // moe_k
                                                                           q_scaling_,
                                                                           start_id_,
                                                                           end_id_,
@@ -237,6 +261,7 @@ T5TritonModel<T>::createModelInstance(int                                       
                                                                           1.0f,  // temperature_,
                                                                           0.0f,  // len_penalty_,
                                                                           1.0f,  // repetition_penalty_,
+                                                                          {},    // moe_layer_index
                                                                           stream,
                                                                           cublas_wrapper.get(),
                                                                           allocator.get(),
@@ -281,7 +306,10 @@ void T5TritonModel<T>::createSharedWeights(int device_id, int rank)
                                                  pipeline_para_rank,
                                                  t5_with_bias_,
                                                  use_gated_activation_,
-                                                 position_embedding_type_);
+                                                 position_embedding_type_,
+                                                 prompt_learning_type_,
+                                                 prompt_learning_table_pair_,
+                                                 ia3_num_tasks_);
 
     decoding_shared_weights_[device_id] =
         std::make_shared<ft::T5DecodingWeight<T>>(decoding_head_num_,
@@ -298,7 +326,8 @@ void T5TritonModel<T>::createSharedWeights(int device_id, int rank)
                                                   pipeline_para_rank,
                                                   t5_with_bias_,
                                                   use_gated_activation_,
-                                                  position_embedding_type_);
+                                                  position_embedding_type_,
+                                                  ia3_num_tasks_);
 
     encoder_shared_weights_[device_id]->loadModel(model_dir_);
     decoding_shared_weights_[device_id]->loadModel(model_dir_);

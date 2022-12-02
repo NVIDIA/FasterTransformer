@@ -19,6 +19,7 @@
 #include "src/fastertransformer/kernels/layernorm_kernels.h"
 #include "src/fastertransformer/layers/FfnWeight.h"
 #include "src/fastertransformer/layers/attention_layers/AttentionWeight.h"
+#include "src/fastertransformer/utils/IA3.h"
 #include "src/fastertransformer/utils/cuda_utils.h"
 #include <string>
 
@@ -36,7 +37,8 @@ struct T5DecoderLayerWeight {
                          const size_t tensor_para_size,
                          const size_t tensor_para_rank,
                          const bool   t5_with_bias,
-                         const bool   use_gated_activation);
+                         const bool   use_gated_activation,
+                         const size_t ia3_num_tasks);
     ~T5DecoderLayerWeight();
     T5DecoderLayerWeight(const T5DecoderLayerWeight& other);
     T5DecoderLayerWeight& operator=(const T5DecoderLayerWeight& other);
@@ -66,6 +68,7 @@ private:
     size_t mem_d_model_;
     size_t tensor_para_size_;
     size_t tensor_para_rank_;
+    size_t ia3_num_tasks_;
     bool   is_maintain_buffer = false;
 
     int real_weights_num_;
@@ -73,6 +76,10 @@ private:
     const static int weights_num_ = 24;
     T*               weights_ptr[weights_num_];
     size_t           weights_size[weights_num_];
+
+    T*     ia3_weights_ptr_[IA3_ADAPTER_MAX_NUM_DECODER];
+    size_t ia3_weights_size_[IA3_ADAPTER_MAX_NUM_DECODER];
+    bool   maintain_ia3_buffer_ = false;
 };
 
 }  // namespace fastertransformer

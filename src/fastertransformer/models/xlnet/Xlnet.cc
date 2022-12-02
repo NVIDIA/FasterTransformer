@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -35,6 +35,7 @@ void Xlnet<T>::initialize()
                                      max_seq_len_,
                                      head_num_,
                                      size_per_head_,
+                                     0,  // expert_num
                                      inter_size_,
                                      stream_,
                                      cublas_wrapper_,
@@ -137,11 +138,11 @@ void Xlnet<T>::forward(std::vector<Tensor>*                    output_tensors,
     const size_t request_batch_size = input_tensors->at(0).shape[0];
     const size_t request_seq_len    = input_tensors->at(0).shape[1];
 
-    T* input_ptr  = (T*)input_tensors->at(0).data;
-    T* output_ptr = (T*)output_tensors->at(0).data;
+    T* input_ptr  = input_tensors->at(0).getPtr<T>();
+    T* output_ptr = output_tensors->at(0).getPtr<T>();
 
-    float* input_mask = (float*)input_tensors->at(1).data;
-    int*   seg_id     = (int*)input_tensors->at(2).data;
+    float* input_mask = input_tensors->at(1).getPtr<float>();
+    int*   seg_id     = input_tensors->at(2).getPtr<int>();
 
     FT_CHECK(input_tensors->size() == 3);
     FT_CHECK(isValidBatchSize(request_batch_size));
@@ -204,16 +205,12 @@ void Xlnet<T>::forward(std::vector<Tensor>*                    output_tensors,
                                    xlnet_layer_weights->at(i).attn_layernorm_weights.beta,
                                    stream_);
 
-        std::vector<Tensor> ffn_input_tensors{
-            Tensor{MEMORY_GPU,
-                   data_type,
-                   std::vector<size_t>{request_batch_size * request_seq_len, hidden_units_},
-                   out_tensor}};
-        std::vector<Tensor> ffn_output_tensors{
-            Tensor{MEMORY_GPU,
-                   data_type,
-                   std::vector<size_t>{request_batch_size * request_seq_len, hidden_units_},
-                   output_fc2_}};
+        TensorMap ffn_input_tensors(
+            {{"ffn_input",
+              Tensor{MEMORY_GPU, data_type, {request_batch_size * request_seq_len, hidden_units_}, out_tensor}}});
+        TensorMap ffn_output_tensors(
+            {{"ffn_output",
+              Tensor{MEMORY_GPU, data_type, {request_batch_size * request_seq_len, hidden_units_}, output_fc2_}}});
         ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &xlnet_layer_weights->at(i).ffn_weights);
 
         invokeAddBiasResidualLayerNorm(out_tensor,

@@ -29,6 +29,7 @@ private:
     std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm_;
     int                                 enable_custom_all_reduce_;
     bool                                do_all_reduce_;
+    T*                                  attention_out_fp_ = nullptr;
 
 protected:
 public:
@@ -98,11 +99,10 @@ public:
 
     TensorParallelDecoderSelfAttentionLayer(TensorParallelDecoderSelfAttentionLayer<T> const& attention_layer);
 
-    ~TensorParallelDecoderSelfAttentionLayer() = default;
+    virtual ~TensorParallelDecoderSelfAttentionLayer();
 
-    void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                 const std::vector<fastertransformer::Tensor>* input_tensors,
-                 const AttentionWeight<T>*                     attention_weights) override;
+    void
+    forward(TensorMap* output_tensors, TensorMap* input_tensors, const AttentionWeight<T>* attention_weights) override;
 };
 
 }  // namespace fastertransformer

@@ -15,7 +15,7 @@
  */
 
 #include "custom_ar_kernels.h"
-#include "src/fastertransformer/kernels/bfloat16_fallback_kenrels.cuh"
+#include "src/fastertransformer/utils/cuda_type_utils.cuh"
 
 namespace fastertransformer {
 
@@ -268,7 +268,7 @@ static __global__ void twoShotAllReduceKernel(AllReduceParams<T> params)
     // sync threads to make sure all block threads have the sums
     __syncthreads();
 
-    // barreris among the blocks with the same idx (release-acuqire sementics)
+    // barreris among the blocks with the same idx (release-acuqire semantics)
     if (tidx < RANKS_PER_NODE) {
         // The all blocks notifies the other ranks.
         uint32_t flag_block_offset = RANKS_PER_NODE + bidx * RANKS_PER_NODE;

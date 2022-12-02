@@ -114,7 +114,7 @@ if __name__ == "__main__":
     ckpt_file = args.ckpt_dir + "/pytorch_model.bin"
     checkpoint = torch.load(ckpt_file)
     print(f"loading from {ckpt_file}")
-    
+
     out_path = args.output_dir
     output_dir = out_path + f"/{args.n_inference_gpus}-gpu/"
     print(f"saving to {output_dir}")

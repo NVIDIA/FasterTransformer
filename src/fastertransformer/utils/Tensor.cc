@@ -166,7 +166,7 @@ size_t Tensor::size() const
     if (data == nullptr || shape.size() == 0) {
         return 0;
     }
-    return std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<size_t>());
+    return std::accumulate(shape.begin(), shape.end(), (size_t)1, std::multiplies<size_t>());
 }
 
 size_t Tensor::sizeBytes() const
@@ -201,16 +201,19 @@ std::string Tensor::toString() const
         {TYPE_FP64, "FP64"},
         {TYPE_BYTES, "BYTES"},
         {TYPE_INVALID, "INVALID"},
+        {TYPE_VOID, "VOID"},
     };
-    return fmtstr("Tensor[where=%s, type=%s, shape=%s]",
+    return fmtstr("Tensor[where=%s, type=%s, shape=%s, data=%p]",
                   memtype_str.c_str(),
                   type_to_string.at(type).c_str(),
-                  vec2str(shape).c_str());
+                  vec2str(shape).c_str(),
+                  data);
 }
 
 DataType Tensor::typeFromNumpyDesc(std::string type)
 {
     static const std::unordered_map<std::string, DataType> type_map{{"?", TYPE_BOOL},
+                                                                    {"b", TYPE_BYTES},
                                                                     {"u1", TYPE_UINT8},
                                                                     {"u2", TYPE_UINT16},
                                                                     {"u4", TYPE_UINT32},
@@ -228,6 +231,7 @@ DataType Tensor::typeFromNumpyDesc(std::string type)
 size_t Tensor::getTypeSize(DataType type)
 {
     static const std::unordered_map<DataType, size_t> type_map{{TYPE_BOOL, sizeof(bool)},
+                                                               {TYPE_BYTES, sizeof(char)},
                                                                {TYPE_UINT8, sizeof(uint8_t)},
                                                                {TYPE_UINT16, sizeof(uint16_t)},
                                                                {TYPE_UINT32, sizeof(uint32_t)},
@@ -236,6 +240,9 @@ size_t Tensor::getTypeSize(DataType type)
                                                                {TYPE_INT16, sizeof(int16_t)},
                                                                {TYPE_INT32, sizeof(int32_t)},
                                                                {TYPE_INT64, sizeof(int64_t)},
+#ifdef ENABLE_BF16
+                                                               {TYPE_BF16, sizeof(__nv_bfloat16)},
+#endif
                                                                {TYPE_FP16, sizeof(half)},
                                                                {TYPE_FP32, sizeof(float)},
                                                                {TYPE_FP64, sizeof(double)}};
@@ -244,7 +251,9 @@ size_t Tensor::getTypeSize(DataType type)
 
 std::string Tensor::getNumpyTypeDesc(DataType type) const
 {
-    static const std::unordered_map<DataType, std::string> type_map{{TYPE_BOOL, "?"},
+    static const std::unordered_map<DataType, std::string> type_map{{TYPE_INVALID, "x"},
+                                                                    {TYPE_BOOL, "?"},
+                                                                    {TYPE_BYTES, "b"},
                                                                     {TYPE_UINT8, "u1"},
                                                                     {TYPE_UINT16, "u2"},
                                                                     {TYPE_UINT32, "u4"},
@@ -256,7 +265,14 @@ std::string Tensor::getNumpyTypeDesc(DataType type) const
                                                                     {TYPE_FP16, "f2"},
                                                                     {TYPE_FP32, "f4"},
                                                                     {TYPE_FP64, "f8"}};
-    return type_map.at(type);
+
+    if (type == TYPE_BF16) {
+        FT_LOG_WARNING("getNumpyTypeDesc(TYPE_BF16) returns an invalid type 'x' since Numpy doesn't "
+                       "support bfloat16 as of now, it will be properly extended if numpy supports. "
+                       "Please refer for the discussions https://github.com/numpy/numpy/issues/19808.");
+    }
+
+    return type_map.count(type) > 0 ? type_map.at(type) : "x";
 }
 
 void Tensor::saveNpy(const std::string& filename) const
@@ -328,7 +344,12 @@ Tensor Tensor::slice(std::vector<size_t> shape, size_t offset) const
 TensorMap::TensorMap(const std::unordered_map<std::string, Tensor>& tensor_map)
 {
     for (auto& kv : tensor_map) {
-        insert(kv.first, kv.second);
+        if (isValid(kv.second)) {
+            insert(kv.first, kv.second);
+        }
+        else {
+            FT_LOG_DEBUG(fmtstr("%s is not a valid tensor, skipping insert into TensorMap", kv.first.c_str()));
+        }
     }
 }
 
@@ -336,6 +357,18 @@ TensorMap::TensorMap(const std::vector<Tensor>& tensor_map)
 {
     for (size_t i = 0; i < tensor_map.size(); i++) {
         insert(std::to_string(i), tensor_map[i]);
+    }
+}
+
+TensorMap::TensorMap(std::initializer_list<std::pair<std::string, Tensor>> tensor_map)
+{
+    for (auto& pair : tensor_map) {
+        if (isValid(pair.second)) {
+            insert(pair.first, pair.second);
+        }
+        else {
+            FT_LOG_DEBUG(fmtstr("%s is not a valid tensor, skipping insert into TensorMap", pair.first.c_str()));
+        }
     }
 }
 

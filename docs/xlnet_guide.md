@@ -36,11 +36,7 @@ In this demo, you can run the XLNet as a C++ program.
 - Python 3 is recommended because some features are not supported in python 2
 - Tensorflow: Verify on 1.15, 1.13 and 1.14 should work.
 
-Recommend to use image `nvcr.io/nvidia/tensorflow:20.12-tf1-py3`.  
-
-```bash
-docker run -ti --gpus all --rm nvcr.io/nvidia/tensorflow:20.12-tf1-py3 bash
-```
+Recommend to use image `nvcr.io/nvidia/tensorflow:22.09-tf1-py3`.
 
 ### Setup
 
@@ -48,23 +44,24 @@ docker run -ti --gpus all --rm nvcr.io/nvidia/tensorflow:20.12-tf1-py3 bash
     ```bash
     docker run \
         -it \
+        --shm-size 5g \
         --rm \
         --gpus=all \
         -v {YOUR_FASTER_TRANSFORMER_PROJECT_DIR_ON_HOST}:/workspace/FasterTransformer \
         --workdir /workspace/FasterTransformer \
-        nvcr.io/nvidia/tensorflow:20.12-tf1-py3 bash
+        nvcr.io/nvidia/tensorflow:22.09-tf1-py3 bash
         
     cd /workspace/FasterTransformer
     ```
 
-Here, we use `nvcr.io/nvidia/tensorflow:20.12-tf1-py3`, you can also switch it to another CUDA-enabled Tensorflow containers, but need to comply with the previous requirements.
+Here, we use `nvcr.io/nvidia/tensorflow:22.09-tf1-py3`, you can also switch it to another CUDA-enabled Tensorflow containers, but need to comply with the previous requirements.
 
 2. Build the FasterTransformer with C++:
     ```bash
     mkdir -p build
     cd build
     cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release ..
-    make
+    make -j12
     ```
 Note: **xx** is the compute capability of your GPU. For example, 60 (P40) or 61 (P4) or 70 (V100) or 75(T4) or 80 (A100).  
 ### Run  

@@ -1,0 +1,7 @@
+SentencePiece~=0.1.96
+datasets~=2.3.2
+omegaconf~=2.1.2
+rouge_score~=0.1.2
+sacrebleu~=2.1.0
+transformers~=4.20.1
+tokenizers~=0.12.1

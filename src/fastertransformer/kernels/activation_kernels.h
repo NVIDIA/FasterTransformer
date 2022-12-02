@@ -19,34 +19,35 @@
 #include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
 #include <cuda_fp16.h>
 #include <cuda_runtime.h>
+#include <stdlib.h>
 
 namespace fastertransformer {
 
-template<typename T>
-void invokeAddBiasGelu(T* out, const T* bias, const int m, const int n, cudaStream_t stream);
+// clang-format off
+template<typename T> struct GeluActivation;
+template<typename T> struct ReluActivation;
+template<typename T> struct SiluActivation;
+template<typename T> struct IdentityActivation;
+// clang-format on
+
+template<template<typename T> class Activation, typename T, typename BT>
+void invokeGenericActivation(T*           out,
+                             const BT*    bias,
+                             const T*     gated_weights,
+                             const BT*    gated_bias,
+                             const int*   ia3_tasks,
+                             const T*     ia3_weights,
+                             const int    m,
+                             const int    n,
+                             const int    int8_mode,
+                             const float* activation_in,
+                             const float* activation_out,
+                             cudaStream_t stream);
 
 template<typename T>
-void invokeAddBiasGatedGelu(
-    T* hidden1, const T* hidden2, const T* bias1, const T* bias2, const int m, const int n, cudaStream_t stream);
+void invokeAddBiasGeluV2(
+    T* out, const T* bias, const int* ia3_tasks, const T* ia3_weights, const int m, const int n, cudaStream_t stream);
 
 template<typename T>
-void invokeAddBiasRelu(T* out, const T* bias, const int m, const int n, cudaStream_t stream);
-
-template<typename T>
-void invokeAddBiasGatedRelu(
-    T* hidden1, const T* hidden2, const T* bias1, const T* bias2, const int m, const int n, cudaStream_t stream);
-
-template<typename F_T, typename B_T>
-void invokeAddBias(F_T* out, const B_T* bias, const int m, const int n, cudaStream_t stream);
-
-template<typename T>
-void invokeAddBiasGeluV2(T* out, const T* bias, const int m, const int n, cudaStream_t stream);
-
-template<typename T>
-void invokeAddBiasGatedSilu(
-    T* hidden1, const T* hidden2, const T* bias1, const T* bias2, const int m, const int n, cudaStream_t stream);
-
-template<typename T>
-void invokeAddBiasSilu(T* out, const T* bias, const int m, const int n, cudaStream_t stream);
-
+void invokeSigmoid(T* data, const int size, const float scale, cudaStream_t stream);
 }  // namespace fastertransformer

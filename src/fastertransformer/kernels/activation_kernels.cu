@@ -15,14 +15,17 @@
  */
 
 #include "src/fastertransformer/kernels/activation_kernels.h"
-#include "src/fastertransformer/kernels/bfloat16_fallback_kenrels.cuh"
+#include "src/fastertransformer/utils/cuda_type_utils.cuh"
 #include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/fastertransformer/utils/memory_utils.h"
 
 #ifndef CUDART_VERSION
 #error CUDART_VERSION Undefined!
 #endif
 
 namespace fastertransformer {
+
+/* Gelu Activation */
 
 __forceinline__ __device__ float copysignf_pos(float a, float b)
 {
@@ -44,485 +47,302 @@ __inline__ __device__ float tanh_opt(float x)
 }
 
 template<typename T>
-__inline__ __device__ T gelu(T x)
-{
-    float cdf = 0.5f * (1.0f + tanh_opt((0.7978845608028654f * (x + 0.044715f * x * x * x))));
-    return x * cdf;
-}
+struct GeluActivation {
+    using return_type = T;
+    static __device__ __forceinline__ T apply(const T& val)
+    {
+        const float cdf = 0.5f * (1.0f + tanh_opt((0.7978845608028654f * (val + 0.044715f * val * val * val))));
+        return val * cdf;
+    }
+};
 
 template<>
-__inline__ __device__ half2 gelu(half2 val)
-{
-    half2  val_pow3 = __hmul2(val, __hmul2(val, val));
-    float2 tmp_pow  = __half22float2(val_pow3);
-    float2 tmp      = __half22float2(val);
+struct GeluActivation<half2> {
+    using return_type = half2;
+    static __device__ __forceinline__ half2 apply(const half2& val)
+    {
+        half2  val_pow3 = __hmul2(val, __hmul2(val, val));
+        float2 tmp_pow  = __half22float2(val_pow3);
+        float2 tmp      = __half22float2(val);
 
-    tmp.x = 0.5f * (1.0f + tanh_opt((0.7978845608028654f * (tmp.x + 0.044715f * tmp_pow.x))));
-    tmp.y = 0.5f * (1.0f + tanh_opt((0.7978845608028654f * (tmp.y + 0.044715f * tmp_pow.y))));
-    return __hmul2(val, __float22half2_rn(tmp));
-}
+        tmp.x = 0.5f * (1.0f + tanh_opt((0.7978845608028654f * (tmp.x + 0.044715f * tmp_pow.x))));
+        tmp.y = 0.5f * (1.0f + tanh_opt((0.7978845608028654f * (tmp.y + 0.044715f * tmp_pow.y))));
+        return __hmul2(val, __float22half2_rn(tmp));
+    }
+};
 
 #ifdef ENABLE_BF16
 template<>
-__inline__ __device__ __nv_bfloat162 gelu(__nv_bfloat162 val)
-{
-    __nv_bfloat162 val_pow3 = bf16hmul2(val, bf16hmul2(val, val));
-    float2         tmp_pow  = bf1622float2(val_pow3);
-    float2         tmp      = bf1622float2(val);
+struct GeluActivation<__nv_bfloat162> {
+    using return_type = __nv_bfloat162;
+    static __device__ __forceinline__ __nv_bfloat162 apply(const __nv_bfloat162& val)
+    {
+        __nv_bfloat162 val_pow3 = bf16hmul2(val, bf16hmul2(val, val));
+        float2         tmp_pow  = bf1622float2(val_pow3);
+        float2         tmp      = bf1622float2(val);
 
-    tmp.x = 0.5f * (1.0f + tanh_opt((0.7978845608028654f * (tmp.x + 0.044715f * tmp_pow.x))));
-    tmp.y = 0.5f * (1.0f + tanh_opt((0.7978845608028654f * (tmp.y + 0.044715f * tmp_pow.y))));
-    return bf16hmul2(val, __floats2bfloat162_rn(tmp.x, tmp.y));
-}
+        tmp.x = 0.5f * (1.0f + tanh_opt((0.7978845608028654f * (tmp.x + 0.044715f * tmp_pow.x))));
+        tmp.y = 0.5f * (1.0f + tanh_opt((0.7978845608028654f * (tmp.y + 0.044715f * tmp_pow.y))));
+        return bf16hmul2(val, __floats2bfloat162_rn(tmp.x, tmp.y));
+    }
+};
 #endif
 
+/* Relu Activation */
+
 template<typename T>
-__global__ void addBiasGelu(T* out, const T* __restrict bias, int m, int n)
-{
-    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        T val = out[id];
-        if (bias != nullptr) {
-            T reg_bias = __ldg(&bias[id % n]);
-            val        = val + reg_bias;
-        }
-        out[id] = (T)(gelu(val));
+struct ReluActivation {
+    using return_type = T;
+    static __device__ __forceinline__ T apply(const T& val)
+    {
+        return val > static_cast<T>(0.0f) ? val : static_cast<T>(0.0f);
     }
-}
+};
 
 template<>
-__global__ void addBiasGelu(half* out, const half* __restrict bias, int m, int n)
-{
-    half2*       out_ptr  = (half2*)out;
-    const half2* bias_ptr = (half2*)bias;
-
-    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        half2 val = out_ptr[id];
-        if (bias != nullptr) {
-            half2 reg_bias = __ldg(&bias_ptr[id % n]);
-            val            = __hadd2(val, reg_bias);
-        }
-        out_ptr[id] = gelu(val);
+struct ReluActivation<half2> {
+    using return_type = half2;
+    static __device__ __forceinline__ half2 apply(const half2& val)
+    {
+        const half zero_half = static_cast<half>(0.0f);
+        return make_half2(val.x > zero_half ? val.x : zero_half, val.y > zero_half ? val.y : zero_half);
     }
-}
+};
 
 #ifdef ENABLE_BF16
 template<>
-__global__ void addBiasGelu(__nv_bfloat16* out, const __nv_bfloat16* __restrict bias, int m, int n)
-{
-    __nv_bfloat162*       out_ptr  = (__nv_bfloat162*)out;
-    const __nv_bfloat162* bias_ptr = (__nv_bfloat162*)bias;
-
-    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        __nv_bfloat162 val = out_ptr[id];
-        if (bias != nullptr) {
-            __nv_bfloat162 reg_bias = ldg(&bias_ptr[id % n]);
-            val                     = bf16hadd2(val, reg_bias);
-        }
-        out_ptr[id] = gelu(val);
+struct ReluActivation<__nv_bfloat162> {
+    using return_type = __nv_bfloat162;
+    static __device__ __forceinline__ __nv_bfloat162 apply(const __nv_bfloat162& val)
+    {
+        const __nv_bfloat16 zero_bf16 = static_cast<__nv_bfloat16>(0.0f);
+        return make_bfloat162(val.x > zero_bf16 ? val.x : zero_bf16, val.y > zero_bf16 ? val.y : zero_bf16);
     }
-}
+};
 #endif
 
-template<typename T>
-void invokeAddBiasGelu(T* out, const T* bias, const int m, const int n, cudaStream_t stream)
-{
-    const int data_type_factor = 4 / sizeof(T);  // 1 for fp32, 2 for fp16 and bf16
-    dim3      block, grid;
-    if (n / 4 / data_type_factor <= 1024) {
-        block.x = n / 4 / data_type_factor;
-        grid.x  = m;
-    }
-    else {
-        block.x = 1024;
-        grid.x  = ceil(m * n / 1024.);
-    }
-    addBiasGelu<T><<<grid, block, 0, stream>>>(out, bias, m, n / data_type_factor);
-}
+/* Silu Activation */
 
-template void invokeAddBiasGelu(float* out, const float* bias, const int m, const int n, cudaStream_t stream);
-template void invokeAddBiasGelu(half* out, const half* bias, const int m, const int n, cudaStream_t stream);
+template<typename T>
+struct SiluActivation {
+    using return_type = T;
+    static __device__ __forceinline__ T apply(const T& val)
+    {
+        return (T)((float)val / (1.0f + __expf((float)-val)));
+    }
+};
+
+template<>
+struct SiluActivation<half2> {
+    using return_type = float2;
+    static __device__ __forceinline__ float2 apply(const half2& val)
+    {
+        return make_float2(SiluActivation<float>::apply(val.x), SiluActivation<float>::apply(val.y));
+    }
+};
+
 #ifdef ENABLE_BF16
-template void
-invokeAddBiasGelu(__nv_bfloat16* out, const __nv_bfloat16* bias, const int m, const int n, cudaStream_t stream);
-#endif
+template<>
+struct SiluActivation<__nv_bfloat162> {
+    using return_type = float2;
+    static __device__ __forceinline__ float2 apply(const __nv_bfloat162& val)
+    {
+        return make_float2(SiluActivation<float>::apply(val.x), SiluActivation<float>::apply(val.y));
+    }
+};
+#endif  // ENABLE_BF16
 
-// Invoke GeGlu (gated glue)
+/* Identity Activation (= no activation) */
+
 template<typename T>
-__global__ void
-addBiasGatedGelu(T* hidden1, const T* hidden2, const T* __restrict bias1, const T* __restrict bias2, int m, int n)
+struct IdentityActivation {
+    using return_type = T;
+    static __device__ __forceinline__ T apply(const T& val)
+    {
+        return val;
+    }
+};
+
+// clang-format off
+template<template<typename T> class Activation, typename T, typename BT>
+__global__ void generic_activation(T*                      out,
+                                   const BT*  __restrict   bias,
+                                   const T*   __restrict   gated_weights,
+                                   const BT*  __restrict   gated_bias,
+                                   const int* __restrict   ia3_tasks,
+                                   const T*   __restrict   ia3_weights,
+                                   const int               int8_mode,
+                                   const float* __restrict activation_in,
+                                   const float* __restrict activation_out,
+                                   int m,
+                                   int n)
 {
-    const bool use_bias = bias1 != nullptr && bias2 != nullptr;
+    constexpr size_t packed_elems = num_elems<T>::value;
+
+    const bool with_bias = bias != nullptr;
+    const bool with_gate = gated_weights != nullptr;
+    const bool with_ia3  = ia3_tasks != nullptr;
+
+    using Act_T         = typename Activation<T>::return_type;
+    using Float_T       = typename packed_as<float, packed_elems>::type;
+    using Packed_Int8_t = typename packed_as<int8_t, packed_elems>::type;
+
     for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        T val1 = hidden1[id];
-        T val2 = hidden2[id];
-        if (use_bias) {
-            T reg_bias1 = __ldg(&bias1[id % n]);
-            T reg_bias2 = __ldg(&bias2[id % n]);
-            hidden1[id] = (T)(gelu(val1 + reg_bias1) * (val2 + reg_bias2));
+        T val;
+        if (int8_mode == 2) {
+            val = cuda_cast<T>(cuda_cast<Float_T>(reinterpret_cast<Packed_Int8_t*>(out)[id]) * activation_in[0]);
         }
         else {
-            hidden1[id] = (T)(gelu(val1) * val2);
+            val = out[id];
         }
-    }
-}
 
-template<>
-__global__ void addBiasGatedGelu(
-    half* hidden1, const half* hidden2, const half* __restrict bias1, const half* __restrict bias2, int m, int n)
-{
-    half2*       hidden1_ptr = (half2*)hidden1;
-    const half2* hidden2_ptr = (half2*)hidden2;
-    const half2* bias1_ptr   = (half2*)bias1;
-    const half2* bias2_ptr   = (half2*)bias2;
-    const bool   use_bias    = bias1 != nullptr && bias2 != nullptr;
+        T gated_val;
+        if (with_gate) {
+            gated_val = gated_weights[id];
+        }
 
-    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        half2 val1 = hidden1_ptr[id];
-        half2 val2 = hidden2_ptr[id];
-        if (use_bias) {
-            half2 reg_bias1 = __ldg(&bias1_ptr[id % n]);
-            half2 reg_bias2 = __ldg(&bias2_ptr[id % n]);
-            hidden1_ptr[id] = __hmul2(gelu(__hadd2(val1, reg_bias1)), __hadd2(val2, reg_bias2));
+        if (with_bias) {
+            const T reg_bias = static_cast<T>(bias[id % n]);
+            val              = val + reg_bias;
+
+            if (with_gate) {
+                const T reg_gated_bias = static_cast<T>(gated_bias[id % n]);
+                gated_val              = gated_val + reg_gated_bias;
+            }
+        }
+
+        if (with_gate) {
+            val = cuda_cast<T>(Activation<T>::apply(val) * cuda_cast<Act_T>(gated_val));
         }
         else {
-            hidden1_ptr[id] = __hmul2(gelu(val1), val2);
+            val = cuda_cast<T>(Activation<T>::apply(val));
         }
-    }
-}
 
-#ifdef ENABLE_BF16
-template<>
-__global__ void addBiasGatedGelu(__nv_bfloat16*       hidden1,
-                                 const __nv_bfloat16* hidden2,
-                                 const __nv_bfloat16* __restrict bias1,
-                                 const __nv_bfloat16* __restrict bias2,
-                                 int m,
-                                 int n)
-{
-    __nv_bfloat162*       hidden1_ptr = (__nv_bfloat162*)hidden1;
-    const __nv_bfloat162* hidden2_ptr = (__nv_bfloat162*)hidden2;
-    const __nv_bfloat162* bias1_ptr   = (__nv_bfloat162*)bias1;
-    const __nv_bfloat162* bias2_ptr   = (__nv_bfloat162*)bias2;
-    const bool            use_bias    = bias1 != nullptr && bias2 != nullptr;
+        if (with_ia3) {
+            const int task = ia3_tasks[id / n];
+            val            = val * ia3_weights[task * n + (id % n)];
+        }
 
-    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        __nv_bfloat162 val1 = hidden1_ptr[id];
-        __nv_bfloat162 val2 = hidden2_ptr[id];
-        if (use_bias) {
-            __nv_bfloat162 reg_bias1 = ldg(&bias1_ptr[id % n]);
-            __nv_bfloat162 reg_bias2 = ldg(&bias2_ptr[id % n]);
-            hidden1_ptr[id]          = bf16hmul2(gelu(bf16hadd2(val1, reg_bias1)), bf16hadd2(val2, reg_bias2));
+        if (int8_mode != 2) {
+            out[id] = val;
         }
         else {
-            hidden1_ptr[id] = bf16hmul2(gelu(val1), val2);
+            reinterpret_cast<Packed_Int8_t*>(out)[id] =
+                cuda_cast<Packed_Int8_t>(cuda_cast<Float_T>(val) * activation_out[0]);
         }
     }
 }
-#endif
+// clang-format on
 
-template<typename T>
-void invokeAddBiasGatedGelu(
-    T* hidden1, const T* hidden2, const T* bias1, const T* bias2, const int m, const int n, cudaStream_t stream)
+template<template<typename T> class Activation, typename T, typename BT>
+void invokeGenericActivation(T*           out,
+                             const BT*    bias,
+                             const T*     gated_weights,
+                             const BT*    gated_bias,
+                             const int*   ia3_tasks,
+                             const T*     ia3_weights,
+                             const int    m,
+                             const int    n,
+                             const int    int8_mode,
+                             const float* activation_in,
+                             const float* activation_out,
+                             cudaStream_t stream)
 {
-    const int data_type_factor = 4 / sizeof(T);  // 1 for fp32, 2 for fp16 and bf16
-    dim3      block, grid;
-    if (n / 4 / data_type_factor <= 1024) {
-        block.x = n / 4 / data_type_factor;
+    using PT                   = typename packed_type<T>::type;
+    constexpr int packed_elems = num_elems<PT>::value;
+    using PBT                  = typename packed_as<BT, packed_elems>::type;
+
+    dim3 block, grid;
+    if (n / 4 / packed_elems <= 1024) {
+        block.x = n / 4 / packed_elems;
         grid.x  = m;
     }
     else {
         block.x = 1024;
         grid.x  = ceil(m * n / 1024.);
     }
-    addBiasGatedGelu<T><<<grid, block, 0, stream>>>(hidden1, hidden2, bias1, bias2, m, n / data_type_factor);
+    generic_activation<Activation><<<grid, block, 0, stream>>>(reinterpret_cast<PT*>(out),
+                                                               reinterpret_cast<const PBT*>(bias),
+                                                               reinterpret_cast<const PT*>(gated_weights),
+                                                               reinterpret_cast<const PBT*>(gated_bias),
+                                                               ia3_tasks,
+                                                               reinterpret_cast<const PT*>(ia3_weights),
+                                                               int8_mode,
+                                                               activation_in,
+                                                               activation_out,
+                                                               m,
+                                                               n / packed_elems);
 }
 
-// GELU(hidden1 + bias1) * (hidden2 + bias2)
-template void invokeAddBiasGatedGelu(float*       hidden1,
-                                     const float* hidden2,
-                                     const float* bias1,
-                                     const float* bias2,
-                                     const int    m,
-                                     const int    n,
-                                     cudaStream_t stream);
-template void invokeAddBiasGatedGelu(half*        hidden1,
-                                     const half*  hidden2,
-                                     const half*  bias1,
-                                     const half*  bias2,
-                                     const int    m,
-                                     const int    n,
-                                     cudaStream_t stream);
+#define INSTANTIATE_GENERIC_ACTIVATION(Activation, T, BT)                                                              \
+    template void invokeGenericActivation<Activation, T, BT>(T * out,                                                  \
+                                                             const BT*    bias,                                        \
+                                                             const T*     gated_weights,                               \
+                                                             const BT*    gated_bias,                                  \
+                                                             const int*   ia3_tasks,                                   \
+                                                             const T*     ia3_weights,                                 \
+                                                             const int    m,                                           \
+                                                             const int    n,                                           \
+                                                             const int    int8_mode,                                   \
+                                                             const float* activation_in,                               \
+                                                             const float* activation_out,                              \
+                                                             cudaStream_t stream)
+
+INSTANTIATE_GENERIC_ACTIVATION(GeluActivation, float, float);
+INSTANTIATE_GENERIC_ACTIVATION(GeluActivation, half, half);
 #ifdef ENABLE_BF16
-template void invokeAddBiasGatedGelu(__nv_bfloat16*       hidden1,
-                                     const __nv_bfloat16* hidden2,
-                                     const __nv_bfloat16* bias1,
-                                     const __nv_bfloat16* bias2,
-                                     const int            m,
-                                     const int            n,
-                                     cudaStream_t         stream);
+INSTANTIATE_GENERIC_ACTIVATION(GeluActivation, __nv_bfloat16, __nv_bfloat16);
 #endif
 
-template<typename T>
-__global__ void add_bias_relu(T* out, const T* __restrict bias, int m, int n)
-{
-    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        T val = out[id];
-        if (bias != nullptr) {
-            val = val + ldg(&bias[id % n]);
-        }
-        out[id] = val > (T)0.0f ? val : (T)0.0f;
-    }
-}
-
-template<>
-__global__ void add_bias_relu(half* out, const half* __restrict bias, int m, int n)
-{
-    half2*       out_ptr  = (half2*)out;
-    const half2* bias_ptr = (half2*)bias;
-
-    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        half2 val = out_ptr[id];
-        if (bias != nullptr) {
-            val = val + __ldg(&bias_ptr[id % n]);
-        }
-        val.x       = val.x > (half)0.0f ? val.x : (half)0.0f;
-        val.y       = val.y > (half)0.0f ? val.y : (half)0.0f;
-        out_ptr[id] = val;
-    }
-}
-
+INSTANTIATE_GENERIC_ACTIVATION(ReluActivation, float, float);
+INSTANTIATE_GENERIC_ACTIVATION(ReluActivation, half, half);
 #ifdef ENABLE_BF16
-template<>
-__global__ void add_bias_relu(__nv_bfloat16* out, const __nv_bfloat16* __restrict bias, int m, int n)
-{
-    __nv_bfloat162*       out_ptr  = (__nv_bfloat162*)out;
-    const __nv_bfloat162* bias_ptr = (__nv_bfloat162*)bias;
-
-    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        __nv_bfloat162 val = out_ptr[id];
-        if (bias != nullptr) {
-            val = bf16hadd2(val, ldg(&bias_ptr[id % n]));
-        }
-        val.x       = val.x > (__nv_bfloat16)0.0f ? val.x : (__nv_bfloat16)0.0f;
-        val.y       = val.y > (__nv_bfloat16)0.0f ? val.y : (__nv_bfloat16)0.0f;
-        out_ptr[id] = val;
-    }
-}
+INSTANTIATE_GENERIC_ACTIVATION(ReluActivation, __nv_bfloat16, __nv_bfloat16);
 #endif
 
-template<typename T>
-void invokeAddBiasRelu(T* out, const T* bias, const int m, const int n, cudaStream_t stream)
-{
-    const int data_type_factor = 4 / sizeof(T);  // 1 for fp32, 2 for fp16 and bf16
-    dim3      block, grid;
-    if (n / 4 / data_type_factor <= 1024) {
-        block.x = n / 4 / data_type_factor;
-        grid.x  = m;
-    }
-    else {
-        block.x = 1024;
-        grid.x  = ceil(m * n / 1024.);
-    }
-    add_bias_relu<T><<<grid, block, 0, stream>>>(out, bias, m, n / data_type_factor);
-}
-
-template void invokeAddBiasRelu(float* out, const float* bias, const int m, const int n, cudaStream_t stream);
-template void invokeAddBiasRelu(half* out, const half* bias, const int m, const int n, cudaStream_t stream);
+INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, float, float);
+INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, half, half);
 #ifdef ENABLE_BF16
-template void
-invokeAddBiasRelu(__nv_bfloat16* out, const __nv_bfloat16* bias, const int m, const int n, cudaStream_t stream);
+INSTANTIATE_GENERIC_ACTIVATION(SiluActivation, __nv_bfloat16, __nv_bfloat16);
 #endif
 
-// Invoke GeGlu (gated glue)
-template<typename T>
-__global__ void
-addBiasGatedRelu(T* hidden1, const T* hidden2, const T* __restrict bias1, const T* __restrict bias2, int m, int n)
-{
-    const bool use_bias = bias1 != nullptr && bias2 != nullptr;
-    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        T val1 = hidden1[id];
-        T val2 = hidden2[id];
-        if (use_bias) {
-            T reg_bias1 = __ldg(&bias1[id % n]);
-            T reg_bias2 = __ldg(&bias2[id % n]);
-            val1 += reg_bias1;
-            val2 += reg_bias2;
-        }
-        hidden1[id] = val1 > (T)0.0f ? val1 * val2 : (T)0.0f;
-    }
-}
-
-template<>
-__global__ void addBiasGatedRelu(
-    half* hidden1, const half* hidden2, const half* __restrict bias1, const half* __restrict bias2, int m, int n)
-{
-    half2*       hidden1_ptr = (half2*)hidden1;
-    const half2* hidden2_ptr = (half2*)hidden2;
-    const half2* bias1_ptr   = (half2*)bias1;
-    const half2* bias2_ptr   = (half2*)bias2;
-    const bool   use_bias    = bias1 != nullptr && bias2 != nullptr;
-
-    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        half2 val1 = hidden1_ptr[id];
-        half2 val2 = hidden2_ptr[id];
-        if (use_bias) {
-            half2 reg_bias1 = __ldg(&bias1_ptr[id % n]);
-            half2 reg_bias2 = __ldg(&bias2_ptr[id % n]);
-            val1            = __hadd2(val1, reg_bias1);
-            val2            = __hadd2(val2, reg_bias2);
-        }
-        val1.x          = val1.x > (half)0.0f ? val1.x * val2.x : (half)0.0f;
-        val1.y          = val1.y > (half)0.0f ? val1.y * val2.y : (half)0.0f;
-        hidden1_ptr[id] = val1;
-    }
-}
-
+INSTANTIATE_GENERIC_ACTIVATION(IdentityActivation, float, float);
+INSTANTIATE_GENERIC_ACTIVATION(IdentityActivation, half, half);
+INSTANTIATE_GENERIC_ACTIVATION(IdentityActivation, float, half);
 #ifdef ENABLE_BF16
-template<>
-__global__ void addBiasGatedRelu(__nv_bfloat16*       hidden1,
-                                 const __nv_bfloat16* hidden2,
-                                 const __nv_bfloat16* __restrict bias1,
-                                 const __nv_bfloat16* __restrict bias2,
-                                 int m,
-                                 int n)
-{
-    __nv_bfloat162*       hidden1_ptr = (__nv_bfloat162*)hidden1;
-    const __nv_bfloat162* hidden2_ptr = (__nv_bfloat162*)hidden2;
-    const __nv_bfloat162* bias1_ptr   = (__nv_bfloat162*)bias1;
-    const __nv_bfloat162* bias2_ptr   = (__nv_bfloat162*)bias2;
-    const bool            use_bias    = bias1 != nullptr && bias2 != nullptr;
-
-    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        __nv_bfloat162 val1 = hidden1_ptr[id];
-        __nv_bfloat162 val2 = hidden2_ptr[id];
-        if (use_bias) {
-            __nv_bfloat162 reg_bias1 = ldg(&bias1_ptr[id % n]);
-            __nv_bfloat162 reg_bias2 = ldg(&bias2_ptr[id % n]);
-            val1                     = bf16hadd2(val1, reg_bias1);
-            val2                     = bf16hadd2(val2, reg_bias2);
-        }
-        val1.x          = val1.x > (__nv_bfloat16)0.0f ? bf16hadd(val1.x, val2.x) : (__nv_bfloat16)0.0f;
-        val1.y          = val1.y > (__nv_bfloat16)0.0f ? bf16hadd(val1.y, val2.y) : (__nv_bfloat16)0.0f;
-        hidden1_ptr[id] = val1;
-    }
-}
+INSTANTIATE_GENERIC_ACTIVATION(IdentityActivation, __nv_bfloat16, __nv_bfloat16);
+INSTANTIATE_GENERIC_ACTIVATION(IdentityActivation, float, __nv_bfloat16);
 #endif
 
-template<typename T>
-void invokeAddBiasGatedRelu(
-    T* hidden1, const T* hidden2, const T* bias1, const T* bias2, const int m, const int n, cudaStream_t stream)
-{
-    const int data_type_factor = 4 / sizeof(T);  // 1 for fp32, 2 for fp16 and bf16
-    dim3      block, grid;
-    if (n / 4 / data_type_factor <= 1024) {
-        block.x = n / 4 / data_type_factor;
-        grid.x  = m;
-    }
-    else {
-        block.x = 1024;
-        grid.x  = ceil(m * n / 1024.);
-    }
-    addBiasGatedRelu<T><<<grid, block, 0, stream>>>(hidden1, hidden2, bias1, bias2, m, n / data_type_factor);
-}
-
-// GELU(hidden1 + bias1) * (hidden2 + bias2)
-template void invokeAddBiasGatedRelu(float*       hidden1,
-                                     const float* hidden2,
-                                     const float* bias1,
-                                     const float* bias2,
-                                     const int    m,
-                                     const int    n,
-                                     cudaStream_t stream);
-template void invokeAddBiasGatedRelu(half*        hidden1,
-                                     const half*  hidden2,
-                                     const half*  bias1,
-                                     const half*  bias2,
-                                     const int    m,
-                                     const int    n,
-                                     cudaStream_t stream);
-#ifdef ENABLE_BF16
-template void invokeAddBiasGatedRelu(__nv_bfloat16*       hidden1,
-                                     const __nv_bfloat16* hidden2,
-                                     const __nv_bfloat16* bias1,
-                                     const __nv_bfloat16* bias2,
-                                     const int            m,
-                                     const int            n,
-                                     cudaStream_t         stream);
-#endif
-
-template<typename H_T, typename B_T>
-__global__ void add_bias(H_T* out, const B_T* __restrict bias, int m, int n)
-{
-    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        out[id] = out[id] + (H_T)ldg(&bias[id % n]);
-    }
-}
-
-template<>
-__global__ void add_bias(half* out, const half* __restrict bias, int m, int n)
-{
-    half2*       out_ptr  = (half2*)out;
-    const half2* bias_ptr = (half2*)bias;
-    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        out_ptr[id] = out_ptr[id] + __ldg(&bias_ptr[id % n]);
-    }
-}
-
-#ifdef ENABLE_BF16
-template<>
-__global__ void add_bias(__nv_bfloat16* out, const __nv_bfloat16* __restrict bias, int m, int n)
-{
-    __nv_bfloat162*       out_ptr  = (__nv_bfloat162*)out;
-    const __nv_bfloat162* bias_ptr = (__nv_bfloat162*)bias;
-    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        out_ptr[id] = bf16hadd2(out_ptr[id], ldg(&bias_ptr[id % n]));
-    }
-}
-#endif
-
-template<typename H_T, typename B_T>
-void invokeAddBias(H_T* out, const B_T* bias, const int m, const int n, cudaStream_t stream)
-{
-    const int data_type_factor = 4 / sizeof(H_T);  // 1 for fp32, 2 for fp16 and bf16
-    dim3      block, grid;
-    if (n / 4 / data_type_factor <= 1024) {
-        block.x = n / 4 / data_type_factor;
-        grid.x  = m;
-    }
-    else {
-        block.x = 1024;
-        grid.x  = ceil(m * n / 1024.);
-    }
-    add_bias<<<grid, block, 0, stream>>>(out, bias, m, n / data_type_factor);
-}
-
-template void invokeAddBias(float* out, const float* bias, const int m, const int n, cudaStream_t stream);
-template void invokeAddBias(half* out, const half* bias, const int m, const int n, cudaStream_t stream);
-template void invokeAddBias(float* out, const half* bias, const int m, const int n, cudaStream_t stream);
-#ifdef ENABLE_BF16
-template void
-invokeAddBias(__nv_bfloat16* out, const __nv_bfloat16* bias, const int m, const int n, cudaStream_t stream);
-template void invokeAddBias(float* out, const __nv_bfloat16* bias, const int m, const int n, cudaStream_t stream);
-#endif
+#undef INSTANCIATE_GENERIC_ACTIVATION
 
 template<typename T2, int N>
-__global__ void addBiasGeluV2(T2* out, const T2* __restrict bias, const int size)
+__global__ void
+addBiasGeluV2(T2* out, const T2* __restrict bias, const int* ia3_tasks, const T2* ia3_weights, const int size)
 {
+    const bool with_ia3 = ia3_tasks != nullptr;
     for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < size; id += blockDim.x * gridDim.x) {
         T2 val = out[id];
         if (bias != nullptr) {
             T2 reg_bias = ldg(&bias[id % N]);
             val         = hadd2(val, reg_bias);
         }
-        out[id] = gelu(val);
+        val = GeluActivation<T2>::apply(val);
+        if (with_ia3) {
+            const int task = ia3_tasks[id / N];
+            val            = val * ia3_weights[task * N + (id % N)];
+        }
+        out[id] = val;
     }
 }
 
 template<typename T2, int N, int ELEMENT_PER_ROUND>
-__global__ void addBiasGeluV3(T2* out, const T2* __restrict bias, const int size)
+__global__ void
+addBiasGeluV3(T2* out, const T2* __restrict bias, const int* ia3_tasks, const T2* ia3_weights, const int size)
 {
-    T2 buffer[ELEMENT_PER_ROUND];
-    T2 tmp_bias[ELEMENT_PER_ROUND];
+    const bool with_ia3 = ia3_tasks != nullptr;
+    T2         buffer[ELEMENT_PER_ROUND];
+    T2         tmp_bias[ELEMENT_PER_ROUND];
     for (int id = blockIdx.x * blockDim.x * ELEMENT_PER_ROUND + threadIdx.x * ELEMENT_PER_ROUND; id < size;
          id += blockDim.x * gridDim.x * ELEMENT_PER_ROUND) {
 #pragma unroll
@@ -537,7 +357,12 @@ __global__ void addBiasGeluV3(T2* out, const T2* __restrict bias, const int size
             if (bias != nullptr) {
                 buffer[i] = hadd2(buffer[i], tmp_bias[i]);
             }
-            out[id + i] = gelu(buffer[i]);
+            buffer[i] = GeluActivation<T2>::apply(buffer[i]);
+            if (with_ia3) {
+                const int task = ia3_tasks[(id + i) / N];
+                buffer[i]      = buffer[i] * ia3_weights[task * N + ((id + i) % N)];
+            }
+            out[id + i] = buffer[i];
         }
     }
 }
@@ -547,15 +372,17 @@ __global__ void addBiasGeluV3(T2* out, const T2* __restrict bias, const int size
         if (ELEMENT_PER_ROUND > 1) {                                                                                   \
             grid.x = grid.x / ELEMENT_PER_ROUND;                                                                       \
             addBiasGeluV3<T2, HALF_N, ELEMENT_PER_ROUND>                                                               \
-                <<<grid, block, 0, stream>>>((T2*)out, (const T2*)bias, m * half_n);                                   \
+                <<<grid, block, 0, stream>>>((T2*)out, (const T2*)bias, ia3_tasks, (T2*)ia3_weights, m * half_n);      \
         }                                                                                                              \
         else {                                                                                                         \
-            addBiasGeluV2<T2, HALF_N><<<grid, block, 0, stream>>>((T2*)out, (const T2*)bias, m * half_n);              \
+            addBiasGeluV2<T2, HALF_N>                                                                                  \
+                <<<grid, block, 0, stream>>>((T2*)out, (const T2*)bias, ia3_tasks, (T2*)ia3_weights, m * half_n);      \
         }                                                                                                              \
         break;
 
 template<typename T>
-void invokeAddBiasGeluV2(T* out, const T* bias, const int m, const int n, cudaStream_t stream)
+void invokeAddBiasGeluV2(
+    T* out, const T* bias, const int* ia3_tasks, const T* ia3_weights, const int m, const int n, cudaStream_t stream)
 {
     if (n % 2 == 0 && sizeof(T) == 2) {
         const int half_n = n / 2;
@@ -577,7 +404,18 @@ void invokeAddBiasGeluV2(T* out, const T* bias, const int m, const int n, cudaSt
                 ADD_BIAS_GELU(24576, 2)
                 ADD_BIAS_GELU(40960, 4)
                 default:
-                    invokeAddBiasGelu(out, bias, m, n, stream);
+                    invokeGenericActivation<GeluActivation>(out,
+                                                            bias,
+                                                            (T*)nullptr,
+                                                            (T*)nullptr,
+                                                            ia3_tasks,
+                                                            ia3_weights,
+                                                            m,
+                                                            n,
+                                                            0,
+                                                            (float*)nullptr,
+                                                            (float*)nullptr,
+                                                            stream);
                     break;
             }
         }
@@ -594,216 +432,105 @@ void invokeAddBiasGeluV2(T* out, const T* bias, const int m, const int n, cudaSt
                 ADD_BIAS_GELU(24576, 2)
                 ADD_BIAS_GELU(40960, 2)
                 default:
-                    invokeAddBiasGelu(out, bias, m, n, stream);
+                    invokeGenericActivation<GeluActivation>(out,
+                                                            bias,
+                                                            (T*)nullptr,
+                                                            (T*)nullptr,
+                                                            ia3_tasks,
+                                                            ia3_weights,
+                                                            m,
+                                                            n,
+                                                            0,
+                                                            (float*)nullptr,
+                                                            (float*)nullptr,
+                                                            stream);
                     break;
             }
         }
     }
     else {
-        invokeAddBiasGelu(out, bias, m, n, stream);
+        invokeGenericActivation<GeluActivation>(out,
+                                                bias,
+                                                (T*)nullptr,
+                                                (T*)nullptr,
+                                                ia3_tasks,
+                                                ia3_weights,
+                                                m,
+                                                n,
+                                                0,
+                                                (float*)nullptr,
+                                                (float*)nullptr,
+                                                stream);
     }
 }
 
 #undef ADD_BIAS_GELU
 
-template void invokeAddBiasGeluV2(float* out, const float* bias, const int m, const int n, cudaStream_t stream);
-template void invokeAddBiasGeluV2(half* out, const half* bias, const int m, const int n, cudaStream_t stream);
+template void invokeAddBiasGeluV2(float*       out,
+                                  const float* bias,
+                                  const int*   ia3_tasks,
+                                  const float* ia3_weights,
+                                  const int    m,
+                                  const int    n,
+                                  cudaStream_t stream);
+template void invokeAddBiasGeluV2(half*        out,
+                                  const half*  bias,
+                                  const int*   ia3_tasks,
+                                  const half*  ia3_weights,
+                                  const int    m,
+                                  const int    n,
+                                  cudaStream_t stream);
 #ifdef ENABLE_BF16
-template void
-invokeAddBiasGeluV2(__nv_bfloat16* out, const __nv_bfloat16* bias, const int m, const int n, cudaStream_t stream);
+template void invokeAddBiasGeluV2(__nv_bfloat16*       out,
+                                  const __nv_bfloat16* bias,
+                                  const int*           ia3_tasks,
+                                  const __nv_bfloat16* ia3_weights,
+                                  const int            m,
+                                  const int            n,
+                                  cudaStream_t         stream);
 #endif  // ENABLE_BF16
 
 template<typename T>
-__inline__ __device__ T silu(T x)
+__global__ void sigmoid_kernel(T* data, const int size, const float scale)
 {
-    return (T)((float)x / (1.0f + __expf((float)-x)));
-}
-
-template<typename T>
-__global__ void add_bias_silu(T* out, const T* __restrict bias, int m, int n)
-{
-    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        T val = out[id];
-        if (bias != nullptr) {
-            val = val + ldg(&bias[id % n]);
-        }
-        out[id] = silu(val);
+    const int index = (blockIdx.y * gridDim.x + blockIdx.x) * blockDim.x + threadIdx.x;
+    if (index < size) {
+        float val   = cuda_cast<float>(data[index]);
+        val         = 1.0f / (1.0f + exp(-val)) * scale;
+        data[index] = T(val);
     }
 }
 
 template<>
-__global__ void add_bias_silu(half* out, const half* __restrict bias, int m, int n)
+__global__ void sigmoid_kernel(half2* data, const int size, const float scale)
 {
-    half2*       out_ptr  = (half2*)out;
-    const half2* bias_ptr = (half2*)bias;
-
-    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        half2 val = out_ptr[id];
-        if (bias != nullptr) {
-            val = val + __ldg(&bias_ptr[id % n]);
-        }
-        val.x       = silu(val.x);
-        val.y       = silu(val.y);
-        out_ptr[id] = val;
+    const int index = (blockIdx.y * gridDim.x + blockIdx.x) * blockDim.x + threadIdx.x;
+    if (index < size / 2) {
+        half2  val        = data[index];
+        float2 val_float2 = cuda_cast<float2>(val);
+        val_float2.x      = 1.0f / (1.0f + exp(-val_float2.x)) * scale;
+        val_float2.y      = 1.0f / (1.0f + exp(-val_float2.y)) * scale;
+        data[index]       = cuda_cast<half2>(val_float2);
     }
 }
-
-#ifdef ENABLE_BF16
-template<>
-__global__ void add_bias_silu(__nv_bfloat16* out, const __nv_bfloat16* __restrict bias, int m, int n)
-{
-    __nv_bfloat162*       out_ptr  = (__nv_bfloat162*)out;
-    const __nv_bfloat162* bias_ptr = (__nv_bfloat162*)bias;
-
-    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        __nv_bfloat162 val = out_ptr[id];
-        if (bias != nullptr) {
-            val = bf16hadd2(val, ldg(&bias_ptr[id % n]));
-        }
-        val.x       = silu(val.x);
-        val.y       = silu(val.y);
-        out_ptr[id] = val;
-    }
-}
-#endif
 
 template<typename T>
-void invokeAddBiasSilu(T* out, const T* bias, const int m, const int n, cudaStream_t stream)
+void invokeSigmoid(T* data, const int size, const float scale, cudaStream_t stream)
 {
-    const int data_type_factor = 4 / sizeof(T);  // 1 for fp32, 2 for fp16 and bf16
-    dim3      block, grid;
-    if (n / 4 / data_type_factor <= 1024) {
-        block.x = n / 4 / data_type_factor;
-        grid.x  = m;
+    if (std::is_same<T, float>::value || (size % 2 != 0)) {
+        dim3 block(128);
+        dim3 grid((size + 127) / 128);
+        sigmoid_kernel<<<grid, block, 0, stream>>>(data, size, scale);
     }
     else {
-        block.x = 1024;
-        grid.x  = ceil(m * n / 1024.);
-    }
-    add_bias_silu<T><<<grid, block, 0, stream>>>(out, bias, m, n / data_type_factor);
-}
-
-template void invokeAddBiasSilu(float* out, const float* bias, const int m, const int n, cudaStream_t stream);
-template void invokeAddBiasSilu(half* out, const half* bias, const int m, const int n, cudaStream_t stream);
-#ifdef ENABLE_BF16
-template void
-invokeAddBiasSilu(__nv_bfloat16* out, const __nv_bfloat16* bias, const int m, const int n, cudaStream_t stream);
-#endif
-
-// Invoke GeGlu (gated glue)
-template<typename T>
-__global__ void
-addBiasGatedSilu(T* hidden1, const T* hidden2, const T* __restrict bias1, const T* __restrict bias2, int m, int n)
-{
-    const bool use_bias = bias1 != nullptr && bias2 != nullptr;
-    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        T val1 = hidden1[id];
-        T val2 = hidden2[id];
-        if (use_bias) {
-            T reg_bias1 = __ldg(&bias1[id % n]);
-            T reg_bias2 = __ldg(&bias2[id % n]);
-            val1 += reg_bias1;
-            val2 += reg_bias2;
-        }
-        hidden1[id] = silu(val1) * val2;
+        dim3 block(128);
+        dim3 grid((size + 255) / 256);
+        sigmoid_kernel<<<grid, block, 0, stream>>>((half2*)data, size, scale);
     }
 }
 
-template<>
-__global__ void addBiasGatedSilu(
-    half* hidden1, const half* hidden2, const half* __restrict bias1, const half* __restrict bias2, int m, int n)
-{
-    half2*       hidden1_ptr = (half2*)hidden1;
-    const half2* hidden2_ptr = (half2*)hidden2;
-    const half2* bias1_ptr   = (half2*)bias1;
-    const half2* bias2_ptr   = (half2*)bias2;
-    const bool   use_bias    = bias1 != nullptr && bias2 != nullptr;
+template void invokeSigmoid(float* data, const int size, const float scale, cudaStream_t stream);
 
-    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        half2 val1 = hidden1_ptr[id];
-        half2 val2 = hidden2_ptr[id];
-        if (use_bias) {
-            half2 reg_bias1 = __ldg(&bias1_ptr[id % n]);
-            half2 reg_bias2 = __ldg(&bias2_ptr[id % n]);
-            val1            = __hadd2(val1, reg_bias1);
-            val2            = __hadd2(val2, reg_bias2);
-        }
-        val1.x          = silu(val1.x) * val2.x;
-        val1.y          = silu(val1.y) * val2.y;
-        hidden1_ptr[id] = val1;
-    }
-}
-
-#ifdef ENABLE_BF16
-template<>
-__global__ void addBiasGatedSilu(__nv_bfloat16*       hidden1,
-                                 const __nv_bfloat16* hidden2,
-                                 const __nv_bfloat16* __restrict bias1,
-                                 const __nv_bfloat16* __restrict bias2,
-                                 int m,
-                                 int n)
-{
-    __nv_bfloat162*       hidden1_ptr = (__nv_bfloat162*)hidden1;
-    const __nv_bfloat162* hidden2_ptr = (__nv_bfloat162*)hidden2;
-    const __nv_bfloat162* bias1_ptr   = (__nv_bfloat162*)bias1;
-    const __nv_bfloat162* bias2_ptr   = (__nv_bfloat162*)bias2;
-    const bool            use_bias    = bias1 != nullptr && bias2 != nullptr;
-
-    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
-        __nv_bfloat162 val1 = hidden1_ptr[id];
-        __nv_bfloat162 val2 = hidden2_ptr[id];
-        if (use_bias) {
-            __nv_bfloat162 reg_bias1 = ldg(&bias1_ptr[id % n]);
-            __nv_bfloat162 reg_bias2 = ldg(&bias2_ptr[id % n]);
-            val1                     = bf16hadd2(val1, reg_bias1);
-            val2                     = bf16hadd2(val2, reg_bias2);
-        }
-        val1.x          = (__nv_bfloat16)(silu((float)val1.x) * (float)val2.x);
-        val1.y          = (__nv_bfloat16)(silu((float)val1.y) * (float)val2.y);
-        hidden1_ptr[id] = val1;
-    }
-}
-#endif
-
-template<typename T>
-void invokeAddBiasGatedSilu(
-    T* hidden1, const T* hidden2, const T* bias1, const T* bias2, const int m, const int n, cudaStream_t stream)
-{
-    const int data_type_factor = 4 / sizeof(T);  // 1 for fp32, 2 for fp16 and bf16
-    dim3      block, grid;
-    if (n / 4 / data_type_factor <= 1024) {
-        block.x = n / 4 / data_type_factor;
-        grid.x  = m;
-    }
-    else {
-        block.x = 1024;
-        grid.x  = ceil(m * n / 1024.);
-    }
-    addBiasGatedSilu<T><<<grid, block, 0, stream>>>(hidden1, hidden2, bias1, bias2, m, n / data_type_factor);
-}
-
-template void invokeAddBiasGatedSilu(float*       hidden1,
-                                     const float* hidden2,
-                                     const float* bias1,
-                                     const float* bias2,
-                                     const int    m,
-                                     const int    n,
-                                     cudaStream_t stream);
-template void invokeAddBiasGatedSilu(half*        hidden1,
-                                     const half*  hidden2,
-                                     const half*  bias1,
-                                     const half*  bias2,
-                                     const int    m,
-                                     const int    n,
-                                     cudaStream_t stream);
-#ifdef ENABLE_BF16
-template void invokeAddBiasGatedSilu(__nv_bfloat16*       hidden1,
-                                     const __nv_bfloat16* hidden2,
-                                     const __nv_bfloat16* bias1,
-                                     const __nv_bfloat16* bias2,
-                                     const int            m,
-                                     const int            n,
-                                     cudaStream_t         stream);
-#endif
+template void invokeSigmoid(half* data, const int size, const float scale, cudaStream_t stream);
 
 }  // namespace fastertransformer

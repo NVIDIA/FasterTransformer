@@ -91,6 +91,7 @@ private:
     float                                              mlp_ratio_;
     bool                                               qkv_bias_;
     float                                              qk_scale_;
+    int                                                version_;
     int*                                               depths_;
     int*                                               num_heads_;
 
@@ -112,6 +113,7 @@ public:
                               const float                mlp_ratio,
                               const bool                 qkv_bias,
                               const float                qk_scale,
+                              const int                  version,
                               const std::vector<T*>&     w,
                               const std::vector<float*>& d_amax,
                               const std::vector<float*>& h_amax);
@@ -132,6 +134,7 @@ public:
                               const float                           mlp_ratio,
                               const bool                            qkv_bias,
                               const float                           qk_scale,
+                              const int                             version,
                               const std::vector<nvinfer1::Weights>& w,
                               const std::vector<nvinfer1::Weights>& d_amax,
                               const std::vector<nvinfer1::Weights>& h_amax);
@@ -192,7 +195,6 @@ public:
         size_t nValue = w.count;
         check_cuda_error(cudaMalloc(&dpWeight, nValue * sizeof(T)));
         check_cuda_error(cudaMemcpy(dpWeight, w.values, nValue * sizeof(T), cudaMemcpyHostToDevice));
-
         weights.push_back(dpWeight);
         return dpWeight;
     }

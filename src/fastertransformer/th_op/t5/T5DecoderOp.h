@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -42,17 +42,20 @@ public:
 template<typename T>
 class FTT5Decoder: public IFT5Decoder {
 public:
-    FTT5Decoder(int                            head_num,
-                int                            head_size,
-                int                            inter_size,
-                int                            d_model,
-                int                            layer_num,
-                int                            mem_d_model,
-                int                            tensor_para_size,
-                int                            pipeline_para_size,
+    FTT5Decoder(int64_t                        head_num,
+                int64_t                        head_size,
+                int64_t                        inter_size,
+                int64_t                        d_model,
+                int64_t                        layer_num,
+                int64_t                        expert_num,
+                int64_t                        moe_k,
+                int64_t                        mem_d_model,
+                int64_t                        tensor_para_size,
+                int64_t                        pipeline_para_size,
                 bool                           t5_with_bias,
                 bool                           use_gated_activation,
-                int                            position_embedding_type,
+                int64_t                        position_embedding_type,
+                std::vector<int64_t>           moe_layer_index,
                 const std::vector<th::Tensor>& w):
         _head_num(head_num),
         _head_size(head_size),
@@ -63,7 +66,10 @@ public:
         _d_model(d_model),
         _weights(w),
         _layer_num(layer_num),
-        _mem_d_model(mem_d_model)
+        _expert_num(expert_num),
+        _moe_k(moe_k),
+        _mem_d_model(mem_d_model),
+        _moe_layer_index(moe_layer_index)
     {
         ft::ftNcclInitialize(tensor_para_, pipeline_para_, tensor_para_size, pipeline_para_size);
 
@@ -198,7 +204,10 @@ public:
                                                     _inter_size,
                                                     _d_model,
                                                     _layer_num,
+                                                    _expert_num,
+                                                    _moe_k,
                                                     _layernorm_eps,
+                                                    _moe_layer_index,
                                                     stream,
                                                     cublas_wrapper,
                                                     allocator,
@@ -239,14 +248,17 @@ public:
     }
 
 private:
-    const int                                 _head_num;
-    const int                                 _head_size;
-    const int                                 _inter_size;
-    const int                                 _d_model;
+    const int64_t                             _head_num;
+    const int64_t                             _head_size;
+    const int64_t                             _inter_size;
+    const int64_t                             _d_model;
     std::vector<th::Tensor>                   _weights;
-    const int                                 _layer_num;
+    const int64_t                             _layer_num;
+    const int64_t                             _expert_num;
+    const int64_t                             _moe_k;
     static constexpr float                    _layernorm_eps = 1e-6f;
-    const int                                 _mem_d_model;
+    const int64_t                             _mem_d_model;
+    std::vector<int64_t>                      _moe_layer_index;
     cublasLtHandle_t                          _cublasltHandle;
     std::mutex*                               cublas_wrapper_mutex_;
     ft::cublasAlgoMap*                        cublas_algo_map_;
@@ -262,41 +274,44 @@ private:
 
 class FasterTransformerT5Decoder: public th::jit::CustomClassHolder {
 public:
-    FasterTransformerT5Decoder(th::Tensor self_layernorm_gamma,
-                               th::Tensor self_kernel_q,
-                               th::Tensor self_output_kernel,
-                               th::Tensor cross_layernorm_gamma,
-                               th::Tensor cross_kernel_q,
-                               th::Tensor cross_kernel_k,
-                               th::Tensor cross_kernel_v,
-                               th::Tensor cross_output_kernel,
-                               th::Tensor ffn_layernorm_gamma,
-                               th::Tensor inter_kernel,
-                               th::Tensor inter_kernel2,
-                               th::Tensor output_kernel,
-                               th::Tensor self_layernorm_beta,
-                               th::Tensor self_bias_qkv,
-                               th::Tensor self_output_bias,
-                               th::Tensor cross_layernorm_beta,
-                               th::Tensor cross_bias_q,
-                               th::Tensor cross_bias_k,
-                               th::Tensor cross_bias_v,
-                               th::Tensor cross_output_bias,
-                               th::Tensor ffn_layernorm_beta,
-                               th::Tensor inter_bias,
-                               th::Tensor inter_bias2,
-                               th::Tensor output_bias,
-                               int64_t    head_num,
-                               int64_t    head_size,
-                               int64_t    inter_size,
-                               int64_t    d_model,
-                               int64_t    layer_num,
-                               int64_t    mem_d_model,
-                               int64_t    tensor_para_size,
-                               int64_t    pipeline_para_size,
-                               bool       t5_with_bias,
-                               bool       use_gated_activation,
-                               int64_t    position_embedding_type);
+    FasterTransformerT5Decoder(th::Tensor           self_layernorm_gamma,
+                               th::Tensor           self_kernel_q,
+                               th::Tensor           self_output_kernel,
+                               th::Tensor           cross_layernorm_gamma,
+                               th::Tensor           cross_kernel_q,
+                               th::Tensor           cross_kernel_k,
+                               th::Tensor           cross_kernel_v,
+                               th::Tensor           cross_output_kernel,
+                               th::Tensor           ffn_layernorm_gamma,
+                               th::Tensor           inter_kernel,
+                               th::Tensor           inter_kernel2,
+                               th::Tensor           output_kernel,
+                               th::Tensor           self_layernorm_beta,
+                               th::Tensor           self_bias_qkv,
+                               th::Tensor           self_output_bias,
+                               th::Tensor           cross_layernorm_beta,
+                               th::Tensor           cross_bias_q,
+                               th::Tensor           cross_bias_k,
+                               th::Tensor           cross_bias_v,
+                               th::Tensor           cross_output_bias,
+                               th::Tensor           ffn_layernorm_beta,
+                               th::Tensor           inter_bias,
+                               th::Tensor           inter_bias2,
+                               th::Tensor           output_bias,
+                               int64_t              head_num,
+                               int64_t              head_size,
+                               int64_t              inter_size,
+                               int64_t              d_model,
+                               int64_t              layer_num,
+                               int64_t              expert_num,
+                               int64_t              moe_k,
+                               int64_t              mem_d_model,
+                               int64_t              tensor_para_size,
+                               int64_t              pipeline_para_size,
+                               bool                 t5_with_bias,
+                               bool                 use_gated_activation,
+                               int64_t              position_embedding_type,
+                               std::vector<int64_t> moe_layer_index);
 
     ~FasterTransformerT5Decoder();
 
@@ -311,12 +326,9 @@ public:
                                     th::Tensor memory_cache_values_tensor,
                                     th::Tensor relative_attention_bias_tensor);
 
-    std::vector<th::Tensor> get_pickle_info() const;
-
 private:
     const at::ScalarType    _st;
     IFT5Decoder*            ftdecoder;
-    th::Tensor              head_info;
     std::vector<th::Tensor> weights;
 };
 

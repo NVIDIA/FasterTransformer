@@ -22,11 +22,11 @@
 #include "3rdparty/cub/cub.cuh"
 #endif
 
-#include "src/fastertransformer/kernels/bfloat16_fallback_kenrels.cuh"
 #include "src/fastertransformer/kernels/decoder_masked_multihead_attention.h"
 #include "src/fastertransformer/kernels/decoder_masked_multihead_attention_utils.h"
 #include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
 #include "src/fastertransformer/layers/attention_layers/DecoderCrossAttentionLayer.h"
+#include "src/fastertransformer/utils/cuda_type_utils.cuh"
 
 namespace fastertransformer {
 
@@ -65,7 +65,10 @@ __global__ void cross_attention_kernel(T*          query_buf,
                                        int         size_per_head,
                                        int         step,
                                        const int   seq_len,
-                                       const T     scalar)
+                                       const T     scalar,
+                                       const int*  ia3_tasks,
+                                       const T*    ia3_key_weights,
+                                       const T*    ia3_value_weights)
 {
     if (finished != nullptr && finished[blockIdx.x / head_num] == true) {
         return;
@@ -73,6 +76,9 @@ __global__ void cross_attention_kernel(T*          query_buf,
     int tid     = threadIdx.x;
     int bid     = blockIdx.x / head_num;
     int head_id = blockIdx.x % head_num;
+
+    const bool do_ia3   = step == 1 && ia3_tasks != nullptr;
+    const int  ia3_task = do_ia3 ? ia3_tasks[bid] : 0;
 
     extern __shared__ __align__(sizeof(float)) unsigned s_buf[];  // align on largest type
     T*                                                  sq     = reinterpret_cast<T*>(s_buf);
@@ -97,7 +103,10 @@ __global__ void cross_attention_kernel(T*          query_buf,
         // For the first step, we should add bias to key memory cache.
         // The KV memory cache only need to be updated at the first step.
         if (step == 1 && tid < size_per_head) {
-            key               = add(key, K_bias[head_id * size_per_head + tid]);
+            key = add(key, K_bias[head_id * size_per_head + tid]);
+            if (do_ia3) {
+                key = mmha::mul<T, T, T>(key, ia3_key_weights[(ia3_task * head_num + head_id) * size_per_head + tid]);
+            }
             key_cache[key_id] = key;
         }
 
@@ -142,7 +151,11 @@ __global__ void cross_attention_kernel(T*          query_buf,
 
             // for the first step, we should add bias to key memory cache
             if (step == 1) {
-                value                 = add(value, V_bias[head_id * size_per_head + tid]);
+                value = add(value, V_bias[head_id * size_per_head + tid]);
+                if (do_ia3) {
+                    value = mmha::mul<T, T, T>(
+                        value, ia3_value_weights[(ia3_task * head_num + head_id) * size_per_head + tid]);
+                }
                 value_cache[value_id] = value;
             }
             sum = fma(value, logits[ite], sum);
@@ -165,7 +178,10 @@ __global__ void cross_attention_kernel_opt(T* __restrict query_buf,
                                            int         head_num,
                                            const int   step,
                                            const int   seq_len,
-                                           const float scalar)
+                                           const float scalar,
+                                           const int*  ia3_tasks,
+                                           const T*    ia3_key_weights,
+                                           const T*    ia3_value_weights)
 {
     if (finished != nullptr && finished[blockIdx.x / head_num] == true) {
         return;
@@ -206,6 +222,9 @@ __global__ void cross_attention_kernel_opt(T* __restrict query_buf,
 
     int key_value_id = bid * (seq_len * head_num * size_per_head) + +head_id * size_per_head;
 
+    const bool do_ia3   = step == 1 && ia3_tasks != nullptr;
+    const int  ia3_task = do_ia3 ? ia3_tasks[bid] : 0;
+
     query_buf   = &query_buf[qkv_id];
     K_bias      = &K_bias[qkv_bias_id];
     key_cache   = &key_cache[key_value_id];
@@ -236,6 +255,10 @@ __global__ void cross_attention_kernel_opt(T* __restrict query_buf,
         if (step == 1) {
             for (int i = 0; i < elems_per_thread; i++) {
                 key_val_r.x[i] = (float)key_val_r.x[i] + (float)bias_r.x[i];
+                if (do_ia3) {
+                    key_val_r.x[i] = (float)key_val_r.x[i]
+                                     * (float)(ia3_key_weights[(ia3_task * head_num + head_id) * size_per_head + tid]);
+                }
             }
             *((copy_t*)&key_cache[ite * offset] + lane_id) = key_val_r.v;
         }
@@ -290,6 +313,11 @@ __global__ void cross_attention_kernel_opt(T* __restrict query_buf,
         if (step == 1) {
             for (int i = 0; i < elems_per_thread; i++) {
                 key_val_r.x[i] = (float)key_val_r.x[i] + (float)bias_r.x[i];
+                if (do_ia3) {
+                    key_val_r.x[i] =
+                        (float)key_val_r.x[i]
+                        * (float)(ia3_value_weights[(ia3_task * head_num + head_id) * size_per_head + tid]);
+                }
             }
             *((copy_t*)&value_cache[ite * offset] + lane_id) = key_val_r.v;
         }
@@ -348,6 +376,9 @@ void cross_attention_dispatch(T*                               query_buf,
                               const bool                       batch_major_cache,
                               const float                      q_scaling,
                               outputCrossAttentionParam<float> output_cross_attention_params,
+                              const int*                       ia3_tasks,
+                              const T*                         ia3_key_weights,
+                              const T*                         ia3_value_weights,
                               cudaStream_t                     stream)
 {
     if (!batch_major_cache) {
@@ -373,7 +404,10 @@ void cross_attention_dispatch(T*                               query_buf,
                                                                                  head_num,
                                                                                  step,
                                                                                  memory_max_len,
-                                                                                 scalar);
+                                                                                 scalar,
+                                                                                 ia3_tasks,
+                                                                                 ia3_key_weights,
+                                                                                 ia3_value_weights);
                 break;
             case 64:
                 cross_attention_kernel_opt<T, 64, block_sz>
@@ -390,7 +424,10 @@ void cross_attention_dispatch(T*                               query_buf,
                                                                                  head_num,
                                                                                  step,
                                                                                  memory_max_len,
-                                                                                 scalar);
+                                                                                 scalar,
+                                                                                 ia3_tasks,
+                                                                                 ia3_key_weights,
+                                                                                 ia3_value_weights);
                 break;
             case 128:
                 cross_attention_kernel_opt<T, 128, block_sz>
@@ -407,7 +444,10 @@ void cross_attention_dispatch(T*                               query_buf,
                                                                                  head_num,
                                                                                  step,
                                                                                  memory_max_len,
-                                                                                 scalar);
+                                                                                 scalar,
+                                                                                 ia3_tasks,
+                                                                                 ia3_key_weights,
+                                                                                 ia3_value_weights);
                 break;
             default:
                 // default path
@@ -452,7 +492,10 @@ void cross_attention_dispatch(T*                               query_buf,
                                                                                 size_per_head,
                                                                                 step,
                                                                                 memory_max_len,
-                                                                                scalar);
+                                                                                scalar,
+                                                                                ia3_tasks,
+                                                                                ia3_key_weights,
+                                                                                ia3_value_weights);
         }
     }
     else {
@@ -495,6 +538,10 @@ void cross_attention_dispatch(T*                               query_buf,
         params.cross_attention_out        = output_cross_attention_params.cross_attention_out;
         params.is_return_cross_attentions = output_cross_attention_params.is_return_cross_attentions;
 
+        params.ia3_tasks         = ia3_tasks;
+        params.ia3_key_weights   = reinterpret_cast<const DataType*>(ia3_key_weights);
+        params.ia3_value_weights = reinterpret_cast<const DataType*>(ia3_value_weights);
+
         cross_multihead_attention(params, stream);
     }
 }
@@ -517,6 +564,9 @@ template void cross_attention_dispatch(float*                           query_bu
                                        const bool                       batch_major_cache,
                                        const float                      q_scaling,
                                        outputCrossAttentionParam<float> output_cross_attention_params,
+                                       const int*                       ia3_tasks,
+                                       const float*                     ia3_key_weights,
+                                       const float*                     ia3_value_weights,
                                        cudaStream_t                     stream);
 
 template void cross_attention_dispatch(half*                            query_buf,
@@ -537,6 +587,9 @@ template void cross_attention_dispatch(half*                            query_bu
                                        const bool                       batch_major_cache,
                                        const float                      q_scaling,
                                        outputCrossAttentionParam<float> output_cross_attention_params,
+                                       const int*                       ia3_tasks,
+                                       const half*                      ia3_key_weights,
+                                       const half*                      ia3_value_weights,
                                        cudaStream_t                     stream);
 
 #ifdef ENABLE_BF16
@@ -558,6 +611,9 @@ template void cross_attention_dispatch(__nv_bfloat16*                   query_bu
                                        const bool                       batch_major_cache,
                                        const float                      q_scaling,
                                        outputCrossAttentionParam<float> output_cross_attention_params,
+                                       const int*                       ia3_tasks,
+                                       const __nv_bfloat16*             ia3_key_weights,
+                                       const __nv_bfloat16*             ia3_value_weights,
                                        cudaStream_t                     stream);
 #endif
 
@@ -679,6 +735,7 @@ template void transpose_4d_batch_major_memory_kernelLauncher(__nv_bfloat16*     
 template<typename T>
 void DecoderCrossAttentionLayer<T>::allocateBuffer()
 {
+    FT_CHECK(false);
     if (is_allocate_buffer_ == false) {
         q_buf_ = reinterpret_cast<T*>(allocator_->reMalloc(q_buf_, sizeof(T) * max_batch_size_ * hidden_units_, false));
         context_buf_ = reinterpret_cast<T*>(
@@ -721,32 +778,6 @@ void DecoderCrossAttentionLayer<T>::freeBuffer()
 }
 
 template<typename T>
-bool DecoderCrossAttentionLayer<T>::isValidBatchSize(size_t batch_size)
-{
-    if (batch_size <= max_batch_size_) {
-        return true;
-    }
-    else {
-        freeBuffer();
-        max_batch_size_ = batch_size * 1.2;
-        return true;
-    }
-}
-
-template<typename T>
-bool DecoderCrossAttentionLayer<T>::isValidSeqLen(size_t seq_len)
-{
-    if (seq_len <= max_mem_seq_len_) {
-        return true;
-    }
-    else {
-        freeBuffer();
-        max_mem_seq_len_ = seq_len * 1.2;
-        return true;
-    }
-}
-
-template<typename T>
 DecoderCrossAttentionLayer<T>::DecoderCrossAttentionLayer(size_t           max_batch_size,
                                                           size_t           head_num,
                                                           size_t           size_per_head,
@@ -765,8 +796,8 @@ DecoderCrossAttentionLayer<T>::DecoderCrossAttentionLayer(size_t           max_b
     q_scaling_(q_scaling)
 {
     FT_CHECK(size_per_head_ == 32 || size_per_head_ == 48 || size_per_head_ == 64 || size_per_head_ == 80
-             || size_per_head_ == 96 || size_per_head_ == 128 || size_per_head_ == 160 || size_per_head_ == 192
-             || size_per_head_ == 224 || size_per_head_ == 256);
+             || size_per_head_ == 96 || size_per_head_ == 128 || size_per_head_ == 144 || size_per_head_ == 160
+             || size_per_head_ == 192 || size_per_head_ == 224 || size_per_head_ == 256);
 }
 
 template<typename T>
@@ -832,43 +863,41 @@ DecoderCrossAttentionLayer<T>::~DecoderCrossAttentionLayer()
 }
 
 template<typename T>
-void DecoderCrossAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                                            const std::vector<fastertransformer::Tensor>* input_tensors,
-                                            const AttentionWeight<T>*                     attention_weights)
+void DecoderCrossAttentionLayer<T>::forward(TensorMap*                output_tensors,
+                                            TensorMap*                input_tensors,
+                                            const AttentionWeight<T>* attention_weights)
 {
     // input tensors:
     //      attention_input [batch_size, d_model],
     //      encoder_output [batch_size, mem_max_seq_len, memory_d_model],
     //      encoder_sequence_length [batch_size],
-    //      finished [batch_size],
     //      step [1] on cpu
+    //      finished [batch_size] (optional)
+    //      ia3_tasks [batch_size] (optional)
 
     // output tensors:
     //      decoder_layer_output [batch_size, d_model],
-    //      key_mem_cache [batch_size, mem_max_seq_len, hidden_dimension],
-    //      value_mem_cache [batch_size, mem_max_seq_len, hidden_dimension]
+    //      key_mem_cache [batch_size, head_num, size_per_head // x, mem_max_seq_len, x], where x = 16 / sizeof(T)
+    //      value_mem_cache [batch_size, head_num, mem_max_seq_len, size_per_head]
     //      cross_attentions [batch_size, head_num, max_decoder_seq_len, mem_max_seq_len] optional float*
+    FT_LOG_DEBUG("%s", __PRETTY_FUNCTION__);
+    allocateBuffer(input_tensors->at("input_query").shape[0], input_tensors->at("encoder_output").shape[1]);
 
-    FT_CHECK(input_tensors->size() == 5);
-    FT_CHECK(output_tensors->size() == 3 || output_tensors->size() == 4);
-    FT_CHECK(isValidBatchSize(input_tensors->at(0).shape[0]));
-    FT_CHECK(isValidSeqLen(input_tensors->at(1).shape[1]));
-    allocateBuffer(input_tensors->at(0).shape[0], input_tensors->at(1).shape[1]);
+    const T*    attention_input        = input_tensors->getPtr<T>("input_query");
+    Tensor      encoder_output_tensor  = input_tensors->at("encoder_output");
+    const int*  memory_sequence_length = input_tensors->getPtr<int>("encoder_sequence_length");
+    const int   step                   = input_tensors->getVal<int>("step");
+    const bool* finished               = input_tensors->getPtr<bool>("finished", nullptr);
+    const bool  has_ia3                = input_tensors->isExist("ia3_tasks");
 
-    const T*    attention_input        = reinterpret_cast<const T*>(input_tensors->at(0).data);
-    Tensor      encoder_output_tensor  = input_tensors->at(1);
-    const int*  memory_sequence_length = reinterpret_cast<const int*>(input_tensors->at(2).data);
-    const bool* finished               = reinterpret_cast<const bool*>(input_tensors->at(3).data);
-    const int   step                   = *reinterpret_cast<const int*>(input_tensors->at(4).data);
+    T* attention_out   = output_tensors->getPtr<T>("hidden_features");
+    T* key_mem_cache   = output_tensors->getPtr<T>("key_cache");
+    T* value_mem_cache = output_tensors->getPtr<T>("value_cache");
 
-    T* attention_out   = (T*)(output_tensors->at(0).data);
-    T* key_mem_cache   = (T*)(output_tensors->at(1).data);
-    T* value_mem_cache = (T*)(output_tensors->at(2).data);
+    const bool output_cross_attentions = output_tensors->isExist("cross_attentions");
+    const int  max_decoder_seq_len     = output_cross_attentions ? output_tensors->at("cross_attentions").shape[2] : 0;
 
-    const bool output_cross_attentions = output_tensors->size() == 4;
-    const int  max_decoder_seq_len     = output_cross_attentions ? output_tensors->at(3).shape[2] : 0;
-
-    const int batch_size      = input_tensors->at(0).shape[0];
+    const int batch_size      = input_tensors->at("input_query").shape[0];
     const int mem_max_seq_len = encoder_output_tensor.shape[1];
     cublas_wrapper_->Gemm(CUBLAS_OP_N,
                           CUBLAS_OP_N,
@@ -891,7 +920,7 @@ void DecoderCrossAttentionLayer<T>::forward(std::vector<fastertransformer::Tenso
                                   encoder_output_tensor.shape[2],
                                   attention_weights->key_weight.kernel,
                                   hidden_units_,
-                                  encoder_output_tensor.data,
+                                  encoder_output_tensor.getPtr<T>(),
                                   encoder_output_tensor.shape[2],
                                   mem_cache_buf_,
                                   hidden_units_);
@@ -906,7 +935,7 @@ void DecoderCrossAttentionLayer<T>::forward(std::vector<fastertransformer::Tenso
                                   encoder_output_tensor.shape[2],
                                   attention_weights->value_weight.kernel,
                                   hidden_units_,
-                                  encoder_output_tensor.data,
+                                  encoder_output_tensor.getPtr<T>(),
                                   encoder_output_tensor.shape[2],
                                   mem_cache_buf_,
                                   hidden_units_);
@@ -928,7 +957,7 @@ void DecoderCrossAttentionLayer<T>::forward(std::vector<fastertransformer::Tenso
                                   encoder_output_tensor.shape[2],
                                   attention_weights->key_weight.kernel,
                                   hidden_units_,
-                                  encoder_output_tensor.data,
+                                  encoder_output_tensor.getPtr<T>(),
                                   encoder_output_tensor.shape[2],
                                   key_mem_cache,
                                   hidden_units_);
@@ -940,7 +969,7 @@ void DecoderCrossAttentionLayer<T>::forward(std::vector<fastertransformer::Tenso
                                   encoder_output_tensor.shape[2],
                                   attention_weights->value_weight.kernel,
                                   hidden_units_,
-                                  encoder_output_tensor.data,
+                                  encoder_output_tensor.getPtr<T>(),
                                   encoder_output_tensor.shape[2],
                                   value_mem_cache,
                                   hidden_units_);
@@ -952,7 +981,7 @@ void DecoderCrossAttentionLayer<T>::forward(std::vector<fastertransformer::Tenso
     // output cross attentions
     if (output_cross_attentions) {
         output_attention_param.max_decoder_seq_len        = max_decoder_seq_len;
-        output_attention_param.cross_attention_out        = output_tensors->at(3).getPtr<float>();
+        output_attention_param.cross_attention_out        = output_tensors->at("cross_attentions").getPtr<float>();
         output_attention_param.is_return_cross_attentions = true;
     }
 
@@ -974,6 +1003,9 @@ void DecoderCrossAttentionLayer<T>::forward(std::vector<fastertransformer::Tenso
                                 is_batch_major_cache_,
                                 q_scaling_,
                                 output_attention_param,
+                                has_ia3 ? input_tensors->at("ia3_tasks").getPtr<const int>() : nullptr,
+                                has_ia3 ? attention_weights->ia3_key_weight.kernel : nullptr,
+                                has_ia3 ? attention_weights->ia3_value_weight.kernel : nullptr,
                                 stream_);
     sync_check_cuda_error();
     cublas_wrapper_->Gemm(CUBLAS_OP_N,

@@ -25,48 +25,42 @@
 namespace fastertransformer {
 
 union __half2_uint32_t_union {
-    half2 fp162;
+    half2    fp162;
     uint32_t u32;
 };
 union __float_uint32_t_union {
-    float fp32;
+    float    fp32;
     uint32_t u32;
 };
 
 static inline void set_alpha(uint32_t& alpha, float norm, Data_type dtype)
 {
-    if (dtype == DATA_TYPE_FP16)
-    {
+    if (dtype == DATA_TYPE_FP16) {
         __half2_uint32_t_union temp;
         temp.fp162 = __float2half2_rn(norm);
-        alpha = temp.u32;
+        alpha      = temp.u32;
     }
-    else if (dtype == DATA_TYPE_FP32)
-    {
+    else if (dtype == DATA_TYPE_FP32) {
         __float_uint32_t_union temp;
         temp.fp32 = norm;
-        alpha = temp.u32;
+        alpha     = temp.u32;
     }
-    else if (dtype == DATA_TYPE_INT32)
-    {
+    else if (dtype == DATA_TYPE_INT32) {
         int32_t inorm = static_cast<int32_t>(norm);
-        alpha = reinterpret_cast<const uint32_t&>(inorm);
+        alpha         = reinterpret_cast<const uint32_t&>(inorm);
     }
-    else
-    {
+    else {
         assert(false);
     }
 }
 
-class FusedMHARunnerFP16v2::mhaImpl
-{
+class FusedMHARunnerFP16v2::mhaImpl {
 public:
-    mhaImpl(FusedMHARunnerFP16v2* interface)
-        : interface(interface)
-        , sm(interface->mSm)
-        , xmmaKernel(getXMMAKernelsV2(DATA_TYPE_FP16, sm))
+    mhaImpl(FusedMHARunnerFP16v2* interface):
+        interface(interface), sm(interface->mSm), xmmaKernel(getXMMAKernelsV2(DATA_TYPE_FP16, sm))
     {
-        assert((sm == kSM_70 || sm == kSM_72 || sm == kSM_75 || sm == kSM_80 || sm == kSM_86) && "Unsupported architecture");
+        assert((sm == kSM_70 || sm == kSM_72 || sm == kSM_75 || sm == kSM_80 || sm == kSM_86 ||
+            sm == kSM_89) && "Unsupported architecture");
         params.clear();
     }
 
@@ -86,47 +80,37 @@ public:
         // TODO these implementation details might be better centralized into the XMMA code, since they are needed in
         // several places (also outside of this plugin)
         size_t warps_m = 2, warps_n = 2, warps_k = 1;
-        if (sm == 70)
-        {
-            if (S == 64 || S == 96)
-            {
+        if (sm == 70) {
+            if (S == 64 || S == 96) {
                 warps_m = 2;
                 warps_n = 2;
             }
-            else if (S == 128)
-            {
+            else if (S == 128) {
                 warps_m = 1;
                 warps_n = 4;
             }
-            else if (S == 256 || S == 384)
-            {
+            else if (S == 256 || S == 384) {
                 warps_m = 1;
                 warps_n = 8;
             }
-            else
-            {
+            else {
                 assert(false && "Unsupporte seqlen");
             }
         }
-        else
-        {
-            if (S == 64 || S == 96 || S == 128)
-            {
+        else {
+            if (S == 32 || S == 64 || S == 96 || S == 128) {
                 warps_m = 2;
                 warps_n = 2;
             }
-            else if (S == 256)
-            {
+            else if (S == 192 || S == 256) {
                 warps_m = 1;
                 warps_n = 4;
             }
-            else if (S == 384)
-            {
+            else if (S == 384 || S == 512) {
                 warps_m = 1;
                 warps_n = 8;
             }
-            else
-            {
+            else {
                 assert(false && "Unsupporte seqlen");
             }
         }
@@ -137,6 +121,37 @@ public:
         // The number of xmmas in the N dimension.
         xmmas_n = (S + 16 * warps_n - 1) / (16 * warps_n);
 
+        const float scale_bmm1    = interface->mRsqrtHeadSize;
+        const float scale_softmax = 1.f;  // Seems to be only required for int8
+        const float scale_bmm2    = 1.f;
+
+        Data_type scale_type = DATA_TYPE_FP16;
+        set_alpha(params.scale_bmm1, scale_bmm1, scale_type);
+        set_alpha(params.scale_softmax, scale_softmax, scale_type);
+        set_alpha(params.scale_bmm2, scale_bmm2, scale_type);
+
+        params.b = B;
+        params.h = interface->mNumHeads;
+        params.s = S;
+        params.d = interface->mHeadSize;
+        // TODO:
+        // For now we set window_num = 0, to avoid using fused multi-head window-attention kernel
+        params.window_num = 0;
+
+        // mLdQKV = 3 * B * mNumHeads * mHeadSize;
+        // mLdOut = B * mNumHeads * mHeadSize;
+
+        params.qkv_stride_in_bytes         = 3 * interface->mNumHeads * interface->mHeadSize * sizeof(half);
+        params.packed_mask_stride_in_bytes = xmmas_m * threads_per_cta * sizeof(uint32_t);
+        params.o_stride_in_bytes           = interface->mNumHeads * interface->mHeadSize * sizeof(half);
+
+        // for bert and vit, use flash attention when s >= 512
+        use_flash_attention = (params.s >= 512);
+        params.force_unroll = use_flash_attention;
+    }
+
+    void setup_causal_masked_fmha(const int S, const int B)
+    {
         const float scale_bmm1 = interface->mRsqrtHeadSize;
         const float scale_softmax = 1.f; // Seems to be only required for int8
         const float scale_bmm2 = 1.f;
@@ -155,8 +170,37 @@ public:
         // mLdOut = B * mNumHeads * mHeadSize;
 
         params.qkv_stride_in_bytes = 3 * interface->mNumHeads * interface->mHeadSize * sizeof(half);
-        params.packed_mask_stride_in_bytes = xmmas_m * threads_per_cta * sizeof(uint32_t);
         params.o_stride_in_bytes = interface->mNumHeads * interface->mHeadSize * sizeof(half);
+
+        // fallback to original fmha_v2 when head_size <= 64 and seq_len <- 128
+        use_flash_attention = true;
+        if (params.d <= 64 && params.s <= 128) {
+            use_flash_attention = false;
+            // get max sequence length
+            if (params.s > 64) {
+                params.s = 128;
+            }
+            else {
+                params.s = 64;
+            }
+        }
+
+        // set flags
+        params.force_unroll = use_flash_attention;
+    }
+
+    bool fmha_supported(bool causal_mask)
+    {
+        if (causal_mask) {
+            return (sm == kSM_70 || sm == kSM_72 || sm == kSM_75 || sm == kSM_80 || sm == kSM_86 || sm == kSM_89) &&
+                (interface->mHeadSize == 32 || interface->mHeadSize == 40 || interface->mHeadSize == 64 ||
+                interface->mHeadSize == 80 || interface->mHeadSize == 128 || interface->mHeadSize == 144
+                || interface->mHeadSize == 160 || interface->mHeadSize == 256);
+        }
+        else {
+            return (sm == kSM_75 || sm == kSM_80 || sm == kSM_86) &&
+                (interface->mHeadSize == 32 || interface->mHeadSize == 64);
+        }
     }
 
     void setup(const int S, const int B, const int window_num)
@@ -186,30 +230,35 @@ public:
         // The number of xmmas in the N dimension.
         xmmas_n = (S + 16 * warps_n - 1) / (16 * warps_n);
 
-        const float scale_bmm1 = interface->mRsqrtHeadSize;
+        const float scale_bmm1    = interface->mRsqrtHeadSize;
         const float scale_softmax = 1.f;  // Seems to be only required for int8
-        const float scale_bmm2 = 1.f;
+        const float scale_bmm2    = 1.f;
 
         Data_type scale_type = DATA_TYPE_FP16;
         set_alpha(params.scale_bmm1, scale_bmm1, scale_type);
         set_alpha(params.scale_softmax, scale_softmax, scale_type);
         set_alpha(params.scale_bmm2, scale_bmm2, scale_type);
 
-        params.b = B;
-        params.h = interface->mNumHeads;
-        params.s = S;
-        params.d = interface->mHeadSize;
+        params.b          = B;
+        params.h          = interface->mNumHeads;
+        params.s          = S;
+        params.d          = interface->mHeadSize;
         params.window_num = window_num;
 
         // mLdQKV = 3 * B * mNumHeads * mHeadSize;
         // mLdOut = B * mNumHeads * mHeadSize;
 
-        params.qkv_stride_in_bytes = 3 * interface->mNumHeads * interface->mHeadSize * sizeof(half);
+        params.qkv_stride_in_bytes         = 3 * interface->mNumHeads * interface->mHeadSize * sizeof(half);
         params.packed_mask_stride_in_bytes = S * sizeof(half);
-        params.o_stride_in_bytes = interface->mNumHeads * interface->mHeadSize * sizeof(half);
+        params.o_stride_in_bytes           = interface->mNumHeads * interface->mHeadSize * sizeof(half);
     }
 
-    void run(const void* qkvPtr, const void* maskPtr, const void* cuSeqlenPtr, void* output, void* workspace, cudaStream_t stream)
+    void run(const void*  qkvPtr,
+             const void*  maskPtr,
+             const void*  cuSeqlenPtr,
+             void*        output,
+             void*        workspace,
+             cudaStream_t stream)
     {
         params.qkv_ptr = const_cast<void*>(qkvPtr);
 
@@ -218,16 +267,16 @@ public:
         params.o_ptr = output;
 
         params.cu_seqlens = static_cast<int*>(const_cast<void*>(cuSeqlenPtr));
-        xmmaKernel->run(params, stream);
+        xmmaKernel->run(params, stream, use_flash_attention);
         check_cuda_error(cudaPeekAtLastError());
     }
 
-    void run(const void* qkvPtr,
-             const void* maskPtr,
-             const void* relative_position_bias,
-             const int actual_seqlen,
-             void* output,
-             void* workspace,
+    void run(const void*  qkvPtr,
+             const void*  maskPtr,
+             const void*  relative_position_bias,
+             const int    actual_seqlen,
+             void*        output,
+             void*        workspace,
              cudaStream_t stream)
     {
         params.qkv_ptr = const_cast<void*>(qkvPtr);
@@ -245,55 +294,82 @@ public:
         check_cuda_error(cudaPeekAtLastError());
     }
 
-    bool isValid(int s) const
+    void run_causal_masked_fmha(const void* qkvPtr, const void* cuSeqlenPtr, void* output, bool causal_mask, cudaStream_t stream)
     {
-        return xmmaKernel->isValid(s);
+        params.qkv_ptr = const_cast<void*>(qkvPtr);
+
+        params.o_ptr = output;
+
+        params.cu_seqlens = static_cast<int*>(const_cast<void*>(cuSeqlenPtr));
+
+        xmmaKernel->run(params, stream, use_flash_attention, causal_mask);
     }
 
-    int getSFromMaxSeqLen(const int max_seq_len)
+    bool isValid(int s, const bool withRelativePositionBias) const
+    {
+        return xmmaKernel->isValid(s) || (s >= 512 && !withRelativePositionBias);
+    }
+
+    int getSFromMaxSeqLen(const int max_seq_len, const bool withRelativePositionBias)
     {
         int S = 1024;
-        if (max_seq_len <= 64)
-        {
-          S = 64;
+        if (withRelativePositionBias) {
+            if (max_seq_len <= 64) {
+                S = 64;
+            }
+            else if (max_seq_len <= 128) {
+                S = 128;
+            }
+            else if (max_seq_len <= 256) {
+                S = 256;
+            }
         }
-        else if (max_seq_len <= 96)
-        {
-          S = 96;
-        }
-        else if (max_seq_len <= 128)
-        {
-          S = 128;
-        }
-        else if (max_seq_len <= 256)
-        {
-          S = 256;
-        }
-        else if (max_seq_len <= 384)
-        {
-          S = 384;
-        }
-        else if (max_seq_len <= 512)
-        {
-          S = 512;
+        else {
+            if (max_seq_len <= 32) {
+                S = 32;
+            }
+            else if (max_seq_len <= 64) {
+                S = 64;
+            }
+            else if (max_seq_len <= 96) {
+                S = 96;
+            }
+            else if (max_seq_len <= 128) {
+                S = 128;
+            }
+            else if (max_seq_len <= 192) {
+                S = 192;
+            }
+            else if (max_seq_len <= 256) {
+                S = 256;
+            }
+            else if (max_seq_len <= 384) {
+                S = 384;
+            }
+            else if (max_seq_len <= 512) {
+                S = 512;
+            }
+            // for bert and vit, use flash attention when s >= 512
+            else if (max_seq_len > 512) {
+                S = max_seq_len;
+            }
         }
         return S;
     }
 
 private:
-    FusedMHARunnerFP16v2* interface;
-    Fused_multihead_attention_params_v2 params;
-    int sm;
+    FusedMHARunnerFP16v2*                      interface;
+    Fused_multihead_attention_params_v2        params;
+    int                                        sm;
     const FusedMultiHeadAttentionXMMAKernelV2* xmmaKernel;
-    size_t xmmas_m;
-    size_t xmmas_n;
-    size_t threads_per_cta;
+    size_t                                     xmmas_m;
+    size_t                                     xmmas_n;
+    size_t                                     threads_per_cta;
+    bool                                       use_flash_attention = false;
 };
 
-FusedMHARunnerFP16v2::FusedMHARunnerFP16v2(const int numHeads, const int headSize, const int sm, const float q_scaling)
-    : MHARunner(numHeads, headSize, 2, q_scaling)
-    , mSm(sm)
-    , pimpl(new mhaImpl(this))
+FusedMHARunnerFP16v2::FusedMHARunnerFP16v2(const int numHeads, const int headSize, const int sm, const float q_scaling):
+    MHARunner(numHeads, headSize, 2, q_scaling), mSm(sm), pimpl(new mhaImpl(this))
 {
 }
 
@@ -301,6 +377,18 @@ void FusedMHARunnerFP16v2::setup(const int S, const int B)
 {
     MHARunner::setup(S, B);
     pimpl->setup(S, B);
+}
+
+void FusedMHARunnerFP16v2::setup_causal_masked_fmha(const int S, const int B)
+{
+    MHARunner::setup_causal_masked_fmha(S, B);
+    pimpl->setup_causal_masked_fmha(S, B);
+}
+
+bool FusedMHARunnerFP16v2::fmha_supported(bool causal_mask)
+{
+    MHARunner::fmha_supported(causal_mask);
+    return pimpl->fmha_supported(causal_mask);
 }
 
 void FusedMHARunnerFP16v2::setup(const int S, const int B, const int window_num)
@@ -319,47 +407,47 @@ void FusedMHARunnerFP16v2::run(const void* input, const void* mask, void* worksp
     assert(false && "not implemented");
 }
 
-void FusedMHARunnerFP16v2::run(const void* input, const void* mask, const void* seqlen, void* workspace, void* output, cudaStream_t stream)
+void FusedMHARunnerFP16v2::run(
+    const void* input, const void* mask, const void* seqlen, void* workspace, void* output, cudaStream_t stream)
 {
     pimpl->run(input, mask, seqlen, output, workspace, stream);
 }
 
-void FusedMHARunnerFP16v2::run(const void* input,
-                               const void* mask,
-                               const void* relatice_position_bias,
-                               const int actual_seqlen,
-                               void* workspace,
-                               void* output,
+void FusedMHARunnerFP16v2::run(const void*  input,
+                               const void*  mask,
+                               const void*  relative_position_bias,
+                               const int    actual_seqlen,
+                               void*        workspace,
+                               void*        output,
                                cudaStream_t stream)
 {
-    pimpl->run(input, mask, relatice_position_bias, actual_seqlen, output, workspace, stream);
+    pimpl->run(input, mask, relative_position_bias, actual_seqlen, output, workspace, stream);
 }
 
-bool FusedMHARunnerFP16v2::isValid(int s) const
+void FusedMHARunnerFP16v2::run_causal_masked_fmha(const void* qkvPtr, const void* cuSeqlenPtr, void* output, bool causal_mask, cudaStream_t stream)
 {
-    return pimpl->isValid(s);
+    pimpl->run_causal_masked_fmha(qkvPtr, cuSeqlenPtr, output, causal_mask, stream);
 }
 
-void FusedMHARunnerFP16v2::setScaleList(const float scaleQkv, const float dqProbs, const float scaleCtx)
+bool FusedMHARunnerFP16v2::isValid(int s, const bool withRelativePositionBias) const
 {
+    return pimpl->isValid(s, withRelativePositionBias);
 }
 
-int FusedMHARunnerFP16v2::getSFromMaxSeqLen(const int max_seq_len)
+void FusedMHARunnerFP16v2::setScaleList(const float scaleQkv, const float dqProbs, const float scaleCtx) {}
+
+int FusedMHARunnerFP16v2::getSFromMaxSeqLen(const int max_seq_len, const bool withRelativePositionBias)
 {
-    return pimpl->getSFromMaxSeqLen(max_seq_len);
+    return pimpl->getSFromMaxSeqLen(max_seq_len, withRelativePositionBias);
 }
-
 
 // Int8 starts here: TODO refactor the duplicate stuff
 
-class FusedMHARunnerInt8v2::mhaImpl
-{
+class FusedMHARunnerInt8v2::mhaImpl {
 
 public:
-    mhaImpl(FusedMHARunnerInt8v2* interface)
-        : interface(interface)
-        , sm(interface->mSm)
-        , xmmaKernel(getXMMAKernelsV2(DATA_TYPE_INT8, sm))
+    mhaImpl(FusedMHARunnerInt8v2* interface):
+        interface(interface), sm(interface->mSm), xmmaKernel(getXMMAKernelsV2(DATA_TYPE_INT8, sm))
     {
         assert((sm == kSM_72 || sm == kSM_75 || sm == kSM_80 || sm == kSM_86) && "Unsupported architecture");
         params.clear();
@@ -382,17 +470,9 @@ public:
             warps_m = 2;
             warps_n = 2;
         }
-        else if (S == 128) {
-            warps_m = 2;
-            warps_n = 2;
-        }
         else if (S == 256) {
             warps_m = 1;
             warps_n = 4;
-        }
-        else if (S == 384) {
-            warps_m = 1;
-            warps_n = 8;
         }
         else {
             assert(false && "Unsupported seqlen.");
@@ -404,46 +484,39 @@ public:
         // The number of xmmas in the N dimension.
         xmmas_n = (S + 16 * warps_n - 1) / (16 * warps_n);
 
-        params.b = B;
-        params.h = interface->mNumHeads;
-        params.s = S;
-        params.d = interface->mHeadSize;
-        params.window_num = window_num;
-        params.use_int8_scale_max = true;
+        params.b                           = B;
+        params.h                           = interface->mNumHeads;
+        params.s                           = S;
+        params.d                           = interface->mHeadSize;
+        params.window_num                  = window_num;
+        params.use_int8_scale_max          = true;
         params.packed_mask_stride_in_bytes = S * sizeof(half);
-        params.qkv_stride_in_bytes = 3 * interface->mNumHeads * interface->mHeadSize * sizeof(int8_t);
-        params.o_stride_in_bytes = interface->mNumHeads * interface->mHeadSize * sizeof(int8_t);
+        params.qkv_stride_in_bytes         = 3 * interface->mNumHeads * interface->mHeadSize * sizeof(int8_t);
+        params.o_stride_in_bytes           = interface->mNumHeads * interface->mHeadSize * sizeof(int8_t);
 
-        float scaleQkv = interface->mScaleQkv;
-        float scaleCtx = interface->mScaleCtx;
-
-        // float scaleBmm1 = scaleQkv * scaleQkv;// * (1.f / sqrtf(interface->mHeadSize));
-        // float scaleBmm2 = interface->mDqProbs * scaleQkv / scaleCtx;
-        // float scaleSoftmax = 1.f / interface->mDqProbs;
-        //TODO: unify 3 scales
-        float scaleBmm1 = scaleQkv * (1.f / sqrtf(interface->mHeadSize));
-        float scaleBmm2 = scaleCtx;
+        float scaleBmm1    = interface->mScaleQkv * interface->mRsqrtHeadSize;
+        float scaleBmm2    = interface->mScaleCtx;
         float scaleSoftmax = interface->mDqProbs;
 
         __float_uint32_t_union temp;
 
-        temp.fp32 = scaleBmm1;
-        params.scale_bmm1 = temp.u32;
-        temp.fp32 = scaleBmm2;
-        params.scale_bmm2 = temp.u32;
-        temp.fp32 = scaleSoftmax;
+        temp.fp32            = scaleBmm1;
+        params.scale_bmm1    = temp.u32;
+        temp.fp32            = scaleBmm2;
+        params.scale_bmm2    = temp.u32;
+        temp.fp32            = scaleSoftmax;
         params.scale_softmax = temp.u32;
 
         params.enable_i2f_trick =
             -double(1 << 22) * double(scaleBmm2) <= -128.f && double(1 << 22) * double(scaleBmm2) >= 127.f;
     }
 
-    void run(const void* qkvPtr,
-             const void* maskPtr,
-             const void* relativePositionBiasPtr,
-             int actual_seqlen,
-             void* output,
-             void* workspace,
+    void run(const void*  qkvPtr,
+             const void*  maskPtr,
+             const void*  relativePositionBiasPtr,
+             int          actual_seqlen,
+             void*        output,
+             void*        workspace,
              cudaStream_t stream)
     {
         params.qkv_ptr = const_cast<void*>(qkvPtr);
@@ -464,29 +537,19 @@ public:
     void setup(const int S, const int B)
     {
         size_t warps_m = 1, warps_n = 1, warps_k = 1;
-        if ((sm == 75 || sm == 80) && S == 64)
-        {
+        if (S == 64 || S == 96 || S == 128) {
             warps_m = 2;
             warps_n = 2;
         }
-	else if (S == 128)
-        {
-            warps_m = 2;
-            warps_n = 2;
-        }
-        else if (S == 192 || S == 256)
-        {
+        else if (S == 192 || S == 256 || S == 384) {
             warps_m = 1;
             warps_n = 4;
         }
-        else if (S == 384)
-        {
+        else if (S == 512) {
             warps_m = 1;
             warps_n = 8;
         }
-
-        else
-        {
+        else {
             assert(false && "Unsupported seqlen.");
         }
         // The number of threads per CTA.
@@ -500,33 +563,40 @@ public:
         params.h = interface->mNumHeads;
         params.s = S;
         params.d = interface->mHeadSize;
-        params.use_int8_scale_max = true;
+        // TODO:
+        // For now we set window_num = 0, to avoid using fused multi-head window-attention kernel
+        params.window_num                  = 0;
+        params.use_int8_scale_max          = true;
         params.packed_mask_stride_in_bytes = xmmas_m * threads_per_cta * sizeof(uint32_t);
-        params.qkv_stride_in_bytes = 3 * interface->mNumHeads * interface->mHeadSize * sizeof(int8_t);
-        params.o_stride_in_bytes = interface->mNumHeads * interface->mHeadSize * sizeof(int8_t);
+        params.qkv_stride_in_bytes         = 3 * interface->mNumHeads * interface->mHeadSize * sizeof(int8_t);
+        params.o_stride_in_bytes           = interface->mNumHeads * interface->mHeadSize * sizeof(int8_t);
 
         float scaleQkv = interface->mScaleQkv;
         float scaleCtx = interface->mScaleCtx;
 
-        float scaleBmm1 = scaleQkv * scaleQkv * (1.f / sqrtf(interface->mHeadSize));
-        float scaleBmm2 = interface->mDqProbs * scaleQkv / scaleCtx;
+        float scaleBmm1    = scaleQkv * scaleQkv * (1.f / sqrtf(interface->mHeadSize));
+        float scaleBmm2    = interface->mDqProbs * scaleQkv / scaleCtx;
         float scaleSoftmax = 1.f / interface->mDqProbs;
 
         __float_uint32_t_union temp;
 
-        temp.fp32 = scaleBmm1;
-        params.scale_bmm1 = temp.u32;
-        temp.fp32 = scaleBmm2;
-        params.scale_bmm2 = temp.u32;
-        temp.fp32 = scaleSoftmax;
+        temp.fp32            = scaleBmm1;
+        params.scale_bmm1    = temp.u32;
+        temp.fp32            = scaleBmm2;
+        params.scale_bmm2    = temp.u32;
+        temp.fp32            = scaleSoftmax;
         params.scale_softmax = temp.u32;
 
-        params.enable_i2f_trick
-            = -double(1 << 22) * double(scaleBmm2) <= -128.f && double(1 << 22) * double(scaleBmm2) >= 127.f;
-        
+        params.enable_i2f_trick =
+            -double(1 << 22) * double(scaleBmm2) <= -128.f && double(1 << 22) * double(scaleBmm2) >= 127.f;
     }
 
-    void run(const void* qkvPtr, const void* maskPtr, const void* cuSeqlenPtr, void* output, void* workspace, cudaStream_t stream)
+    void run(const void*  qkvPtr,
+             const void*  maskPtr,
+             const void*  cuSeqlenPtr,
+             void*        output,
+             void*        workspace,
+             cudaStream_t stream)
     {
         params.qkv_ptr = const_cast<void*>(qkvPtr);
 
@@ -537,88 +607,85 @@ public:
         xmmaKernel->run(params, stream);
     }
 
-    bool isValid(int s) const
+    bool isValid(int s, const bool withRelativePositionBias) const
     {
         return xmmaKernel->isValid(s);
     }
 
-    int getSFromMaxSeqLen(const int max_seq_len)
+    int getSFromMaxSeqLen(const int max_seq_len, const bool withRelativePositionBias)
     {
         int S = 1024;
-	if (sm == 75 || sm == 80)
-        {
-          if (max_seq_len <= 64)
-          {
-            S = 64;
-          }
-	  else if (max_seq_len <= 128)
-          {
-            S = 128;
-          }
-          else if (max_seq_len <= 192)
-          {
-            S = 192;
-          }
-          else if (max_seq_len <= 256)
-          {
-            S = 256;
-          }
-          else if (max_seq_len <= 384)
-          {
-            S = 384;
-          }
-          else if (max_seq_len <= 512)
-          {
-            S = 512;
-          }
-	}
-	else
-        {
-	  if (max_seq_len <= 128)
-          {
-            S = 128;
-          }
-          else if (max_seq_len <= 192)
-          {
-            S = 192;
-          }
-          else if (max_seq_len <= 256)
-          {
-            S = 256;
-          }
-          else if (max_seq_len <= 384)
-          {
-            S = 384;
-          }
-          else if (max_seq_len <= 512)
-          {
-            S = 512;
-          }
+        if (sm == 75 || sm == 80 || sm == 86) {
+            if (withRelativePositionBias) {
+                if (max_seq_len <= 64) {
+                    S = 64;
+                }
+                else if (max_seq_len <= 256) {
+                    S = 256;
+                }
+            }
+            else {
+                if (max_seq_len <= 64) {
+                    S = 64;
+                }
+                else if (max_seq_len <= 96) {
+                    S = 96;
+                }
+                else if (max_seq_len <= 128) {
+                    S = 128;
+                }
+                else if (max_seq_len <= 192) {
+                    S = 192;
+                }
+                else if (max_seq_len <= 256) {
+                    S = 256;
+                }
+                else if (max_seq_len <= 384) {
+                    S = 384;
+                }
+                else if (max_seq_len <= 512) {
+                    S = 512;
+                }
+            }
+        }
+        else {
+            if (max_seq_len <= 128) {
+                S = 128;
+            }
+            else if (max_seq_len <= 192) {
+                S = 192;
+            }
+            else if (max_seq_len <= 256) {
+                S = 256;
+            }
+            else if (max_seq_len <= 384) {
+                S = 384;
+            }
+            else if (max_seq_len <= 512) {
+                S = 512;
+            }
         }
         return S;
     }
 
-
 private:
-    FusedMHARunnerInt8v2* interface;
-    Fused_multihead_attention_params_v2 params;
-    int sm;
+    FusedMHARunnerInt8v2*                      interface;
+    Fused_multihead_attention_params_v2        params;
+    int                                        sm;
     const FusedMultiHeadAttentionXMMAKernelV2* xmmaKernel;
-    size_t xmmas_m;
-    size_t xmmas_n;
-    size_t threads_per_cta;
+    size_t                                     xmmas_m;
+    size_t                                     xmmas_n;
+    size_t                                     threads_per_cta;
 };
 
-FusedMHARunnerInt8v2::FusedMHARunnerInt8v2(const int numHeads, const int headSize, const int sm, const float q_scaling)
-    : MHARunner(numHeads, headSize, 1, q_scaling)
-    , mSm(sm)
-    , pimpl(new mhaImpl(this))
+FusedMHARunnerInt8v2::FusedMHARunnerInt8v2(const int numHeads, const int headSize, const int sm, const float q_scaling):
+    MHARunner(numHeads, headSize, 1, q_scaling), mSm(sm), pimpl(new mhaImpl(this))
 {
 }
 
 void FusedMHARunnerInt8v2::setScaleList(const float scaleQkv, const float dqProbs, const float scaleCtx)
 {
-    mDqProbs = dqProbs;
+    mDqProbs  = dqProbs;
     mScaleQkv = scaleQkv;
     mScaleCtx = scaleCtx;
 }
@@ -643,31 +710,31 @@ void FusedMHARunnerInt8v2::run(const void* input, const void* mask, void* worksp
     assert(false && "Not implemented");
 }
 
-void FusedMHARunnerInt8v2::run(const void* input,
-                               const void* mask,
-                               const void* relatice_position_bias,
-                               int actual_seqlen,
-                               void* workspace,
-                               void* output,
+void FusedMHARunnerInt8v2::run(const void*  input,
+                               const void*  mask,
+                               const void*  relative_position_bias,
+                               int          actual_seqlen,
+                               void*        workspace,
+                               void*        output,
                                cudaStream_t stream)
 {
-    pimpl->run(input, mask, relatice_position_bias, actual_seqlen, output, workspace, stream);
+    pimpl->run(input, mask, relative_position_bias, actual_seqlen, output, workspace, stream);
 }
 
-
-void FusedMHARunnerInt8v2::run(const void* input, const void* mask, const void* seqlen, void* workspace, void* output, cudaStream_t stream)
+void FusedMHARunnerInt8v2::run(
+    const void* input, const void* mask, const void* seqlen, void* workspace, void* output, cudaStream_t stream)
 {
     pimpl->run(input, mask, seqlen, output, workspace, stream);
 }
 
-bool FusedMHARunnerInt8v2::isValid(int s) const
+bool FusedMHARunnerInt8v2::isValid(int s, const bool withRelativePositionBias) const
 {
-    return pimpl->isValid(s);
+    return pimpl->isValid(s, withRelativePositionBias);
 }
 
-int FusedMHARunnerInt8v2::getSFromMaxSeqLen(const int max_seq_len)
+int FusedMHARunnerInt8v2::getSFromMaxSeqLen(const int max_seq_len, const bool withRelativePositionBias)
 {
-    return pimpl->getSFromMaxSeqLen(max_seq_len);
+    return pimpl->getSFromMaxSeqLen(max_seq_len, withRelativePositionBias);
 }
 
-} // namespace fastertransformer
+}  // namespace fastertransformer

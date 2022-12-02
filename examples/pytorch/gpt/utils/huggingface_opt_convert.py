@@ -20,16 +20,97 @@ import argparse
 import configparser
 import multiprocessing
 import numpy as np
-from pathlib import Path
-import torch
-
 import os
 import sys
+import torch
+
 from datetime import datetime
-from transformers import OPTForCausalLM, AutoModelForCausalLM # transformers-4.20.0.dev0
+from pathlib import Path
+from tqdm import tqdm
+from transformers import OPTForCausalLM, AutoModelForCausalLM, AutoTokenizer # transformers-4.20.0.dev0
+from transformers.models.opt.modeling_opt import OPTAttention, OPTDecoderLayer
+
 dir_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(dir_path + "/../../../..")
 sys.path.append(dir_path)
+
+class Evaluator:
+    def __init__(self, dataset, tokenizer, device):
+        self.dataset = dataset
+        self.tokenizer = tokenizer
+        self.device = device
+
+        # tokenize the dataset
+        def tokenize_function(examples):
+            example = self.tokenizer(examples['text'])
+            return example
+
+        self.dataset = self.dataset.map(tokenize_function, batched=True)
+        self.dataset.set_format(type='torch', columns=['input_ids'])
+
+    @torch.no_grad()
+    def evaluate(self, model):
+        model.eval()
+        # The task is to predict the last word of the input.
+        total, hit = 0, 0
+        for batch in tqdm(self.dataset):
+            input_ids = batch['input_ids'].to(self.device).unsqueeze(0)
+            label = input_ids[:, -1]
+            outputs = model(input_ids)
+            last_token_logits = outputs.logits[:, -2, :]
+            pred = last_token_logits.argmax(dim=-1)
+            total += label.size(0)
+            hit += (pred == label).sum().item()
+        acc = hit / total
+        return acc
+
+class RangeDetector(torch.nn.Module):
+    def __init__(self, layer, name, save_dict):
+        super().__init__()
+        self.layer = layer
+        self.name = f"model.{name}.weight"
+        self.save_dict = save_dict
+
+    @torch.no_grad()
+    def forward(self, x):
+        matmul = x @ self.layer.weight.T
+
+        act_pre_max = x.abs().max()
+        act_post_max = matmul.abs().max()
+
+        if self.name in self.save_dict:
+            act_pre_max = torch.max(act_pre_max, self.save_dict[self.name][0])
+            act_post_max = torch.max(act_post_max, self.save_dict[self.name][1])
+        self.save_dict[self.name] = (act_pre_max, act_post_max)
+
+        return matmul + self.layer.bias
+
+
+def inject_range_detectors(model):
+    capture_dict = {}
+    for name, m in model.model.named_modules():
+        if isinstance(m, OPTDecoderLayer):
+            m.fc1 = RangeDetector(m.fc1, f"{name}.fc1", capture_dict)
+            m.fc2 = RangeDetector(m.fc2, f"{name}.fc2", capture_dict)
+        elif isinstance(m, OPTAttention):
+            m.q_proj = RangeDetector(m.q_proj, f"{name}.q_proj", capture_dict)
+            m.k_proj = RangeDetector(m.k_proj, f"{name}.k_proj", capture_dict)
+            m.v_proj = RangeDetector(m.v_proj, f"{name}.v_proj", capture_dict)
+            m.out_proj = RangeDetector(m.out_proj, f"{name}.out_proj", capture_dict)
+    return capture_dict
+
+
+def remove_range_detectors(model):
+    for name, m in model.model.named_modules():
+        if isinstance(m, OPTDecoderLayer):
+            m.fc1 = m.fc1.layer
+            m.fc2 = m.fc2.layer
+        elif isinstance(m, OPTAttention):
+            m.q_proj = m.q_proj.layer
+            m.k_proj = m.k_proj.layer
+            m.v_proj = m.v_proj.layer
+            m.out_proj = m.out_proj.layer
+
 
 def get_weight_data_type(data_type):
     if data_type == "fp32":
@@ -39,57 +120,112 @@ def get_weight_data_type(data_type):
     else:
         assert False, f"Invalid weight data type {data_type}"
 
-def split_and_convert_process(i, saved_dir,factor,key,args, val):
 
-    if key.find("input_layernorm.weight") != -1 or key.find("input_layernorm.bias") != -1 or \
-        key.find("attention.dense.bias") != -1 or key.find("post_attention_layernorm.weight") != -1 or \
-        key.find("post_attention_layernorm.bias") != -1 or key.find("mlp.dense_4h_to_h.bias") != -1 or \
-        key.find("final_layernorm.weight") != -1 or key.find("final_layernorm.bias") != -1:
+def quantize(mat, act_range):
+    if mat.ndim == 3 and mat.shape[1] == 3:
+        mat_max = np.abs(mat).clip(1e-8, None).max(axis=(0,2))[None, :, None]
+    else:
+        mat_max = np.abs(mat).clip(1e-8, None).max()
+
+    act_scale_in = 127. / act_range[0].cpu().numpy()
+    weight_scales = 127. / mat_max
+    act_scale_post = 127. / act_range[1].cpu().numpy()
+
+    mat_quant = (mat * weight_scales).round().astype(np.int8)
+    return mat_quant, weight_scales, act_scale_in, act_scale_post
+
+
+def split_and_convert_process(i, saved_dir, factor, key, args, val, capture_dict, old_name, dtype):
+
+    def save_val(val, key, tp_num=None):
+        path = saved_dir + "/model." + key
+        if tp_num is not None:
+            path += "." + str(tp_num)
+        path += ".bin"
+
+        val.tofile(path)
+
+    quantized_out = args.quantize or args.act_scale is not None
+
+    if "input_layernorm.weight" in key or "input_layernorm.bias" in key or \
+        "attention.dense.bias" in key or "post_attention_layernorm.weight" in key or \
+        "post_attention_layernorm.bias" in key or "mlp.dense_4h_to_h.bias" in key or \
+        "final_layernorm.weight" in key or "final_layernorm.bias" in key:
 
         # shared weights, only need to convert the weights of rank 0
         if i == 0:
-            saved_path = saved_dir + "/model." + key + ".bin"
-            val.tofile(saved_path)
+            save_val(val, key)
 
-    elif key.find("attention.dense.weight") != -1 or key.find("mlp.dense_4h_to_h.weight") != -1:
+    elif "attention.dense.weight" in key or "mlp.dense_4h_to_h.weight" in key:
+        if quantized_out:
+            val_q, weight_scales, act_scale_pre, act_scale_post = quantize(val, capture_dict[old_name])
+            save_val(act_scale_pre.astype(dtype), key.replace("weight", "scale"))
+            scale_inter = (act_scale_post / (act_scale_pre * weight_scales)).astype(dtype)
+            save_val(scale_inter, key.replace("weight", "scale_inter"))
+            save_val((1. / act_scale_post).astype(dtype), key.replace("weight", "scale_out"))
+
+            split_vals_q = np.split(val_q, factor, axis=0)
+            for j in range(factor):
+                save_val(split_vals_q[j], key + ".int8", i * factor + j)
+
         split_vals = np.split(val, factor, axis=0)
         for j in range(factor):
-            saved_path = saved_dir + "/model." + key + ".%d.bin" % (i * factor + j)
-            split_vals[j].tofile(saved_path)
+            save_val(split_vals[j], key, i * factor + j)
 
-    elif key.find("mlp.dense_h_to_4h.weight") != -1 or key.find("mlp.dense_h_to_4h.bias") != -1:
+    elif "mlp.dense_h_to_4h.weight" in key or "mlp.dense_h_to_4h.bias" in key:
+        if quantized_out and "weight" in key:
+            val_q, weight_scales, act_scale_pre, act_scale_post = quantize(val, capture_dict[old_name])
+            save_val(act_scale_pre.astype(dtype), key.replace("weight", "scale"))
+            scale_inter = (act_scale_post / (act_scale_pre * weight_scales)).astype(dtype)
+            save_val(scale_inter, key.replace("weight", "scale_inter"))
+            save_val((1. / act_scale_post).astype(dtype), key.replace("weight", "scale_out"))
+
+            split_vals_q = np.split(val_q, factor, axis=-1)
+            for j in range(factor):
+                save_val(split_vals_q[j], key + ".int8", i * factor + j)
 
         split_vals = np.split(val, factor, axis=-1)
         for j in range(factor):
-            saved_path = saved_dir + "/model." + key + ".%d.bin" % (i * factor + j)
-            split_vals[j].tofile(saved_path)
+            save_val(split_vals[j], key, i * factor + j)
 
-    elif key.find("attention.query_key_value.bias") != -1:
+    elif "attention.query_key_value.bias" in key:
         local_dim = (int)(val.shape[-1] / 3)
 
         val = val.reshape(3, local_dim)
         split_vals = np.split(val, factor, axis=-1)
 
         for j in range(factor):
-            saved_path = saved_dir + "/model." + key + ".%d.bin" % (i * factor + j)
-            split_vals[j].tofile(saved_path)
+            save_val(split_vals[j], key, i * factor + j)
 
-    elif key.find("attention.query_key_value.weight") != -1:
+    elif "attention.query_key_value.weight" in key:
         hidden_dim = val.shape[0]
         local_dim = (int)(val.shape[-1] / 3)
 
         val = val.reshape(hidden_dim, 3, local_dim)
-        split_vals = np.split(val, factor, axis=-1)
+        if quantized_out:
+            val_q, weight_scales, act_scale_pre, act_scale_post = quantize(val, capture_dict[old_name])
+            weight_scales = weight_scales[0] * np.ones((3, local_dim // factor))
+            save_val(act_scale_pre.astype(dtype), key.replace("weight", "scale"))
+            scale_inter = (act_scale_post[:, None] / (act_scale_pre[:, None] * weight_scales)).astype(dtype)
+            save_val(scale_inter, key.replace("weight", "scale_inter"))
+            save_val((1. / act_scale_post).astype(dtype), key.replace("weight", "scale_out"))
 
+            split_vals_q = np.split(val_q, factor, axis=-1)
+            for j in range(factor):
+                save_val(split_vals_q[j], key + ".int8", i * factor + j)
+
+        split_vals = np.split(val, factor, axis=-1)
         for j in range(factor):
-            saved_path = saved_dir + "/model." + key + ".%d.bin" % (i * factor + j)
-            split_vals[j].tofile(saved_path)
+            save_val(split_vals[j], key, i * factor + j)
 
     else:
         print("[ERROR] cannot find key '{}'".format(key))
 
 def fuse_qkv_weight(q, k, v):
-    qkv = torch.cat([q, k, v], dim=-1)
+    if q.dim() == 0:
+        qkv = torch.tensor((q.item(), k.item(), v.item()))
+    else:
+        qkv = torch.cat([q, k, v], dim=-1)
     return qkv
 
 def split_and_convert(args):
@@ -103,10 +239,29 @@ def split_and_convert(args):
     i_gpu_num = args.infer_gpu_num
     assert(i_gpu_num % t_gpu_num == 0)
 
+    save_int8 = args.quantize or args.act_scale is not None
+
     factor = (int)(i_gpu_num / t_gpu_num)
 
     # load position_embedding from rank 0
     model = AutoModelForCausalLM.from_pretrained(args.in_file)
+
+    capture_dict = None
+    if args.quantize:
+        capture_dict = inject_range_detectors(model)
+        from datasets import load_dataset
+        Evaluator(load_dataset('lambada', split='validation[:1000]'),
+                  AutoTokenizer.from_pretrained("facebook/opt-125m"),
+                  "cuda").evaluate(model.to("cuda"))
+        remove_range_detectors(model)
+        model.to("cpu")
+    elif args.act_scale is not None:
+        scales = {key: value.max() for (key, value) in torch.load(args.act_scale).items()}
+        capture_dict = {}
+        for key, value in scales.items():
+            if key.endswith(".after"):
+                continue
+            capture_dict[key + ".weight"] = (value, scales[key + ".after"])
 
     hf_config = vars(model.config)
 
@@ -134,6 +289,7 @@ def split_and_convert(args):
         config["gpt"]["start_id"] = str(hf_config["bos_token_id"])
         config["gpt"]["end_id"] = str(hf_config["eos_token_id"])
         config['gpt']['weight_data_type'] = args.weight_data_type
+        config['gpt']['int8'] = str(save_int8) # really useful?
         with open(saved_dir + "/config.ini", 'w') as configfile:
             config.write(configfile)
     except:
@@ -155,7 +311,7 @@ def split_and_convert(args):
         "fc2.bias",
         "fc2.weight",
     ]
-    
+
     ft_model_name_pattern = [
         "input_layernorm.bias",
         "input_layernorm.weight",
@@ -174,29 +330,34 @@ def split_and_convert(args):
     model_named_parameters_iter =  model.named_parameters()
     model_named_parameters = dict()
     for name, param in model_named_parameters_iter:
-        if name.find("embed") != -1:
+        if "embed" in name:
             model_named_parameters[name] = param
-        elif name.find("project_in") != -1:
+        elif "project_in" in name:
             model_named_parameters[name] = param.permute(1, 0)
-        elif name.find("project_out") != -1:
+        elif "project_out" in name:
             model_named_parameters[name] = param
         else:
             model_named_parameters[name] = param.permute(1, 0) if len(param.shape) == 2 else param
-    # print(model_named_parameters.keys())
+
     for l in range(num_layers):
-        q_weight = model_named_parameters[f'model.decoder.layers.{l}.self_attn.q_proj.weight']
-        k_weight = model_named_parameters[f'model.decoder.layers.{l}.self_attn.k_proj.weight']
-        v_weight = model_named_parameters[f'model.decoder.layers.{l}.self_attn.v_proj.weight']
-        q_bias = model_named_parameters[f'model.decoder.layers.{l}.self_attn.q_proj.bias']
-        k_bias = model_named_parameters[f'model.decoder.layers.{l}.self_attn.k_proj.bias']
-        v_bias = model_named_parameters[f'model.decoder.layers.{l}.self_attn.v_proj.bias']
+        prefix = f'model.decoder.layers.{l}.self_attn.'
+        q_weight = model_named_parameters[prefix + 'q_proj.weight']
+        k_weight = model_named_parameters[prefix + 'k_proj.weight']
+        v_weight = model_named_parameters[prefix + 'v_proj.weight']
+        q_bias = model_named_parameters[prefix + 'q_proj.bias']
+        k_bias = model_named_parameters[prefix + 'k_proj.bias']
+        v_bias = model_named_parameters[prefix + 'v_proj.bias']
         qkv_weight = fuse_qkv_weight(q_weight, k_weight, v_weight)
         qkv_bias = fuse_qkv_weight(q_bias, k_bias, v_bias)
-        model_named_parameters[f'model.decoder.layers.{l}.self_attn.qkv_proj.weight'] = qkv_weight
-        model_named_parameters[f'model.decoder.layers.{l}.self_attn.qkv_proj.bias'] = qkv_bias
-    
-    torch.multiprocessing.set_start_method("spawn")
-    torch.multiprocessing.set_sharing_strategy("file_system")
+        if save_int8:
+            qkv_scales = (capture_dict[prefix + 'q_proj.weight'],
+                          capture_dict[prefix + 'k_proj.weight'],
+                          capture_dict[prefix + 'v_proj.weight'])
+            capture_dict[prefix + 'qkv_proj.weight'] = (fuse_qkv_weight(qkv_scales[0][0], qkv_scales[1][0], qkv_scales[2][0]),
+                                                        fuse_qkv_weight(qkv_scales[0][1], qkv_scales[1][1], qkv_scales[2][1]))
+        model_named_parameters[prefix + 'qkv_proj.weight'] = qkv_weight
+        model_named_parameters[prefix + 'qkv_proj.bias'] = qkv_bias
+
     pool = multiprocessing.Pool(args.processes)
     padding_offset = 2
     for name, param in model_named_parameters.items():
@@ -215,20 +376,25 @@ def split_and_convert(args):
             param.detach().cpu().numpy().astype(np_weight_data_type).tofile(saved_dir + "model.final_layernorm.weight.bin")
         elif name == 'model.decoder.final_layer_norm.bias':
             param.detach().cpu().numpy().astype(np_weight_data_type).tofile(saved_dir + "model.final_layernorm.bias.bin")
-        elif name.find("project_in") != -1 or name.find("project_out") != -1:
+        elif "project_in" in name or "project_out" in name:
             continue
         else:
+            starmap_args = []
             for i in range(len(huggingface_model_name_pattern)):
-                if name.find(huggingface_model_name_pattern[i]) != -1:
+                if huggingface_model_name_pattern[i] in name:
                     new_name = name.replace("model.decoder.layers.", "layers.").replace(huggingface_model_name_pattern[i], ft_model_name_pattern[i])
-                    pool.starmap(split_and_convert_process,
-                                [(0, saved_dir, factor, new_name, args,
-                                    param.detach().cpu().numpy().astype(np_weight_data_type))], )
 
+                    starmap_args.append((0, saved_dir, factor, new_name, args,
+                                        param.detach().cpu().numpy().astype(np_weight_data_type),
+                                        capture_dict, name, np_weight_data_type))
+            pool.starmap(split_and_convert_process, starmap_args)
     pool.close()
     pool.join()
 
 if __name__ == "__main__":
+    torch.multiprocessing.set_start_method("spawn")
+    torch.multiprocessing.set_sharing_strategy("file_system")
+
     parser = argparse.ArgumentParser(formatter_class=argparse.RawTextHelpFormatter)
     parser.add_argument('-saved_dir', '-o', type=str, help='file name of output file', required=True)
     parser.add_argument('-in_file', '-i', type=str, help='file name of input checkpoint file', required=True)
@@ -236,12 +402,20 @@ if __name__ == "__main__":
     parser.add_argument('-infer_gpu_num', '-i_g', type=int, help='How many gpus for inference', required=True)
     parser.add_argument("-processes", "-p", type=int, help="How many processes to spawn for conversion (default: 4)", default=4)
     parser.add_argument("-weight_data_type", type=str, default="fp32", choices=["fp32", "fp16"])
+    parser.add_argument("-quantize",
+                        help="Store selected in int8, run the models to determine scaling factors",
+                        action="store_true")
+    parser.add_argument("-act_scale", default=None, help="path to activation scalings for int8 conversion")
 
     args = parser.parse_args()
     print("\n=============== Argument ===============")
     for key in vars(args):
         print(f"{key}: {vars(args)[key]}")
     print("========================================")
+
+    if args.quantize and args.act_scale is not None:
+        print("[ERROR] Cannot specify both -quantize and -act_scale")
+        sys.exit()
 
     start_time = datetime.now()
     split_and_convert(args)

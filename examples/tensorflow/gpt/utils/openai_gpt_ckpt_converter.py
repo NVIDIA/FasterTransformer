@@ -24,7 +24,7 @@ tf.disable_v2_behavior()
 """
 This file converts the model of TensorFlow checkpoint to numpy array,
 and store the numpy into <.bin> file. We also little modify the name.
-The followings are examples:
+The following are examples:
 
 For example, the original name of variable of the 3rd transformer layers are:
     model.h<layer>.ln_1.b
@@ -81,7 +81,7 @@ For multi-gpu weights, we need to split the following weights:
     5. mlp/c_fc/b: it is similar to mlp/c_fc/w
     6. mlp/c_proj/w: we need to split at axis 1. Namely, we split by W = [ [W_1], [W_2] ]
         
-    Note that we do not need to split followings variables:
+    Note that we do not need to split following variables:
         attn/c_proj/b 
         mlp/c_proj/b
         ln_1/g, ln_1/b

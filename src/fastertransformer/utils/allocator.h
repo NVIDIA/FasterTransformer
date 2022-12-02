@@ -63,10 +63,13 @@ enum class ReallocType {
 
 class IAllocator {
 public:
-    virtual void*        malloc(size_t size, const bool is_set_zero = true) = 0;
-    virtual void         free(void** ptr) const                             = 0;
-    virtual void         setStream(cudaStream_t stream)                     = 0;
-    virtual cudaStream_t returnStream()                                     = 0;
+    virtual ~IAllocator(){};
+
+    virtual void*        malloc(size_t size, const bool is_set_zero = true)  = 0;
+    virtual void         free(void** ptr) const                              = 0;
+    virtual void         setStream(cudaStream_t stream)                      = 0;
+    virtual cudaStream_t returnStream()                                      = 0;
+    virtual void         memSet(void* ptr, const int val, const size_t size) = 0;
 
     template<typename T>
     void* reMalloc(T* ptr, size_t size, const bool is_set_zero = true)
@@ -90,7 +93,10 @@ public:
             }
 #endif
             else {
-                FT_LOG_DEBUG("Reuse original buffer %p and do nothing for reMalloc.", void_ptr);
+                FT_LOG_DEBUG("Reuse original buffer %p with size %d and do nothing for reMalloc.", void_ptr, size);
+                if (is_set_zero) {
+                    memSet(void_ptr, 0, size);
+                }
                 return void_ptr;
             }
         }
@@ -212,6 +218,9 @@ public:
 #else
         check_cuda_error(cudaMallocAsync(&ptr, (size_t)(ceil(size / 32.)) * 32, stream_));
 #endif
+        if (is_set_zero) {
+            check_cuda_error(cudaMemsetAsync(ptr, 0, (size_t)(ceil(size / 32.)) * 32, stream_));
+        }
         check_cuda_error(getSetDevice(o_device));
         FT_LOG_DEBUG("malloc buffer %p with size %ld", ptr, size);
 
@@ -233,6 +242,7 @@ public:
                 check_cuda_error(cudaFree(*ptr));
 #else
                 check_cuda_error(cudaFreeAsync(*ptr, stream_));
+                cudaStreamSynchronize(stream_);
 #endif
                 check_cuda_error(getSetDevice(o_device));
                 pointer_mapping_->erase(address);
@@ -243,6 +253,11 @@ public:
         }
         *ptr = nullptr;
         return;
+    }
+
+    void memSet(void* ptr, const int val, const size_t size)
+    {
+        check_cuda_error(cudaMemsetAsync(ptr, val, size, stream_));
     }
 };
 
@@ -306,7 +321,7 @@ public:
 
         auto  flat = buf.flat<uint8>();
         void* ptr  = (void*)flat.data();
-        if (is_set_zero == true) {
+        if (is_set_zero) {
             cudaMemsetAsync(ptr, 0, buf_size, stream_);
         }
         pointer_mapping_->insert({getAddress(ptr), buf});
@@ -331,6 +346,11 @@ public:
         }
         pointer_mapping_->clear();
         delete pointer_mapping_;
+    }
+
+    void memSet(void* ptr, const int val, const size_t size)
+    {
+        check_cuda_error(cudaMemsetAsync(ptr, val, size, stream_));
     }
 };
 #endif
@@ -385,12 +405,12 @@ public:
     {
         FT_LOG_DEBUG(__PRETTY_FUNCTION__);
         int64_t buf_size = static_cast<int64_t>(ceil(size / 32.)) * 32;
-        // TODO: test this later
-        // torch::Tensor buf = is_set_zero ?
-        //                     torch::zeros({buf_size}, torch::dtype(torch::kUInt8).device(torch::kCUDA)) :
-        //                     torch::empty({buf_size}, torch::dtype(torch::kUInt8).device(torch::kCUDA));
+
         torch::Tensor buf = torch::empty({buf_size}, torch::dtype(torch::kUInt8).device(torch::kCUDA));
         void*         ptr = buf.data_ptr();
+        if (is_set_zero) {
+            cudaMemset(ptr, 0, buf_size);
+        }
         FT_LOG_DEBUG("malloc buffer %p with size %ld", ptr, buf_size);
         pointer_mapping_->insert({getAddress(ptr), buf});
         return ptr;
@@ -414,6 +434,11 @@ public:
         }
         pointer_mapping_->clear();
         delete pointer_mapping_;
+    }
+
+    void memSet(void* ptr, const int val, const size_t size)
+    {
+        check_cuda_error(cudaMemset(ptr, val, size));
     }
 };
 #endif

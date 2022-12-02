@@ -49,8 +49,6 @@ private:
     size_t adapter_inter_size_;
     T*     after_adapter_attn_output_;
 
-    int int8_mode_ = 0;
-
     // calculated data
     size_t hidden_units_;
 
@@ -61,10 +59,12 @@ private:
     int                                 enable_custom_all_reduce_;
 
     // buffers
-    T* decoder_normed_input_    = nullptr;
-    T* self_attn_output_        = nullptr;
-    T* normed_self_attn_output_ = nullptr;
-    T* decoder_layer_output_    = nullptr;
+    T*       decoder_normed_input_       = nullptr;
+    T*       self_attn_output_           = nullptr;
+    T*       normed_self_attn_output_    = nullptr;
+    T*       decoder_layer_output_       = nullptr;
+    int32_t* self_attn_output_int32_     = nullptr;
+    int32_t* decoder_layer_output_int32_ = nullptr;
 
     BaseAttentionLayer<T>* self_attention_layer_;
     FfnLayer<T>*           ffn_layer_;
@@ -79,6 +79,8 @@ private:
     int  getFirstLayerParallelId();
 
 protected:
+    int int8_mode_ = 0;
+
 public:
     ParallelGptDecoder(size_t                              max_batch_size,
                        size_t                              head_num,
@@ -102,8 +104,8 @@ public:
 
     ~ParallelGptDecoder();
 
-    void forward(std::vector<Tensor>*                                  output_tensors,
-                 const std::vector<Tensor>*                            input_tensors,
+    void forward(std::unordered_map<std::string, Tensor>*              output_tensors,
+                 const std::unordered_map<std::string, Tensor>*        input_tensors,
                  const std::vector<ParallelGptDecoderLayerWeight<T>*>* decoder_layer_weights);
 };
 

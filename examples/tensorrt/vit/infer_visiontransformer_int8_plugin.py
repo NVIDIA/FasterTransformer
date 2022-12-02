@@ -52,6 +52,7 @@ def setup_trt(args, config, model):
     p_loader = ViTINT8PluginLoader(args.plugin_path)
     p_loader.load_model_config(config, args)
     engine = p_loader.build_network(model.state_dict())
+    p_loader.serialize_engine(engine)
     return engine, p_loader
 
 def parse_option():
@@ -139,20 +140,9 @@ def run_trt_plugin(plugin_loader:ViTINT8PluginLoader, images, engine):
 
 @torch.no_grad()
 def run_torch(model, images, mark):
-    # warm up
-    for i in range(warmup_time):
-        output = model(images)
-
-    torch.cuda.synchronize()
-    torch_start = time.time()
-    for i in range(test_time):
-        torch_output = model.transformer(images)
+    torch_output = model.transformer(images)
     
-    torch.cuda.synchronize()
-    torch_end = time.time()
     torch_output = torch_output[0].cpu().numpy()
-    print(mark + " time : ", (torch_end - torch_start)/test_time*1000.0, "ms")
-
     return torch_output
 
 @torch.no_grad()

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,7 +36,8 @@ SwinTransformerClass::SwinTransformerClass(std::vector<th::Tensor> w,
                                            int64_t                 layer_num,
                                            double                  mlp_ratio,
                                            bool                    qkv_bias,
-                                           double                  qk_scale):
+                                           double                  qk_scale,
+                                           int64_t                 version):
     st_(w[0].scalar_type()), depths_(depths), num_heads_(num_heads), weights_(w)
 {
 
@@ -68,6 +69,7 @@ SwinTransformerClass::SwinTransformerClass(std::vector<th::Tensor> w,
                                                                     mlp_ratio,
                                                                     qkv_bias,
                                                                     qk_scale,
+                                                                    version,
                                                                     weights_);
             break;
         case at::ScalarType::Half:
@@ -85,31 +87,13 @@ SwinTransformerClass::SwinTransformerClass(std::vector<th::Tensor> w,
                                                                    mlp_ratio,
                                                                    qkv_bias,
                                                                    qk_scale,
+                                                                   version,
                                                                    weights_);
             break;
-#ifdef ENABLE_BF16
-        case at::ScalarType::BFloat16:
-            swin_transformer_func_ = new SwinTransformerFunc<__nv_bfloat16>(max_batch,
-                                                                            img_size,
-                                                                            patch_size,
-                                                                            in_chans,
-                                                                            embed_dim,
-                                                                            window_size,
-                                                                            get_ptr<int>(depths),
-                                                                            get_ptr<int>(num_heads),
-                                                                            ape,
-                                                                            patch_norm,
-                                                                            layer_num,
-                                                                            mlp_ratio,
-                                                                            qkv_bias,
-                                                                            qk_scale,
-                                                                            weights_);
-            break;
-#endif
         default:
             throw std::runtime_error("Wrong th::Tensor type.");
     }
-    info_int_      = torch::empty({10}, torch::dtype(torch::kInt64));
+    info_int_      = torch::empty({11}, torch::dtype(torch::kInt64));
     info_int_[0]   = max_batch;
     info_int_[1]   = img_size;
     info_int_[2]   = patch_size;
@@ -120,6 +104,7 @@ SwinTransformerClass::SwinTransformerClass(std::vector<th::Tensor> w,
     info_int_[7]   = (int64_t)patch_norm;
     info_int_[8]   = layer_num;
     info_int_[9]   = (int64_t)qkv_bias;
+    info_int_[10]  = (int64_t)version;
     info_float_    = torch::empty({2}, torch::dtype(torch::kFloat64));
     info_float_[0] = mlp_ratio;
     info_float_[1] = qk_scale;
@@ -150,22 +135,51 @@ th::Tensor SwinTransformerClass::forward(th::Tensor input)
     return output;
 }
 
-th::Tensor gen_relative_pos_bias(th::Tensor    relative_position_bias_table,
+th::Tensor gen_relative_pos_bias(th::Tensor    table,
                                  th::Tensor    relative_position_bias_index,
                                  const int64_t window_size,
-                                 const int64_t head_num)
+                                 const int64_t head_num,
+                                 th::Tensor    cpb_mlp_weight1,
+                                 th::Tensor    cpb_mlp_bias1,
+                                 th::Tensor    cpb_mlp_weight2,
+                                 const int64_t version)
 {
-    const at::ScalarType _st = relative_position_bias_table.scalar_type();
-    CHECK_INPUT(relative_position_bias_table, _st);
+    const at::ScalarType _st = table.scalar_type();
+    CHECK_INPUT(table, _st);
     switch (_st) {
         case at::ScalarType::Float:
-            return gen_relative_pos_bias_impl<float>(
-                relative_position_bias_table, relative_position_bias_index, window_size, head_num);
+            return gen_relative_pos_bias_impl<float>(table,
+                                                     relative_position_bias_index,
+                                                     cpb_mlp_weight1,
+                                                     cpb_mlp_bias1,
+                                                     cpb_mlp_weight2,
+                                                     window_size,
+                                                     head_num,
+                                                     version);
         case at::ScalarType::Half:
-            return gen_relative_pos_bias_impl<half>(
-                relative_position_bias_table, relative_position_bias_index, window_size, head_num);
+            return gen_relative_pos_bias_impl<half>(table,
+                                                    relative_position_bias_index,
+                                                    cpb_mlp_weight1,
+                                                    cpb_mlp_bias1,
+                                                    cpb_mlp_weight2,
+                                                    window_size,
+                                                    head_num,
+                                                    version);
         default:
             throw std::runtime_error("Wrong th::Tensor type.");
+    }
+}
+
+th::Tensor transform_trt_mask(th::Tensor mask, const int64_t B, const int64_t S, bool use_int8)
+{
+    const at::ScalarType _st = mask.scalar_type();
+    CHECK_INPUT(mask, _st);
+    switch (_st) {
+        case at::ScalarType::Half:
+            return transform_trt_mask_impl<half>(mask, B, S, use_int8);
+        case at::ScalarType::Float:
+        default:
+            throw std::runtime_error("Wrong th::Tensor type for transform_mask.");
     }
 }
 
@@ -191,7 +205,8 @@ static auto swinTransformerTHS =
                               int64_t,
                               double,
                               bool,
-                              double>())
+                              double,
+                              int64_t>())
         .def("forward", &torch_ext::SwinTransformerClass::forward)
         .def_pickle(
             [](const c10::intrusive_ptr<torch_ext::SwinTransformerClass>& self) -> std::vector<th::Tensor> {
@@ -214,6 +229,7 @@ static auto swinTransformerTHS =
                 bool                                    patch_norm  = state[idx][i++].item().to<bool>();
                 int64_t                                 layer_num   = state[idx][i++].item().to<int>();
                 bool                                    qkv_bias    = state[idx][i++].item().to<bool>();
+                int64_t                                 version     = state[idx][i++].item().to<int>();
                 idx                                                 = state.size() - 1;
                 double mlp_ratio                                    = state[idx][0].item().to<double>();
                 double qk_scale                                     = state[idx][1].item().to<double>();
@@ -231,8 +247,12 @@ static auto swinTransformerTHS =
                                                                             layer_num,
                                                                             mlp_ratio,
                                                                             qkv_bias,
-                                                                            qk_scale);
+                                                                            qk_scale,
+                                                                            version);
             });
 
 static auto gen_relative_pos_bias =
     torch::RegisterOperators("fastertransformer::gen_relative_pos_bias", &torch_ext::gen_relative_pos_bias);
+
+static auto transform_trt_mask =
+    torch::RegisterOperators("fastertransformer::transform_trt_mask", &torch_ext::transform_trt_mask);

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
  * Copyright (c) 2021, NAVER Corp.  Authored by CLOVA.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include "3rdparty/trt_fused_multihead_attention/qkvToContext.h"
+#include "src/fastertransformer/kernels/cutlass_kernels/fpA_intB_gemm/fpA_intB_gemm.h"
 #include "src/fastertransformer/layers/attention_layers/BaseAttentionLayer.h"
 
 namespace fastertransformer {
@@ -37,6 +39,10 @@ private:
     const size_t rotary_embedding_dim_;
     const bool   neox_rotary_style_;
 
+    // fmha runner
+    int                        sm_ = getSMVersion();
+    std::unique_ptr<MHARunner> dispatcher_fp16;
+
     void allocateBuffer() override;
     void allocateBuffer(size_t batch_size, size_t seq_len);
     void freeBuffer() override;
@@ -44,21 +50,30 @@ private:
     using BaseAttentionLayer<T>::is_free_buffer_after_forward_;
     using BaseAttentionLayer<T>::is_allocate_buffer_;
     using BaseAttentionLayer<T>::cublas_wrapper_;
-    using BaseAttentionLayer<T>::allocator_;
 
     bool is_qk_buf_float_;
 
+    std::shared_ptr<CutlassFpAIntBGemmRunner<T, uint8_t>> weight_only_int8_fc_runner_;
+
 protected:
+    using BaseAttentionLayer<T>::allocator_;
     using BaseAttentionLayer<T>::stream_;
     using BaseAttentionLayer<T>::sparse_;
-    T*     qkv_buf_      = nullptr;
-    T*     q_buf_2_      = nullptr;
-    T*     k_buf_2_      = nullptr;
-    T*     v_buf_2_      = nullptr;
-    T*     qk_buf_       = nullptr;
-    float* qk_buf_float_ = nullptr;
-    T*     qkv_buf_2_    = nullptr;
-    T*     qkv_buf_3_    = nullptr;
+    T*     qkv_buf_              = nullptr;
+    T*     q_buf_2_              = nullptr;
+    T*     k_buf_2_              = nullptr;
+    T*     v_buf_2_              = nullptr;
+    T*     qk_buf_               = nullptr;
+    float* qk_buf_float_         = nullptr;
+    T*     qkv_buf_2_            = nullptr;
+    T*     qkv_buf_3_            = nullptr;
+    char*  mixed_gemm_workspace_ = nullptr;
+    size_t mixed_gemm_ws_bytes_  = 0;
+
+    // int8_mode_ == 0 means we don't use any mechanism related to INT8.
+    // int8_mode_ == 1 for weight quantized only gemm for GPT
+    // int8_mode_ == 2 for SmoothQuant O3 (per tensor scales)
+    const int int8_mode_ = 0;
 
 public:
     GptContextAttentionLayer(size_t           max_batch_size,
@@ -70,7 +85,8 @@ public:
                              IAllocator*      allocator,
                              bool             is_free_buffer_after_forward,
                              bool             is_qk_buf_float,
-                             bool             sparse = false);
+                             bool             sparse    = false,
+                             int              int8_mode = 0);
 
     GptContextAttentionLayer(size_t           max_batch_size,
                              size_t           max_seq_len,
@@ -82,7 +98,8 @@ public:
                              IAllocator*      allocator,
                              bool             is_free_buffer_after_forward,
                              bool             is_qk_buf_float,
-                             bool             sparse = false);
+                             bool             sparse    = false,
+                             int              int8_mode = 0);
 
     GptContextAttentionLayer(size_t           max_batch_size,
                              size_t           max_seq_len,
@@ -96,15 +113,15 @@ public:
                              IAllocator*      allocator,
                              bool             is_free_buffer_after_forward,
                              bool             is_qk_buf_float,
-                             bool             sparse = false);
+                             bool             sparse    = false,
+                             int              int8_mode = 0);
 
     GptContextAttentionLayer(GptContextAttentionLayer<T> const& attention_layer);
 
     virtual ~GptContextAttentionLayer();
 
-    void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                 const std::vector<fastertransformer::Tensor>* input_tensors,
-                 const AttentionWeight<T>*                     attention_weights) override;
+    void
+    forward(TensorMap* output_tensors, TensorMap* input_tensors, const AttentionWeight<T>* attention_weights) override;
 };
 
 }  // namespace fastertransformer

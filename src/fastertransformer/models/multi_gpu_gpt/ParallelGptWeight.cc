@@ -86,6 +86,8 @@ ParallelGptWeight<T>::~ParallelGptWeight()
 
         position_encoding_table       = nullptr;
         pre_decoder_embedding_table   = nullptr;
+        pre_decoder_layernorm.gamma   = nullptr;
+        pre_decoder_layernorm.beta    = nullptr;
         post_decoder_layernorm.beta   = nullptr;
         post_decoder_layernorm.gamma  = nullptr;
         post_decoder_embedding.kernel = nullptr;
@@ -117,11 +119,19 @@ ParallelGptWeight<T>::ParallelGptWeight(const ParallelGptWeight& other):
     gpt_variant_params_(other.gpt_variant_params_)
 {
     mallocWeights();
-    cudaD2Dcpy(weights_ptr[0], other.weights_ptr[0], max_seq_len_ * vocab_size_);
+    if (gpt_variant_params_.has_positional_encoding) {
+        cudaD2Dcpy(weights_ptr[0], other.weights_ptr[0], max_seq_len_ * vocab_size_);
+    }
     cudaD2Dcpy(weights_ptr[1], other.weights_ptr[1], vocab_size_ * hidden_units_);
-    cudaD2Dcpy(weights_ptr[2], other.weights_ptr[2], hidden_units_);
-    cudaD2Dcpy(weights_ptr[3], other.weights_ptr[3], hidden_units_);
-    cudaD2Dcpy(weights_ptr[4], other.weights_ptr[4], hidden_units_ * vocab_size_);
+    if (gpt_variant_params_.has_pre_decoder_layernorm) {
+        cudaD2Dcpy(weights_ptr[2], other.weights_ptr[2], hidden_units_);
+        cudaD2Dcpy(weights_ptr[3], other.weights_ptr[3], hidden_units_);
+    }
+    if (gpt_variant_params_.has_post_decoder_layernorm) {
+        cudaD2Dcpy(weights_ptr[4], other.weights_ptr[4], hidden_units_);
+        cudaD2Dcpy(weights_ptr[5], other.weights_ptr[5], hidden_units_);
+    }
+    cudaD2Dcpy(weights_ptr[6], other.weights_ptr[6], hidden_units_ * vocab_size_);
 
     // prompt learning table: malloc weights and set weight ptr
     if (malloc_load_prompt_weights_) {
@@ -165,11 +175,19 @@ ParallelGptWeight<T>& ParallelGptWeight<T>::operator=(const ParallelGptWeight& o
     gpt_variant_params_         = other.gpt_variant_params_;
 
     mallocWeights();
-    cudaD2Dcpy(weights_ptr[0], other.weights_ptr[0], max_seq_len_ * vocab_size_);
+    if (gpt_variant_params_.has_positional_encoding) {
+        cudaD2Dcpy(weights_ptr[0], other.weights_ptr[0], max_seq_len_ * vocab_size_);
+    }
     cudaD2Dcpy(weights_ptr[1], other.weights_ptr[1], vocab_size_ * hidden_units_);
-    cudaD2Dcpy(weights_ptr[2], other.weights_ptr[2], hidden_units_);
-    cudaD2Dcpy(weights_ptr[3], other.weights_ptr[3], hidden_units_);
-    cudaD2Dcpy(weights_ptr[4], other.weights_ptr[4], hidden_units_ * vocab_size_);
+    if (gpt_variant_params_.has_pre_decoder_layernorm) {
+        cudaD2Dcpy(weights_ptr[2], other.weights_ptr[2], hidden_units_);
+        cudaD2Dcpy(weights_ptr[3], other.weights_ptr[3], hidden_units_);
+    }
+    if (gpt_variant_params_.has_post_decoder_layernorm) {
+        cudaD2Dcpy(weights_ptr[4], other.weights_ptr[4], hidden_units_);
+        cudaD2Dcpy(weights_ptr[5], other.weights_ptr[5], hidden_units_);
+    }
+    cudaD2Dcpy(weights_ptr[6], other.weights_ptr[6], hidden_units_ * vocab_size_);
 
     // prompt learning tables: malloc weights and set weight ptr
     if (malloc_load_prompt_weights_) {
@@ -198,11 +216,13 @@ void ParallelGptWeight<T>::setWeightPtr()
 {
     prompt_learning_table.resize(prompt_learning_pair_.size());
 
-    position_encoding_table       = weights_ptr[0];
+    position_encoding_table       = gpt_variant_params_.has_positional_encoding ? weights_ptr[0] : nullptr;
     pre_decoder_embedding_table   = weights_ptr[1];
-    post_decoder_layernorm.beta   = weights_ptr[2];
-    post_decoder_layernorm.gamma  = weights_ptr[3];
-    post_decoder_embedding.kernel = weights_ptr[4];
+    pre_decoder_layernorm.gamma   = gpt_variant_params_.has_pre_decoder_layernorm ? weights_ptr[2] : nullptr;
+    pre_decoder_layernorm.beta    = gpt_variant_params_.has_pre_decoder_layernorm ? weights_ptr[3] : nullptr;
+    post_decoder_layernorm.beta   = gpt_variant_params_.has_post_decoder_layernorm ? weights_ptr[4] : nullptr;
+    post_decoder_layernorm.gamma  = gpt_variant_params_.has_post_decoder_layernorm ? weights_ptr[5] : nullptr;
+    post_decoder_embedding.kernel = weights_ptr[6];
     post_decoder_embedding.bias   = nullptr;
 
     // prompt learning tables: set weight ptr
@@ -223,11 +243,23 @@ void ParallelGptWeight<T>::mallocWeights()
 {
     weights_ptr.resize(num_base_weights + prompt_learning_pair_.size());
 
-    deviceMalloc(&weights_ptr[0], max_seq_len_ * vocab_size_);
+    if (gpt_variant_params_.has_positional_encoding) {
+        deviceMalloc(&weights_ptr[0], max_seq_len_ * vocab_size_);
+    }
+    // word embedding table.
     deviceMalloc(&weights_ptr[1], vocab_size_ * hidden_units_);
-    deviceMalloc(&weights_ptr[2], hidden_units_);
-    deviceMalloc(&weights_ptr[3], hidden_units_);
-    deviceMalloc(&weights_ptr[4], hidden_units_ * vocab_size_);
+    // pre decoder layernorm
+    if (gpt_variant_params_.has_pre_decoder_layernorm) {
+        deviceMalloc(&weights_ptr[2], hidden_units_);
+        deviceMalloc(&weights_ptr[3], hidden_units_);
+    }
+    // post decoder layernorm
+    if (gpt_variant_params_.has_post_decoder_layernorm) {
+        deviceMalloc(&weights_ptr[4], hidden_units_);
+        deviceMalloc(&weights_ptr[5], hidden_units_);
+    }
+    // deceder embedding table.
+    deviceMalloc(&weights_ptr[6], hidden_units_ * vocab_size_);
 
     // prompt learning tables: malloc weights
     if (malloc_load_prompt_weights_) {
@@ -250,21 +282,30 @@ void ParallelGptWeight<T>::loadModel(std::string dir_path)
 {
     FtCudaDataType model_file_type = getModelFileType(dir_path + "/config.ini", "gpt");
     FT_CHECK(is_maintain_buffer == true);
-    loadWeightFromBin<T>(weights_ptr[0], {max_seq_len_, hidden_units_}, dir_path + "/model.wpe.bin", model_file_type);
+    if (gpt_variant_params_.has_positional_encoding) {
+        loadWeightFromBin<T>(
+            weights_ptr[0], {max_seq_len_, hidden_units_}, dir_path + "/model.wpe.bin", model_file_type);
+    }
     loadWeightFromBin<T>(weights_ptr[1], {vocab_size_ * hidden_units_}, dir_path + "/model.wte.bin", model_file_type);
+    if (gpt_variant_params_.has_pre_decoder_layernorm) {
+        loadWeightFromBin<T>(
+            weights_ptr[2], {hidden_units_}, dir_path + "/model.pre_decoder_layernorm.weight.bin", model_file_type);
+        loadWeightFromBin<T>(
+            weights_ptr[3], {hidden_units_}, dir_path + "/model.pre_decoder_layernorm.bias.bin", model_file_type);
+    }
     if (gpt_variant_params_.has_post_decoder_layernorm) {
         loadWeightFromBin<T>(
-            weights_ptr[2], {hidden_units_}, dir_path + "/model.final_layernorm.bias.bin", model_file_type);
+            weights_ptr[4], {hidden_units_}, dir_path + "/model.final_layernorm.bias.bin", model_file_type);
         loadWeightFromBin<T>(
-            weights_ptr[3], {hidden_units_}, dir_path + "/model.final_layernorm.weight.bin", model_file_type);
+            weights_ptr[5], {hidden_units_}, dir_path + "/model.final_layernorm.weight.bin", model_file_type);
     }
     if (checkIfFileExist(dir_path + "/model.lm_head.weight.bin")) {
         loadWeightFromBin<T>(
-            weights_ptr[4], {vocab_size_ * hidden_units_}, dir_path + "/model.lm_head.weight.bin", model_file_type);
+            weights_ptr[6], {vocab_size_ * hidden_units_}, dir_path + "/model.lm_head.weight.bin", model_file_type);
     }
     else {
         loadWeightFromBin<T>(
-            weights_ptr[4], {vocab_size_ * hidden_units_}, dir_path + "/model.wte.bin", model_file_type);
+            weights_ptr[6], {vocab_size_ * hidden_units_}, dir_path + "/model.wte.bin", model_file_type);
     }
 
     // prompt table: load weights from bin

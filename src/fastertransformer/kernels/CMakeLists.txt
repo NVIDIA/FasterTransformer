@@ -14,6 +14,20 @@
 
 cmake_minimum_required(VERSION 3.8)
 
+add_subdirectory(cutlass_kernels)
+
+add_library(image_shift_partition_kernels image_shift_partition_kernels.cu)
+set_property(TARGET image_shift_partition_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET image_shift_partition_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+add_library(image_merge_kernels image_merge_kernels.cu)
+set_property(TARGET image_merge_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET image_merge_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+add_library(normalize_kernels normalize_kernels.cu)
+set_property(TARGET normalize_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET normalize_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
 add_library(layernorm_kernels STATIC layernorm_kernels.cu)
 set_property(TARGET layernorm_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET layernorm_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
@@ -57,6 +71,7 @@ set_property(TARGET calibrate_quantize_weight_kernels PROPERTY CUDA_RESOLVE_DEVI
 add_library(gen_relative_pos_bias STATIC gen_relative_pos_bias.cu)
 set_property(TARGET gen_relative_pos_bias PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET gen_relative_pos_bias PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+target_link_libraries(gen_relative_pos_bias PUBLIC activation_kernels)
 
 add_library(transform_mask_kernels STATIC transform_mask_kernels.cu)
 set_property(TARGET transform_mask_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -170,3 +185,8 @@ set_property(TARGET custom_ar_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 add_library(vit_kernels STATIC vit_kernels.cu)
 set_property(TARGET vit_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET vit_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+add_library(moe_kernels STATIC moe_kernels.cu)
+set_property(TARGET moe_kernels PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(TARGET moe_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+target_link_libraries(moe_kernels PRIVATE moe_gemm_kernels)

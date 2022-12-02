@@ -59,9 +59,8 @@ public:
 
     ~TensorParallelDecoderCrossAttentionLayer() = default;
 
-    void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                 const std::vector<fastertransformer::Tensor>* input_tensors,
-                 const AttentionWeight<T>*                     attention_weights) override;
+    void
+    forward(TensorMap* output_tensors, TensorMap* input_tensors, const AttentionWeight<T>* attention_weights) override;
 };
 
 }  // namespace fastertransformer

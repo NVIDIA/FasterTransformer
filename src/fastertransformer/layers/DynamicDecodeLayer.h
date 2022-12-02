@@ -19,6 +19,7 @@
 #include <string>
 #include <unordered_map>
 
+#include "src/fastertransformer/kernels/beam_search_topk_kernels.h"
 #include "src/fastertransformer/layers/BaseLayer.h"
 #include "src/fastertransformer/layers/DynamicDecodeBaseLayer.h"
 #include "src/fastertransformer/layers/sampling_layers/TopPSamplingLayer.h"
@@ -31,7 +32,7 @@ protected:
     void allocateBuffer() override;
     void freeBuffer() override;
     void initialize();
-    bool hasDiffRuntimeArgs(const std::unordered_map<std::string, Tensor>* input_tensors);
+    bool hasDiffRuntimeArgs(TensorMap* input_tensors);
 
     DynamicDecodeBaseLayer* online_beamsearch_decode_;
     DynamicDecodeBaseLayer* beamsearch_decode_;
@@ -62,9 +63,8 @@ public:
     ~DynamicDecodeLayer();
     DynamicDecodeLayer(DynamicDecodeLayer const& dynamic_decode_layer);
 
-    void setup(const size_t                                   batch_size,
-               const size_t                                   beam_width,
-               const std::unordered_map<std::string, Tensor>* runtime_args);
+    void setup(const size_t batch_size, const size_t beam_width, TensorMap* runtime_args);
+    void forward(TensorMap* output_tensors, TensorMap* input_tensors);
     void forward(std::unordered_map<std::string, Tensor>*       output_tensors,
                  const std::unordered_map<std::string, Tensor>* input_tensors);
 };

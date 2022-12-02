@@ -1,5 +1,5 @@
 # coding=utf-8
-# Copyright (c) 2019-2020 NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2019-2022 NVIDIA CORPORATION. All rights reserved.
 # Copyright 2018 The Google AI Language Team Authors and The HugginFace Inc. team.
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -769,24 +769,24 @@ class BertPreTrainedModel(nn.Module):
                 resolved_archive_file, tempdir))
             with tarfile.open(resolved_archive_file, 'r:gz') as archive:
                 def is_within_directory(directory, target):
-                    
+    
                     abs_directory = os.path.abspath(directory)
                     abs_target = os.path.abspath(target)
-                
+
                     prefix = os.path.commonprefix([abs_directory, abs_target])
-                    
+
                     return prefix == abs_directory
-                
+
                 def safe_extract(tar, path=".", members=None, *, numeric_owner=False):
-                
+
                     for member in tar.getmembers():
                         member_path = os.path.join(path, member.name)
                         if not is_within_directory(path, member_path):
                             raise Exception("Attempted Path Traversal in Tar File")
-                
+
                     tar.extractall(path, members, numeric_owner=numeric_owner) 
-                    
-                
+
+
                 safe_extract(archive, tempdir)
             serialization_dir = tempdir
         # Load config

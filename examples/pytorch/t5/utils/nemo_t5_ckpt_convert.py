@@ -17,6 +17,7 @@ import concurrent.futures
 import configparser
 import datetime
 import logging
+import os
 import pathlib
 import shutil
 import sys
@@ -25,6 +26,7 @@ import typing
 
 import numpy as np
 import torch  # pytype: disable=import-error
+import yaml
 
 # verify if root package is in PYTHONPATH
 __root_package_path__ = pathlib.Path(__file__).parent.parent.parent.parent.parent.absolute().as_posix()
@@ -84,7 +86,7 @@ encoder_config_mapping = {
     "ffn_hidden_size": "d_ff",
     "num_layers": "num_layers",
     "max_position_embeddings": "relative_attention_num_buckets_or_max_pos_seq_len",
-    "relative_position_num_buckets": "relative_attention_num_buckets_or_max_pos_seq_len",
+    "relative_attention_num_buckets": "relative_attention_num_buckets_or_max_pos_seq_len",
     "activation": "feed_forward_proj",
 }
 
@@ -95,7 +97,8 @@ decoder_config_mapping = {
     "ffn_hidden_size": "d_ff",
     "num_layers": "num_layers",
     "max_position_embeddings": "relative_attention_num_buckets_or_max_pos_seq_len",
-    "relative_position_num_buckets": "relative_attention_num_buckets_or_max_pos_seq_len",
+    "relative_attention_num_buckets": "relative_attention_num_buckets_or_max_pos_seq_len",
+    "activation": "feed_forward_proj",
 }
 
 
@@ -114,6 +117,49 @@ def megatron2hf_name(saved_key, name_mapping):
     return saved_keys
 
 
+def prompt_convert(args, prompt_config, prompt_weights):
+
+    prompt_templates = prompt_config["task_templates"]
+
+    # model config save dir
+    config_saved_dir = pathlib.Path(args.saved_dir) / f"{args.infer_gpu_num:d}-gpu"
+
+    # Configuration for the model (load by triton backends)
+    config_path = config_saved_dir / "config.ini"
+    config = configparser.ConfigParser()
+    with config_path.open("r") as config_file:
+        config.read_file(config_file)
+
+    num_tasks = len(prompt_templates)
+    prompt_learning_type = 3  # p_prompt_tuning
+    prompt_learning_start_id = config["encoder"]["vocab_size"]  # hard code here
+    config["encoder"]["num_tasks"] = str(num_tasks)
+    config["encoder"]["prompt_learning_start_id"] = str(prompt_learning_start_id)
+    config["encoder"]["prompt_learning_type"] = str(prompt_learning_type)
+
+    for task_name_id, prompt_task in enumerate(prompt_templates):
+        prompt_task_name = prompt_task["taskname"]
+        prompt_length = int(prompt_task["total_virtual_tokens"])
+        config[f"task_{task_name_id:d}"] = {}
+        config[f"task_{task_name_id:d}"]["task_name"] = prompt_task_name
+        config[f"task_{task_name_id:d}"]["prompt_length"] = str(prompt_length)
+        prompt_task_weights = prompt_weights["prompt_table"][
+            f"prompt_table.{prompt_task_name}.prompt_embeddings.weight"
+        ]
+        # put converted prompts weights to the model weights saved dir
+        prompt_task_weights_output_path = config_saved_dir / f"model.prompt_table.{prompt_task_name}.weight.bin"
+        val = torch2np(prompt_task_weights)
+        val.tofile(prompt_task_weights_output_path)
+
+    if prompt_config["data"]["decoder_starts_with_pad"]:
+        config["decoder"]["decoder_start_token_id"] = config["decoder"]["pad_id"]
+
+    with config_path.open("w") as config_file:
+        config.write(config_file)
+
+    LOGGER.info(">>>>>>>>>>>>>>>> model saved config")
+    LOGGER.info(config_path.read_text())
+
 # This tool is used to support the new megatron model trained by pipeline parallel + tensor parallel
 def merge_and_convert_process(
     model_type,
@@ -126,144 +172,82 @@ def merge_and_convert_process(
     models_list,
     np_weight_data_type,
 ):
-    assert model_type == "encoder" or model_type == "decoder"
-    prefix = model_type
-    pipeline_para_size = nemo_model_config["pipeline_model_parallel_size"]
-    pipeline_model_parallel_split_rank = nemo_model_config.get("pipeline_model_parallel_split_rank", 0)
-    num_layers = nemo_model_config["num_layers"]
+    try:
+        assert model_type == "encoder" or model_type == "decoder"
+        model_config = None if nemo_model_config.get(model_type, None) == None else nemo_model_config[model_type]
 
-    major_device = models_list[0][key].device
+        prefix = model_type
+        pipeline_para_size = nemo_model_config["pipeline_model_parallel_size"]
+        pipeline_model_parallel_split_rank = nemo_model_config.get("pipeline_model_parallel_split_rank", 0)
+        if model_config != None:
+            num_layers = model_config["num_layers"]
+        else:
+            num_layers = nemo_model_config["num_layers"]
 
-    name_mapping = megatron_HF_name_mapping[model_type]
-    saved_dir = pathlib.Path(saved_dir)
-    if key.find("layers.") != -1:
-        layer_index = int(key[7 : key.find(".", 7)])
-        encoder_num_pipeline_stages = pipeline_model_parallel_split_rank
-        decoder_num_pipeline_stages = pipeline_para_size - pipeline_model_parallel_split_rank
-        offset = 0
-        if model_type == "encoder" and pipeline_para_size > 1:
-            offset = pipeline_para_rank * (num_layers // encoder_num_pipeline_stages)
-        elif model_type == "decoder" and pipeline_para_size > 1:
-            offset = (pipeline_para_rank - pipeline_model_parallel_split_rank) * (
-                num_layers // decoder_num_pipeline_stages
-            )
-        saved_key = key.replace(f"layers.{layer_index}.", f"layers.{layer_index + offset}.")
-    else:
-        saved_key = key
+        major_device = models_list[0][key].device
 
-    if (
-        key.find("input_layernorm.weight") != -1
-        or key.find("input_layernorm.bias") != -1
-        or key.find("self_attention.dense.bias") != -1
-        or key.find("inter_attention.dense.bias") != -1
-        or key.find("post_attention_layernorm.weight") != -1
-        or key.find("post_inter_attention_layernorm.weight") != -1
-        or key.find("post_attention_layernorm.bias") != -1
-        or key.find("post_inter_attention_layernorm.bias") != -1
-        or key.find("mlp.dense_4h_to_h.bias") != -1
-        or key.find("final_layernorm.weight") != -1
-        or key.find("final_layernorm.bias") != -1
-    ):
-        # shared weights, only need to convert the weights of rank 0
-        if tensor_para_rank == 0:
+        name_mapping = megatron_HF_name_mapping[model_type]
+        saved_dir = pathlib.Path(saved_dir)
+        if key.find("layers.") != -1:
+            layer_index = int(key[7 : key.find(".", 7)])
+            encoder_num_pipeline_stages = pipeline_model_parallel_split_rank
+            decoder_num_pipeline_stages = pipeline_para_size - pipeline_model_parallel_split_rank
+            offset = 0
+            if model_type == "encoder" and pipeline_para_size > 1:
+                offset = pipeline_para_rank * (num_layers // encoder_num_pipeline_stages)
+            elif model_type == "decoder" and pipeline_para_size > 1:
+                offset = (pipeline_para_rank - pipeline_model_parallel_split_rank) * (
+                    num_layers // decoder_num_pipeline_stages
+                )
+            saved_key = key.replace(f"layers.{layer_index}.", f"layers.{layer_index + offset}.")
+        else:
+            saved_key = key
+
+        if (
+            key.find("input_layernorm.weight") != -1
+            or key.find("input_layernorm.bias") != -1
+            or key.find("self_attention.dense.bias") != -1
+            or key.find("inter_attention.dense.bias") != -1
+            or key.find("post_attention_layernorm.weight") != -1
+            or key.find("post_inter_attention_layernorm.weight") != -1
+            or key.find("post_attention_layernorm.bias") != -1
+            or key.find("post_inter_attention_layernorm.bias") != -1
+            or key.find("mlp.dense_4h_to_h.bias") != -1
+            or key.find("final_layernorm.weight") != -1
+            or key.find("final_layernorm.bias") != -1
+        ):
+            # shared weights, only need to convert the weights of rank 0
+            if tensor_para_rank == 0:
+                saved_keys = megatron2hf_name(saved_key, name_mapping)
+                saved_path = saved_dir / f"{prefix}.{saved_keys[0]}.bin"
+                val = safe_transpose(models_list[0][key])
+                val = torch2np(val, np_weight_data_type)
+                val = np.squeeze(val)
+                LOGGER.debug(
+                    "merge for pp_rank=%d tp_rank=%d only for tp_rank=0 src_key=%s filename=%s shape=%s dtype=%s",
+                    pipeline_para_rank,
+                    tensor_para_rank,
+                    key,
+                    saved_path.name,
+                    val.shape,
+                    val.dtype,
+                )
+                val.tofile(saved_path)
+
+        elif (
+            key.find("self_attention.dense.weight") != -1
+            or key.find("inter_attention.dense.weight") != -1
+            or key.find("mlp.dense_4h_to_h.weight") != -1
+        ):
+            vals = []
+            for k in range(factor):
+                val = safe_transpose(models_list[k][key])
+                val = val.float().to(major_device)
+                vals.append(val)
             saved_keys = megatron2hf_name(saved_key, name_mapping)
-            saved_path = saved_dir / f"{prefix}.{saved_keys[0]}.bin"
-            val = safe_transpose(models_list[0][key])
+            saved_path = saved_dir / f"{prefix}.{saved_keys[0]}.{tensor_para_rank:d}.bin"
+            val = torch.cat(vals, dim=0)
             val = torch2np(val, np_weight_data_type)
-            val = np.squeeze(val)
-            LOGGER.debug(
-                "merge for pp_rank=%d tp_rank=%d only for tp_rank=0 src_key=%s filename=%s shape=%s dtype=%s",
-                pipeline_para_rank,
-                tensor_para_rank,
-                key,
-                saved_path.name,
-                val.shape,
-                val.dtype,
-            )
-            val.tofile(saved_path)
-
-    elif (
-        key.find("self_attention.dense.weight") != -1
-        or key.find("inter_attention.dense.weight") != -1
-        or key.find("mlp.dense_4h_to_h.weight") != -1
-    ):
-        vals = []
-        for k in range(factor):
-            val = safe_transpose(models_list[k][key])
-            val = val.float().to(major_device)
-            vals.append(val)
-        saved_keys = megatron2hf_name(saved_key, name_mapping)
-        saved_path = saved_dir / f"{prefix}.{saved_keys[0]}.{tensor_para_rank:d}.bin"
-        val = torch.cat(vals, dim=0)
-        val = torch2np(val, np_weight_data_type)
-        LOGGER.debug(
-            "merge for pp_rank=%d tp_rank=%d factor=%d src_key=%s filename=%s shape=%s dtype=%s",
-            pipeline_para_rank,
-            tensor_para_rank,
-            factor,
-            key,
-            saved_path.name,
-            val.shape,
-            val.dtype,
-        )
-        val.tofile(saved_path)
-
-    elif (
-        key.find("mlp.dense_h_to_4h.weight") != -1
-        or key.find("mlp.dense_h_to_4h.bias") != -1
-        or key.find("mlp.dense_h_to_4h_2.weight") != -1
-        or key.find("mlp.dense_h_to_4h_2.bias") != -1
-    ):
-        vals = []
-        for k in range(factor):
-            val = safe_transpose(models_list[k][key])
-            val = val.float().to(major_device)
-            vals.append(val)
-        saved_keys = megatron2hf_name(saved_key, name_mapping)
-        saved_path = saved_dir / f"{prefix}.{saved_keys[0]}.{tensor_para_rank:d}.bin"
-        val = torch.cat(vals, dim=-1)
-        val = torch2np(val, np_weight_data_type)
-        LOGGER.debug(
-            "merge for pp_rank=%d tp_rank=%d factor=%d src_key=%s filename=%s shape=%s dtype=%s",
-            pipeline_para_rank,
-            tensor_para_rank,
-            factor,
-            key,
-            saved_path.name,
-            val.shape,
-            val.dtype,
-        )
-        val.tofile(saved_path)
-
-    elif (
-        key.find("self_attention.query_key_value.bias") != -1
-        or key.find("inter_attention.query.bias") != -1
-        or key.find("inter_attention.key_value.bias") != -1
-    ):
-        num_splits = 3
-        if key.find("inter_attention.key_value.bias") != -1:
-            num_splits = 2
-        if key.find("inter_attention.query.bias") != -1:
-            num_splits = 1
-
-        vals = []
-        for k in range(factor):
-            val = safe_transpose(models_list[k][key])
-            val = val.float()
-            local_dim = int(val.shape[-1] / num_splits)
-            head_num = nemo_model_config["num_attention_heads"] // nemo_model_config["tensor_model_parallel_size"]
-            # t5 kv_channels may not be equal to hidden_size // head_num
-            size_per_head = nemo_model_config["kv_channels"]
-            val = val.reshape(head_num, num_splits, size_per_head)
-            val = val.permute(1, 0, 2)
-            val = val.reshape(num_splits, local_dim)
-            vals.append(val.to(major_device))
-
-        saved_vals = torch.cat(vals, dim=-1)
-        saved_keys = megatron2hf_name(saved_key, name_mapping)
-        if len(saved_keys) == 1:
-            saved_path = saved_dir / f"{prefix}.{saved_keys[0]}.{tensor_para_rank:d}.bin"
-            val = torch2np(saved_vals, np_weight_data_type)
             LOGGER.debug(
                 "merge for pp_rank=%d tp_rank=%d factor=%d src_key=%s filename=%s shape=%s dtype=%s",
                 pipeline_para_rank,
@@ -275,53 +259,22 @@ def merge_and_convert_process(
                 val.dtype,
             )
             val.tofile(saved_path)
-        else:
-            for index in range(len(saved_keys)):
-                saved_path = saved_dir / f"{prefix}.{saved_keys[index]}.{tensor_para_rank:d}.bin"
-                val = torch2np(saved_vals[index, ...], np_weight_data_type)
-                LOGGER.debug(
-                    "merge for pp_rank=%d tp_rank=%d factor=%d src_key=%s filename=%s shape=%s dtype=%s",
-                    pipeline_para_rank,
-                    tensor_para_rank,
-                    factor,
-                    key,
-                    saved_path.name,
-                    val.shape,
-                    val.dtype,
-                )
-                val.tofile(saved_path)
 
-    elif (
-        key.find("self_attention.query_key_value.weight") != -1
-        or key.find("inter_attention.query.weight") != -1
-        or key.find("inter_attention.key_value.weight") != -1
-    ):
-        num_splits = 3
-        if key.find("inter_attention.key_value.weight") != -1:
-            num_splits = 2
-        if key.find("inter_attention.query.weight") != -1:
-            num_splits = 1
-
-        vals = []
-        for k in range(factor):
-            val = safe_transpose(models_list[k][key])
-            val = val.float()
-            hidden_dim = val.shape[0]
-            local_dim = int(val.shape[-1] / num_splits)
-            head_num = nemo_model_config["num_attention_heads"]
-            # t5 kv_channels may not be equal to hidden_size // head_num
-            size_per_head = nemo_model_config["kv_channels"]
-            head_num = head_num // nemo_model_config["tensor_model_parallel_size"]
-            val = val.reshape(hidden_dim, head_num, num_splits, size_per_head)
-            val = val.permute(0, 2, 1, 3)
-            val = val.reshape(hidden_dim, num_splits, local_dim)
-            vals.append(val.to(major_device))
-
-        saved_vals = torch.cat(vals, dim=-1)
-        saved_keys = megatron2hf_name(saved_key, name_mapping)
-        if len(saved_keys) == 1:
+        elif (
+            key.find("mlp.dense_h_to_4h.weight") != -1
+            or key.find("mlp.dense_h_to_4h.bias") != -1
+            or key.find("mlp.dense_h_to_4h_2.weight") != -1
+            or key.find("mlp.dense_h_to_4h_2.bias") != -1
+        ):
+            vals = []
+            for k in range(factor):
+                val = safe_transpose(models_list[k][key])
+                val = val.float().to(major_device)
+                vals.append(val)
+            saved_keys = megatron2hf_name(saved_key, name_mapping)
             saved_path = saved_dir / f"{prefix}.{saved_keys[0]}.{tensor_para_rank:d}.bin"
-            val = torch2np(saved_vals, np_weight_data_type)
+            val = torch.cat(vals, dim=-1)
+            val = torch2np(val, np_weight_data_type)
             LOGGER.debug(
                 "merge for pp_rank=%d tp_rank=%d factor=%d src_key=%s filename=%s shape=%s dtype=%s",
                 pipeline_para_rank,
@@ -333,10 +286,42 @@ def merge_and_convert_process(
                 val.dtype,
             )
             val.tofile(saved_path)
-        else:
-            for index in range(len(saved_keys)):
-                saved_path = saved_dir / f"{prefix}.{saved_keys[index]}.{tensor_para_rank:d}.bin"
-                val = torch2np(saved_vals[:, index, ...], np_weight_data_type)
+
+        elif (
+            key.find("self_attention.query_key_value.bias") != -1
+            or key.find("inter_attention.query.bias") != -1
+            or key.find("inter_attention.key_value.bias") != -1
+        ):
+            num_splits = 3
+            if key.find("inter_attention.key_value.bias") != -1:
+                num_splits = 2
+            if key.find("inter_attention.query.bias") != -1:
+                num_splits = 1
+
+            vals = []
+            for k in range(factor):
+                val = safe_transpose(models_list[k][key])
+                val = val.float()
+                local_dim = int(val.shape[-1] / num_splits)
+                if model_config != None:
+                    head_num = model_config["num_attention_heads"] // nemo_model_config["tensor_model_parallel_size"]
+                    # t5 kv_channels may not be equal to hidden_size // head_num
+                    size_per_head = model_config["kv_channels"]
+                else:
+                    head_num = nemo_model_config["num_attention_heads"] // nemo_model_config["tensor_model_parallel_size"]
+                    # t5 kv_channels may not be equal to hidden_size // head_num
+                    size_per_head = nemo_model_config["kv_channels"]
+                if model_config == None or model_config["megatron_legacy"] == False:
+                    val = val.reshape(head_num, num_splits, size_per_head)
+                    val = val.permute(1, 0, 2)
+                val = val.reshape(num_splits, local_dim)
+                vals.append(val.to(major_device))
+
+            saved_vals = torch.cat(vals, dim=-1)
+            saved_keys = megatron2hf_name(saved_key, name_mapping)
+            if len(saved_keys) == 1:
+                saved_path = saved_dir / f"{prefix}.{saved_keys[0]}.{tensor_para_rank:d}.bin"
+                val = torch2np(saved_vals, np_weight_data_type)
                 LOGGER.debug(
                     "merge for pp_rank=%d tp_rank=%d factor=%d src_key=%s filename=%s shape=%s dtype=%s",
                     pipeline_para_rank,
@@ -348,9 +333,92 @@ def merge_and_convert_process(
                     val.dtype,
                 )
                 val.tofile(saved_path)
-    else:
-        LOGGER.error(f"cannot find key '{key}'")
+            else:
+                for index in range(len(saved_keys)):
+                    saved_path = saved_dir / f"{prefix}.{saved_keys[index]}.{tensor_para_rank:d}.bin"
+                    val = torch2np(saved_vals[index, ...], np_weight_data_type)
+                    LOGGER.debug(
+                        "merge for pp_rank=%d tp_rank=%d factor=%d src_key=%s filename=%s shape=%s dtype=%s",
+                        pipeline_para_rank,
+                        tensor_para_rank,
+                        factor,
+                        key,
+                        saved_path.name,
+                        val.shape,
+                        val.dtype,
+                    )
+                    val.tofile(saved_path)
 
+        elif (
+            key.find("self_attention.query_key_value.weight") != -1
+            or key.find("inter_attention.query.weight") != -1
+            or key.find("inter_attention.key_value.weight") != -1
+        ):
+            num_splits = 3
+            if key.find("inter_attention.key_value.weight") != -1:
+                num_splits = 2
+            if key.find("inter_attention.query.weight") != -1:
+                num_splits = 1
+
+            vals = []
+            for k in range(factor):
+                val = safe_transpose(models_list[k][key])
+                val = val.float()
+                hidden_dim = val.shape[0]
+                local_dim = int(val.shape[-1] / num_splits)
+                if model_config != None:
+                    head_num = model_config["num_attention_heads"]
+                    # t5 kv_channels may not be equal to hidden_size // head_num
+                    size_per_head = model_config["kv_channels"]
+                    head_num = head_num // nemo_model_config["tensor_model_parallel_size"]
+                else:
+                    head_num = nemo_model_config["num_attention_heads"]
+                    # t5 kv_channels may not be equal to hidden_size // head_num
+                    size_per_head = nemo_model_config["kv_channels"]
+                    head_num = head_num // nemo_model_config["tensor_model_parallel_size"]
+                if model_config == None or model_config["megatron_legacy"] == False:
+                    # shape of self_attention.query_key_value.weight is [hidden_dim, head_num * 3 * size_per_head]
+                    # convert to [hidden_dim, 3, head_num, size_per_head]
+                    val = val.reshape(hidden_dim, head_num, num_splits, size_per_head)
+                    val = val.permute(0, 2, 1, 3)
+                val = val.reshape(hidden_dim, num_splits, local_dim)
+                vals.append(val.to(major_device))
+
+            saved_vals = torch.cat(vals, dim=-1)
+            saved_keys = megatron2hf_name(saved_key, name_mapping)
+            if len(saved_keys) == 1:
+                saved_path = saved_dir / f"{prefix}.{saved_keys[0]}.{tensor_para_rank:d}.bin"
+                val = torch2np(saved_vals, np_weight_data_type)
+                LOGGER.debug(
+                    "merge for pp_rank=%d tp_rank=%d factor=%d src_key=%s filename=%s shape=%s dtype=%s",
+                    pipeline_para_rank,
+                    tensor_para_rank,
+                    factor,
+                    key,
+                    saved_path.name,
+                    val.shape,
+                    val.dtype,
+                )
+                val.tofile(saved_path)
+            else:
+                for index in range(len(saved_keys)):
+                    saved_path = saved_dir / f"{prefix}.{saved_keys[index]}.{tensor_para_rank:d}.bin"
+                    val = torch2np(saved_vals[:, index, ...], np_weight_data_type)
+                    LOGGER.debug(
+                        "merge for pp_rank=%d tp_rank=%d factor=%d src_key=%s filename=%s shape=%s dtype=%s",
+                        pipeline_para_rank,
+                        tensor_para_rank,
+                        factor,
+                        key,
+                        saved_path.name,
+                        val.shape,
+                        val.dtype,
+                    )
+                    val.tofile(saved_path)
+        else:
+            LOGGER.error(f"cannot find key '{key}'")
+    except Exception as e:
+        LOGGER.error(f"fail to convert {key} with error {e}.")
 
 def split_and_convert_process(
     model_type,
@@ -363,131 +431,76 @@ def split_and_convert_process(
     models_list,
     np_weight_data_type,
 ):
-    assert model_type == "encoder" or model_type == "decoder"
-    prefix = model_type
-    num_layers = nemo_model_config["num_layers"]
-    pipeline_para_size = nemo_model_config["pipeline_model_parallel_size"]
-    pipeline_model_parallel_split_rank = nemo_model_config.get("pipeline_model_parallel_split_rank", 0)
+    try:
+        assert model_type == "encoder" or model_type == "decoder"
+        model_config = None if nemo_model_config.get(model_type, None) == None else nemo_model_config[model_type]
+        prefix = model_type
+        if model_config != None:
+            num_layers = model_config["num_layers"]
+        else:
+            num_layers = nemo_model_config["num_layers"]
+        pipeline_para_size = nemo_model_config["pipeline_model_parallel_size"]
+        pipeline_model_parallel_split_rank = nemo_model_config.get("pipeline_model_parallel_split_rank", 0)
 
-    name_mapping = megatron_HF_name_mapping[model_type]
-    val = safe_transpose(models_list[0][key])
-    val = torch2np(val, np_weight_data_type)
+        name_mapping = megatron_HF_name_mapping[model_type]
+        val = safe_transpose(models_list[0][key])
+        val = torch2np(val, np_weight_data_type)
 
-    if key.find("layers.") != -1:
-        layer_index = int(key[7 : key.find(".", 7)])
-        encoder_num_pipeline_stages = pipeline_model_parallel_split_rank
-        decoder_num_pipeline_stages = pipeline_para_size - pipeline_model_parallel_split_rank
-        offset = 0
-        if model_type == "encoder" and pipeline_para_size > 1:
-            offset = pipeline_para_rank * (num_layers // encoder_num_pipeline_stages)
-        elif model_type == "decoder" and pipeline_para_size > 1:
-            offset = (pipeline_para_rank - pipeline_model_parallel_split_rank) * (
-                num_layers // decoder_num_pipeline_stages
-            )
-        saved_key = key.replace(f"layers.{layer_index}.", f"layers.{layer_index + offset}.")
-    else:
-        saved_key = key
+        if key.find("layers.") != -1:
+            layer_index = int(key[7 : key.find(".", 7)])
+            encoder_num_pipeline_stages = pipeline_model_parallel_split_rank
+            decoder_num_pipeline_stages = pipeline_para_size - pipeline_model_parallel_split_rank
+            offset = 0
+            if model_type == "encoder" and pipeline_para_size > 1:
+                offset = pipeline_para_rank * (num_layers // encoder_num_pipeline_stages)
+            elif model_type == "decoder" and pipeline_para_size > 1:
+                offset = (pipeline_para_rank - pipeline_model_parallel_split_rank) * (
+                    num_layers // decoder_num_pipeline_stages
+                )
+            saved_key = key.replace(f"layers.{layer_index}.", f"layers.{layer_index + offset}.")
+        else:
+            saved_key = key
 
-    if (
-        key.find("input_layernorm.weight") != -1
-        or key.find("input_layernorm.bias") != -1
-        or key.find("self_attention.dense.bias") != -1
-        or key.find("inter_attention.dense.bias") != -1
-        or key.find("post_attention_layernorm.weight") != -1
-        or key.find("post_inter_attention_layernorm.weight") != -1
-        or key.find("post_attention_layernorm.bias") != -1
-        or key.find("post_inter_attention_layernorm.bias") != -1
-        or key.find("mlp.dense_4h_to_h.bias") != -1
-        or key.find("final_layernorm.weight") != -1
-        or key.find("final_layernorm.bias") != -1
-    ):
-        # shared weights, only need to convert the weights of rank 0
-        if tensor_para_rank == 0:
+        if (
+            key.find("input_layernorm.weight") != -1
+            or key.find("input_layernorm.bias") != -1
+            or key.find("self_attention.dense.bias") != -1
+            or key.find("inter_attention.dense.bias") != -1
+            or key.find("post_attention_layernorm.weight") != -1
+            or key.find("post_inter_attention_layernorm.weight") != -1
+            or key.find("post_attention_layernorm.bias") != -1
+            or key.find("post_inter_attention_layernorm.bias") != -1
+            or key.find("mlp.dense_4h_to_h.bias") != -1
+            or key.find("final_layernorm.weight") != -1
+            or key.find("final_layernorm.bias") != -1
+        ):
+            # shared weights, only need to convert the weights of rank 0
+            if tensor_para_rank == 0:
+                saved_keys = megatron2hf_name(saved_key, name_mapping)
+                saved_path = saved_dir / f"{prefix}.{saved_keys[0]}.bin"
+                LOGGER.debug(
+                    "split for pp_rank=%d tp_rank=%d only for tp_rank=0 src_key=%s filename=%s "
+                    "shape=%s (same as original) dtype=%s",
+                    pipeline_para_rank,
+                    tensor_para_rank,
+                    key,
+                    saved_path.name,
+                    val.shape,
+                    val.dtype,
+                )
+                val.tofile(saved_path)
+
+        elif (
+            key.find("self_attention.dense.weight") != -1
+            or key.find("inter_attention.dense.weight") != -1
+            or key.find("mlp.dense_4h_to_h.weight") != -1
+        ):
+            split_vals = np.split(val, factor, axis=0)
             saved_keys = megatron2hf_name(saved_key, name_mapping)
-            saved_path = saved_dir / f"{prefix}.{saved_keys[0]}.bin"
-            LOGGER.debug(
-                "split for pp_rank=%d tp_rank=%d only for tp_rank=0 src_key=%s filename=%s "
-                "shape=%s (same as original) dtype=%s",
-                pipeline_para_rank,
-                tensor_para_rank,
-                key,
-                saved_path.name,
-                val.shape,
-                val.dtype,
-            )
-            val.tofile(saved_path)
-
-    elif (
-        key.find("self_attention.dense.weight") != -1
-        or key.find("inter_attention.dense.weight") != -1
-        or key.find("mlp.dense_4h_to_h.weight") != -1
-    ):
-        split_vals = np.split(val, factor, axis=0)
-        saved_keys = megatron2hf_name(saved_key, name_mapping)
-        for j in range(factor):
-            saved_path = saved_dir / f"{prefix}.{saved_keys[0]}.{tensor_para_rank * factor + j:d}.bin"
-            LOGGER.debug(
-                "split for pp_rank=%d tp_rank=%d factor=%d src_key=%s filename=%s original_shape=%s shape=%s dtype=%s",
-                pipeline_para_rank,
-                tensor_para_rank,
-                factor,
-                key,
-                saved_path.name,
-                val.shape,
-                split_vals[j].shape,
-                split_vals[j].dtype,
-            )
-            split_vals[j].tofile(saved_path)
-
-    elif (
-        key.find("mlp.dense_h_to_4h.weight") != -1
-        or key.find("mlp.dense_h_to_4h.bias") != -1
-        or key.find("mlp.dense_h_to_4h_2.weight") != -1
-        or key.find("mlp.dense_h_to_4h_2.bias") != -1
-    ):
-        split_vals = np.split(val, factor, axis=-1)
-        saved_keys = megatron2hf_name(saved_key, name_mapping)
-        for j in range(factor):
-            saved_path = saved_dir / f"{prefix}.{saved_keys[0]}.{tensor_para_rank * factor + j:d}.bin"
-            LOGGER.debug(
-                "split for pp_rank=%d tp_rank=%d factor=%d src_key=%s filename=%s original_shape=%s shape=%s dtype=%s",
-                pipeline_para_rank,
-                tensor_para_rank,
-                factor,
-                key,
-                saved_path.name,
-                val.shape,
-                split_vals[j].shape,
-                split_vals[j].dtype,
-            )
-            split_vals[j].tofile(saved_path)
-
-    elif (
-        key.find("self_attention.query_key_value.bias") != -1
-        or key.find("inter_attention.query.bias") != -1
-        or key.find("inter_attention.key_value.bias") != -1
-    ):
-        num_splits = 3
-        if key.find("inter_attention.key_value.bias") != -1:
-            num_splits = 2
-        if key.find("inter_attention.query.bias") != -1:
-            num_splits = 1
-        local_dim = int(val.shape[-1] / num_splits)
-        head_num = nemo_model_config["num_attention_heads"] // nemo_model_config["tensor_model_parallel_size"]
-        # t5 kv_channels may not be equal to hidden_size // head_num
-        size_per_head = nemo_model_config["kv_channels"]
-        val = val.reshape(head_num, num_splits, size_per_head)
-        val = val.transpose(1, 0, 2)
-
-        val = val.reshape(num_splits, local_dim)
-        split_vals = np.split(val, factor, axis=-1)
-        saved_keys = megatron2hf_name(saved_key, name_mapping)
-        for j in range(factor):
-            if len(saved_keys) == 1:
+            for j in range(factor):
                 saved_path = saved_dir / f"{prefix}.{saved_keys[0]}.{tensor_para_rank * factor + j:d}.bin"
                 LOGGER.debug(
-                    "split for pp_rank=%d tp_rank=%d factor=%d src_key=%s filename=%s "
-                    "preprocessed_shape=%s shape=%s dtype=%s",
+                    "split for pp_rank=%d tp_rank=%d factor=%d src_key=%s filename=%s original_shape=%s shape=%s dtype=%s",
                     pipeline_para_rank,
                     tensor_para_rank,
                     factor,
@@ -498,54 +511,19 @@ def split_and_convert_process(
                     split_vals[j].dtype,
                 )
                 split_vals[j].tofile(saved_path)
-                continue
-            for index in range(len(saved_keys)):
-                saved_path = saved_dir / f"{prefix}.{saved_keys[index]}.{tensor_para_rank * factor + j:d}.bin"
-                split_val_idxed = split_vals[j][index, ...]
-                LOGGER.debug(
-                    "split for pp_rank=%d tp_rank=%d factor=%d src_key=%s filename=%s "
-                    "preprocessed_shape=%s shape=%s dtype=%s",
-                    pipeline_para_rank,
-                    tensor_para_rank,
-                    factor,
-                    key,
-                    saved_path.name,
-                    val.shape,
-                    split_val_idxed.shape,
-                    split_val_idxed.dtype,
-                )
-                split_val_idxed.tofile(saved_path)
 
-    elif (
-        key.find("self_attention.query_key_value.weight") != -1
-        or key.find("inter_attention.query.weight") != -1
-        or key.find("inter_attention.key_value.weight") != -1
-    ):
-        num_splits = 3
-        if key.find("inter_attention.key_value.weight") != -1:
-            num_splits = 2
-        if key.find("inter_attention.query.weight") != -1:
-            num_splits = 1
-        hidden_dim = val.shape[0]
-        local_dim = int(val.shape[-1] / num_splits)
-
-        head_num = nemo_model_config["num_attention_heads"]
-        # t5 kv_channels may not be equal to hidden_size // head_num
-        size_per_head = nemo_model_config["kv_channels"]
-        head_num = head_num // nemo_model_config["tensor_model_parallel_size"]
-        val = val.reshape(hidden_dim, head_num, num_splits, size_per_head)
-        val = val.transpose(0, 2, 1, 3)
-
-        val = val.reshape(hidden_dim, num_splits, local_dim)
-        split_vals = np.split(val, factor, axis=-1)
-
-        saved_keys = megatron2hf_name(saved_key, name_mapping)
-        for j in range(factor):
-            if len(saved_keys) == 1:
+        elif (
+            key.find("mlp.dense_h_to_4h.weight") != -1
+            or key.find("mlp.dense_h_to_4h.bias") != -1
+            or key.find("mlp.dense_h_to_4h_2.weight") != -1
+            or key.find("mlp.dense_h_to_4h_2.bias") != -1
+        ):
+            split_vals = np.split(val, factor, axis=-1)
+            saved_keys = megatron2hf_name(saved_key, name_mapping)
+            for j in range(factor):
                 saved_path = saved_dir / f"{prefix}.{saved_keys[0]}.{tensor_para_rank * factor + j:d}.bin"
                 LOGGER.debug(
-                    "split for pp_rank=%d tp_rank=%d factor=%d src_key=%s filename=%s "
-                    "preprocessed_shape=%s shape=%s dtype=%s",
+                    "split for pp_rank=%d tp_rank=%d factor=%d src_key=%s filename=%s original_shape=%s shape=%s dtype=%s",
                     pipeline_para_rank,
                     tensor_para_rank,
                     factor,
@@ -556,32 +534,161 @@ def split_and_convert_process(
                     split_vals[j].dtype,
                 )
                 split_vals[j].tofile(saved_path)
-                continue
-            for index in range(len(saved_keys)):
-                saved_path = saved_dir / f"{prefix}.{saved_keys[index]}.{tensor_para_rank * factor + j:d}.bin"
-                split_val_idxed = split_vals[j][:, index, ...]
-                LOGGER.debug(
-                    "split for pp_rank=%d tp_rank=%d factor=%d src_key=%s filename=%s "
-                    "preprocessed_shape=%s shape=%s dtype=%s",
-                    pipeline_para_rank,
-                    tensor_para_rank,
-                    factor,
-                    key,
-                    saved_path.name,
-                    val.shape,
-                    split_val_idxed.shape,
-                    split_val_idxed.dtype,
-                )
-                split_val_idxed.tofile(saved_path)
-    else:
-        LOGGER.error(f"cannot find key '{key}'")
 
+        elif (
+            key.find("self_attention.query_key_value.bias") != -1
+            or key.find("inter_attention.query.bias") != -1
+            or key.find("inter_attention.key_value.bias") != -1
+        ):
+            num_splits = 3
+            if key.find("inter_attention.key_value.bias") != -1:
+                num_splits = 2
+            if key.find("inter_attention.query.bias") != -1:
+                num_splits = 1
+            local_dim = int(val.shape[-1] / num_splits)
+            if model_config != None:
+                head_num = model_config["num_attention_heads"] // nemo_model_config["tensor_model_parallel_size"]
+                # t5 kv_channels may not be equal to hidden_size // head_num
+                size_per_head = model_config["kv_channels"]
+            else:
+                head_num = nemo_model_config["num_attention_heads"] // nemo_model_config["tensor_model_parallel_size"]
+                # t5 kv_channels may not be equal to hidden_size // head_num
+                size_per_head = nemo_model_config["kv_channels"]
+            if model_config == None or model_config.get("megatron_legacy", False) == False:
+                val = val.reshape(head_num, num_splits, size_per_head)
+                val = val.transpose(1, 0, 2)
+
+            val = val.reshape(num_splits, local_dim)
+            split_vals = np.split(val, factor, axis=-1)
+            saved_keys = megatron2hf_name(saved_key, name_mapping)
+            for j in range(factor):
+                if len(saved_keys) == 1:
+                    saved_path = saved_dir / f"{prefix}.{saved_keys[0]}.{tensor_para_rank * factor + j:d}.bin"
+                    LOGGER.debug(
+                        "split for pp_rank=%d tp_rank=%d factor=%d src_key=%s filename=%s "
+                        "preprocessed_shape=%s shape=%s dtype=%s",
+                        pipeline_para_rank,
+                        tensor_para_rank,
+                        factor,
+                        key,
+                        saved_path.name,
+                        val.shape,
+                        split_vals[j].shape,
+                        split_vals[j].dtype,
+                    )
+                    split_vals[j].tofile(saved_path)
+                    continue
+                for index in range(len(saved_keys)):
+                    saved_path = saved_dir / f"{prefix}.{saved_keys[index]}.{tensor_para_rank * factor + j:d}.bin"
+                    split_val_idxed = split_vals[j][index, ...]
+                    LOGGER.debug(
+                        "split for pp_rank=%d tp_rank=%d factor=%d src_key=%s filename=%s "
+                        "preprocessed_shape=%s shape=%s dtype=%s",
+                        pipeline_para_rank,
+                        tensor_para_rank,
+                        factor,
+                        key,
+                        saved_path.name,
+                        val.shape,
+                        split_val_idxed.shape,
+                        split_val_idxed.dtype,
+                    )
+                    split_val_idxed.tofile(saved_path)
+
+        elif (
+            key.find("self_attention.query_key_value.weight") != -1
+            or key.find("inter_attention.query.weight") != -1
+            or key.find("inter_attention.key_value.weight") != -1
+        ):
+            num_splits = 3
+            if key.find("inter_attention.key_value.weight") != -1:
+                num_splits = 2
+            if key.find("inter_attention.query.weight") != -1:
+                num_splits = 1
+            hidden_dim = val.shape[0]
+            local_dim = int(val.shape[-1] / num_splits)
+
+            if model_config != None:
+                head_num = model_config["num_attention_heads"]
+                # t5 kv_channels may not be equal to hidden_size // head_num
+                size_per_head = model_config["kv_channels"]
+                head_num = head_num // nemo_model_config["tensor_model_parallel_size"]
+            else:
+                head_num = nemo_model_config["num_attention_heads"]
+                # t5 kv_channels may not be equal to hidden_size // head_num
+                size_per_head = nemo_model_config["kv_channels"]
+                head_num = head_num // nemo_model_config["tensor_model_parallel_size"]
+            if model_config == None or model_config.get("megatron_legacy", False) == False:
+                # shape of self_attention.query_key_value.weight is [hidden_dim, head_num * 3 * size_per_head]
+                # convert to [hidden_dim, 3, head_num, size_per_head]
+                val = val.reshape(hidden_dim, head_num, num_splits, size_per_head)
+                val = val.transpose(0, 2, 1, 3)
+
+            val = val.reshape(hidden_dim, num_splits, local_dim)
+            split_vals = np.split(val, factor, axis=-1)
+
+            saved_keys = megatron2hf_name(saved_key, name_mapping)
+            for j in range(factor):
+                if len(saved_keys) == 1:
+                    saved_path = saved_dir / f"{prefix}.{saved_keys[0]}.{tensor_para_rank * factor + j:d}.bin"
+                    LOGGER.debug(
+                        "split for pp_rank=%d tp_rank=%d factor=%d src_key=%s filename=%s "
+                        "preprocessed_shape=%s shape=%s dtype=%s",
+                        pipeline_para_rank,
+                        tensor_para_rank,
+                        factor,
+                        key,
+                        saved_path.name,
+                        val.shape,
+                        split_vals[j].shape,
+                        split_vals[j].dtype,
+                    )
+                    split_vals[j].tofile(saved_path)
+                    continue
+                for index in range(len(saved_keys)):
+                    saved_path = saved_dir / f"{prefix}.{saved_keys[index]}.{tensor_para_rank * factor + j:d}.bin"
+                    split_val_idxed = split_vals[j][:, index, ...]
+                    LOGGER.debug(
+                        "split for pp_rank=%d tp_rank=%d factor=%d src_key=%s filename=%s "
+                        "preprocessed_shape=%s shape=%s dtype=%s",
+                        pipeline_para_rank,
+                        tensor_para_rank,
+                        factor,
+                        key,
+                        saved_path.name,
+                        val.shape,
+                        split_val_idxed.shape,
+                        split_val_idxed.dtype,
+                    )
+                    split_val_idxed.tofile(saved_path)
+        else:
+            LOGGER.error(f"cannot find key '{key}'")
+    except Exception as e:
+        LOGGER.error(f"fail to convert {key} with error {e}.")
 
 def convert_checkpoint(unpacked_checkpoints_dir: UnpackedNemoCheckpointDir, args: argparse.Namespace):
     nemo_model_config = unpacked_checkpoints_dir.model_config
 
-    if nemo_model_config.get("kv_channels", None) is None:
-        nemo_model_config["kv_channels"] = nemo_model_config["hidden_size"] // nemo_model_config["num_attention_heads"]
+    encoder_config = None
+    decoder_config = None
+    
+    # separate config for encoder and decoder because the ckpt is converted from HF
+    if nemo_model_config.get("encoder", None) != None:
+        encoder_config = nemo_model_config["encoder"]
+    if nemo_model_config.get("decoder", None) != None:
+        decoder_config = nemo_model_config["decoder"]
+
+    assert (encoder_config == None and decoder_config == None) or (encoder_config != None and decoder_config != None)
+    
+    if encoder_config != None:
+        if encoder_config.get("kv_channels", None) is None:
+            encoder_config["kv_channels"] = encoder_config["hidden_size"] // encoder_config["num_attention_heads"]
+        if decoder_config.get("kv_channels", None) is None:
+            decoder_config["kv_channels"] = decoder_config["hidden_size"] // decoder_config["num_attention_heads"]
+    else:
+        # shared config for encoder and decoder
+        if nemo_model_config.get("kv_channels", None) is None:
+            nemo_model_config["kv_channels"] = nemo_model_config["hidden_size"] // nemo_model_config["num_attention_heads"]
 
     inference_tensor_para_size = args.infer_gpu_num
 
@@ -595,9 +702,12 @@ def convert_checkpoint(unpacked_checkpoints_dir: UnpackedNemoCheckpointDir, args
 
     saved_dir.mkdir(parents=True)
 
+    training_tensor_para_size = nemo_model_config.get("tensor_model_parallel_size", 1)
+    training_pipeline_para_size = nemo_model_config.get("pipeline_model_parallel_size", 1)
+
     checkpoints_paths = unpacked_checkpoints_dir.get_checkpoints_paths(
-        nemo_model_config.get("tensor_model_parallel_size", 1),
-        nemo_model_config.get("pipeline_model_parallel_size", 1),
+        training_tensor_para_size,
+        training_pipeline_para_size,
     )
 
     LOGGER.debug("Expecting checkpoints paths in:")
@@ -639,6 +749,7 @@ def convert_checkpoint(unpacked_checkpoints_dir: UnpackedNemoCheckpointDir, args
         def _split(src_key, dst_filename_fn):
             if src_key in model_from_selected_pipeline.keys():
                 _val = model_from_selected_pipeline[src_key]
+                _val = safe_transpose(_val)
                 _val = torch2np(_val, np_weight_data_type)
                 _val = np.split(_val, inference_tensor_para_size, axis=0)
                 for tensor_idx in range(inference_tensor_para_size):
@@ -648,38 +759,40 @@ def convert_checkpoint(unpacked_checkpoints_dir: UnpackedNemoCheckpointDir, args
                         pipeline_rank,
                         src_key,
                         saved_path.name,
-                        val.shape,
-                        val.dtype,
+                        _val[tensor_idx].shape,
+                        _val[tensor_idx].dtype,
                     )
                     _val[tensor_idx].tofile(saved_path)
                 del _val
 
         # split rpe into tensor parallel ranks
         _split(
-            "enc_dec_model.encoder_embedding.encoder_relative_position_embedding.weight",
+            "enc_dec_model.encoder_relative_position_embedding.relative_position_embedding.weight",
             lambda idx: f"encoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight.{idx}.bin",
         )
         _split(
-            "enc_dec_model.decoder_embedding.decoder_relative_position_embedding.weight",
+            "enc_dec_model.decoder_relative_position_embedding.relative_position_embedding.weight",
             lambda idx: f"decoder.block.0.layer.0.SelfAttention.relative_attention_bias.weight.{idx}.bin",
         )
 
         del model_from_selected_pipeline
 
-    nemo_position_embedding_type = nemo_model_config.get("position_embedding_type", "absolute")
-    nenemo_position_embedding_type = (
+    if encoder_config != None:
+        nemo_position_embedding_type = encoder_config.get("position_embedding_type", "absolute")
+        assert encoder_config.get("position_embedding_type", "absolute") == decoder_config.get("position_embedding_type", "absolute")
+    else:
+        nemo_position_embedding_type = nemo_model_config.get("position_embedding_type", "absolute")
+    nemo_position_embedding_type = (
         "absolute" if nemo_position_embedding_type == "learned_absolute" else nemo_position_embedding_type
     )
     model_new_config = {
         "structure": {
-            "t5_with_bias": str(True),
-            "position_embedding_type": nenemo_position_embedding_type,
+            "t5_with_bias": str(nemo_model_config.get("tokens_head_bias", True)),
+            "position_embedding_type": nemo_position_embedding_type,
             "use_gated_activation": str(has_gated_activations),
         }
     }
 
-    training_tensor_para_size = nemo_model_config.get("tensor_model_parallel_size", 1)
-    training_pipeline_para_size = nemo_model_config.get("pipeline_model_parallel_size", 1)
 
     if training_tensor_para_size > inference_tensor_para_size:
         assert training_tensor_para_size % inference_tensor_para_size == 0
@@ -690,13 +803,20 @@ def convert_checkpoint(unpacked_checkpoints_dir: UnpackedNemoCheckpointDir, args
         is_merge_ckpt = False
         factor = int(inference_tensor_para_size / training_tensor_para_size)
 
-    assert nemo_model_config["ffn_hidden_size"] % inference_tensor_para_size == 0
-    assert nemo_model_config["num_attention_heads"] % inference_tensor_para_size == 0
+    if encoder_config != None:
+        assert encoder_config["ffn_hidden_size"] % inference_tensor_para_size == 0
+        assert encoder_config["num_attention_heads"] % inference_tensor_para_size == 0
+        assert encoder_config["ffn_hidden_size"] == decoder_config["ffn_hidden_size"]
+        assert encoder_config["num_attention_heads"] == decoder_config["num_attention_heads"]
+    else:
+        assert nemo_model_config["ffn_hidden_size"] % inference_tensor_para_size == 0
+        assert nemo_model_config["num_attention_heads"] % inference_tensor_para_size == 0
 
     main_loop = min(training_tensor_para_size, inference_tensor_para_size)
 
     w_e_list = []
-    lm_head_list = []
+    lm_head_bias_list = []
+    lm_head_weight_list = []
 
     torch.multiprocessing.set_start_method("spawn")
     torch.multiprocessing.set_sharing_strategy("file_system")
@@ -718,11 +838,25 @@ def convert_checkpoint(unpacked_checkpoints_dir: UnpackedNemoCheckpointDir, args
                             w_e_val = model.get("state_dict", model)[word_embedding_key]
                             w_e_val = torch2np(w_e_val, np_weight_data_type)
                             w_e_list.append(w_e_val)
-                        if pp_idx == training_pipeline_para_size - 1:
-                            lm_head_val = model.get("state_dict", model)[lm_head_bias_key]
-                            lm_head_val = torch2np(lm_head_val, np_weight_data_type)
-                            lm_head_list.append(lm_head_val)
-
+                        if pp_idx == training_pipeline_para_size - 1 and nemo_model_config.get("tokens_head_bias", True):
+                            lm_head_bias_val = model.get("state_dict", model)[lm_head_bias_key]
+                            lm_head_bias_val = torch2np(lm_head_bias_val, np_weight_data_type)
+                            lm_head_bias_list.append(lm_head_bias_val)
+                        
+                        lm_head_weight_key = "enc_dec_model.tokens_head.weight" if \
+                                        "enc_dec_model.tokens_head.weight" in model.get("state_dict", model) \
+                                        else word_embedding_key
+                        if lm_head_weight_key == word_embedding_key:
+                            if pp_idx == 0:
+                                lm_head_weight_val = model.get("state_dict", model)[lm_head_weight_key]
+                                lm_head_weight_val = torch2np(lm_head_weight_val, np_weight_data_type)
+                                lm_head_weight_list.append(lm_head_weight_val)
+                        elif lm_head_weight_key == "enc_dec_model.tokens_head.weight":
+                            if pp_idx == training_pipeline_para_size - 1:
+                                lm_head_weight_val = model.get("state_dict", model)[lm_head_weight_key]
+                                lm_head_weight_val = torch2np(lm_head_weight_val, np_weight_data_type)
+                                lm_head_weight_list.append(lm_head_weight_val)
+                            
                         encoder_models.append(
                             extract_layers_with_prefix(model, "enc_dec_model.enc_dec_model.encoder.model.")
                         )
@@ -746,11 +880,26 @@ def convert_checkpoint(unpacked_checkpoints_dir: UnpackedNemoCheckpointDir, args
                         w_e_val = model.get("state_dict", model)[word_embedding_key]
                         w_e_val = torch2np(w_e_val, np_weight_data_type)
                         w_e_list.append(w_e_val)
-                    if pp_idx == training_pipeline_para_size - 1:
-                        lm_head_val = model.get("state_dict", model)[lm_head_bias_key]
-                        lm_head_val = torch2np(lm_head_val, np_weight_data_type)
-                        lm_head_list.append(lm_head_val)
 
+                    if pp_idx == training_pipeline_para_size - 1 and nemo_model_config.get("tokens_head_bias", True):
+                        lm_head_bias_val = model.get("state_dict", model)[lm_head_bias_key]
+                        lm_head_bias_val = torch2np(lm_head_bias_val, np_weight_data_type)
+                        lm_head_bias_list.append(lm_head_bias_val)
+
+                    lm_head_weight_key = "enc_dec_model.tokens_head.weight" if \
+                                    "enc_dec_model.tokens_head.weight" in model.get("state_dict", model) \
+                                    else word_embedding_key
+                    if lm_head_weight_key == word_embedding_key:
+                        if pp_idx == 0:
+                            lm_head_weight_val = model.get("state_dict", model)[lm_head_weight_key]
+                            lm_head_weight_val = torch2np(lm_head_weight_val, np_weight_data_type)
+                            lm_head_weight_list.append(lm_head_weight_val)
+                    elif lm_head_weight_key == "enc_dec_model.tokens_head.weight":
+                        if pp_idx == training_pipeline_para_size - 1:
+                            lm_head_weight_val = model.get("state_dict", model)[lm_head_weight_key]
+                            lm_head_weight_val = torch2np(lm_head_weight_val, np_weight_data_type)
+                            lm_head_weight_list.append(lm_head_weight_val)
+                   
                     encoder_models.append(
                         extract_layers_with_prefix(model, "enc_dec_model.enc_dec_model.encoder.model.")
                     )
@@ -801,7 +950,9 @@ def convert_checkpoint(unpacked_checkpoints_dir: UnpackedNemoCheckpointDir, args
     lm_head_weight_saved_path = saved_dir / "lm_head.weight.bin"
     lm_head_saved_path = saved_dir / "shared.bias.bin"
     w_e_val = np.concatenate(w_e_list, axis=0)
-    lm_head_val = np.concatenate(lm_head_list, axis=0)
+    if nemo_model_config.get("tokens_head_bias", True):
+        lm_head_bias_val = np.concatenate(lm_head_bias_list, axis=0)
+    lm_head_weight_val = np.concatenate(lm_head_weight_list, axis=0)
     LOGGER.debug(
         "save for src_key=%s filename=%s shape=%s dtype=%s",
         word_embedding_key,
@@ -809,35 +960,74 @@ def convert_checkpoint(unpacked_checkpoints_dir: UnpackedNemoCheckpointDir, args
         w_e_val.shape,
         w_e_val.dtype,
     )
+    if nemo_model_config.get("tokens_head_bias", True):
+        LOGGER.debug(
+            "save for src_key=%s filename=%s shape=%s dtype=%s",
+            lm_head_bias_key,
+            lm_head_saved_path.name,
+            lm_head_bias_val.shape,
+            lm_head_bias_val.dtype,
+        )
     LOGGER.debug(
         "save for src_key=%s filename=%s shape=%s dtype=%s",
-        lm_head_bias_key,
+        lm_head_weight_key,
         lm_head_saved_path.name,
-        lm_head_val.shape,
-        lm_head_val.dtype,
+        lm_head_weight_val.shape,
+        lm_head_weight_val.dtype,
     )
     w_e_val.tofile(w_e_saved_path)
-    w_e_val.tofile(lm_head_weight_saved_path)
-    lm_head_val.tofile(lm_head_saved_path)
-
+    if nemo_model_config.get("tokens_head_bias", True):
+        lm_head_bias_val.tofile(lm_head_saved_path)
+    lm_head_weight_val.tofile(lm_head_weight_saved_path)
     vocab_size = w_e_val.shape[0]
 
     config = configparser.ConfigParser()
 
-    config["encoder"] = {
-        **{
-            "_name_or_path": args.model_name,
-            "model_type": "T5",
-            "weight_data_type": args.weight_data_type,
-            "tensor_para_size": str(inference_tensor_para_size),
-            "vocab_size": str(vocab_size),
-        },
-        **{
-            encoder_config_mapping[key]: str(val)
-            for key, val in nemo_model_config.items()
-            if key in encoder_config_mapping
-        },
-    }
+    if nemo_position_embedding_type == "absolute":
+        encoder_config_mapping.pop("relative_attention_num_buckets", None)
+        decoder_config_mapping.pop("relative_attention_num_buckets", None)
+    elif nemo_position_embedding_type == "relative":
+        encoder_config_mapping.pop("max_position_embeddings", None)
+        decoder_config_mapping.pop("max_position_embeddings", None)
+    else:
+        LOGGER.error(f"nemo_position_embedding_type should be absolute or relative")
+
+    if encoder_config != None:
+        merge_config = {}
+        for key, val in nemo_model_config.items():
+            if key not in encoder_config:
+                merge_config[key] = val
+        for key, val in encoder_config.items():
+            merge_config[key] = val
+        config["encoder"] = {
+            **{
+                "_name_or_path": args.model_name,
+                "model_type": "T5",
+                "weight_data_type": args.weight_data_type,
+                "tensor_para_size": str(inference_tensor_para_size),
+                "vocab_size": str(vocab_size),
+            },
+            **{
+                encoder_config_mapping[key]: str(val)
+                for key, val in merge_config.items()
+                if key in encoder_config_mapping
+            },
+        }
+    else:
+        config["encoder"] = {
+            **{
+                "_name_or_path": args.model_name,
+                "model_type": "T5",
+                "weight_data_type": args.weight_data_type,
+                "tensor_para_size": str(inference_tensor_para_size),
+                "vocab_size": str(vocab_size),
+            },
+            **{
+                encoder_config_mapping[key]: str(val)
+                for key, val in nemo_model_config.items()
+                if key in encoder_config_mapping
+            },
+        }
 
     tokenizer_config = nemo_model_config["tokenizer"]
     tokenizer_config = _update_tokenizer_config(tokenizer_config, unpacked_checkpoints_dir)
@@ -855,24 +1045,50 @@ def convert_checkpoint(unpacked_checkpoints_dir: UnpackedNemoCheckpointDir, args
     _copy_tokenizer_file_if_defined("vocab_file", tokenizer_config["vocab_file"], saved_dir)
     _copy_tokenizer_file_if_defined("merge_file", tokenizer_config["merge_file"], saved_dir)
 
-    bos_id, eos_id = _get_special_tokens_ids(tokenizer_config)
+    bos_id, eos_id, pad_id = _get_special_tokens_ids(tokenizer_config)
 
-    config["decoder"] = {
-        **{
-            "_name_or_path": args.model_name,
-            "model_type": "T5",
-            "weight_data_type": args.weight_data_type,
-            "tensor_para_size": str(inference_tensor_para_size),
-            "vocab_size": str(vocab_size),
-            "decoder_start_token_id": str(bos_id),
-            "eos_token_id": str(eos_id),
-        },
-        **{
-            decoder_config_mapping[key]: str(val)
-            for key, val in nemo_model_config.items()
-            if key in decoder_config_mapping
-        },
-    }
+    if decoder_config != None:
+        merge_config = {}
+        for key, val in nemo_model_config.items():
+            if key not in decoder_config:
+                merge_config[key] = val
+        for key, val in decoder_config.items():
+            merge_config[key] = val
+        config["decoder"] = {
+            **{
+                "_name_or_path": args.model_name,
+                "model_type": "T5",
+                "weight_data_type": args.weight_data_type,
+                "tensor_para_size": str(inference_tensor_para_size),
+                "vocab_size": str(vocab_size),
+                "decoder_start_token_id": str(bos_id),
+                "eos_token_id": str(eos_id),
+                "pad_id": str(pad_id),
+            },
+            **{
+                decoder_config_mapping[key]: str(val)
+                for key, val in merge_config.items()
+                if key in decoder_config_mapping
+            },
+        }
+    else:
+        config["decoder"] = {
+            **{
+                "_name_or_path": args.model_name,
+                "model_type": "T5",
+                "weight_data_type": args.weight_data_type,
+                "tensor_para_size": str(inference_tensor_para_size),
+                "vocab_size": str(vocab_size),
+                "decoder_start_token_id": str(bos_id),
+                "eos_token_id": str(eos_id),
+                "pad_id": str(pad_id),
+            },
+            **{
+                decoder_config_mapping[key]: str(val)
+                for key, val in nemo_model_config.items()
+                if key in decoder_config_mapping
+            },
+        }
 
     for section, section_dict in model_new_config.items():
         config[section] = {k: str(v) for k, v in section_dict.items()}
@@ -942,10 +1158,11 @@ def _get_special_tokens_ids(tokenizer_config: typing.Dict):
 
     bos_id = tokenizer.bos_id
     eos_id = tokenizer.eos_id
+    pad_id = tokenizer.pad_id
 
     LOGGER.debug("for %s obtained tokenizer tokens ids bos_id=%d eos_id=%d", tokenizer_config, bos_id, eos_id)
 
-    return bos_id, eos_id
+    return bos_id, eos_id, pad_id
 
 
 def main():
@@ -1018,6 +1235,18 @@ def main():
         default=1,
         help="Whether to load model weights to CPU",
     )
+    parser.add_argument(
+        "--prompt-in-file",
+        "-prompt_in_file",
+        "-p_i",
+        help="file name of .nemo prompt checkpoint file",
+    )
+    parser.add_argument(
+        "--prompt-saved-dir",
+        "-prompt_saved_dir",
+        "-p_o",
+        help="folder name of prompt checkpoint output files",
+    )
     parser.add_argument("--verbose", action="store_true", help="Provide verbose messages")
     args = parser.parse_args()
 
@@ -1059,6 +1288,26 @@ def main():
         convert_checkpoint(unpacked_checkpoint_dir, args)
         LOGGER.info("Spent %s (h:m:s) to convert the model", datetime.datetime.now() - start_time)
 
+    map_location_fn = cpu_map_location if bool(args.load_checkpoints_to_cpu) else gpu_map_location
+    if args.prompt_in_file is not None:
+        start_time = datetime.datetime.now()
+        assert args.prompt_saved_dir is not None
+        unpack_nemo_ckpt(args.prompt_in_file, args.prompt_saved_dir)
+        LOGGER.info("Spent %s (h:m:s) to unpack NeMo prompt archive", datetime.datetime.now() - start_time)
+
+        model_config_yaml = "model_config.yaml"
+        model_weights_ckpt = "model_weights.ckpt"
+        prompt_config_file = open(os.path.join(args.prompt_saved_dir, model_config_yaml), "r")
+        prompt_config = yaml.full_load(prompt_config_file)
+        LOGGER.info(prompt_config)
+
+        start_time = datetime.datetime.now()
+        prompt_weights = torch.load(
+            os.path.join(args.prompt_saved_dir, model_weights_ckpt),
+            map_location=map_location_fn,
+        )
+        prompt_convert(args, prompt_config, prompt_weights)
+        LOGGER.info(f"Spent %s (h:m:s) to unpack convert prompt model", datetime.datetime.now() - start_time)
 
 if __name__ == "__main__":
     main()

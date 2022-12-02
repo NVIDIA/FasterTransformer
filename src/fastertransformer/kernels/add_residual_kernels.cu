@@ -15,25 +15,90 @@
  */
 
 #include "src/fastertransformer/kernels/add_residual_kernels.h"
-#include "src/fastertransformer/kernels/bfloat16_fallback_kenrels.cuh"
+#include "src/fastertransformer/utils/cuda_type_utils.cuh"
 
 namespace fastertransformer {
 
-template<typename T, int RESIDUAL_NUM>
-__global__ void
-addBiasResidual(T* output, const T* residual1, const T* residual2, const T* bias, const int m, const int n)
+template<typename T, int RESIDUAL_NUM, typename T2 = T>
+__global__ void addBiasResidual(T*           output,
+                                const T2*    input,
+                                const T*     residual1,
+                                const T*     residual2,
+                                const T*     bias,
+                                const float* scale_inter,
+                                const float* scale_out,
+                                const int    m,
+                                const int    n)
 {
     const int col_index = blockIdx.y * blockDim.x + threadIdx.x;
     if (col_index < n) {
         T bias_val = (bias == nullptr) ? (T)(0.0f) : bias[col_index];
+        T in;
+        if (std::is_same<T, T2>::value) {
+            in = cuda_cast<T>(input[blockIdx.x * n + col_index]);  // cast required for compilation when T != T2
+        }
+        else {
+            in = cuda_cast<float>(input[blockIdx.x * n + col_index]) * (*scale_inter) * (*scale_out);
+        }
+
         if (RESIDUAL_NUM == 1) {
-            output[blockIdx.x * n + col_index] =
-                output[blockIdx.x * n + col_index] + residual1[blockIdx.x * n + col_index] + bias_val;
+            output[blockIdx.x * n + col_index] = in + residual1[blockIdx.x * n + col_index] + bias_val;
         }
         else if (RESIDUAL_NUM == 2) {
-            output[blockIdx.x * n + col_index] = output[blockIdx.x * n + col_index]
-                                                 + residual1[blockIdx.x * n + col_index]
-                                                 + residual2[blockIdx.x * n + col_index] + bias_val;
+            output[blockIdx.x * n + col_index] =
+                in + residual1[blockIdx.x * n + col_index] + residual2[blockIdx.x * n + col_index] + bias_val;
+        }
+    }
+}
+
+template<typename T>
+void invokeAddBiasResidual(T*           output,
+                           const T*     input,
+                           const T*     residual1,
+                           const T*     residual2,
+                           const T*     bias,
+                           const float* scale_inter,
+                           const float* scale_out,
+                           const int    m,
+                           const int    n,
+                           const int    int8_mode,
+                           cudaStream_t stream)
+{
+    int  blocks_per_row = ceil(float(n) / 1024);
+    dim3 grid(m, blocks_per_row);
+    dim3 block(min(n, 1024));
+    if (residual2 == nullptr) {
+        if (int8_mode == 2) {
+            addBiasResidual<T, 1><<<grid, block, 0, stream>>>(output,
+                                                              reinterpret_cast<const int32_t*>(input),
+                                                              residual1,
+                                                              residual2,
+                                                              bias,
+                                                              scale_inter,
+                                                              scale_out,
+                                                              m,
+                                                              n);
+        }
+        else {
+            addBiasResidual<T, 1>
+                <<<grid, block, 0, stream>>>(output, input, residual1, residual2, bias, nullptr, nullptr, m, n);
+        }
+    }
+    else {
+        if (int8_mode == 2) {
+            addBiasResidual<T, 2><<<grid, block, 0, stream>>>(output,
+                                                              reinterpret_cast<const int32_t*>(input),
+                                                              residual1,
+                                                              residual2,
+                                                              bias,
+                                                              scale_inter,
+                                                              scale_out,
+                                                              m,
+                                                              n);
+        }
+        else {
+            addBiasResidual<T, 2>
+                <<<grid, block, 0, stream>>>(output, input, residual1, residual2, bias, nullptr, nullptr, m, n);
         }
     }
 }
@@ -42,15 +107,7 @@ template<typename T>
 void invokeAddBiasResidual(
     T* output, const T* residual1, const T* residual2, const T* bias, const int m, const int n, cudaStream_t stream)
 {
-    int  blocks_per_row = ceil(float(n) / 1024);
-    dim3 grid(m, blocks_per_row);
-    dim3 block(min(n, 1024));
-    if (residual2 == nullptr) {
-        addBiasResidual<T, 1><<<grid, block, 0, stream>>>(output, residual1, residual2, bias, m, n);
-    }
-    else {
-        addBiasResidual<T, 2><<<grid, block, 0, stream>>>(output, residual1, residual2, bias, m, n);
-    }
+    invokeAddBiasResidual(output, output, residual1, residual2, bias, nullptr, nullptr, m, n, 0, stream);
 }
 
 template<typename T>
@@ -68,7 +125,7 @@ __global__ void addBiasAttentionFfnResidual(T*        block_output,
         block_output[blockIdx.x * n + col_index] =
             ffn_output[blockIdx.x * n + col_index] + attn_output[blockIdx.x * n + col_index] + bias[col_index]
             + ((block_input != nullptr) ?
-                   float2type<T>((float)block_input[blockIdx.x * n + col_index] / (float)block_input_tp_split) :
+                   cuda_cast<T>((float)block_input[blockIdx.x * n + col_index] / (float)block_input_tp_split) :
                    static_cast<T>(0.0f));
     }
 }
@@ -85,7 +142,7 @@ __global__ void addBiasAttentionFfnResidual(T*        block_output,
     const int col_index = blockIdx.y * blockDim.x + threadIdx.x;
     if (col_index < n) {
         const int global_index     = blockIdx.x * n + col_index;
-        block_output[global_index] = add(float2type<T>((float)block_output[global_index] / (float)block_input_tp_split),
+        block_output[global_index] = add(cuda_cast<T>((float)block_output[global_index] / (float)block_input_tp_split),
                                          ffn_output[global_index],
                                          attn_output[global_index],
                                          bias[col_index]);
@@ -115,6 +172,25 @@ void invokeAddBiasAttentionFfnResidual(T*           block_output,
             block_output, ffn_output, attn_output, block_input, bias, m, n, block_input_tp_split);
     }
 }
+
+#define INSTANTIATE_INVOKE_ADD_BIAS_RESIDUAL(T)                                                                        \
+    template void invokeAddBiasResidual(T*           output,                                                           \
+                                        const T*     input,                                                            \
+                                        const T*     residual1,                                                        \
+                                        const T*     residual2,                                                        \
+                                        const T*     bias,                                                             \
+                                        const float* scale_inter,                                                      \
+                                        const float* scale_out,                                                        \
+                                        const int    m,                                                                \
+                                        const int    n,                                                                \
+                                        const int    int8_mode,                                                        \
+                                        cudaStream_t stream)
+INSTANTIATE_INVOKE_ADD_BIAS_RESIDUAL(float);
+INSTANTIATE_INVOKE_ADD_BIAS_RESIDUAL(half);
+#ifdef ENABLE_BF16
+INSTANTIATE_INVOKE_ADD_BIAS_RESIDUAL(__nv_bfloat16);
+#endif
+#undef INSTANTIATE_INVOKE_ADD_BIAS_RESIDUAL
 
 template void invokeAddBiasResidual(float*       output,
                                     const float* residual1,

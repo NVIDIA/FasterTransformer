@@ -13,3 +13,7 @@
 # limitations under the License.
 
 add_subdirectory(unittests)
+if(BUILD_PYT)
+    add_subdirectory(gemm_dequantize)
+    add_subdirectory(moe)
+endif()

@@ -19,6 +19,7 @@
 #include "src/fastertransformer/kernels/gen_relative_pos_bias.h"
 #include "src/fastertransformer/kernels/layernorm_kernels.h"
 #include "src/fastertransformer/models/t5/T5DecoderLayerWeight.h"
+#include "src/fastertransformer/utils/IA3.h"
 #include "src/fastertransformer/utils/cuda_utils.h"
 #include "src/fastertransformer/utils/memory_utils.h"
 
@@ -42,7 +43,8 @@ struct T5DecodingWeight {
                      const size_t                pipeline_para_rank,
                      const bool                  t5_with_bias_para            = false,
                      const bool                  use_gated_activation_para    = false,
-                     const PositionEmbeddingType position_embedding_type_para = PositionEmbeddingType::relative);
+                     const PositionEmbeddingType position_embedding_type_para = PositionEmbeddingType::relative,
+                     const size_t                num_ia3_tasks                = false);
     ~T5DecodingWeight();
     T5DecodingWeight(const T5DecodingWeight& other);
     T5DecodingWeight& operator=(const T5DecodingWeight& other);
@@ -64,6 +66,11 @@ struct T5DecodingWeight {
                             bool                  use_gated_activation_para,
                             PositionEmbeddingType position_embedding_type_para);
 
+    inline size_t getNumIA3Tasks() const
+    {
+        return ia3_num_tasks_;
+    };
+
 private:
     void setWeightPtr();
     void mallocWeights();
@@ -84,6 +91,7 @@ private:
     size_t tensor_para_rank_;
     size_t pipeline_para_size_;
     size_t pipeline_para_rank_;
+    size_t ia3_num_tasks_;
     bool   is_maintain_buffer = false;
 
     int real_weights_num_;

@@ -72,9 +72,6 @@ public:
         cublas_algo_map_            = new ft::cublasAlgoMap("gemm_config.in", sp_config_fname);
         cublas_wrapper_mutex_       = new std::mutex();
 
-
-        // #define LOAD_MODEL // Used for debug
-
 #ifdef LOAD_MODEL
         bert_weights = ft::BertWeight<T>(_head_num * _head_size,
                                          _inter_size,

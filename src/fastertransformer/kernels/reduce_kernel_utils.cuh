@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,11 +27,45 @@
 #include <curand_kernel.h>
 #include <float.h>
 #include <type_traits>
-#include "src/fastertransformer/kernels/bfloat16_fallback_kenrels.cuh"
+#include "src/fastertransformer/utils/cuda_type_utils.cuh"
 
 namespace cg = cooperative_groups;
 
 namespace fastertransformer {
+
+template <int VPT>
+struct BytesToType;
+
+template <>
+struct BytesToType<2>
+{
+    using type = uint16_t;
+};
+template <>
+struct BytesToType<4>
+{
+    using type = uint32_t;
+};
+template <>
+struct BytesToType<8>
+{
+    using type = uint64_t;
+};
+template <>
+struct BytesToType<16>
+{
+    using type = float4;
+};
+
+template <int Bytes>
+__device__ inline void copy(const void* local, void* data)
+{
+    using T = typename BytesToType<Bytes>::type;
+
+    const T* in = static_cast<const T*>(local);
+    T* out = static_cast<T*>(data);
+    *out = *in;
+}
 
 static const float HALF_FLT_MAX = 65504.F;
 #define FINAL_MASK 0xffffffff
@@ -41,7 +75,7 @@ __inline__ __device__ T warpReduceSum(T val)
 {
 #pragma unroll
     for (int mask = 16; mask > 0; mask >>= 1)
-        val = add(val, __shfl_xor_sync(FINAL_MASK, val, mask, 32));//__shfl_sync bf16 return float when sm < 80
+        val = add(val, __shfl_xor_sync(FINAL_MASK, val, mask, 32));  //__shfl_sync bf16 return float when sm < 80
     return val;
 }
 
@@ -50,8 +84,8 @@ template<typename T>
 __inline__ __device__ T blockReduceSum(T val)
 {
     static __shared__ T shared[32];
-    int lane = threadIdx.x & 0x1f;
-    int wid = threadIdx.x >> 5;
+    int                 lane = threadIdx.x & 0x1f;
+    int                 wid  = threadIdx.x >> 5;
 
     val = warpReduceSum<T>(val);
 
@@ -82,8 +116,8 @@ template<typename T>
 __inline__ __device__ T blockReduceMax(T val)
 {
     static __shared__ T shared[32];
-    int lane = threadIdx.x & 0x1f;  // in-warp idx
-    int wid = threadIdx.x >> 5;     // warp idx
+    int                 lane = threadIdx.x & 0x1f;  // in-warp idx
+    int                 wid  = threadIdx.x >> 5;    // warp idx
 
     val = warpReduceMax(val);  // get maxx in each warp
 
@@ -116,8 +150,8 @@ template<typename T, int NUM>
 __inline__ __device__ T blockReduceSumV2(T* val)
 {
     static __shared__ T shared[NUM][33];
-    int lane = threadIdx.x & 0x1f;
-    int wid = threadIdx.x >> 5;
+    int                 lane = threadIdx.x & 0x1f;
+    int                 wid  = threadIdx.x >> 5;
 
     warpReduceSumV2<T, NUM>(val);
 
@@ -155,8 +189,8 @@ template<typename T, int NUM>
 __inline__ __device__ T blockReduceMaxV2(T* val)
 {
     static __shared__ T shared[32][NUM];
-    int lane = threadIdx.x & 0x1f;  // in-warp idx
-    int wid = threadIdx.x >> 5;     // warp idx
+    int                 lane = threadIdx.x & 0x1f;  // in-warp idx
+    int                 wid  = threadIdx.x >> 5;    // warp idx
 
     warpReduceMaxV2<T, NUM>(val);  // get maxx in each warp
 
@@ -185,10 +219,10 @@ __inline__ __device__ T blockReduceMaxV2(T* val)
 template<int NUM>
 __inline__ __device__ void cgBlockReduceSumElements(float* element_list, float* cgBlockReduceSumElements_shm)
 {
-    cg::thread_block cta = cg::this_thread_block();
+    cg::thread_block          cta  = cg::this_thread_block();
     cg::thread_block_tile<32> tile = cg::tiled_partition<32>(cta);
 
-    const int tid = cta.thread_rank();
+    const int tid    = cta.thread_rank();
     const int blockz = blockDim.x;
     for (int i = 0; i < NUM; i++) {
 #if ((__CUDACC_VER_MAJOR__ > 11) || (__CUDACC_VER_MAJOR__ == 11 && __CUDACC_VER_MINOR__ >= 0))
@@ -217,7 +251,7 @@ __inline__ __device__ void cgBlockReduceSumElements(float* element_list, float* 
 template<typename T, int MAX_K>
 struct TopK {
     int p[MAX_K];
-    T u[MAX_K];
+    T   u[MAX_K];
 
     __device__ __forceinline__ void insert(T elem, int elem_id)
     {
@@ -232,10 +266,10 @@ struct TopK {
             if ((u[k + 1] > u[k]) || (p[k] == -1) || ((u[k + 1] == u[k]) && (p[k + 1] < p[k])))
             // if ((u[k+1] > u[k]) || ((u[k+1] == u[k])&&(p[k+1] < p[k])))
             {
-                T u2 = u[k];
-                int p2 = p[k];
-                u[k] = u[k + 1];
-                p[k] = p[k + 1];
+                T   u2   = u[k];
+                int p2   = p[k];
+                u[k]     = u[k + 1];
+                p[k]     = p[k + 1];
                 u[k + 1] = u2;
                 p[k + 1] = p2;
             }
@@ -244,8 +278,8 @@ struct TopK {
 
     __device__ __forceinline__ void init()
     {
-        const bool IS_FP16 = std::is_same<T, half>::value;
-        const T MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
+        const bool IS_FP16   = std::is_same<T, half>::value;
+        const T    MAX_T_VAL = (IS_FP16) ? HALF_FLT_MAX : FLT_MAX;
 
         for (int i = 0; i < MAX_K; i++) {
             p[i] = -1;
@@ -266,7 +300,7 @@ __device__ __forceinline__ TopK<T, MAX_K> reduce_topk_op(const TopK<T, MAX_K>& a
 template<typename T>
 struct TopK_2 {
     int p = -1;
-    T u = -((std::is_same<T, half>::value) ? HALF_FLT_MAX : FLT_MAX);
+    T   u = -((std::is_same<T, half>::value) ? HALF_FLT_MAX : FLT_MAX);
 
     __device__ __forceinline__ void insert(T elem, int elem_id)
     {
@@ -290,7 +324,8 @@ __device__ __forceinline__ TopK_2<T> reduce_topk_op_2(const TopK_2<T>& a, const 
 }
 
 template<typename T>
-__device__ __forceinline__ T clamp_inf_for_half(const float input) {
+__device__ __forceinline__ T clamp_inf_for_half(const float input)
+{
     return input;
 }
 
@@ -298,7 +333,7 @@ template<>
 __device__ __forceinline__ half clamp_inf_for_half(const float input)
 {
     // clamp inf values to enable fp16 training
-    return input > 0.0f ? (half) min(input, HALF_FLT_MAX - 1000) : (half) max(input, -HALF_FLT_MAX + 1000);
+    return input > 0.0f ? (half)min(input, HALF_FLT_MAX - 1000) : (half)max(input, -HALF_FLT_MAX + 1000);
 }
 
 #ifdef ENABLE_BF16

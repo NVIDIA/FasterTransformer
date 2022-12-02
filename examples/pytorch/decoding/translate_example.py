@@ -47,7 +47,7 @@ parser.add_argument('--input_file', type=str, default='../examples/tensorflow/de
 parser.add_argument('--output_file', type=str, default='',
                     help='output file path')
 parser.add_argument('-diversity_rate', '--beam_search_diversity_rate', type=float, default=0.0, metavar='NUMBER',
-                        help='deviersity rate of beam search. default is 0. When diversity rate = 0, it is equivalent to the naive beams earch.')
+                        help='deviersity rate of beam search. default is 0. When diversity rate = 0, it is equivalent to the naive beam search.')
 parser.add_argument('-topk', '--sampling_topk', type=int, default=1, metavar='NUMBER',
                     help='Candidate (k) value of top k sampling in decoding. Default is 1.')
 parser.add_argument('-topp', '--sampling_topp', type=float, default=0.0, metavar='NUMBER',

@@ -29,100 +29,27 @@
 #include "src/fastertransformer/kernels/beam_search_penalty_kernels.h"
 #include "src/fastertransformer/kernels/sampling_penalty_kernels.h"
 #include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/fastertransformer/utils/memory_utils.h"
 
-#include "tests/unittests/unittest_utils.h"
+// #include "tests/unittests/unittest_utils.h"
+#include "tests/unittests/gtest_utils.h"
 
 using namespace fastertransformer;
 
-struct TemperatureTestCase {
+struct TemperatureTestParam {
     size_t batch_size;
     size_t vocab_size;
-    float temperature;
+    float* temperatures;
+    size_t temperatures_size;
 
     std::string toString() {
-        char buf[200];
-        snprintf(buf, sizeof(buf),
-                 "TemperatureTestCase[batch=%ld, vocab=%ld, temperature=%4.2f]",
-                 batch_size, vocab_size, temperature);
-        return buf;
-    }
-
-    void print() {
-        FT_LOG_INFO(toString());
-    }
-};
-
-struct RepetitionTestCase {
-    size_t batch_size;
-    size_t vocab_size;
-    size_t max_input_length;
-    float repetition_penalty;
-
-    std::string toString() {
-        char buf[200];
-        snprintf(buf, sizeof(buf),
-                 "RepetitionTestCase[batch=%ld, vocab=%ld, max_input_length=%ld, repetition_penalty=%4.2f]",
-                 batch_size, vocab_size, max_input_length, repetition_penalty);
-        return buf;
-    }
-
-    void print() {
-        FT_LOG_INFO(toString());
+        return fmtstr("TemperatureTestParam[batch=%ld, vocab=%ld, temperatures=%s]",
+                      batch_size, vocab_size, arr2str(temperatures, temperatures_size).c_str());
     }
 };
 
 size_t pad_vocab_size(size_t vocab_size, size_t pad = 8) {
     return (vocab_size + pad - 1) / pad * pad;
-}
-
-void checkTemperatureValidity(float temperature) {
-    if (temperature <= 0.0f) {
-        throw std::domain_error(
-            fmtstr("temperature should be positive but got %.2f.", temperature));
-    }
-}
-
-template<typename T>
-void applyTemperature(T* logits,
-                      const T* bias,
-                      const float temperature,
-                      const size_t batch_size,
-                      const size_t vocab_size,
-                      const size_t vocab_size_padded)
-{
-    checkTemperatureValidity(temperature);
-    for (size_t i = 0; i < batch_size; ++i) {
-        for (size_t j = 0; j < vocab_size; ++j) {
-            size_t index = i * vocab_size_padded + j;
-            float logit = static_cast<float>(logits[index]);
-            if (bias != nullptr) {
-                logit += static_cast<float>(bias[j]);
-            }
-            logits[index] = static_cast<T>(logit / temperature);
-        }
-    }
-}
-
-template<typename T>
-void batchApplyTemperature(T* logits,
-                           const T* bias,
-                           const float* temperatures,
-                           const size_t batch_size,
-                           const size_t vocab_size,
-                           const size_t vocab_size_padded)
-{
-    for (size_t i = 0; i < batch_size; ++i) {
-        float temperature = temperatures[i];
-        checkTemperatureValidity(temperature);
-        for (size_t j = 0; j < vocab_size; ++j) {
-            size_t index = i * vocab_size_padded + j;
-            float logit = static_cast<float>(logits[index]);
-            if (bias != nullptr) {
-                logit += static_cast<float>(bias[j]);
-            }
-            logits[index] = static_cast<T>(logit / temperature);
-        }
-    }
 }
 
 template<typename T>
@@ -180,8 +107,8 @@ void batchApplyRepetitonPenalty(T* logits,
             int token_id = output_ids[i + t * batch_size];
             if (!penalized[token_id]) {
                 float logit = static_cast<float>(logits[offset + token_id]);
-                logits[offset + token_id] = static_cast<T>(logit < 0.0f ?
-                    logit * repetition_penalty : logit / repetition_penalty);
+                logits[offset + token_id] =
+                    static_cast<T>(logit < 0.0f ? logit * repetition_penalty : logit / repetition_penalty);
                 penalized[token_id] = true;
             }
         }
@@ -200,10 +127,11 @@ void initLogitsAndBias(T* logits,
     if (bias != nullptr) {
         initRandom(bias, vocab_size, -5.0f, 5.0f);
     }
+    bool is_half = sizeof(T) == 2;
     for (size_t i = 0; i < batch_size; ++i) {
         for (size_t j = 0; j < vocab_size_padded; ++j) {
             if (j >= vocab_size) {
-                logits[i * vocab_size_padded + j] = static_cast<T>(isHalf<T>() ? -65504.f : -FLT_MAX);
+                logits[i * vocab_size_padded + j] = static_cast<T>(is_half ? -65504.f : -FLT_MAX);
                 if (bias != nullptr && i == 0) {
                     bias[j] = (T)0.0f;
                 }
@@ -216,657 +144,498 @@ void initLogitsAndBias(T* logits,
 /////////////////////////////////// Tests //////////////////////////////////////////
 
 template<typename T>
-void testApplyTemperaturePenaltyKernel(TemperatureTestCase tc) {
+class TemperaturePenaltyTest : public FtTestBase {
+protected:
     // Set up test
-    const size_t batch_size = tc.batch_size;
-    const size_t vocab_size = tc.vocab_size;
-    const size_t vocab_size_padded = pad_vocab_size(vocab_size);
+    size_t batch_size_;
+    size_t vocab_size_;
+    size_t vocab_size_padded_;
 
-    const float temperature = tc.temperature;
-    T* h_logits = new T[batch_size * vocab_size_padded];
-    T* h_bias = new T[vocab_size_padded];
-    initLogitsAndBias(h_logits, h_bias, batch_size, vocab_size, vocab_size_padded);
+    T* h_logits_;
+    T* h_bias_;
+    T* d_logits_;
+    T* d_bias_;
 
-    T* d_logits;
-    T* d_bias;
-    check_cuda_error(cudaMalloc(&d_logits, sizeof(T) * batch_size * vocab_size_padded));
-    check_cuda_error(cudaMalloc(&d_bias, sizeof(T) * vocab_size_padded));
-    check_cuda_error(cudaMemcpy(d_logits, h_logits, sizeof(T) * batch_size * vocab_size_padded, cudaMemcpyHostToDevice));
-    check_cuda_error(cudaMemcpy(d_bias, h_bias, sizeof(T) * vocab_size_padded, cudaMemcpyHostToDevice));
+    float* d_temperatures_;
 
-    cudaStream_t stream;
-    check_cuda_error(cudaStreamCreate(&stream));
+    void subsetup(TemperatureTestParam param) {
+        batch_size_ = param.batch_size;
+        vocab_size_ = param.vocab_size;
+        vocab_size_padded_ = pad_vocab_size(vocab_size_);
 
-    // Do test
-    invokeApplyTemperaturePenalty(d_logits,
-                                  d_bias,
-                                  temperature,
-                                  batch_size,
-                                  vocab_size,
-                                  vocab_size_padded,
-                                  stream);
+        h_logits_ = new T[batch_size_ * vocab_size_padded_];
+        h_bias_ = new T[vocab_size_padded_];
+        initLogitsAndBias(h_logits_, h_bias_, batch_size_, vocab_size_, vocab_size_padded_);
 
-    applyTemperature(h_logits, h_bias, temperature, batch_size, vocab_size, vocab_size_padded);
-    std::string tag = "Correctness " + tc.toString() + (isHalf<T>() ? " (FP16)" : " (FP32)");
-    bool passed = checkResult(tag, d_logits, h_logits, batch_size * vocab_size_padded);
-
-    // Tear down test
-    check_cuda_error(cudaStreamDestroy(stream));
-    check_cuda_error(cudaFree(d_logits));
-    check_cuda_error(cudaFree(d_bias));
-    delete[] h_logits;
-    delete[] h_bias;
-
-    EXPECT_TRUE(passed);
-}
-
-template<typename T>
-void testBatchApplyTemperaturePenaltyKernel(TemperatureTestCase tc) {
-    // Set up test
-    const size_t batch_size = tc.batch_size;
-    const size_t vocab_size = tc.vocab_size;
-    const size_t vocab_size_padded = pad_vocab_size(vocab_size);
-
-    float* h_temperatures = new float[batch_size];
-    for (size_t i = 0; i < batch_size; ++i) {
-        h_temperatures[i] = i % 2 == 0 ? tc.temperature : 0.1f * tc.temperature;
-    }
-    T* h_logits = new T[batch_size * vocab_size_padded];
-    T* h_bias = new T[vocab_size_padded];
-    initLogitsAndBias(h_logits, h_bias, batch_size, vocab_size, vocab_size_padded);
-
-    float* d_temperatures;
-    T* d_logits;
-    T* d_bias;
-    check_cuda_error(cudaMalloc(&d_temperatures, sizeof(float) * batch_size));
-    check_cuda_error(cudaMalloc(&d_logits, sizeof(T) * batch_size * vocab_size_padded));
-    check_cuda_error(cudaMalloc(&d_bias, sizeof(T) * vocab_size_padded));
-    check_cuda_error(cudaMemcpy(d_temperatures, h_temperatures, sizeof(float) * batch_size, cudaMemcpyHostToDevice));
-    check_cuda_error(cudaMemcpy(d_logits, h_logits, sizeof(T) * batch_size * vocab_size_padded, cudaMemcpyHostToDevice));
-    check_cuda_error(cudaMemcpy(d_bias, h_bias, sizeof(T) * vocab_size_padded, cudaMemcpyHostToDevice));
-
-    cudaStream_t stream;
-    check_cuda_error(cudaStreamCreate(&stream));
-
-    // Do test
-    invokeBatchApplyTemperaturePenalty(d_logits,
-                                       d_bias,
-                                       d_temperatures,
-                                       batch_size,
-                                       vocab_size,
-                                       vocab_size_padded,
-                                       stream);
-
-    batchApplyTemperature(h_logits, h_bias, h_temperatures, batch_size, vocab_size, vocab_size_padded);
-    std::string tag = "Correctness Batch " + tc.toString() + (isHalf<T>() ? " (FP16)" : " (FP32)");
-    bool passed = checkResult(tag, d_logits, h_logits, batch_size * vocab_size_padded);
-
-    // Tear down test
-    check_cuda_error(cudaStreamDestroy(stream));
-    check_cuda_error(cudaFree(d_logits));
-    check_cuda_error(cudaFree(d_bias));
-    check_cuda_error(cudaFree(d_temperatures));
-    delete[] h_logits;
-    delete[] h_bias;
-    delete[] h_temperatures;
-
-    EXPECT_TRUE(passed);
-}
-
-template<typename T>
-void testConsistencyTemperaturePenaltyKernel(TemperatureTestCase tc) {
-    // Set up test
-    const size_t batch_size = tc.batch_size;
-    const size_t vocab_size = tc.vocab_size;
-    const size_t vocab_size_padded = pad_vocab_size(vocab_size);
-
-    float temperature = tc.temperature;
-    float* h_temperatures = new float[batch_size];
-    for (size_t i = 0; i < batch_size; ++i) {
-        h_temperatures[i] = temperature;
-    }
-    T* h_logits = new T[batch_size * vocab_size_padded];
-    T* h_bias = new T[vocab_size_padded];
-    initLogitsAndBias(h_logits, h_bias, batch_size, vocab_size, vocab_size_padded);
-
-    float* d_temperatures;
-    check_cuda_error(cudaMalloc(&d_temperatures, sizeof(float) * batch_size));
-    check_cuda_error(cudaMemcpy(d_temperatures, h_temperatures, sizeof(float) * batch_size, cudaMemcpyHostToDevice));
-
-    T* d_logits_single;
-    T* d_bias_single;
-    check_cuda_error(cudaMalloc(&d_logits_single, sizeof(T) * batch_size * vocab_size_padded));
-    check_cuda_error(cudaMalloc(&d_bias_single, sizeof(T) * vocab_size_padded));
-    check_cuda_error(cudaMemcpy(d_logits_single, h_logits, sizeof(T) * batch_size * vocab_size_padded, cudaMemcpyHostToDevice));
-    check_cuda_error(cudaMemcpy(d_bias_single, h_bias, sizeof(T) * vocab_size_padded, cudaMemcpyHostToDevice));
-
-    T* d_logits_batch;
-    T* d_bias_batch;
-    check_cuda_error(cudaMalloc(&d_logits_batch, sizeof(T) * batch_size * vocab_size_padded));
-    check_cuda_error(cudaMalloc(&d_bias_batch, sizeof(T) * vocab_size_padded));
-    check_cuda_error(cudaMemcpy(d_logits_batch, h_logits, sizeof(T) * batch_size * vocab_size_padded, cudaMemcpyHostToDevice));
-    check_cuda_error(cudaMemcpy(d_bias_batch, h_bias, sizeof(T) * vocab_size_padded, cudaMemcpyHostToDevice));
-
-    cudaStream_t stream;
-    check_cuda_error(cudaStreamCreate(&stream));
-
-    // Do test
-    invokeApplyTemperaturePenalty(d_logits_single,
-                                  d_bias_single,
-                                  temperature,
-                                  batch_size,
-                                  vocab_size,
-                                  vocab_size_padded,
-                                  stream);
-    invokeBatchApplyTemperaturePenalty(d_logits_batch,
-                                       d_bias_batch,
-                                       d_temperatures,
-                                       batch_size,
-                                       vocab_size,
-                                       vocab_size_padded,
-                                       stream);
-    std::string tag = "Consistency " + tc.toString() + (isHalf<T>() ? " (FP16)" : " (FP32)");
-    bool passed = checkResult(tag, d_logits_single, d_logits_batch, batch_size * vocab_size_padded, true, true);
-
-    // Tear down test
-    check_cuda_error(cudaStreamDestroy(stream));
-    check_cuda_error(cudaFree(d_logits_single));
-    check_cuda_error(cudaFree(d_bias_single));
-    check_cuda_error(cudaFree(d_logits_batch));
-    check_cuda_error(cudaFree(d_bias_batch));
-    check_cuda_error(cudaFree(d_temperatures));
-    delete[] h_logits;
-    delete[] h_bias;
-    delete[] h_temperatures;
-
-    EXPECT_TRUE(passed);
-}
-
-template<typename T>
-void testApplyRepetitonPenaltyKernel(RepetitionTestCase tc) {
-    // Set up test
-    const size_t batch_size = tc.batch_size;
-    const size_t vocab_size = tc.vocab_size;
-    const size_t vocab_size_padded = pad_vocab_size(vocab_size);
-    const size_t max_input_length = tc.max_input_length;
-    const size_t sequence_length = 2 * max_input_length;  // input + output
-    const size_t step = sequence_length * 0.5;
-    const float repetition_penalty = tc.repetition_penalty;
-    T* h_logits = new T[batch_size * vocab_size_padded];
-    int* h_output_ids = new int[sequence_length * batch_size];
-    int* h_input_lengths = new int[batch_size];
-    initLogitsAndBias(h_logits, (T*)nullptr, batch_size, vocab_size, vocab_size_padded);
-    initRandomInt(h_output_ids, sequence_length * batch_size, 0, vocab_size);
-    initRandomInt(h_input_lengths, batch_size, 1, max_input_length);
-
-    T* d_logits;
-    check_cuda_error(cudaMalloc(&d_logits, sizeof(T) * batch_size * vocab_size_padded));
-    check_cuda_error(cudaMemcpy(d_logits, h_logits, sizeof(T) * batch_size * vocab_size_padded, cudaMemcpyHostToDevice));
-    int* d_output_ids;
-    check_cuda_error(cudaMalloc(&d_output_ids, sizeof(int) * sequence_length * batch_size));
-    check_cuda_error(cudaMemcpy(d_output_ids, h_output_ids, sizeof(int) * sequence_length * batch_size, cudaMemcpyHostToDevice));
-    int* d_input_lengths;
-    check_cuda_error(cudaMalloc(&d_input_lengths, sizeof(int) * batch_size));
-    check_cuda_error(cudaMemcpy(d_input_lengths, h_input_lengths, sizeof(int) * batch_size, cudaMemcpyHostToDevice));
-
-    cudaStream_t stream;
-    check_cuda_error(cudaStreamCreate(&stream));
-
-    // Do test
-    invokeApplyRepetitionPenalty(d_logits,
-                                 repetition_penalty,
-                                 nullptr,
-                                 d_output_ids,
-                                 batch_size,
-                                 batch_size,
-                                 vocab_size,
-                                 vocab_size_padded,
-                                 d_input_lengths,
-                                 max_input_length,
-                                 step,
-                                 stream);
-
-    applyRepetitonPenalty(h_logits,
-                          h_output_ids,
-                          h_input_lengths,
-                          repetition_penalty,
-                          step,
-                          max_input_length,
-                          batch_size,
-                          vocab_size,
-                          vocab_size_padded);
-
-    std::string tag = "Correctness " + tc.toString() + (isHalf<T>() ? " (FP16)" : " (FP32)");
-    bool passed = checkResult(tag, d_logits, h_logits, batch_size * vocab_size_padded);
-
-    // Tear down test
-    check_cuda_error(cudaStreamDestroy(stream));
-    check_cuda_error(cudaFree(d_logits));
-    check_cuda_error(cudaFree(d_output_ids));
-    check_cuda_error(cudaFree(d_input_lengths));
-    delete[] h_logits;
-    delete[] h_output_ids;
-    delete[] h_input_lengths;
-
-    EXPECT_TRUE(passed);
-}
-
-template<typename T>
-void testBatchApplyRepetitonPenaltyKernel(RepetitionTestCase tc) {
-    // Set up test
-    const size_t batch_size = tc.batch_size;
-    const size_t vocab_size = tc.vocab_size;
-    const size_t vocab_size_padded = pad_vocab_size(vocab_size);
-    const size_t max_input_length = tc.max_input_length;
-    const size_t sequence_length = 2 * tc.max_input_length;
-    const size_t step = sequence_length * 0.8;
-    const float repetition_penalty = tc.repetition_penalty;
-    float* h_repetition_penalties = new float[batch_size];
-    for (size_t i = 0; i < batch_size; ++i) {
-        h_repetition_penalties[i] = i % 2 == 0 ? repetition_penalty : 0.1f * repetition_penalty;
+        d_logits_ = reinterpret_cast<T*>(allocator->malloc(sizeof(T) * batch_size_ * vocab_size_padded_));
+        d_bias_ = reinterpret_cast<T*>(allocator->malloc(sizeof(T) * vocab_size_padded_));
+        cudaAutoCpy(d_logits_, h_logits_, batch_size_ * vocab_size_padded_, stream);
+        cudaAutoCpy(d_bias_, h_bias_, vocab_size_padded_, stream);
+        if (param.temperatures_size > 1) {
+            ASSERT_EQ(param.temperatures_size, param.batch_size) << "Invalid test configuration.";
+            d_temperatures_ = reinterpret_cast<float*>(allocator->malloc(sizeof(T) * param.temperatures_size));
+            cudaAutoCpy(d_temperatures_, param.temperatures, batch_size_, stream);
+        }
     }
 
-    T* h_logits = new T[batch_size * vocab_size_padded];
-    int* h_output_ids = new int[sequence_length * batch_size];
-    int* h_input_lengths = new int[batch_size];
-    initLogitsAndBias(h_logits, (T*)nullptr, batch_size, vocab_size, vocab_size_padded);
-    initRandomInt(h_output_ids, sequence_length * batch_size, 0, vocab_size);
-    initRandomInt(h_input_lengths, batch_size, 1, max_input_length);
+    void subteardown() {
+        delete[] h_logits_;
+        delete[] h_bias_;
+    }
 
-    T* d_logits;
-    check_cuda_error(cudaMalloc(&d_logits, sizeof(T) * batch_size * vocab_size_padded));
-    check_cuda_error(cudaMemcpy(d_logits, h_logits, sizeof(T) * batch_size * vocab_size_padded, cudaMemcpyHostToDevice));
-    int* d_output_ids;
-    check_cuda_error(cudaMalloc(&d_output_ids, sizeof(int) * sequence_length * batch_size));
-    check_cuda_error(cudaMemcpy(d_output_ids, h_output_ids, sizeof(int) * sequence_length * batch_size, cudaMemcpyHostToDevice));
-    int* d_input_lengths;
-    check_cuda_error(cudaMalloc(&d_input_lengths, sizeof(int) * batch_size));
-    check_cuda_error(cudaMemcpy(d_input_lengths, h_input_lengths, sizeof(int) * batch_size, cudaMemcpyHostToDevice));
-    float* d_repetition_penalties;
-    check_cuda_error(cudaMalloc(&d_repetition_penalties, sizeof(float) * batch_size));
-    check_cuda_error(cudaMemcpy(d_repetition_penalties, h_repetition_penalties, sizeof(float) * batch_size, cudaMemcpyHostToDevice));
+    void computeReference(T*           logits,
+                          const T*     bias,
+                          const float* temperatures,
+                          const size_t temperatures_size,
+                          const size_t batch_size,
+                          const size_t vocab_size,
+                          const size_t vocab_size_padded)
+    {
+        for (size_t i = 0; i < batch_size; ++i) {
+            float temperature = temperatures_size > 1 ? temperatures[i] : temperatures[0];
+            ASSERT_GT(temperature, 0.0f) << "temperature should be positive but got " << temperature;
+            for (size_t j = 0; j < vocab_size; ++j) {
+                size_t index = i * vocab_size_padded + j;
+                float logit = static_cast<float>(logits[index]);
+                if (bias != nullptr) {
+                    logit += static_cast<float>(bias[j]);
+                }
+                logits[index] = static_cast<T>(logit / temperature);
+            }
+        }
+    }
 
-    cudaStream_t stream;
-    check_cuda_error(cudaStreamCreate(&stream));
 
-    // Do test
-    invokeBatchApplyRepetitionPenalty(d_logits,
-                                      d_repetition_penalties,
-                                      d_output_ids,
-                                      batch_size,
-                                      batch_size,
-                                      vocab_size_padded,
-                                      d_input_lengths,
-                                      max_input_length,
-                                      step,
+public:
+    void runTest(TemperatureTestParam param)
+    {
+        subsetup(param);
+        // Do test
+        if (param.temperatures_size == 1) {
+            invokeApplyTemperaturePenalty(d_logits_,
+                                          d_bias_,
+                                          param.temperatures[0],
+                                          batch_size_,
+                                          vocab_size_,
+                                          vocab_size_padded_,
+                                          stream);
+        }
+        else {
+            invokeBatchApplyTemperaturePenalty(d_logits_,
+                                               d_bias_,
+                                               d_temperatures_,
+                                               batch_size_,
+                                               vocab_size_,
+                                               vocab_size_padded_,
+                                               stream);
+        }
+        computeReference(h_logits_,
+                         h_bias_,
+                         param.temperatures,
+                         param.temperatures_size,
+                         batch_size_,
+                         vocab_size_,
+                         vocab_size_padded_);
+        bool passed = checkResult(param.toString(), d_logits_, h_logits_, batch_size_ * vocab_size_padded_);
+        EXPECT_TRUE(passed);
+        subteardown();
+    }
+
+    void runConsistencyTest(TemperatureTestParam param) {
+        // Set up test
+        ASSERT_EQ(param.temperatures_size, 1) << "A consistency test assumes temperatures_size=1";
+        subsetup(param);
+
+        // Run a single runtime value case.
+        invokeApplyTemperaturePenalty(d_logits_,
+                                      d_bias_,
+                                      param.temperatures[0],
+                                      batch_size_,
+                                      vocab_size_,
+                                      vocab_size_padded_,
                                       stream);
 
-    batchApplyRepetitonPenalty(h_logits,
-                               h_output_ids,
-                               h_input_lengths,
-                               h_repetition_penalties,
-                               step,
-                               max_input_length,
-                               batch_size,
-                               vocab_size,
-                               vocab_size_padded);
+        float temperature = param.temperatures[0];
+        float* h_temperatures = new float[batch_size_];
+        for (size_t i = 0; i < batch_size_; ++i) {
+            h_temperatures[i] = temperature;
+        }
+        d_temperatures_ = reinterpret_cast<float*>(allocator->malloc(sizeof(T) * batch_size_));
+        cudaAutoCpy(d_temperatures_, h_temperatures, batch_size_, stream);
 
-    std::string tag = "Correctness Batch " + tc.toString() + (isHalf<T>() ? " (FP16)" : " (FP32)");
-    bool passed = checkResult(tag, d_logits, h_logits, batch_size * vocab_size_padded);
+        T* d_logits_batch = reinterpret_cast<T*>(allocator->malloc(sizeof(T) * batch_size_ * vocab_size_padded_));
+        T* d_bias_batch = reinterpret_cast<T*>(allocator->malloc(sizeof(T) * vocab_size_padded_));
+        cudaAutoCpy(d_logits_batch, h_logits_, batch_size_ * vocab_size_padded_, stream);
+        cudaAutoCpy(d_bias_batch, h_bias_, vocab_size_padded_, stream);
 
-    // Tear down test
-    check_cuda_error(cudaStreamDestroy(stream));
-    check_cuda_error(cudaFree(d_logits));
-    check_cuda_error(cudaFree(d_output_ids));
-    check_cuda_error(cudaFree(d_input_lengths));
-    check_cuda_error(cudaFree(d_repetition_penalties));
-    delete[] h_repetition_penalties;
-    delete[] h_logits;
-    delete[] h_output_ids;
-    delete[] h_input_lengths;
+        invokeBatchApplyTemperaturePenalty(d_logits_batch,
+                                           d_bias_batch,
+                                           d_temperatures_,
+                                           batch_size_,
+                                           vocab_size_,
+                                           vocab_size_padded_,
+                                           stream);
+        bool passed = checkResult(param.toString(), d_logits_, d_logits_batch, batch_size_ * vocab_size_padded_, true, true);
+        EXPECT_TRUE(passed);
 
-    EXPECT_TRUE(passed);
+        // Tear down test
+        delete[] h_temperatures;
+        subteardown();
+    }
+};
+
+// Since a compiler doesn't correctly catch the use of a variable inside gtest,
+// we carefully suppress a compile warning message.
+#pragma nv_diag_suppress 177
+
+TYPED_TEST_SUITE(TemperaturePenaltyTest, FloatAndHalfTypes);
+
+TYPED_TEST(TemperaturePenaltyTest, NoPenalty)
+{
+    float temperature = 1.0f;
+    this->runTest({6, 4, &temperature, 1});
 }
 
-template<typename T>
-void testBatchApplyRepetitonPenaltyKernelWithLocalBatch(RepetitionTestCase tc) {
-    // Set up test
-    const size_t batch_size = tc.batch_size;
-    if (batch_size % 2 != 0) {
-        FT_LOG_WARNING("Skip testApplyRepetitonPenaltyKernelWithLocalBatch (batch_size % 2 != 0).");
-        return;
-    }
-    const size_t local_batch_size = batch_size / 2;
-    const size_t vocab_size = tc.vocab_size;
-    const size_t vocab_size_padded = pad_vocab_size(vocab_size);
-    const size_t max_input_length = tc.max_input_length;
-    const size_t sequence_length = 2 * tc.max_input_length; // input + output
-    const size_t step = sequence_length * 0.8;
-    const float repetition_penalty = tc.repetition_penalty;
-    float* h_repetition_penalties = new float[batch_size];
+TYPED_TEST(TemperaturePenaltyTest, LessThanOne)
+{
+    float temperature = 0.53f;
+    this->runTest({6, 4, &temperature, 1});
+}
+
+TYPED_TEST(TemperaturePenaltyTest, GreaterThaneOne)
+{
+    float temperature = 2.01f;
+    this->runTest({6, 4, &temperature, 1});
+}
+
+TYPED_TEST(TemperaturePenaltyTest, LargeVocab)
+{
+    float temperature = 2.01f;
+    this->runTest({6, 50001, &temperature, 1});
+}
+
+TYPED_TEST(TemperaturePenaltyTest, BatchNoPenalty)
+{
+    size_t batch_size = 6;
+    float* temperatures = new float[batch_size];
     for (size_t i = 0; i < batch_size; ++i) {
-        h_repetition_penalties[i] = i % 2 == 0 ? repetition_penalty : 0.1f * repetition_penalty;
+        temperatures[i] = 1.0f;
     }
-
-    T* h_logits = new T[batch_size * vocab_size_padded];
-    int* h_output_ids = new int[sequence_length * batch_size];
-    int* h_input_lengths = new int[batch_size];
-    initLogitsAndBias(h_logits, (T*)nullptr, batch_size, vocab_size, vocab_size_padded);
-    initRandomInt(h_output_ids, sequence_length * batch_size, 0, vocab_size);
-    initRandomInt(h_input_lengths, batch_size, 1, max_input_length);
-
-    T* d_logits;
-    check_cuda_error(cudaMalloc(&d_logits, sizeof(T) * batch_size * vocab_size_padded));
-    check_cuda_error(cudaMemcpy(d_logits, h_logits, sizeof(T) * batch_size * vocab_size_padded, cudaMemcpyHostToDevice));
-    int* d_output_ids;
-    check_cuda_error(cudaMalloc(&d_output_ids, sizeof(int) * sequence_length * batch_size));
-    check_cuda_error(cudaMemcpy(d_output_ids, h_output_ids, sizeof(int) * sequence_length * batch_size, cudaMemcpyHostToDevice));
-    int* d_input_lengths;
-    check_cuda_error(cudaMalloc(&d_input_lengths, sizeof(int) * batch_size));
-    check_cuda_error(cudaMemcpy(d_input_lengths, h_input_lengths, sizeof(int) * batch_size, cudaMemcpyHostToDevice));
-    float* d_repetition_penalties;
-    check_cuda_error(cudaMalloc(&d_repetition_penalties, sizeof(float) * batch_size));
-    check_cuda_error(cudaMemcpy(d_repetition_penalties, h_repetition_penalties, sizeof(float) * batch_size, cudaMemcpyHostToDevice));
-
-    cudaStream_t stream;
-    check_cuda_error(cudaStreamCreate(&stream));
-
-    // Do test
-    int ite = 1;
-    invokeBatchApplyRepetitionPenalty(d_logits + ite * local_batch_size * vocab_size_padded,
-                                      d_repetition_penalties + ite * local_batch_size,
-                                      d_output_ids + ite * local_batch_size,
-                                      batch_size,
-                                      local_batch_size,
-                                      vocab_size_padded,
-                                      d_input_lengths + ite * local_batch_size,
-                                      max_input_length,
-                                      step,
-                                      stream);
-    batchApplyRepetitonPenalty(h_logits,
-                               h_output_ids,
-                               h_input_lengths,
-                               h_repetition_penalties,
-                               step,
-                               max_input_length,
-                               batch_size,
-                               vocab_size,
-                               vocab_size_padded);
-
-    std::string tag = "Correctness (local batch) " + tc.toString() + (isHalf<T>() ? " (FP16)" : " (FP32)");
-    bool passed = checkResult(tag,
-                              d_logits + ite * local_batch_size * vocab_size_padded,
-                              h_logits + ite * local_batch_size * vocab_size_padded,
-                              local_batch_size * vocab_size_padded);
-
-    // Tear down test
-    check_cuda_error(cudaStreamDestroy(stream));
-    check_cuda_error(cudaFree(d_logits));
-    check_cuda_error(cudaFree(d_output_ids));
-    check_cuda_error(cudaFree(d_input_lengths));
-    check_cuda_error(cudaFree(d_repetition_penalties));
-    delete[] h_repetition_penalties;
-    delete[] h_logits;
-    delete[] h_output_ids;
-    delete[] h_input_lengths;
-
-    EXPECT_TRUE(passed);
+    this->runTest({batch_size, 4, temperatures, batch_size});
 }
 
-template<typename T>
-void testConsistencyRepetitionPenaltyKernel(RepetitionTestCase tc) {
-    // Set up test
-    const size_t batch_size = tc.batch_size;
-    const size_t vocab_size = tc.vocab_size;
-    const size_t vocab_size_padded = pad_vocab_size(vocab_size);
-    const size_t max_input_length = tc.max_input_length;
-    const size_t sequence_length = 2 * max_input_length;
-    const size_t step = max_input_length * 0.8;
-    const float repetition_penalty = tc.repetition_penalty;
-    float* h_repetition_penalties = new float[batch_size];
+TYPED_TEST(TemperaturePenaltyTest, BatchLessThanOne)
+{
+    size_t batch_size = 6;
+    float* temperatures = new float[batch_size];
     for (size_t i = 0; i < batch_size; ++i) {
-        h_repetition_penalties[i] = repetition_penalty;
+        temperatures[i] = 0.53f;
     }
-
-    T* h_logits = new T[batch_size * vocab_size_padded];
-    int* h_output_ids = new int[sequence_length * batch_size];
-    int* h_input_lengths = new int[batch_size];
-    initLogitsAndBias(h_logits, (T*)nullptr, batch_size, vocab_size, vocab_size_padded);
-    initRandomInt(h_output_ids, sequence_length * batch_size, 0, vocab_size);
-    initRandomInt(h_input_lengths, batch_size, 1, max_input_length);
-
-    T* d_logits_single;
-    check_cuda_error(cudaMalloc(&d_logits_single, sizeof(T) * batch_size * vocab_size_padded));
-    check_cuda_error(cudaMemcpy(d_logits_single, h_logits, sizeof(T) * batch_size * vocab_size_padded, cudaMemcpyHostToDevice));
-    T* d_logits_batch;
-    check_cuda_error(cudaMalloc(&d_logits_batch, sizeof(T) * batch_size * vocab_size_padded));
-    check_cuda_error(cudaMemcpy(d_logits_batch, h_logits, sizeof(T) * batch_size * vocab_size_padded, cudaMemcpyHostToDevice));
-
-    int* d_output_ids;
-    check_cuda_error(cudaMalloc(&d_output_ids, sizeof(int) * sequence_length * batch_size));
-    check_cuda_error(cudaMemcpy(d_output_ids, h_output_ids, sizeof(int) * sequence_length * batch_size, cudaMemcpyHostToDevice));
-    int* d_input_lengths;
-    check_cuda_error(cudaMalloc(&d_input_lengths, sizeof(int) * batch_size));
-    check_cuda_error(cudaMemcpy(d_input_lengths, h_input_lengths, sizeof(int) * batch_size, cudaMemcpyHostToDevice));
-    float* d_repetition_penalties;
-    check_cuda_error(cudaMalloc(&d_repetition_penalties, sizeof(float) * batch_size));
-    check_cuda_error(cudaMemcpy(d_repetition_penalties, h_repetition_penalties, sizeof(float) * batch_size, cudaMemcpyHostToDevice));
-
-    cudaStream_t stream;
-    check_cuda_error(cudaStreamCreate(&stream));
-
-    // Do test
-    invokeApplyRepetitionPenalty(d_logits_single,
-                                 repetition_penalty,
-                                 nullptr,
-                                 d_output_ids,
-                                 batch_size,
-                                 batch_size,
-                                 vocab_size,
-                                 vocab_size_padded,
-                                 d_input_lengths,
-                                 max_input_length,
-                                 step,
-                                 stream);
-
-    invokeBatchApplyRepetitionPenalty(d_logits_batch,
-                                      d_repetition_penalties,
-                                      d_output_ids,
-                                      batch_size,
-                                      batch_size,
-                                      vocab_size_padded,
-                                      d_input_lengths,
-                                      max_input_length,
-                                      step,
-                                      stream);
-
-    std::string tag = "Consistency " + tc.toString() + (isHalf<T>() ? " (FP16)" : " (FP32)");
-    bool passed = checkResult(tag, d_logits_single, d_logits_batch, batch_size * vocab_size_padded, true, true);
-
-    // Tear down test
-    check_cuda_error(cudaStreamDestroy(stream));
-    check_cuda_error(cudaFree(d_logits_single));
-    check_cuda_error(cudaFree(d_logits_batch));
-    check_cuda_error(cudaFree(d_output_ids));
-    check_cuda_error(cudaFree(d_input_lengths));
-    check_cuda_error(cudaFree(d_repetition_penalties));
-    delete[] h_logits;
-    delete[] h_output_ids;
-    delete[] h_repetition_penalties;
-    delete[] h_input_lengths;
-    EXPECT_TRUE(passed);
+    this->runTest({batch_size, 4, temperatures, batch_size});
 }
+
+TYPED_TEST(TemperaturePenaltyTest, BatchGreaterThaneOne)
+{
+    size_t batch_size = 6;
+    float* temperatures = new float[batch_size];
+    for (size_t i = 0; i < batch_size; ++i) {
+        temperatures[i] = 2.01f;
+    }
+    this->runTest({batch_size, 4, temperatures, batch_size});
+}
+
+TYPED_TEST(TemperaturePenaltyTest, BatchMixed)
+{
+    size_t batch_size = 6;
+    float* temperatures = new float[batch_size];
+    for (size_t i = 0; i < batch_size; ++i) {
+        temperatures[i] = i % 2 ==0 ? 2.01f : 0.53f;
+    }
+    this->runTest({batch_size, 4, temperatures, batch_size});
+}
+
+TYPED_TEST(TemperaturePenaltyTest, Consistency)
+{
+    float temperature = 2.01f;
+    this->runConsistencyTest({6, 4, &temperature, 1});
+}
+
+struct RepetitionPenaltyTestCase {
+    size_t batch_size;
+    size_t vocab_size;
+    size_t max_input_length;
+    float* repetition_penalties;
+    size_t repetition_penalties_size;
+
+    std::string toString() {
+        return fmtstr(
+            "RepetitionPenaltyTestCase[batch=%ld, vocab=%ld, max_input_length=%ld, repetition_penalties=%s]",
+            batch_size, vocab_size, max_input_length, arr2str(repetition_penalties, repetition_penalties_size).c_str());
+    }
+};
 
 template<typename T>
-void testBeamPenaltyKernelCorrectness() {
+class RepetitionPenaltyTest : public FtTestBase {
+protected:
     // Set up test
-    const size_t batch_size = 2;
-    const size_t beam_width = 3;
-    const size_t batchxbeam = batch_size * beam_width;
-    const size_t vocab_size = 4;
-    const size_t vocab_size_padded = 8;
-    const size_t max_input_length = 2;
-    const size_t local_batch_size = batch_size;
-    const int ite = 0;
-    const int step = 4;
-    assert(step > max_input_length);
-    int* h_end_ids = new int[batch_size]{0, 2};
-    int* h_input_lengths = new int[batchxbeam]{2, 2, 2, 2, 2, 2};
-    const T MASK_VAL = static_cast<T>(isHalf<T>() ? -65504.f : -FLT_MAX);
-    T* h_logits = new T[batchxbeam * vocab_size_padded]{
-         4.0f, -2.0f,  5.0f,  9.0f, MASK_VAL, MASK_VAL, MASK_VAL, MASK_VAL,
-         4.0f, -2.0f,  5.0f,  9.0f, MASK_VAL, MASK_VAL, MASK_VAL, MASK_VAL,
-         4.0f, -2.0f,  5.0f,  9.0f, MASK_VAL, MASK_VAL, MASK_VAL, MASK_VAL,
-        -2.0f,  1.0f, -3.0f, -2.0f, MASK_VAL, MASK_VAL, MASK_VAL, MASK_VAL,
-        -2.0f,  1.0f, -3.0f, -2.0f, MASK_VAL, MASK_VAL, MASK_VAL, MASK_VAL,
-        -2.0f,  1.0f, -3.0f, -2.0f, MASK_VAL, MASK_VAL, MASK_VAL, MASK_VAL
-    };
-    T* h_bias = new T[vocab_size_padded]{
-        0.0f, 0.0f, 1.0f, -1.0f, 0.0f, 0.0f, 0.0f, 0.0f
-    };
-    int* h_previous_ids = new int[(step - 1) * batchxbeam]{
-        3, 3, 2, 3, 0, 2, // step 0 [b1 b1 b1 b2 b2 b2]
-        1, 2, 1, 1, 1, 2, // step 1 [b1 b1 b1 b2 b2 b2]
-        2, 0, 1, 1, 2, 1, // step 2
-    };
-    int* h_current_ids = new int[batchxbeam]{0, 3, 1, 0, 0, 2};  // step 3.
-    int* h_parent_ids = new int[(step - 1) * batchxbeam]{
-        0, 1, 2, 0, 1, 1,  // step 0 [b1 b1 b1 b2 b2 b2]
-        0, 2, 2, 2, 1, 1,  // step 1 [b1 b1 b1 b2 b2 b2]
-        2, 0, 1, 2, 2, 1,  // step 2
-    };
-    // final output sequence [batch, beam]
-    //   [0, 0]: 2 1 1 0
-    //   [0, 1]: 3 1 2 3
-    //   [0, 2]: 2 1 0 1
-    //   [1, 0]: 0 1 1 0
-    //   [1, 1]: 0 1 2 0
-    //   [1, 2]: 0 1 2 2
+    size_t batch_size_;
+    size_t vocab_size_;
+    size_t vocab_size_padded_;
+    size_t max_input_length_;
+    size_t sequence_length_;
+    size_t step_;
 
-    float temperature = 2.0f;
-    float repetition_penalty = 2.0f;
+    T* h_logits_;
+    T* h_bias_;
+    int* h_output_ids_;
+    int* h_input_lengths_;
 
-    T* h_expected = new T[batchxbeam * vocab_size_padded]{
-         1.0f, -2.0f,  1.5f,  4.0f, MASK_VAL, MASK_VAL, MASK_VAL, MASK_VAL,
-         2.0f, -2.0f,  1.5f,  2.0f, MASK_VAL, MASK_VAL, MASK_VAL, MASK_VAL,
-         1.0f, -2.0f,  1.5f,  4.0f, MASK_VAL, MASK_VAL, MASK_VAL, MASK_VAL,
-        -2.0f, 0.25f, -1.0f, -1.5f, MASK_VAL, MASK_VAL, MASK_VAL, MASK_VAL,
-        -2.0f, 0.25f, -1.0f, -1.5f, MASK_VAL, MASK_VAL, MASK_VAL, MASK_VAL,
-        -2.0f, 0.25f, -2.0f, -1.5f, MASK_VAL, MASK_VAL, MASK_VAL, MASK_VAL
-    };
+    T* d_logits_;
+    T* d_bias_;
+    int* d_output_ids_;
+    int* d_input_lengths_;
 
-    T *d_logits, *d_bias;
-    check_cuda_error(cudaMalloc(&d_logits, sizeof(T) * batchxbeam * vocab_size_padded));
-    check_cuda_error(cudaMemcpy(
-        d_logits, h_logits, sizeof(T) * batchxbeam * vocab_size_padded, cudaMemcpyHostToDevice));
-    check_cuda_error(cudaMalloc(&d_bias, sizeof(T) * vocab_size_padded));
-    check_cuda_error(cudaMemcpy(d_bias, h_bias, sizeof(T) * vocab_size_padded, cudaMemcpyHostToDevice));
-    int *d_previous_ids, *d_current_ids, *d_parent_ids;
-    check_cuda_error(cudaMalloc(&d_previous_ids, sizeof(int) * (step - 1) * batchxbeam));
-    check_cuda_error(cudaMemcpy(
-        d_previous_ids, h_previous_ids, sizeof(int) * (step - 1) * batchxbeam, cudaMemcpyHostToDevice));
-    check_cuda_error(cudaMalloc(&d_current_ids, sizeof(int) * batchxbeam));
-    check_cuda_error(cudaMemcpy(
-        d_current_ids, h_current_ids, sizeof(int) * batchxbeam, cudaMemcpyHostToDevice));
-    check_cuda_error(cudaMalloc(&d_parent_ids, sizeof(int) * (step - 1) * batchxbeam));
-    check_cuda_error(cudaMemcpy(
-        d_parent_ids, h_parent_ids, sizeof(int) * (step - 1) * batchxbeam, cudaMemcpyHostToDevice));
-    int *d_end_ids;
-    check_cuda_error(cudaMalloc(&d_end_ids, sizeof(int) * batch_size));
-    check_cuda_error(cudaMemcpy(d_end_ids, h_end_ids, sizeof(int) * batch_size, cudaMemcpyHostToDevice));
-    int* d_input_lengths;
-    check_cuda_error(cudaMalloc(&d_input_lengths, sizeof(int) * batchxbeam));
-    check_cuda_error(cudaMemcpy(
-        d_input_lengths, h_input_lengths, sizeof(int) * batchxbeam, cudaMemcpyHostToDevice));
+    float* d_repetition_penalties_;
 
-    cudaStream_t stream;
-    check_cuda_error(cudaStreamCreate(&stream));
+    void subsetup(RepetitionPenaltyTestCase param) {
+        batch_size_ = param.batch_size;
+        vocab_size_ = param.vocab_size;
+        vocab_size_padded_ = pad_vocab_size(vocab_size_);
+        max_input_length_ = param.max_input_length;
+        sequence_length_ = 2 * max_input_length_;  // input + output
+        step_ = sequence_length_ * 0.7;
 
-    // Do test
-    invokeAddBiasApplyPenalties(step,
-                                d_logits + ite * vocab_size_padded,
-                                d_current_ids,
-                                d_previous_ids,
-                                d_parent_ids, // + ite * local_batch_size * beam_width,
-                                d_input_lengths + ite * local_batch_size * beam_width,
-                                d_bias,
-                                ite,
-                                max_input_length,
-                                local_batch_size,
-                                batch_size,
-                                beam_width,
-                                vocab_size,
-                                vocab_size_padded,
-                                d_end_ids,
-                                temperature,
-                                repetition_penalty,
-                                stream);
-    std::string tag = std::string("Beamsearch Penalty Kernel Correctness")
-                      + (isHalf<T>() ? " (FP16)" : " (FP32)");
-    bool passed = checkResult(tag, d_logits, h_expected, batchxbeam * vocab_size_padded);
+        h_logits_ = new T[batch_size_ * vocab_size_padded_];
+        h_bias_ = new T[vocab_size_padded_];
+        h_output_ids_ = new int[sequence_length_ * batch_size_];
+        h_input_lengths_ = new int[batch_size_];
+        initLogitsAndBias(h_logits_, h_bias_, batch_size_, vocab_size_, vocab_size_padded_);
+        initRandomInt(h_output_ids_, sequence_length_ * batch_size_, 0, vocab_size_);
+        initRandomInt(h_input_lengths_, batch_size_, 1, max_input_length_);
 
-    // Tear down test
-    check_cuda_error(cudaStreamDestroy(stream));
-    check_cuda_error(cudaFree(d_logits));
-    check_cuda_error(cudaFree(d_bias));
-    check_cuda_error(cudaFree(d_current_ids));
-    check_cuda_error(cudaFree(d_previous_ids));
-    check_cuda_error(cudaFree(d_parent_ids));
-    check_cuda_error(cudaFree(d_input_lengths));
-    check_cuda_error(cudaFree(d_end_ids));
-    delete[] h_logits;
-    delete[] h_bias;
-    delete[] h_current_ids;
-    delete[] h_previous_ids;
-    delete[] h_parent_ids;
-    delete[] h_input_lengths;
-    delete[] h_end_ids;
-    EXPECT_TRUE(passed);
+        d_logits_ = reinterpret_cast<T*>(allocator->malloc(sizeof(T) * batch_size_ * vocab_size_padded_));
+        d_bias_ = reinterpret_cast<T*>(allocator->malloc(sizeof(T) * vocab_size_padded_));
+        d_output_ids_ = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * sequence_length_ * batch_size_));
+        d_input_lengths_ = reinterpret_cast<int*>(allocator->malloc(sizeof(int) * batch_size_));
+
+        cudaAutoCpy(d_logits_, h_logits_, batch_size_ * vocab_size_padded_, stream);
+        cudaAutoCpy(d_bias_, h_bias_, vocab_size_padded_, stream);
+        cudaAutoCpy(d_output_ids_, h_output_ids_, sequence_length_ * batch_size_, stream);
+        cudaAutoCpy(d_input_lengths_, h_input_lengths_, batch_size_, stream);
+        if (param.repetition_penalties_size > 1) {
+            ASSERT_EQ(param.repetition_penalties_size, param.batch_size) << "Invalid test configuration.";
+            d_repetition_penalties_ =
+                reinterpret_cast<float*>(allocator->malloc(sizeof(T) * param.repetition_penalties_size));
+            cudaAutoCpy(d_repetition_penalties_, param.repetition_penalties, batch_size_, stream);
+        }
+    }
+
+    void subteardown() {
+        delete[] h_logits_;
+        delete[] h_bias_;
+        delete[] h_output_ids_;
+        delete[] h_input_lengths_;
+    }
+
+    void computeReference(T*           logits,
+                          const int*   output_ids,
+                          const int*   input_lengths,
+                          const float* repetition_penalties,
+                          const size_t repetition_penalties_size,
+                          const size_t step,
+                          const size_t max_input_length,
+                          const size_t batch_size,
+                          const size_t vocab_size,
+                          const size_t vocab_size_padded)
+    {
+        bool* penalized = new bool[vocab_size];
+        for (size_t i = 0; i < batch_size; ++i) {
+            float repetition_penalty =
+                repetition_penalties_size > 1 ? repetition_penalties[i] : repetition_penalties[0];
+            ASSERT_GT(repetition_penalty, 0.0f) << "temperature should be positive but got " << repetition_penalty;
+            std::fill_n(penalized, vocab_size, false);
+            size_t offset = i * vocab_size_padded;
+            for (size_t t = 0; t < step; ++t) {
+                if (t >= (size_t)input_lengths[i] && t < max_input_length) {
+                    continue;
+                }
+                int token_id = output_ids[i + t * batch_size];
+                if (!penalized[token_id]) {
+                    float logit = static_cast<float>(logits[offset + token_id]);
+                    logits[offset + token_id] =
+                        static_cast<T>(logit < 0.0f ? logit * repetition_penalty : logit / repetition_penalty);
+                    penalized[token_id] = true;
+                }
+            }
+        }
+        delete[] penalized;
+    }
+
+public:
+    void runTest(RepetitionPenaltyTestCase param)
+    {
+        subsetup(param);
+        // Do test
+        if (param.repetition_penalties_size == 1) {
+            invokeApplyRepetitionPenalty(d_logits_,
+                                         param.repetition_penalties[0],
+                                         nullptr,
+                                         d_output_ids_,
+                                         batch_size_,
+                                         batch_size_,
+                                         vocab_size_,
+                                         vocab_size_padded_,
+                                         d_input_lengths_,
+                                         max_input_length_,
+                                         step_,
+                                         stream);
+        }
+        else {
+            invokeBatchApplyRepetitionPenalty(d_logits_,
+                                              d_repetition_penalties_,
+                                              d_output_ids_,
+                                              batch_size_,
+                                              batch_size_,
+                                              vocab_size_padded_,
+                                              d_input_lengths_,
+                                              max_input_length_,
+                                              step_,
+                                              stream);
+        }
+        computeReference(h_logits_,
+                         h_output_ids_,
+                         h_input_lengths_,
+                         param.repetition_penalties,
+                         param.repetition_penalties_size,
+                         step_,
+                         max_input_length_,
+                         batch_size_,
+                         vocab_size_,
+                         vocab_size_padded_);
+        bool passed = checkResult(param.toString(), d_logits_, h_logits_, batch_size_ * vocab_size_padded_);
+        EXPECT_TRUE(passed);
+        subteardown();
+    }
+
+    void runConsistencyTest(RepetitionPenaltyTestCase param) {
+        // Set up test
+        ASSERT_EQ(param.repetition_penalties_size, 1) << "A consistency test assumes repetition_penalties_size=1";
+        subsetup(param);
+
+        // Run a single runtime value case.
+        invokeApplyRepetitionPenalty(d_logits_,
+                                     param.repetition_penalties[0],
+                                     nullptr,
+                                     d_output_ids_,
+                                     batch_size_,
+                                     batch_size_,
+                                     vocab_size_,
+                                     vocab_size_padded_,
+                                     d_input_lengths_,
+                                     max_input_length_,
+                                     step_,
+                                     stream);
+
+        float* h_repetition_penalties = new float[batch_size_];
+        for (size_t i = 0; i < batch_size_; ++i) {
+            h_repetition_penalties[i] = param.repetition_penalties[0];
+        }
+        d_repetition_penalties_ = reinterpret_cast<float*>(allocator->malloc(sizeof(T) * batch_size_));
+        cudaAutoCpy(d_repetition_penalties_, h_repetition_penalties, batch_size_, stream);
+
+        T* d_logits_batch = reinterpret_cast<T*>(allocator->malloc(sizeof(T) * batch_size_ * vocab_size_padded_));
+        cudaAutoCpy(d_logits_batch, h_logits_, batch_size_ * vocab_size_padded_, stream);
+        invokeBatchApplyRepetitionPenalty(d_logits_batch,
+                                          d_repetition_penalties_,
+                                          d_output_ids_,
+                                          batch_size_,
+                                          batch_size_,
+                                          vocab_size_padded_,
+                                          d_input_lengths_,
+                                          max_input_length_,
+                                          step_,
+                                          stream);
+        bool passed =
+            checkResult(param.toString(), d_logits_, d_logits_batch, batch_size_ * vocab_size_padded_, true, true);
+        EXPECT_TRUE(passed);
+
+        // Tear down test
+        delete[] h_repetition_penalties;
+        subteardown();
+    }
+};
+
+TYPED_TEST_SUITE(RepetitionPenaltyTest, FloatAndHalfTypes);
+
+TYPED_TEST(RepetitionPenaltyTest, NoPenalty)
+{
+    float repetition_penalty = 1.0f;
+    this->runTest({6, 4, 5, &repetition_penalty, 1});
 }
 
-int main() {
-    std::vector<TemperatureTestCase> temperature_test_cases {
-        // TC: name / batch / vocab / temperature / repetition
-        {6,  4, 0.53f},
-        {6,  4, 1.0f},
-        {6,  4, 2.01f},
-        {6,  50001, 2.01f},
-        {128,  51200, 2.01f}
-    };
-
-    for (auto &tc : temperature_test_cases) {
-        testApplyTemperaturePenaltyKernel<float>(tc);
-        testApplyTemperaturePenaltyKernel<half>(tc);
-        testBatchApplyTemperaturePenaltyKernel<float>(tc);
-        testBatchApplyTemperaturePenaltyKernel<half>(tc);
-        testConsistencyTemperaturePenaltyKernel<float>(tc);
-        testConsistencyTemperaturePenaltyKernel<half>(tc);
-    }
-    FT_LOG_INFO("test TemperaturePenaltyKernel done");
-
-    std::vector<RepetitionTestCase> repetition_test_cases {
-        {6, 4, 10, 0.53f},
-        {6, 4, 10, 1.0f},
-        {6, 4, 10, 2.01f},
-        {6, 50001, 10, 2.01f},
-        {128, 51200, 1024, 2.01f},
-        {128, 51200, 2048, 2.01f}
-    };
-    for (auto& tc : repetition_test_cases) {
-        testApplyRepetitonPenaltyKernel<float>(tc);
-        testApplyRepetitonPenaltyKernel<half>(tc);
-        testBatchApplyRepetitonPenaltyKernel<float>(tc);
-        testBatchApplyRepetitonPenaltyKernel<half>(tc);
-        testBatchApplyRepetitonPenaltyKernelWithLocalBatch<float>(tc);
-        testBatchApplyRepetitonPenaltyKernelWithLocalBatch<half>(tc);
-        testConsistencyRepetitionPenaltyKernel<float>(tc);
-        testConsistencyRepetitionPenaltyKernel<half>(tc);
-    }
-    FT_LOG_INFO("test RepetitionPenaltyKernel done");
-
-    testBeamPenaltyKernelCorrectness<float>();
-    testBeamPenaltyKernelCorrectness<half>();
-    FT_LOG_INFO("test BeamPenaltyKernelCorrectness done");
-
-    return 0;
+TYPED_TEST(RepetitionPenaltyTest, LessThanOne)
+{
+    float repetition_penalty = 0.53f;
+    this->runTest({6, 4, 5, &repetition_penalty, 1});
 }
+
+TYPED_TEST(RepetitionPenaltyTest, GreaterThaneOne)
+{
+    float repetition_penalty = 2.01f;
+    this->runTest({6, 4, 5, &repetition_penalty, 1});
+}
+
+TYPED_TEST(RepetitionPenaltyTest, LargeVocab)
+{
+    float repetition_penalty = 2.01f;
+    this->runTest({6, 50001, 1003, &repetition_penalty, 1});
+}
+
+TYPED_TEST(RepetitionPenaltyTest, BatchNoPenalty)
+{
+    size_t batch_size = 6;
+    float* repetition_penalties = new float[batch_size];
+    for (size_t i = 0; i < batch_size; ++i) {
+        repetition_penalties[i] = 1.0f;
+    }
+    this->runTest({batch_size, 4, 5, repetition_penalties, batch_size});
+}
+
+TYPED_TEST(RepetitionPenaltyTest, BatchLessThanOne)
+{
+    size_t batch_size = 6;
+    float* repetition_penalties = new float[batch_size];
+    for (size_t i = 0; i < batch_size; ++i) {
+        repetition_penalties[i] = 0.53f;
+    }
+    this->runTest({batch_size, 4, 5, repetition_penalties, batch_size});
+}
+
+TYPED_TEST(RepetitionPenaltyTest, BatchGreaterThaneOne)
+{
+    size_t batch_size = 6;
+    float* temperatures = new float[batch_size];
+    for (size_t i = 0; i < batch_size; ++i) {
+        temperatures[i] = 2.01f;
+    }
+    this->runTest({batch_size, 4, 5, temperatures, batch_size});
+}
+
+TYPED_TEST(RepetitionPenaltyTest, BatchMixed)
+{
+    size_t batch_size = 6;
+    float* repetition_penalties = new float[batch_size];
+    for (size_t i = 0; i < batch_size; ++i) {
+        repetition_penalties[i] = i % 2 ==0 ? 2.01f : 0.53f;
+    }
+    this->runTest({batch_size, 4, 5, repetition_penalties, batch_size});
+}
+
+TYPED_TEST(RepetitionPenaltyTest, Consistency)
+{
+    float repetition_penalty = 2.01f;
+    this->runConsistencyTest({6, 4, 5, &repetition_penalty, 1});
+}
+
+// Turn on the warning message.
+#pragma nv_diag_suppress 177

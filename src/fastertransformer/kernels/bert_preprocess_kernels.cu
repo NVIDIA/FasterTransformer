@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,18 +18,23 @@
 
 namespace fastertransformer {
 
-__global__ void getPaddingOffsetKernel(size_t*    valid_word_num,
-                                       int*       tmp_mask_offset,
-                                       const int* sequence_length,
-                                       const int  batch_size,
-                                       const int  max_seq_len)
+__global__ void getPaddingOffsetAndCuSeqLensKernel(size_t*    valid_word_num,
+                                                   int*       tmp_mask_offset,
+                                                   int*       cu_seqlens,
+                                                   const int* sequence_length,
+                                                   const int  batch_size,
+                                                   const int  max_seq_len)
 {
     // do cumulated sum
-    int total_seq_len = 0;
-    int cum_offset    = 0;
-    int index         = 0;
+    int        total_seq_len        = 0;
+    int        cum_offset           = 0;
+    int        index                = 0;
+    const bool calculate_cu_seqlens = cu_seqlens != nullptr;
     for (int i = 0; i < batch_size; i++) {
         const int seq_len = sequence_length[i];
+        if (calculate_cu_seqlens) {
+            cu_seqlens[i] = total_seq_len;
+        }
         for (int j = 0; j < seq_len; j++) {
             tmp_mask_offset[index] = cum_offset;
             index++;
@@ -37,19 +42,23 @@ __global__ void getPaddingOffsetKernel(size_t*    valid_word_num,
         cum_offset += max_seq_len - seq_len;
         total_seq_len += seq_len;
     }
+    if (calculate_cu_seqlens) {
+        cu_seqlens[batch_size] = total_seq_len;
+    }
     valid_word_num[0] = (size_t)total_seq_len;
 }
 
-void invokeGetPaddingOffset(size_t*      h_token_num,
-                            size_t*      d_token_num,
-                            int*         tmp_mask_offset,
-                            const int*   sequence_lengths,
-                            const int    batch_size,
-                            const int    max_seq_len,
-                            cudaStream_t stream)
+void invokeGetPaddingOffsetAndCuSeqLens(size_t*      h_token_num,
+                                        size_t*      d_token_num,
+                                        int*         tmp_mask_offset,
+                                        int*         cu_seqlens,
+                                        const int*   sequence_lengths,
+                                        const int    batch_size,
+                                        const int    max_seq_len,
+                                        cudaStream_t stream)
 {
-    getPaddingOffsetKernel<<<1, 1, 0, stream>>>(
-        d_token_num, tmp_mask_offset, sequence_lengths, batch_size, max_seq_len);
+    getPaddingOffsetAndCuSeqLensKernel<<<1, 1, 0, stream>>>(
+        d_token_num, tmp_mask_offset, cu_seqlens, sequence_lengths, batch_size, max_seq_len);
     sync_check_cuda_error();
     check_cuda_error(cudaMemcpyAsync(h_token_num, d_token_num, sizeof(size_t), cudaMemcpyDeviceToHost, stream));
     sync_check_cuda_error();

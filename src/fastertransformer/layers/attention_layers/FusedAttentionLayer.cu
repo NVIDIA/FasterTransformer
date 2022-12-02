@@ -69,9 +69,9 @@ void FusedAttentionLayer<T>::invokeTrtAddQkvBias(size_t token_num, const Attenti
 }
 
 template<typename T>
-void FusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                                     const std::vector<fastertransformer::Tensor>* input_tensors,
-                                     const AttentionWeight<T>*                     attention_weights)
+void FusedAttentionLayer<T>::forward(TensorMap*                output_tensors,
+                                     TensorMap*                input_tensors,
+                                     const AttentionWeight<T>* attention_weights)
 {
     // input_tensors: [input_query (h_token_num, d_model),
     //                 attention_mask (batch, 1, seqlen, seqlen),
@@ -80,20 +80,20 @@ void FusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>*    
 
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
 
-    const int request_batch_size = input_tensors->at(1).shape[0];
-    const int request_seq_len    = input_tensors->at(1).shape[2];
+    const int request_batch_size = input_tensors->at("attention_mask").shape[0];
+    const int request_seq_len    = input_tensors->at("attention_mask").shape[2];
     allocateBuffer(request_batch_size, request_seq_len);
 
-    T*         attention_out  = (T*)output_tensors->at(0).data;
-    const T*   from_tensor    = (const T*)input_tensors->at(0).data;
-    const T*   attention_mask = (const T*)input_tensors->at(1).data;
-    const int* padding_offset = (const int*)input_tensors->at(2).data;
+    T*         attention_out  = output_tensors->getPtr<T>("hidden_features");
+    const T*   from_tensor    = input_tensors->getPtr<T>("input_query");
+    const T*   attention_mask = input_tensors->getPtr<T>("attention_mask");
+    const int* padding_offset = input_tensors->getPtr<int>("padding_offset");
 
-    size_t m_tmp = input_tensors->at(0).shape[0];
+    size_t m_tmp = input_tensors->at("input_query").shape[0];
     if (m_tmp % 8 != 0) {
         m_tmp = (m_tmp / 8 + 1) * 8;
     }
-    const size_t m = input_tensors->at(0).shape[0];
+    const size_t m = input_tensors->at("input_query").shape[0];
     int          k = d_model_;
     int          n = hidden_units_;
 
@@ -175,10 +175,10 @@ void FusedAttentionLayer<T>::forward(std::vector<fastertransformer::Tensor>*    
     sync_check_cuda_error();
 
     int S = dispatcher_fp16->getSFromMaxSeqLen(request_seq_len);
-    FT_CHECK(dispatcher_fp16->isValid(S));
-    const int B = input_tensors->at(2).shape[0] - 1;
+    FT_CHECK(dispatcher_fp16->isValid(S, false));
+    const int B = input_tensors->at("padding_offset").shape[0] - 1;
     dispatcher_fp16->setup(S, B);
-    dispatcher_fp16->run(qkv_buf_, nullptr, (int*)input_tensors->at(2).data, attn_workspace_, qkv_buf_2_, stream_);
+    dispatcher_fp16->run(qkv_buf_, nullptr, padding_offset, attn_workspace_, qkv_buf_2_, stream_);
     sync_check_cuda_error();
 
     k = hidden_units_;
@@ -238,7 +238,8 @@ FusedAttentionLayer<T>::FusedAttentionLayer(size_t           max_batch_size,
     sparse_(sparse)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    if ((sm_ == kSM_70 || sm_ == kSM_86 || sm_ == kSM_80 || sm_ == kSM_75 || sm_ == kSM_72) && size_per_head_ == 64) {
+    if (((sm_ == kSM_70 || sm_ == kSM_86 || sm_ == kSM_80 || sm_ == kSM_75 || sm_ == kSM_72) && size_per_head_ == 64)
+        || ((sm_ == kSM_86 || sm_ == kSM_80 || sm_ == kSM_75) && size_per_head_ == 32)) {
         dispatcher_fp16.reset(new FusedMHARunnerFP16v2(head_num_, size_per_head_, sm_, q_scaling_));
     }
     else {
@@ -315,7 +316,7 @@ void FusedAttentionLayer<T>::freeBuffer()
 template<typename T>
 bool FusedAttentionLayer<T>::isValidSeqLen(const size_t seq_len)
 {
-    return seq_len <= 384;
+    return true;
 }
 
 template class FusedAttentionLayer<float>;

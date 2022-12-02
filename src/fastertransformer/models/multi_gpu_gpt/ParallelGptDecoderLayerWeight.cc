@@ -15,6 +15,7 @@
  */
 
 #include "src/fastertransformer/models/multi_gpu_gpt/ParallelGptDecoderLayerWeight.h"
+#include "src/fastertransformer/kernels/transpose_int8_kernels.h"
 #include "src/fastertransformer/utils/memory_utils.h"
 
 namespace fastertransformer {
@@ -35,9 +36,9 @@ ParallelGptDecoderLayerWeight<T>::ParallelGptDecoderLayerWeight(const int       
 {
     mallocWeights();
     setWeightPtr();
-    if (int8_mode_ != 0) {
-        transposeCalibrateQuantizeWeight();
-    }
+
+    FT_CHECK_WITH_INFO(!(std::is_same<T, float>::value && int8_mode_ == 1),
+                       "Weight only quant does not work with FP32 compute.");
 }
 
 template<typename T>
@@ -85,30 +86,157 @@ ParallelGptDecoderLayerWeight<T>::~ParallelGptDecoderLayerWeight()
                     deviceFree(int8_weights_ptr[i]);
                 }
             }
-            for (int i = 0; i < scale_ptr.size(); i++) {
-                if (scale_ptr[i] != nullptr) {
-                    deviceFree(scale_ptr[i]);
+
+            if (int8_mode_ == 1) {
+                for (int i = 0; i < scale_ptr.size(); i++) {
+                    if (weight_only_scale_ptr[i] != nullptr) {
+                        deviceFree(weight_only_scale_ptr[i]);
+                    }
                 }
             }
-            self_attention_weights.query_weight.int8_kernel                 = nullptr;
-            self_attention_weights.query_weight.scale                       = nullptr;
-            self_attention_weights.attention_output_weight.int8_kernel      = nullptr;
-            self_attention_weights.attention_output_weight.scale            = nullptr;
-            ffn_weights.intermediate_weight.int8_kernel                     = nullptr;
-            ffn_weights.intermediate_weight.scale                           = nullptr;
-            ffn_weights.output_weight.int8_kernel                           = nullptr;
-            ffn_weights.output_weight.scale                                 = nullptr;
-            after_attention_adapter_weights.intermediate_weight.int8_kernel = nullptr;
-            after_attention_adapter_weights.intermediate_weight.scale       = nullptr;
-            after_attention_adapter_weights.output_weight.int8_kernel       = nullptr;
-            after_attention_adapter_weights.output_weight.scale             = nullptr;
-            after_ffn_adapter_weights.intermediate_weight.int8_kernel       = nullptr;
-            after_ffn_adapter_weights.intermediate_weight.scale             = nullptr;
-            after_ffn_adapter_weights.output_weight.int8_kernel             = nullptr;
-            after_ffn_adapter_weights.output_weight.scale                   = nullptr;
+            else if (int8_mode_ == 2) {
+                for (int i = 0; i < scale_ptr.size(); i++) {
+                    if (scale_ptr[i] != nullptr) {
+                        deviceFree(scale_ptr[i]);
+                    }
+                }
+                for (int i = 0; i < scale_inter_ptr.size(); i++) {
+                    if (scale_inter_ptr[i] != nullptr) {
+                        deviceFree(scale_inter_ptr[i]);
+                    }
+                }
+                for (int i = 0; i < scale_out_ptr.size(); i++) {
+                    if (scale_out_ptr[i] != nullptr) {
+                        deviceFree(scale_out_ptr[i]);
+                    }
+                }
+            }
+            self_attention_weights.query_weight.int8_kernel                             = nullptr;
+            self_attention_weights.query_weight.weight_only_quant_scale                 = nullptr;
+            self_attention_weights.query_weight.scale                                   = nullptr;
+            self_attention_weights.query_weight.scale_inter                             = nullptr;
+            self_attention_weights.query_weight.scale_out                               = nullptr;
+            self_attention_weights.attention_output_weight.int8_kernel                  = nullptr;
+            self_attention_weights.attention_output_weight.weight_only_quant_scale      = nullptr;
+            self_attention_weights.attention_output_weight.scale                        = nullptr;
+            self_attention_weights.attention_output_weight.scale_inter                  = nullptr;
+            self_attention_weights.attention_output_weight.scale_out                    = nullptr;
+            ffn_weights.intermediate_weight.int8_kernel                                 = nullptr;
+            ffn_weights.intermediate_weight.weight_only_quant_scale                     = nullptr;
+            ffn_weights.intermediate_weight.scale                                       = nullptr;
+            ffn_weights.intermediate_weight.scale_inter                                 = nullptr;
+            ffn_weights.intermediate_weight.scale_out                                   = nullptr;
+            ffn_weights.output_weight.int8_kernel                                       = nullptr;
+            ffn_weights.output_weight.weight_only_quant_scale                           = nullptr;
+            ffn_weights.output_weight.scale                                             = nullptr;
+            ffn_weights.output_weight.scale_inter                                       = nullptr;
+            ffn_weights.output_weight.scale_out                                         = nullptr;
+            after_attention_adapter_weights.intermediate_weight.int8_kernel             = nullptr;
+            after_attention_adapter_weights.intermediate_weight.weight_only_quant_scale = nullptr;
+            after_attention_adapter_weights.output_weight.int8_kernel                   = nullptr;
+            after_attention_adapter_weights.output_weight.weight_only_quant_scale       = nullptr;
+            after_ffn_adapter_weights.intermediate_weight.int8_kernel                   = nullptr;
+            after_ffn_adapter_weights.intermediate_weight.weight_only_quant_scale       = nullptr;
+            after_ffn_adapter_weights.output_weight.int8_kernel                         = nullptr;
+            after_ffn_adapter_weights.output_weight.weight_only_quant_scale             = nullptr;
         }
 
         is_maintain_buffer = false;
+    }
+}
+
+template<typename T>
+void ParallelGptDecoderLayerWeight<T>::copyFrom(const ParallelGptDecoderLayerWeight& other)
+{
+    cudaD2Dcpy(weights_ptr[0], other.weights_ptr[0], hidden_units_);
+    cudaD2Dcpy(weights_ptr[1], other.weights_ptr[1], hidden_units_);
+    cudaD2Dcpy(weights_ptr[3], other.weights_ptr[3], 3 * hidden_units_ / tensor_para_size_);
+    cudaD2Dcpy(weights_ptr[5], other.weights_ptr[5], hidden_units_);
+    cudaD2Dcpy(weights_ptr[6], other.weights_ptr[6], hidden_units_);
+    cudaD2Dcpy(weights_ptr[7], other.weights_ptr[7], hidden_units_);
+    cudaD2Dcpy(weights_ptr[9], other.weights_ptr[9], inter_size_ / tensor_para_size_);
+    cudaD2Dcpy(weights_ptr[11], other.weights_ptr[11], hidden_units_);
+
+    if (gpt_variant_params_.has_adapters) {
+        // Copy adapter biases regardless of int8 mode
+        cudaD2Dcpy(weights_ptr[13], other.weights_ptr[13], gpt_variant_params_.adapter_inter_size / tensor_para_size_);
+        cudaD2Dcpy(weights_ptr[15], other.weights_ptr[15], hidden_units_);
+        cudaD2Dcpy(weights_ptr[17], other.weights_ptr[17], gpt_variant_params_.adapter_inter_size / tensor_para_size_);
+        cudaD2Dcpy(weights_ptr[19], other.weights_ptr[19], hidden_units_);
+    }
+
+    if (int8_mode_ == 0) {
+        cudaD2Dcpy(weights_ptr[2], other.weights_ptr[2], hidden_units_ * 3 * hidden_units_ / tensor_para_size_);
+        cudaD2Dcpy(weights_ptr[4], other.weights_ptr[4], hidden_units_ / tensor_para_size_ * hidden_units_);
+        cudaD2Dcpy(weights_ptr[8], other.weights_ptr[8], hidden_units_ * inter_size_ / tensor_para_size_);
+        cudaD2Dcpy(weights_ptr[10], other.weights_ptr[10], inter_size_ / tensor_para_size_ * hidden_units_);
+
+        if (gpt_variant_params_.has_adapters) {
+            cudaD2Dcpy(weights_ptr[12],
+                       other.weights_ptr[12],
+                       hidden_units_ * gpt_variant_params_.adapter_inter_size / tensor_para_size_);
+            cudaD2Dcpy(weights_ptr[14],
+                       other.weights_ptr[14],
+                       gpt_variant_params_.adapter_inter_size / tensor_para_size_ * hidden_units_);
+            cudaD2Dcpy(weights_ptr[16],
+                       other.weights_ptr[16],
+                       hidden_units_ * gpt_variant_params_.adapter_inter_size / tensor_para_size_);
+            cudaD2Dcpy(weights_ptr[18],
+                       other.weights_ptr[18],
+                       gpt_variant_params_.adapter_inter_size / tensor_para_size_ * hidden_units_);
+        }
+    }
+    else {
+        cudaD2Dcpy(
+            int8_weights_ptr[0], other.int8_weights_ptr[0], hidden_units_ * 3 * hidden_units_ / tensor_para_size_);
+        cudaD2Dcpy(int8_weights_ptr[1], other.int8_weights_ptr[1], hidden_units_ / tensor_para_size_ * hidden_units_);
+        cudaD2Dcpy(int8_weights_ptr[2], other.int8_weights_ptr[2], hidden_units_ * inter_size_ / tensor_para_size_);
+        cudaD2Dcpy(int8_weights_ptr[3], other.int8_weights_ptr[3], inter_size_ / tensor_para_size_ * hidden_units_);
+
+        if (gpt_variant_params_.has_adapters) {
+            // Copy weights for FFN adapters after attn and regular FFN
+            cudaD2Dcpy(int8_weights_ptr[4],
+                       other.int8_weights_ptr[4],
+                       hidden_units_ * gpt_variant_params_.adapter_inter_size / tensor_para_size_);
+            cudaD2Dcpy(int8_weights_ptr[5],
+                       other.int8_weights_ptr[5],
+                       gpt_variant_params_.adapter_inter_size / tensor_para_size_ * hidden_units_);
+            cudaD2Dcpy(int8_weights_ptr[6],
+                       other.int8_weights_ptr[6],
+                       hidden_units_ * gpt_variant_params_.adapter_inter_size / tensor_para_size_);
+            cudaD2Dcpy(int8_weights_ptr[7],
+                       other.int8_weights_ptr[7],
+                       gpt_variant_params_.adapter_inter_size / tensor_para_size_ * hidden_units_);
+        }
+
+        if (int8_mode_ == 1) {
+            cudaD2Dcpy(weight_only_scale_ptr[0], other.weight_only_scale_ptr[0], 3 * hidden_units_ / tensor_para_size_);
+            cudaD2Dcpy(weight_only_scale_ptr[1], other.weight_only_scale_ptr[1], hidden_units_);
+            cudaD2Dcpy(weight_only_scale_ptr[2], other.weight_only_scale_ptr[2], inter_size_ / tensor_para_size_);
+            cudaD2Dcpy(weight_only_scale_ptr[3], other.weight_only_scale_ptr[3], hidden_units_);
+
+            if (gpt_variant_params_.has_adapters) {
+                cudaD2Dcpy(weight_only_scale_ptr[4],
+                           other.weight_only_scale_ptr[4],
+                           gpt_variant_params_.adapter_inter_size / tensor_para_size_);
+                cudaD2Dcpy(weight_only_scale_ptr[5], other.weight_only_scale_ptr[5], hidden_units_);
+                cudaD2Dcpy(weight_only_scale_ptr[6],
+                           other.weight_only_scale_ptr[6],
+                           gpt_variant_params_.adapter_inter_size / tensor_para_size_);
+                cudaD2Dcpy(weight_only_scale_ptr[7], other.weight_only_scale_ptr[7], hidden_units_);
+            }
+        }
+        else if (int8_mode_ == 2) {
+            cudaD2Dcpy(scale_ptr[0], other.scale_out_ptr[0], 1);
+            cudaD2Dcpy(scale_inter_ptr[0], other.scale_inter_ptr[0], 3 * hidden_units_ / tensor_para_size_);
+            cudaD2Dcpy(scale_out_ptr[0], other.scale_out_ptr[0], 3);
+
+            for (int i = 1; i < 4; i++) {
+                cudaD2Dcpy(scale_ptr[i], other.scale_ptr[i], 1);
+                cudaD2Dcpy(scale_inter_ptr[i], other.scale_inter_ptr[i], 1);
+                cudaD2Dcpy(scale_out_ptr[i], other.scale_out_ptr[i], 1);
+            }
+        }
     }
 }
 
@@ -122,69 +250,7 @@ ParallelGptDecoderLayerWeight<T>::ParallelGptDecoderLayerWeight(const ParallelGp
     gpt_variant_params_(other.gpt_variant_params_)
 {
     mallocWeights();
-    cudaD2Dcpy(weights_ptr[0], other.weights_ptr[0], hidden_units_);
-    cudaD2Dcpy(weights_ptr[1], other.weights_ptr[1], hidden_units_);
-    cudaD2Dcpy(weights_ptr[2], other.weights_ptr[2], hidden_units_ * 3 * hidden_units_ / tensor_para_size_);
-    cudaD2Dcpy(weights_ptr[3], other.weights_ptr[3], 3 * hidden_units_ / tensor_para_size_);
-    cudaD2Dcpy(weights_ptr[4], other.weights_ptr[4], hidden_units_ / tensor_para_size_ * hidden_units_);
-    cudaD2Dcpy(weights_ptr[5], other.weights_ptr[5], hidden_units_);
-    cudaD2Dcpy(weights_ptr[6], other.weights_ptr[6], hidden_units_);
-    cudaD2Dcpy(weights_ptr[7], other.weights_ptr[7], hidden_units_);
-
-    cudaD2Dcpy(weights_ptr[8], other.weights_ptr[8], hidden_units_ * inter_size_ / tensor_para_size_);
-    cudaD2Dcpy(weights_ptr[9], other.weights_ptr[9], inter_size_ / tensor_para_size_);
-    cudaD2Dcpy(weights_ptr[10], other.weights_ptr[10], inter_size_ / tensor_para_size_ * hidden_units_);
-    cudaD2Dcpy(weights_ptr[11], other.weights_ptr[11], hidden_units_);
-
-    if (gpt_variant_params_.has_adapters) {
-        cudaD2Dcpy(weights_ptr[12],
-                   other.weights_ptr[12],
-                   hidden_units_ * gpt_variant_params_.adapter_inter_size / tensor_para_size_);
-        cudaD2Dcpy(weights_ptr[13], other.weights_ptr[13], gpt_variant_params_.adapter_inter_size / tensor_para_size_);
-        cudaD2Dcpy(weights_ptr[14],
-                   other.weights_ptr[14],
-                   gpt_variant_params_.adapter_inter_size / tensor_para_size_ * hidden_units_);
-        cudaD2Dcpy(weights_ptr[15], other.weights_ptr[15], hidden_units_);
-        cudaD2Dcpy(weights_ptr[16],
-                   other.weights_ptr[16],
-                   hidden_units_ * gpt_variant_params_.adapter_inter_size / tensor_para_size_);
-        cudaD2Dcpy(weights_ptr[17], other.weights_ptr[17], gpt_variant_params_.adapter_inter_size / tensor_para_size_);
-        cudaD2Dcpy(weights_ptr[18],
-                   other.weights_ptr[18],
-                   gpt_variant_params_.adapter_inter_size / tensor_para_size_ * hidden_units_);
-        cudaD2Dcpy(weights_ptr[19], other.weights_ptr[19], hidden_units_);
-    }
-
-    if (int8_mode_ != 0) {
-        cudaD2Dcpy(
-            int8_weights_ptr[0], other.int8_weights_ptr[0], hidden_units_ * 3 * hidden_units_ / tensor_para_size_);
-        cudaD2Dcpy(int8_weights_ptr[1], other.int8_weights_ptr[1], hidden_units_ / tensor_para_size_ * hidden_units_);
-        cudaD2Dcpy(int8_weights_ptr[2], other.int8_weights_ptr[2], hidden_units_ * inter_size_ / tensor_para_size_);
-        cudaD2Dcpy(int8_weights_ptr[3], other.int8_weights_ptr[3], inter_size_ / tensor_para_size_ * hidden_units_);
-        cudaD2Dcpy(scale_ptr[0], other.scale_ptr[0], 3 * hidden_units_ / tensor_para_size_);
-        cudaD2Dcpy(scale_ptr[1], other.scale_ptr[1], hidden_units_);
-        cudaD2Dcpy(scale_ptr[2], other.scale_ptr[2], inter_size_ / tensor_para_size_);
-        cudaD2Dcpy(scale_ptr[3], other.scale_ptr[3], hidden_units_);
-        if (gpt_variant_params_.has_adapters) {
-            cudaD2Dcpy(int8_weights_ptr[4],
-                       other.int8_weights_ptr[4],
-                       hidden_units_ * gpt_variant_params_.adapter_inter_size / tensor_para_size_);
-            cudaD2Dcpy(int8_weights_ptr[5],
-                       other.int8_weights_ptr[5],
-                       gpt_variant_params_.adapter_inter_size / tensor_para_size_ * hidden_units_);
-            cudaD2Dcpy(int8_weights_ptr[6],
-                       other.int8_weights_ptr[6],
-                       hidden_units_ * gpt_variant_params_.adapter_inter_size / tensor_para_size_);
-            cudaD2Dcpy(int8_weights_ptr[7],
-                       other.int8_weights_ptr[7],
-                       gpt_variant_params_.adapter_inter_size / tensor_para_size_ * hidden_units_);
-            cudaD2Dcpy(scale_ptr[4], other.scale_ptr[4], gpt_variant_params_.adapter_inter_size / tensor_para_size_);
-            cudaD2Dcpy(scale_ptr[5], other.scale_ptr[5], hidden_units_);
-            cudaD2Dcpy(scale_ptr[6], other.scale_ptr[6], gpt_variant_params_.adapter_inter_size / tensor_para_size_);
-            cudaD2Dcpy(scale_ptr[7], other.scale_ptr[7], hidden_units_);
-        }
-    }
-
+    copyFrom(other);
     setWeightPtr();
 }
 
@@ -200,69 +266,7 @@ ParallelGptDecoderLayerWeight<T>::operator=(const ParallelGptDecoderLayerWeight&
     gpt_variant_params_ = other.gpt_variant_params_;
 
     mallocWeights();
-    cudaD2Dcpy(weights_ptr[0], other.weights_ptr[0], hidden_units_);
-    cudaD2Dcpy(weights_ptr[1], other.weights_ptr[1], hidden_units_);
-    cudaD2Dcpy(weights_ptr[2], other.weights_ptr[2], hidden_units_ * 3 * hidden_units_ / tensor_para_size_);
-    cudaD2Dcpy(weights_ptr[3], other.weights_ptr[3], 3 * hidden_units_ / tensor_para_size_);
-    cudaD2Dcpy(weights_ptr[4], other.weights_ptr[4], hidden_units_ / tensor_para_size_ * hidden_units_);
-    cudaD2Dcpy(weights_ptr[5], other.weights_ptr[5], hidden_units_);
-    cudaD2Dcpy(weights_ptr[6], other.weights_ptr[6], hidden_units_);
-    cudaD2Dcpy(weights_ptr[7], other.weights_ptr[7], hidden_units_);
-
-    cudaD2Dcpy(weights_ptr[8], other.weights_ptr[8], hidden_units_ * inter_size_ / tensor_para_size_);
-    cudaD2Dcpy(weights_ptr[9], other.weights_ptr[9], inter_size_ / tensor_para_size_);
-    cudaD2Dcpy(weights_ptr[10], other.weights_ptr[10], inter_size_ / tensor_para_size_ * hidden_units_);
-    cudaD2Dcpy(weights_ptr[11], other.weights_ptr[11], hidden_units_);
-
-    if (gpt_variant_params_.has_adapters) {
-        cudaD2Dcpy(weights_ptr[12],
-                   other.weights_ptr[12],
-                   hidden_units_ * gpt_variant_params_.adapter_inter_size / tensor_para_size_);
-        cudaD2Dcpy(weights_ptr[13], other.weights_ptr[13], gpt_variant_params_.adapter_inter_size / tensor_para_size_);
-        cudaD2Dcpy(weights_ptr[14],
-                   other.weights_ptr[14],
-                   gpt_variant_params_.adapter_inter_size / tensor_para_size_ * hidden_units_);
-        cudaD2Dcpy(weights_ptr[15], other.weights_ptr[15], hidden_units_);
-        cudaD2Dcpy(weights_ptr[16],
-                   other.weights_ptr[16],
-                   hidden_units_ * gpt_variant_params_.adapter_inter_size / tensor_para_size_);
-        cudaD2Dcpy(weights_ptr[17], other.weights_ptr[17], gpt_variant_params_.adapter_inter_size / tensor_para_size_);
-        cudaD2Dcpy(weights_ptr[18],
-                   other.weights_ptr[18],
-                   gpt_variant_params_.adapter_inter_size / tensor_para_size_ * hidden_units_);
-        cudaD2Dcpy(weights_ptr[19], other.weights_ptr[19], hidden_units_);
-    }
-
-    if (int8_mode_ != 0) {
-        cudaD2Dcpy(
-            int8_weights_ptr[0], other.int8_weights_ptr[0], hidden_units_ * 3 * hidden_units_ / tensor_para_size_);
-        cudaD2Dcpy(int8_weights_ptr[1], other.int8_weights_ptr[1], hidden_units_ / tensor_para_size_ * hidden_units_);
-        cudaD2Dcpy(int8_weights_ptr[2], other.int8_weights_ptr[2], hidden_units_ * inter_size_ / tensor_para_size_);
-        cudaD2Dcpy(int8_weights_ptr[3], other.int8_weights_ptr[3], inter_size_ / tensor_para_size_ * hidden_units_);
-        cudaD2Dcpy(scale_ptr[0], other.scale_ptr[0], 3 * hidden_units_ / tensor_para_size_);
-        cudaD2Dcpy(scale_ptr[1], other.scale_ptr[1], hidden_units_);
-        cudaD2Dcpy(scale_ptr[2], other.scale_ptr[2], inter_size_ / tensor_para_size_);
-        cudaD2Dcpy(scale_ptr[3], other.scale_ptr[3], hidden_units_);
-        if (gpt_variant_params_.has_adapters) {
-            cudaD2Dcpy(int8_weights_ptr[4],
-                       other.int8_weights_ptr[4],
-                       hidden_units_ * gpt_variant_params_.adapter_inter_size / tensor_para_size_);
-            cudaD2Dcpy(int8_weights_ptr[5],
-                       other.int8_weights_ptr[5],
-                       gpt_variant_params_.adapter_inter_size / tensor_para_size_ * hidden_units_);
-            cudaD2Dcpy(int8_weights_ptr[6],
-                       other.int8_weights_ptr[6],
-                       hidden_units_ * gpt_variant_params_.adapter_inter_size / tensor_para_size_);
-            cudaD2Dcpy(int8_weights_ptr[7],
-                       other.int8_weights_ptr[7],
-                       gpt_variant_params_.adapter_inter_size / tensor_para_size_ * hidden_units_);
-            cudaD2Dcpy(scale_ptr[4], other.scale_ptr[4], gpt_variant_params_.adapter_inter_size / tensor_para_size_);
-            cudaD2Dcpy(scale_ptr[5], other.scale_ptr[5], hidden_units_);
-            cudaD2Dcpy(scale_ptr[6], other.scale_ptr[6], gpt_variant_params_.adapter_inter_size / tensor_para_size_);
-            cudaD2Dcpy(scale_ptr[7], other.scale_ptr[7], hidden_units_);
-        }
-    }
-
+    copyFrom(other);
     setWeightPtr();
     return *this;
 }
@@ -274,79 +278,189 @@ void ParallelGptDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDat
 
     loadWeightFromBin<T>(weights_ptr[0], {hidden_units_}, dir_path + ".input_layernorm.bias.bin", model_file_type);
     loadWeightFromBin<T>(weights_ptr[1], {hidden_units_}, dir_path + ".input_layernorm.weight.bin", model_file_type);
-    loadWeightFromBin<T>(weights_ptr[2],
-                         {hidden_units_, 3 * hidden_units_ / tensor_para_size_},
-                         dir_path + ".attention.query_key_value.weight." + std::to_string(tensor_para_rank_) + ".bin",
-                         model_file_type);
     loadWeightFromBin<T>(weights_ptr[3],
                          {3, hidden_units_ / tensor_para_size_},
                          dir_path + ".attention.query_key_value.bias." + std::to_string(tensor_para_rank_) + ".bin",
-                         model_file_type);
-    loadWeightFromBin<T>(weights_ptr[4],
-                         {hidden_units_ / tensor_para_size_, hidden_units_},
-                         dir_path + ".attention.dense.weight." + std::to_string(tensor_para_rank_) + ".bin",
                          model_file_type);
     loadWeightFromBin<T>(weights_ptr[5], {hidden_units_}, dir_path + ".attention.dense.bias.bin", model_file_type);
     loadWeightFromBin<T>(
         weights_ptr[6], {hidden_units_}, dir_path + ".post_attention_layernorm.bias.bin", model_file_type);
     loadWeightFromBin<T>(
         weights_ptr[7], {hidden_units_}, dir_path + ".post_attention_layernorm.weight.bin", model_file_type);
-
-    loadWeightFromBin<T>(weights_ptr[8],
-                         {hidden_units_, inter_size_ / tensor_para_size_},
-                         dir_path + ".mlp.dense_h_to_4h.weight." + std::to_string(tensor_para_rank_) + ".bin",
-                         model_file_type);
     loadWeightFromBin<T>(weights_ptr[9],
                          {inter_size_ / tensor_para_size_},
                          dir_path + ".mlp.dense_h_to_4h.bias." + std::to_string(tensor_para_rank_) + ".bin",
                          model_file_type);
-    loadWeightFromBin<T>(weights_ptr[10],
-                         {inter_size_ / tensor_para_size_, hidden_units_},
-                         dir_path + ".mlp.dense_4h_to_h.weight." + std::to_string(tensor_para_rank_) + ".bin",
-                         model_file_type);
     loadWeightFromBin<T>(weights_ptr[11], {hidden_units_}, dir_path + ".mlp.dense_4h_to_h.bias.bin", model_file_type);
 
     if (gpt_variant_params_.has_adapters) {
-        loadWeightFromBin<T>(weights_ptr[12],
-                             {hidden_units_, gpt_variant_params_.adapter_inter_size / tensor_para_size_},
-                             dir_path + ".after_attention_adapter.dense_h_to_4h.weight."
-                                 + std::to_string(tensor_para_rank_) + ".bin",
-                             model_file_type);
         loadWeightFromBin<T>(weights_ptr[13],
                              {gpt_variant_params_.adapter_inter_size / tensor_para_size_},
                              dir_path + ".after_attention_adapter.dense_h_to_4h.bias."
                                  + std::to_string(tensor_para_rank_) + ".bin",
                              model_file_type);
-        loadWeightFromBin<T>(weights_ptr[14],
-                             {gpt_variant_params_.adapter_inter_size / tensor_para_size_, hidden_units_},
-                             dir_path + ".after_attention_adapter.dense_4h_to_h.weight."
-                                 + std::to_string(tensor_para_rank_) + ".bin",
-                             model_file_type);
+
         loadWeightFromBin<T>(weights_ptr[15],
                              {hidden_units_},
                              dir_path + ".after_attention_adapter.dense_4h_to_h.bias.bin",
                              model_file_type);
-        loadWeightFromBin<T>(weights_ptr[16],
-                             {hidden_units_, gpt_variant_params_.adapter_inter_size / tensor_para_size_},
-                             dir_path + ".after_ffn_adapter.dense_h_to_4h.weight." + std::to_string(tensor_para_rank_)
-                                 + ".bin",
-                             model_file_type);
+
         loadWeightFromBin<T>(weights_ptr[17],
                              {gpt_variant_params_.adapter_inter_size / tensor_para_size_},
                              dir_path + ".after_ffn_adapter.dense_h_to_4h.bias." + std::to_string(tensor_para_rank_)
                                  + ".bin",
                              model_file_type);
-        loadWeightFromBin<T>(weights_ptr[18],
-                             {gpt_variant_params_.adapter_inter_size / tensor_para_size_, hidden_units_},
-                             dir_path + ".after_ffn_adapter.dense_4h_to_h.weight." + std::to_string(tensor_para_rank_)
-                                 + ".bin",
-                             model_file_type);
+
         loadWeightFromBin<T>(
             weights_ptr[19], {hidden_units_}, dir_path + ".after_ffn_adapter.dense_4h_to_h.bias.bin", model_file_type);
     }
 
-    if (int8_mode_ != 0) {
-        transposeCalibrateQuantizeWeight();
+    // Load weights for GPT
+    if (int8_mode_ == 0) {
+        loadWeightFromBin<T>(weights_ptr[2],
+                             {hidden_units_, 3 * hidden_units_ / tensor_para_size_},
+                             dir_path + ".attention.query_key_value.weight." + std::to_string(tensor_para_rank_)
+                                 + ".bin",
+                             model_file_type);
+
+        loadWeightFromBin<T>(weights_ptr[4],
+                             {hidden_units_ / tensor_para_size_, hidden_units_},
+                             dir_path + ".attention.dense.weight." + std::to_string(tensor_para_rank_) + ".bin",
+                             model_file_type);
+
+        loadWeightFromBin<T>(weights_ptr[8],
+                             {hidden_units_, inter_size_ / tensor_para_size_},
+                             dir_path + ".mlp.dense_h_to_4h.weight." + std::to_string(tensor_para_rank_) + ".bin",
+                             model_file_type);
+
+        loadWeightFromBin<T>(weights_ptr[10],
+                             {inter_size_ / tensor_para_size_, hidden_units_},
+                             dir_path + ".mlp.dense_4h_to_h.weight." + std::to_string(tensor_para_rank_) + ".bin",
+                             model_file_type);
+
+        // Load adapter weights if required.
+        if (gpt_variant_params_.has_adapters) {
+            loadWeightFromBin<T>(weights_ptr[12],
+                                 {hidden_units_, gpt_variant_params_.adapter_inter_size / tensor_para_size_},
+                                 dir_path + ".after_attention_adapter.dense_h_to_4h.weight."
+                                     + std::to_string(tensor_para_rank_) + ".bin",
+                                 model_file_type);
+
+            loadWeightFromBin<T>(weights_ptr[14],
+                                 {gpt_variant_params_.adapter_inter_size / tensor_para_size_, hidden_units_},
+                                 dir_path + ".after_attention_adapter.dense_4h_to_h.weight."
+                                     + std::to_string(tensor_para_rank_) + ".bin",
+                                 model_file_type);
+
+            loadWeightFromBin<T>(weights_ptr[16],
+                                 {hidden_units_, gpt_variant_params_.adapter_inter_size / tensor_para_size_},
+                                 dir_path + ".after_ffn_adapter.dense_h_to_4h.weight."
+                                     + std::to_string(tensor_para_rank_) + ".bin",
+                                 model_file_type);
+
+            loadWeightFromBin<T>(weights_ptr[18],
+                                 {gpt_variant_params_.adapter_inter_size / tensor_para_size_, hidden_units_},
+                                 dir_path + ".after_ffn_adapter.dense_4h_to_h.weight."
+                                     + std::to_string(tensor_para_rank_) + ".bin",
+                                 model_file_type);
+        }
+    }
+    else if (int8_mode_ == 1) {
+        loadWeightFromBinAndQuantizeForWeightOnly<T>(int8_weights_ptr[0],
+                                                     weight_only_scale_ptr[0],
+                                                     {hidden_units_, 3 * hidden_units_ / tensor_para_size_},
+                                                     dir_path + ".attention.query_key_value.weight."
+                                                         + std::to_string(tensor_para_rank_) + ".bin",
+                                                     model_file_type);
+
+        loadWeightFromBinAndQuantizeForWeightOnly<T>(int8_weights_ptr[1],
+                                                     weight_only_scale_ptr[1],
+                                                     {hidden_units_ / tensor_para_size_, hidden_units_},
+                                                     dir_path + ".attention.dense.weight."
+                                                         + std::to_string(tensor_para_rank_) + ".bin",
+                                                     model_file_type);
+
+        loadWeightFromBinAndQuantizeForWeightOnly<T>(int8_weights_ptr[2],
+                                                     weight_only_scale_ptr[2],
+                                                     {hidden_units_, inter_size_ / tensor_para_size_},
+                                                     dir_path + ".mlp.dense_h_to_4h.weight."
+                                                         + std::to_string(tensor_para_rank_) + ".bin",
+                                                     model_file_type);
+
+        loadWeightFromBinAndQuantizeForWeightOnly<T>(int8_weights_ptr[3],
+                                                     weight_only_scale_ptr[3],
+                                                     {inter_size_ / tensor_para_size_, hidden_units_},
+                                                     dir_path + ".mlp.dense_4h_to_h.weight."
+                                                         + std::to_string(tensor_para_rank_) + ".bin",
+                                                     model_file_type);
+
+        // Load adapter weights if required.
+        if (gpt_variant_params_.has_adapters) {
+            loadWeightFromBinAndQuantizeForWeightOnly<T>(
+                int8_weights_ptr[4],
+                weight_only_scale_ptr[4],
+                {hidden_units_, gpt_variant_params_.adapter_inter_size / tensor_para_size_},
+                dir_path + ".after_attention_adapter.dense_h_to_4h.weight." + std::to_string(tensor_para_rank_)
+                    + ".bin",
+                model_file_type);
+
+            loadWeightFromBinAndQuantizeForWeightOnly<T>(
+                int8_weights_ptr[5],
+                weight_only_scale_ptr[5],
+                {gpt_variant_params_.adapter_inter_size / tensor_para_size_, hidden_units_},
+                dir_path + ".after_attention_adapter.dense_4h_to_h.weight." + std::to_string(tensor_para_rank_)
+                    + ".bin",
+                model_file_type);
+
+            loadWeightFromBinAndQuantizeForWeightOnly<T>(
+                int8_weights_ptr[6],
+                weight_only_scale_ptr[6],
+                {hidden_units_, gpt_variant_params_.adapter_inter_size / tensor_para_size_},
+                dir_path + ".after_ffn_adapter.dense_h_to_4h.weight." + std::to_string(tensor_para_rank_) + ".bin",
+                model_file_type);
+
+            loadWeightFromBinAndQuantizeForWeightOnly<T>(
+                int8_weights_ptr[7],
+                weight_only_scale_ptr[7],
+                {gpt_variant_params_.adapter_inter_size / tensor_para_size_, hidden_units_},
+                dir_path + ".after_ffn_adapter.dense_4h_to_h.weight." + std::to_string(tensor_para_rank_) + ".bin",
+                model_file_type);
+        }
+    }
+    else if (int8_mode_ == 2) {
+        const auto                     tp_rank = std::to_string(tensor_para_rank_);
+        const std::vector<std::string> weight_list{
+            "attention.query_key_value", "attention.dense", "mlp.dense_h_to_4h", "mlp.dense_4h_to_h"};
+        const std::vector<std::vector<size_t>> shape_list{{hidden_units_, 3 * hidden_units_ / tensor_para_size_},
+                                                          {hidden_units_ / tensor_para_size_, hidden_units_},
+                                                          {hidden_units_, inter_size_ / tensor_para_size_},
+                                                          {inter_size_ / tensor_para_size_, hidden_units_}};
+        for (int i = 0; i < weight_list.size(); i++) {
+            loadWeightFromBin<int8_t>(int8_weights_ptr[i],
+                                      shape_list[i],
+                                      dir_path + "." + weight_list[i] + ".weight.int8." + tp_rank + ".bin",
+                                      FtCudaDataType::INT8);
+
+            const std::pair<std::vector<std::vector<float*>*>, std::vector<std::string>> arg_pair{
+                {&scale_ptr, &scale_inter_ptr, &scale_out_ptr}, {"scale", "scale_inter", "scale_out"}};
+            for (int j = 0; j < arg_pair.first.size(); j++) {
+                size_t num_elems = 1;
+                // attention.qkv scale_inter has 3 weights for Q, K and V
+                // attention.qkv scale_out has 3 weights for Q, K and V, duplicated along hidden_units dim
+                if (i == 0 && j == 1) {
+                    num_elems = 3 * hidden_units_ / tensor_para_size_;
+                }
+                else if (i == 0 && j == 2) {
+                    num_elems = 3;
+                }
+
+                loadWeightFromBin<float>((*arg_pair.first[j])[i],
+                                         {num_elems},
+                                         dir_path + "." + weight_list[i] + "." + arg_pair.second[j] + ".bin",
+                                         FtCudaDataType::FP32);
+            }
+        }
+        transposeWeight();
     }
 }
 
@@ -379,21 +493,38 @@ void ParallelGptDecoderLayerWeight<T>::setWeightPtr()
 
     if (int8_mode_ != 0) {
         self_attention_weights.query_weight.int8_kernel                 = int8_weights_ptr[0];
-        self_attention_weights.query_weight.scale                       = scale_ptr[0];
         self_attention_weights.attention_output_weight.int8_kernel      = int8_weights_ptr[1];
-        self_attention_weights.attention_output_weight.scale            = scale_ptr[1];
         ffn_weights.intermediate_weight.int8_kernel                     = int8_weights_ptr[2];
-        ffn_weights.intermediate_weight.scale                           = scale_ptr[2];
         ffn_weights.output_weight.int8_kernel                           = int8_weights_ptr[3];
-        ffn_weights.output_weight.scale                                 = scale_ptr[3];
         after_attention_adapter_weights.intermediate_weight.int8_kernel = int8_weights_ptr[4];
-        after_attention_adapter_weights.intermediate_weight.scale       = scale_ptr[4];
         after_attention_adapter_weights.output_weight.int8_kernel       = int8_weights_ptr[5];
-        after_attention_adapter_weights.output_weight.scale             = scale_ptr[5];
         after_ffn_adapter_weights.intermediate_weight.int8_kernel       = int8_weights_ptr[6];
-        after_ffn_adapter_weights.intermediate_weight.scale             = scale_ptr[6];
         after_ffn_adapter_weights.output_weight.int8_kernel             = int8_weights_ptr[7];
-        after_ffn_adapter_weights.output_weight.scale                   = scale_ptr[7];
+
+        if (int8_mode_ == 1) {
+            self_attention_weights.query_weight.weight_only_quant_scale                 = weight_only_scale_ptr[0];
+            self_attention_weights.attention_output_weight.weight_only_quant_scale      = weight_only_scale_ptr[1];
+            ffn_weights.intermediate_weight.weight_only_quant_scale                     = weight_only_scale_ptr[2];
+            ffn_weights.output_weight.weight_only_quant_scale                           = weight_only_scale_ptr[3];
+            after_attention_adapter_weights.intermediate_weight.weight_only_quant_scale = weight_only_scale_ptr[4];
+            after_attention_adapter_weights.output_weight.weight_only_quant_scale       = weight_only_scale_ptr[5];
+            after_ffn_adapter_weights.intermediate_weight.weight_only_quant_scale       = weight_only_scale_ptr[6];
+            after_ffn_adapter_weights.output_weight.weight_only_quant_scale             = weight_only_scale_ptr[7];
+        }
+        else if (int8_mode_ == 2) {
+            self_attention_weights.query_weight.scale                  = scale_ptr[0];
+            self_attention_weights.query_weight.scale_inter            = scale_inter_ptr[0];
+            self_attention_weights.query_weight.scale_out              = scale_out_ptr[0];
+            self_attention_weights.attention_output_weight.scale       = scale_ptr[1];
+            self_attention_weights.attention_output_weight.scale_inter = scale_inter_ptr[1];
+            self_attention_weights.attention_output_weight.scale_out   = scale_out_ptr[1];
+            ffn_weights.intermediate_weight.scale                      = scale_ptr[2];
+            ffn_weights.intermediate_weight.scale_inter                = scale_inter_ptr[2];
+            ffn_weights.intermediate_weight.scale_out                  = scale_out_ptr[2];
+            ffn_weights.output_weight.scale                            = scale_ptr[3];
+            ffn_weights.output_weight.scale_inter                      = scale_inter_ptr[3];
+            ffn_weights.output_weight.scale_out                        = scale_out_ptr[3];
+        }
     }
 
     is_maintain_buffer = true;
@@ -402,43 +533,47 @@ void ParallelGptDecoderLayerWeight<T>::setWeightPtr()
 template<typename T>
 void ParallelGptDecoderLayerWeight<T>::mallocWeights()
 {
-    deviceMalloc(&weights_ptr[0], hidden_units_);
-    deviceMalloc(&weights_ptr[1], hidden_units_);
-    deviceMalloc(&weights_ptr[2], hidden_units_ * 3 * hidden_units_ / tensor_para_size_);
-    deviceMalloc(&weights_ptr[3], 3 * hidden_units_ / tensor_para_size_);
-    deviceMalloc(&weights_ptr[4], hidden_units_ / tensor_para_size_ * hidden_units_);
-    deviceMalloc(&weights_ptr[5], hidden_units_);
-    deviceMalloc(&weights_ptr[6], hidden_units_);
-    deviceMalloc(&weights_ptr[7], hidden_units_);
+    deviceMalloc(&weights_ptr[0], hidden_units_);                          // pre layer norm beta
+    deviceMalloc(&weights_ptr[1], hidden_units_);                          // pre layer norm gamma
+    deviceMalloc(&weights_ptr[3], 3 * hidden_units_ / tensor_para_size_);  // qkv biases
+    deviceMalloc(&weights_ptr[5], hidden_units_);                          // attention output bias
+    deviceMalloc(&weights_ptr[6], hidden_units_);                          // attn layer norm beta
+    deviceMalloc(&weights_ptr[7], hidden_units_);                          // attn layer norm gamma
+    deviceMalloc(&weights_ptr[9], inter_size_ / tensor_para_size_);        // ffn inter bias
+    deviceMalloc(&weights_ptr[11], hidden_units_);                         // ffn output bias
 
-    deviceMalloc(&weights_ptr[8], hidden_units_ * inter_size_ / tensor_para_size_);
-    deviceMalloc(&weights_ptr[9], inter_size_ / tensor_para_size_);
-    deviceMalloc(&weights_ptr[10], inter_size_ / tensor_para_size_ * hidden_units_);
-    deviceMalloc(&weights_ptr[11], hidden_units_);
-
+    // Alloc biases adapters. They do not get quantized so are placed here.
     if (gpt_variant_params_.has_adapters) {
-        deviceMalloc(&weights_ptr[12], hidden_units_ * gpt_variant_params_.adapter_inter_size / tensor_para_size_);
         deviceMalloc(&weights_ptr[13], gpt_variant_params_.adapter_inter_size / tensor_para_size_);
-        deviceMalloc(&weights_ptr[14], gpt_variant_params_.adapter_inter_size / tensor_para_size_ * hidden_units_);
         deviceMalloc(&weights_ptr[15], hidden_units_);
-        deviceMalloc(&weights_ptr[16], hidden_units_ * gpt_variant_params_.adapter_inter_size / tensor_para_size_);
         deviceMalloc(&weights_ptr[17], gpt_variant_params_.adapter_inter_size / tensor_para_size_);
-        deviceMalloc(&weights_ptr[18], gpt_variant_params_.adapter_inter_size / tensor_para_size_ * hidden_units_);
         deviceMalloc(&weights_ptr[19], hidden_units_);
     }
 
-    if (int8_mode_ != 0) {
+    if (int8_mode_ == 0) {
+        deviceMalloc(&weights_ptr[2], hidden_units_ * 3 * hidden_units_ / tensor_para_size_);  // qkv weight
+        deviceMalloc(&weights_ptr[4],
+                     hidden_units_ / tensor_para_size_ * hidden_units_);                  // attention output weight
+        deviceMalloc(&weights_ptr[8], hidden_units_ * inter_size_ / tensor_para_size_);   // ffn inter weight
+        deviceMalloc(&weights_ptr[10], inter_size_ / tensor_para_size_ * hidden_units_);  // ffn output weight
+
+        // Alloc weights for adapters
+        if (gpt_variant_params_.has_adapters) {
+            deviceMalloc(&weights_ptr[12], hidden_units_ * gpt_variant_params_.adapter_inter_size / tensor_para_size_);
+            deviceMalloc(&weights_ptr[14], gpt_variant_params_.adapter_inter_size / tensor_para_size_ * hidden_units_);
+            deviceMalloc(&weights_ptr[16], hidden_units_ * gpt_variant_params_.adapter_inter_size / tensor_para_size_);
+            deviceMalloc(&weights_ptr[18], gpt_variant_params_.adapter_inter_size / tensor_para_size_ * hidden_units_);
+        }
+    }
+    else {
+        // Alloc FFN and Attention int8 weights
         deviceMalloc(&int8_weights_ptr[0], hidden_units_ * 3 * hidden_units_ / tensor_para_size_);
         deviceMalloc(&int8_weights_ptr[1], hidden_units_ / tensor_para_size_ * hidden_units_);
         deviceMalloc(&int8_weights_ptr[2], hidden_units_ * inter_size_ / tensor_para_size_);
         deviceMalloc(&int8_weights_ptr[3], inter_size_ / tensor_para_size_ * hidden_units_);
 
-        deviceMalloc(&scale_ptr[0], 3 * hidden_units_ / tensor_para_size_);
-        deviceMalloc(&scale_ptr[1], hidden_units_);
-        deviceMalloc(&scale_ptr[2], inter_size_ / tensor_para_size_);
-        deviceMalloc(&scale_ptr[3], hidden_units_);
-
         if (gpt_variant_params_.has_adapters) {
+            // Alloc weights for FFN adapters after attn and regular FFN
             deviceMalloc(&int8_weights_ptr[4],
                          hidden_units_ * gpt_variant_params_.adapter_inter_size / tensor_para_size_);
             deviceMalloc(&int8_weights_ptr[5],
@@ -447,10 +582,32 @@ void ParallelGptDecoderLayerWeight<T>::mallocWeights()
                          hidden_units_ * gpt_variant_params_.adapter_inter_size / tensor_para_size_);
             deviceMalloc(&int8_weights_ptr[7],
                          gpt_variant_params_.adapter_inter_size / tensor_para_size_ * hidden_units_);
-            deviceMalloc(&scale_ptr[4], gpt_variant_params_.adapter_inter_size / tensor_para_size_);
-            deviceMalloc(&scale_ptr[5], hidden_units_);
-            deviceMalloc(&scale_ptr[6], gpt_variant_params_.adapter_inter_size / tensor_para_size_);
-            deviceMalloc(&scale_ptr[7], hidden_units_);
+        }
+
+        if (int8_mode_ == 1) {
+            // Alloc scales for weight only quant for attention and FFN weights
+            deviceMalloc(&weight_only_scale_ptr[0], 3 * hidden_units_ / tensor_para_size_);
+            deviceMalloc(&weight_only_scale_ptr[1], hidden_units_);
+            deviceMalloc(&weight_only_scale_ptr[2], inter_size_ / tensor_para_size_);
+            deviceMalloc(&weight_only_scale_ptr[3], hidden_units_);
+
+            if (gpt_variant_params_.has_adapters) {
+                // Alloc scales for FFN adapters after attn and regular FFN.
+                deviceMalloc(&weight_only_scale_ptr[4], gpt_variant_params_.adapter_inter_size / tensor_para_size_);
+                deviceMalloc(&weight_only_scale_ptr[5], hidden_units_);
+                deviceMalloc(&weight_only_scale_ptr[6], gpt_variant_params_.adapter_inter_size / tensor_para_size_);
+                deviceMalloc(&weight_only_scale_ptr[7], hidden_units_);
+            }
+        }
+        else if (int8_mode_ == 2) {
+            deviceMalloc(&scale_ptr[0], 1);
+            deviceMalloc(&scale_inter_ptr[0], 3 * hidden_units_ / tensor_para_size_);
+            deviceMalloc(&scale_out_ptr[0], 3);
+            for (int i = 1; i < 4; i++) {
+                deviceMalloc(&scale_ptr[i], 1);
+                deviceMalloc(&scale_inter_ptr[i], 1);
+                deviceMalloc(&scale_out_ptr[i], 1);
+            }
         }
     }
 }
@@ -503,6 +660,32 @@ void ParallelGptDecoderLayerWeight<T>::compress_weights(cublasMMWrapper& cublas_
 }
 #endif
 
+template<typename T>
+void ParallelGptDecoderLayerWeight<T>::transposeWeight()
+{
+    const auto                             tp = tensor_para_size_;
+    const std::vector<std::vector<size_t>> shape_list{{hidden_units_, 3 * hidden_units_ / tp},
+                                                      {hidden_units_ / tp, hidden_units_},
+                                                      {hidden_units_, inter_size_ / tp},
+                                                      {inter_size_ / tp, hidden_units_}};
+
+    const auto max_size =
+        sizeof(int8_t) * std::max(3 * hidden_units_ * hidden_units_ / tp, hidden_units_ * inter_size_ / tp);
+
+    int8_t* transpose_temp;
+    cudaMalloc(&transpose_temp, max_size);
+
+    for (int i = 0; i < shape_list.size(); i++) {
+        invokeTransposeInt8Tensor({MEMORY_GPU, TYPE_INT8, {shape_list[i][1], shape_list[i][0]}, transpose_temp},
+                                  {MEMORY_GPU, TYPE_INT8, shape_list[i], int8_weights_ptr[i]},
+                                  stream_);
+        cudaD2Dcpy(int8_weights_ptr[i], transpose_temp, shape_list[i][0] * shape_list[i][1]);
+    }
+
+    cudaFree(transpose_temp);
+}
+
+// This function is deprecated.
 template<typename T>
 void ParallelGptDecoderLayerWeight<T>::transposeCalibrateQuantizeWeight()
 {

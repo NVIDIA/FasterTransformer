@@ -12,29 +12,37 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from __future__ import print_function
-
 import argparse
 import dataclasses
-import json
 import os
 import pathlib
 import typing
 
-import torch
-import torch.nn as nn
 import numpy as np
+import torch
 import torch.distributed as dist
+import torch.nn as nn
+
+str_type_map = {"fp32": torch.float32, "fp16": torch.float16, "bf16": torch.bfloat16}
 
 
-class GPTWeights(object):
+class GPTWeights:
     def __init__(self, head_num, size_per_head, layer_num, vocab_size, max_seq_len, tensor_para_size, pipeline_para_size,
-                 has_adapters=False, adapter_inter_size = 0, has_post_decoder_layernorm=True,
-                 int8_mode=0, weights_data_type=typing.Union[str, np.float32]):
+                 weights_data_type: typing.Union[str, np.dtype],
+                 inference_data_type: str,
+                 has_adapters: bool = False,
+                 adapter_inter_size: int = 0,
+                 has_positional_encoding: bool = True,
+                 has_pre_decoder_layernorm: bool = False,
+                 has_post_decoder_layernorm: bool = True,
+                 int8_mode: int = 0):
         assert(head_num % tensor_para_size == 0)
 
-        if int8_mode != 0:
-            self.weight_transpose_calibrate_quantize = torch.ops.fastertransformer.weight_transpose_calibrate_quantize
+        if int8_mode == 1:
+            quant = torch.ops.fastertransformer.symmetric_quantize_last_axis_of_batched_matrix
+            self.weight_transpose_calibrate_quantize = lambda x: quant(x, torch.int8)
+        else:
+            assert int8_mode == 0, "Invalid int8 mode for GPT. Must be 0 or 1"
 
         self.head_num = head_num
         self.size_per_head = size_per_head
@@ -47,6 +55,8 @@ class GPTWeights(object):
 
         self.has_adapters = has_adapters
         self.adapter_inter_size = adapter_inter_size
+        self.has_positional_encoding = has_positional_encoding
+        self.has_pre_decoder_layernorm = has_pre_decoder_layernorm
         self.has_post_decoder_layernorm = has_post_decoder_layernorm
 
         local_head_num = head_num // tensor_para_size
@@ -77,61 +87,111 @@ class GPTWeights(object):
 
         assert weights_data_type in [np.float32, np.float16]
         self.weights_data_type = weights_data_type
+        self.inference_data_type = inference_data_type
 
         self.w = []
         self.int8_w = []
         self.scale = []
         # Transformer blocks
-        self.w.extend([torch.zeros(global_hidden_units)] * layer_num)   # self_layernorm_gamma
-        self.w.extend([torch.zeros(global_hidden_units)] * layer_num)   # self_layernorm_beta
-        self.w.extend([torch.zeros(global_hidden_units, local_hidden_units * 3)] * layer_num)   # self_kernel
-        self.w.extend([torch.zeros(local_hidden_units * 3)] * layer_num)   # self_bias
-        self.w.extend([torch.zeros(local_hidden_units, global_hidden_units)] * layer_num)   # self_output_kernel
-        self.w.extend([torch.zeros(global_hidden_units)] * layer_num)   # self_output_bias
-        self.w.extend([torch.zeros(global_hidden_units)] * layer_num)   # ffn_layernorm_gamma
-        self.w.extend([torch.zeros(global_hidden_units)] * layer_num)   # ffn_layernorm_beta
-        self.w.extend([torch.zeros(global_hidden_units, local_inter_size)] * layer_num)   # ffn_kernel1
-        self.w.extend([torch.zeros(local_inter_size)] * layer_num)   # ffn_bias1
-        self.w.extend([torch.zeros(local_inter_size, global_hidden_units)] * layer_num)   # ffn_kernel2
-        self.w.extend([torch.zeros(global_hidden_units)] * layer_num)   # ffn_bias2
+        self.w.extend([torch.zeros(global_hidden_units, dtype=str_type_map[
+            self.inference_data_type])] * layer_num)   # self_layernorm_gamma
+        self.w.extend([torch.zeros(global_hidden_units, dtype=str_type_map[
+            self.inference_data_type])] * layer_num)   # self_layernorm_beta
+        self.w.extend([torch.zeros(global_hidden_units, local_hidden_units * 3,
+                      dtype=str_type_map[self.inference_data_type])] * layer_num)   # self_kernel
+        self.w.extend([torch.zeros(local_hidden_units * 3, dtype=str_type_map[self.inference_data_type])]
+                      * layer_num)   # self_bias
+        self.w.extend([torch.zeros(local_hidden_units, global_hidden_units, dtype=str_type_map[
+            self.inference_data_type])] * layer_num)   # self_output_kernel
+        self.w.extend([torch.zeros(global_hidden_units, dtype=str_type_map[
+            self.inference_data_type])] * layer_num)   # self_output_bias
+        self.w.extend([torch.zeros(global_hidden_units, dtype=str_type_map[
+            self.inference_data_type])] * layer_num)   # ffn_layernorm_gamma
+        self.w.extend([torch.zeros(global_hidden_units, dtype=str_type_map[
+            self.inference_data_type])] * layer_num)   # ffn_layernorm_beta
+        self.w.extend([torch.zeros(global_hidden_units, local_inter_size,
+                      dtype=str_type_map[self.inference_data_type])] * layer_num)   # ffn_kernel1
+        self.w.extend([torch.zeros(local_inter_size, dtype=str_type_map[
+            self.inference_data_type])] * layer_num)   # ffn_bias1
+        self.w.extend([torch.zeros(local_inter_size, global_hidden_units,
+                      dtype=str_type_map[self.inference_data_type])] * layer_num)   # ffn_kernel2
+        self.w.extend([torch.zeros(global_hidden_units, dtype=str_type_map[
+            self.inference_data_type])] * layer_num)   # ffn_bias2
+
+        optional_adapter_offset = 0
         # After Transformer blocks
+        if self.has_pre_decoder_layernorm:
+            self.w.append(torch.zeros(global_hidden_units, dtype=str_type_map[
+                self.inference_data_type]))   # embedding layernorm gamma
+            self.w.append(torch.zeros(global_hidden_units, dtype=str_type_map[
+                self.inference_data_type]))   # embedding layernorm beta
+            optional_adapter_offset += 2
         if self.has_post_decoder_layernorm:
-            self.w.append(torch.zeros(global_hidden_units))   # layernorm_gamma
-            self.w.append(torch.zeros(global_hidden_units))   # layernorm_beta
-        self.w.append(torch.zeros(max_seq_len, global_hidden_units))   # position_encoding_table
-        self.w.append(torch.zeros(vocab_size, global_hidden_units))   # embedding_table
-        self.w.append(torch.zeros(vocab_size, global_hidden_units))   # embedding_kernel
+            self.w.append(torch.zeros(global_hidden_units, dtype=str_type_map[
+                self.inference_data_type]))   # final layernorm gamma
+            self.w.append(torch.zeros(global_hidden_units, dtype=str_type_map[
+                self.inference_data_type]))   # final layernorm beta
+            optional_adapter_offset += 2
+        if self.has_positional_encoding:
+            self.w.append(torch.zeros(max_seq_len, global_hidden_units, dtype=str_type_map[
+                self.inference_data_type]))   # position_encoding_table
+            optional_adapter_offset += 1
+
+        self.w.append(torch.zeros(vocab_size, global_hidden_units,
+                      dtype=str_type_map[self.inference_data_type]))   # embedding_table
+        self.w.append(torch.zeros(vocab_size, global_hidden_units, dtype=str_type_map[
+            self.inference_data_type]))   # post embedding_kernel
+        self.adapter_offset = 2 + optional_adapter_offset
+
         # adapters
         if self.has_adapters:
-            self.w.extend([torch.zeros(global_hidden_units, local_adapter_inter_size)] * layer_num)   # adaptor1_kernel1
-            self.w.extend([torch.zeros(local_adapter_inter_size)] * layer_num)   # adaptor1_bias1
-            self.w.extend([torch.zeros(local_adapter_inter_size, global_hidden_units)] * layer_num)   # adaptor1_kernel2
-            self.w.extend([torch.zeros(global_hidden_units)] * layer_num)   # adaptor1_bias2
-            self.w.extend([torch.zeros(global_hidden_units, local_adapter_inter_size)] * layer_num)   # adaptor2_kernel1
-            self.w.extend([torch.zeros(local_adapter_inter_size)] * layer_num)   # adaptor2_bias1
-            self.w.extend([torch.zeros(local_adapter_inter_size, global_hidden_units)] * layer_num)   # adaptor2_kernel2
-            self.w.extend([torch.zeros(global_hidden_units)] * layer_num)   # adaptor2_bias2
+            self.w.extend([torch.zeros(global_hidden_units, local_adapter_inter_size,
+                          dtype=str_type_map[self.inference_data_type])] * layer_num)   # adaptor1_kernel1
+            self.w.extend([torch.zeros(local_adapter_inter_size, dtype=str_type_map[
+                self.inference_data_type])] * layer_num)   # adaptor1_bias1
+            self.w.extend([torch.zeros(local_adapter_inter_size, global_hidden_units,
+                          dtype=str_type_map[self.inference_data_type])] * layer_num)   # adaptor1_kernel2
+            self.w.extend([torch.zeros(global_hidden_units, dtype=str_type_map[
+                self.inference_data_type])] * layer_num)   # adaptor1_bias2
+            self.w.extend([torch.zeros(global_hidden_units, local_adapter_inter_size,
+                          dtype=str_type_map[self.inference_data_type])] * layer_num)   # adaptor2_kernel1
+            self.w.extend([torch.zeros(local_adapter_inter_size, dtype=str_type_map[
+                self.inference_data_type])] * layer_num)   # adaptor2_bias1
+            self.w.extend([torch.zeros(local_adapter_inter_size, global_hidden_units,
+                          dtype=str_type_map[self.inference_data_type])] * layer_num)   # adaptor2_kernel2
+            self.w.extend([torch.zeros(global_hidden_units, dtype=str_type_map[
+                self.inference_data_type])] * layer_num)   # adaptor2_bias2
 
         # Initialization
         self._map(lambda w: torch.nn.init.normal_(w, mean=0., std=1.))
 
         if (self.int8_mode != 0):
-            self.int8_w.extend([torch.zeros(global_hidden_units, local_hidden_units * 3, dtype=torch.int8)] * layer_num)   # self_int8_kernel
+            self.int8_w.extend([torch.zeros(global_hidden_units, local_hidden_units *
+                               3, dtype=torch.int8)] * layer_num)   # self_int8_kernel
             self.scale.extend([torch.zeros(local_hidden_units * 3, dtype=torch.float)] * layer_num)   # self_scale
-            self.int8_w.extend([torch.zeros(local_hidden_units, global_hidden_units, dtype=torch.int8)] * layer_num)   # self_output_int8_kernel
+            self.int8_w.extend([torch.zeros(local_hidden_units, global_hidden_units, dtype=torch.int8)]
+                               * layer_num)   # self_output_int8_kernel
             self.scale.extend([torch.zeros(global_hidden_units, dtype=torch.float)] * layer_num)   # self_output_scale
-            self.int8_w.extend([torch.zeros(global_hidden_units, local_inter_size, dtype=torch.int8)] * layer_num)   # ffn_int8_kernel1
+            self.int8_w.extend([torch.zeros(global_hidden_units, local_inter_size,
+                               dtype=torch.int8)] * layer_num)   # ffn_int8_kernel1
             self.scale.extend([torch.zeros(local_inter_size, dtype=torch.float)] * layer_num)   # ffn_scale1
-            self.int8_w.extend([torch.zeros(local_inter_size, global_hidden_units, dtype=torch.int8)] * layer_num)   # ffn_int8_kernel2
+            self.int8_w.extend([torch.zeros(local_inter_size, global_hidden_units,
+                               dtype=torch.int8)] * layer_num)   # ffn_int8_kernel2
             self.scale.extend([torch.zeros(global_hidden_units, dtype=torch.float)] * layer_num)   # ffn_scale2
             if self.has_adapters:
-                self.int8_w.extend([torch.zeros(global_hidden_units, local_adapter_inter_size, dtype=torch.int8)] * layer_num)   # adaptor1_int8_kernel1
-                self.scale.extend([torch.zeros(local_adapter_inter_size, dtype=torch.float)] * layer_num)   # adaptor1_scale1
-                self.int8_w.extend([torch.zeros(local_adapter_inter_size, global_hidden_units, dtype=torch.int8)] * layer_num)   # adaptor1_int8_kernel2
+                self.int8_w.extend([torch.zeros(global_hidden_units, local_adapter_inter_size,
+                                   dtype=torch.int8)] * layer_num)   # adaptor1_int8_kernel1
+                self.scale.extend([torch.zeros(local_adapter_inter_size, dtype=torch.float)]
+                                  * layer_num)   # adaptor1_scale1
+                self.int8_w.extend([torch.zeros(local_adapter_inter_size, global_hidden_units,
+                                   dtype=torch.int8)] * layer_num)   # adaptor1_int8_kernel2
                 self.scale.extend([torch.zeros(global_hidden_units, dtype=torch.float)] * layer_num)   # adaptor1_scale2
-                self.int8_w.extend([torch.zeros(global_hidden_units, local_adapter_inter_size, dtype=torch.int8)] * layer_num)   # adaptor2_int8_kernel1
-                self.scale.extend([torch.zeros(local_adapter_inter_size, dtype=torch.float)] * layer_num)   # adaptor2_scale1
-                self.int8_w.extend([torch.zeros(local_adapter_inter_size, global_hidden_units, dtype=torch.int8)] * layer_num)   # adaptor2_int8_kernel2
+                self.int8_w.extend([torch.zeros(global_hidden_units, local_adapter_inter_size,
+                                   dtype=torch.int8)] * layer_num)   # adaptor2_int8_kernel1
+                self.scale.extend([torch.zeros(local_adapter_inter_size, dtype=torch.float)]
+                                  * layer_num)   # adaptor2_scale1
+                self.int8_w.extend([torch.zeros(local_adapter_inter_size, global_hidden_units,
+                                   dtype=torch.int8)] * layer_num)   # adaptor2_int8_kernel2
                 self.scale.extend([torch.zeros(global_hidden_units, dtype=torch.float)] * layer_num)   # adaptor2_scale2
 
     def __getitem__(self, idx):
@@ -167,75 +227,94 @@ class GPTWeights(object):
             else:
                 self.scale[i] = func(self.scale[i])
 
-    def load(self, ckpt_path, tensor_para_rank, pipeline_para_rank):
+    def _map_int8_scales(self, func):
+        for i in range(len(self.scale)):
+            if isinstance(self.scale[i], list):
+                for j in range(len(self.scale[i])):
+                    self.scale[i][j] = func(self.scale[i][j])
+
+            else:
+                self.scale[i] = func(self.scale[i])
+
+    def load(self, ckpt_path, tp_rank, pipeline_para_rank):
         if not os.path.exists(ckpt_path):
-            return False
+            raise FileNotFoundError(f"Failed to find {ckpt_path}")
         w = []
 
         type_map = {np.float32: torch.float32, np.float16: torch.float16}
         # Load
+
         def is_load(i): return i >= self.layers_per_device * \
             pipeline_para_rank and i < self.layers_per_device * (pipeline_para_rank + 1)
-        w.extend([torch.from_numpy(np.fromfile(ckpt_path + "/model.layers.{}.input_layernorm.weight.bin".format(i),
-                                               dtype=self.weights_data_type)) if is_load(i) else torch.empty(0).to(type_map[self.weights_data_type]) for i in range(self.layer_num)])
-        w.extend([torch.from_numpy(np.fromfile(ckpt_path + "/model.layers.{}.input_layernorm.bias.bin".format(i),
-                                               dtype=self.weights_data_type)) if is_load(i) else torch.empty(0).to(type_map[self.weights_data_type]) for i in range(self.layer_num)])
-        w.extend([torch.from_numpy(np.fromfile(ckpt_path + "/model.layers.{}.attention.query_key_value.weight.{}.bin".format(i,
-                                                                                                                             tensor_para_rank), dtype=self.weights_data_type)) if is_load(i) else torch.empty(0).to(type_map[self.weights_data_type]) for i in range(self.layer_num)])
-        w.extend([torch.from_numpy(np.fromfile(ckpt_path + "/model.layers.{}.attention.query_key_value.bias.{}.bin".format(i,
-                                                                                                                           tensor_para_rank), dtype=self.weights_data_type)) if is_load(i) else torch.empty(0).to(type_map[self.weights_data_type]) for i in range(self.layer_num)])
-        w.extend([torch.from_numpy(np.fromfile(ckpt_path + "/model.layers.{}.attention.dense.weight.{}.bin".format(i,
-                                                                                                                   tensor_para_rank), dtype=self.weights_data_type)) if is_load(i) else torch.empty(0).to(type_map[self.weights_data_type]) for i in range(self.layer_num)])
-        w.extend([torch.from_numpy(np.fromfile(ckpt_path + "/model.layers.{}.attention.dense.bias.bin".format(i),
-                                               dtype=self.weights_data_type)) if is_load(i) else torch.empty(0).to(type_map[self.weights_data_type]) for i in range(self.layer_num)])
-        w.extend([torch.from_numpy(np.fromfile(ckpt_path + "/model.layers.{}.post_attention_layernorm.weight.bin".format(i),
-                                               dtype=self.weights_data_type)) if is_load(i) else torch.empty(0).to(type_map[self.weights_data_type]) for i in range(self.layer_num)])
-        w.extend([torch.from_numpy(np.fromfile(ckpt_path + "/model.layers.{}.post_attention_layernorm.bias.bin".format(i),
-                                               dtype=self.weights_data_type)) if is_load(i) else torch.empty(0).to(type_map[self.weights_data_type]) for i in range(self.layer_num)])
-        w.extend([torch.from_numpy(np.fromfile(ckpt_path + "/model.layers.{}.mlp.dense_h_to_4h.weight.{}.bin".format(i,
-                                                                                                                     tensor_para_rank), dtype=self.weights_data_type)) if is_load(i) else torch.empty(0).to(type_map[self.weights_data_type]) for i in range(self.layer_num)])
-        w.extend([torch.from_numpy(np.fromfile(ckpt_path + "/model.layers.{}.mlp.dense_h_to_4h.bias.{}.bin".format(i,
-                                                                                                                   tensor_para_rank), dtype=self.weights_data_type)) if is_load(i) else torch.empty(0).to(type_map[self.weights_data_type]) for i in range(self.layer_num)])
-        w.extend([torch.from_numpy(np.fromfile(ckpt_path + "/model.layers.{}.mlp.dense_4h_to_h.weight.{}.bin".format(i,
-                                                                                                                     tensor_para_rank), dtype=self.weights_data_type)) if is_load(i) else torch.empty(0).to(type_map[self.weights_data_type]) for i in range(self.layer_num)])
-        w.extend([torch.from_numpy(np.fromfile(ckpt_path + "/model.layers.{}.mlp.dense_4h_to_h.bias.bin".format(i),
-                                               dtype=self.weights_data_type)) if is_load(i) else torch.empty(0).to(type_map[self.weights_data_type]) for i in range(self.layer_num)])
+
+        def load_to_torch(file_path: str, is_load: bool):
+            if is_load:
+                return torch.from_numpy(np.fromfile(file_path, dtype=self.weights_data_type)).to(str_type_map[self.inference_data_type])
+            else:
+                return torch.empty(0).to(str_type_map[self.inference_data_type])
+        w.extend([load_to_torch(f"{ckpt_path}/model.layers.{i}.input_layernorm.weight.bin", is_load(i))
+                 for i in range(self.layer_num)])
+        w.extend([load_to_torch(f"{ckpt_path}/model.layers.{i}.input_layernorm.bias.bin", is_load(i))
+                 for i in range(self.layer_num)])
+        w.extend([load_to_torch(
+            f"{ckpt_path}/model.layers.{i}.attention.query_key_value.weight.{tp_rank}.bin", is_load(i)) for i in range(self.layer_num)])
+        w.extend([load_to_torch(
+            f"{ckpt_path}/model.layers.{i}.attention.query_key_value.bias.{tp_rank}.bin", is_load(i)) for i in range(self.layer_num)])
+        w.extend([load_to_torch(f"{ckpt_path}/model.layers.{i}.attention.dense.weight.{tp_rank}.bin",
+                 is_load(i)) for i in range(self.layer_num)])
+        w.extend([load_to_torch(f"{ckpt_path}/model.layers.{i}.attention.dense.bias.bin", is_load(i))
+                 for i in range(self.layer_num)])
+        w.extend([load_to_torch(f"{ckpt_path}/model.layers.{i}.post_attention_layernorm.weight.bin",
+                 is_load(i)) for i in range(self.layer_num)])
+        w.extend([load_to_torch(f"{ckpt_path}/model.layers.{i}.post_attention_layernorm.bias.bin",
+                 is_load(i)) for i in range(self.layer_num)])
+        w.extend([load_to_torch(
+            f"{ckpt_path}/model.layers.{i}.mlp.dense_h_to_4h.weight.{tp_rank}.bin", is_load(i)) for i in range(self.layer_num)])
+        w.extend([load_to_torch(f"{ckpt_path}/model.layers.{i}.mlp.dense_h_to_4h.bias.{tp_rank}.bin",
+                 is_load(i)) for i in range(self.layer_num)])
+        w.extend([load_to_torch(
+            f"{ckpt_path}/model.layers.{i}.mlp.dense_4h_to_h.weight.{tp_rank}.bin", is_load(i)) for i in range(self.layer_num)])
+        w.extend([load_to_torch(f"{ckpt_path}/model.layers.{i}.mlp.dense_4h_to_h.bias.bin", is_load(i))
+                 for i in range(self.layer_num)])
+
+        if self.has_pre_decoder_layernorm:
+            w.append(load_to_torch(f"{ckpt_path}/model.pre_decoder_layernorm.weight.bin", True))
+            w.append(load_to_torch(f"{ckpt_path}/model.pre_decoder_layernorm.bias.bin", True))
 
         if self.has_post_decoder_layernorm:
-            w.append(torch.from_numpy(np.fromfile(ckpt_path + "/model.final_layernorm.weight.bin", dtype=self.weights_data_type)))
-            w.append(torch.from_numpy(np.fromfile(ckpt_path + "/model.final_layernorm.bias.bin", dtype=self.weights_data_type)))
+            w.append(load_to_torch(f"{ckpt_path}/model.final_layernorm.weight.bin", True))
+            w.append(load_to_torch(f"{ckpt_path}/model.final_layernorm.bias.bin", True))
 
-        wpe = torch.from_numpy(np.fromfile(ckpt_path + "/model.wpe.bin", dtype=self.weights_data_type)
-                               ).reshape(-1, self.global_hidden_units)
-        assert self.max_seq_len <= wpe.size(0), (
-            f"max_seq_len ({self.max_seq_len} must not exceed "
-            f"the value of maximum sequence length during training ({wpe.size(0)})."
-        )
-        w.append(wpe)
-        w.append(torch.from_numpy(np.fromfile(ckpt_path + "/model.wte.bin", dtype=self.weights_data_type)))
-        if os.path.isfile(ckpt_path + "/model.lm_head.weight.bin"):
-            w.append(torch.from_numpy(np.fromfile(ckpt_path + "/model.lm_head.weight.bin", dtype=self.weights_data_type)))
+        if self.has_positional_encoding:
+            wpe = load_to_torch(f"{ckpt_path}/model.wpe.bin", True).reshape(-1, self.global_hidden_units)
+            assert self.max_seq_len <= wpe.size(0), (
+                f"max_seq_len ({self.max_seq_len} must not exceed "
+                f"the value of maximum sequence length during training ({wpe.size(0)})."
+            )
+            w.append(wpe)
+        w.append(load_to_torch(f"{ckpt_path}/model.wte.bin", True))
+        if os.path.isfile(f"{ckpt_path}/model.lm_head.weight.bin"):
+            w.append(load_to_torch(f"{ckpt_path}/model.lm_head.weight.bin", True))
         else:
-            w.append(torch.from_numpy(np.fromfile(ckpt_path + "/model.wte.bin", dtype=self.weights_data_type)))
-
+            w.append(load_to_torch(f"{ckpt_path}/model.wte.bin", True))
 
         if self.has_adapters:
-            w.extend([torch.from_numpy(np.fromfile(ckpt_path + "/model.layers.{}.after_attention_adapter.dense_h_to_4h.weight.{}.bin".format(i,
-                                                                                                                tensor_para_rank), dtype=self.weights_data_type)) if is_load(i) else torch.empty(0).to(type_map[self.weights_data_type]) for i in range(self.layer_num)])
-            w.extend([torch.from_numpy(np.fromfile(ckpt_path + "/model.layers.{}.after_attention_adapter.dense_h_to_4h.bias.{}.bin".format(i,
-                                                                                                                    tensor_para_rank), dtype=self.weights_data_type)) if is_load(i) else torch.empty(0).to(type_map[self.weights_data_type]) for i in range(self.layer_num)])
-            w.extend([torch.from_numpy(np.fromfile(ckpt_path + "/model.layers.{}.after_attention_adapter.dense_4h_to_h.weight.{}.bin".format(i,
-                                                                                                                        tensor_para_rank), dtype=self.weights_data_type)) if is_load(i) else torch.empty(0).to(type_map[self.weights_data_type]) for i in range(self.layer_num)])
-            w.extend([torch.from_numpy(np.fromfile(ckpt_path + "/model.layers.{}.after_attention_adapter.dense_4h_to_h.bias.bin".format(i),
-                                                dtype=self.weights_data_type)) if is_load(i) else torch.empty(0).to(type_map[self.weights_data_type]) for i in range(self.layer_num)])
-            w.extend([torch.from_numpy(np.fromfile(ckpt_path + "/model.layers.{}.after_ffn_adapter.dense_h_to_4h.weight.{}.bin".format(i,
-                                                                                                                tensor_para_rank), dtype=self.weights_data_type)) if is_load(i) else torch.empty(0).to(type_map[self.weights_data_type]) for i in range(self.layer_num)])
-            w.extend([torch.from_numpy(np.fromfile(ckpt_path + "/model.layers.{}.after_ffn_adapter.dense_h_to_4h.bias.{}.bin".format(i,
-                                                                                                                    tensor_para_rank), dtype=self.weights_data_type)) if is_load(i) else torch.empty(0).to(type_map[self.weights_data_type]) for i in range(self.layer_num)])
-            w.extend([torch.from_numpy(np.fromfile(ckpt_path + "/model.layers.{}.after_ffn_adapter.dense_4h_to_h.weight.{}.bin".format(i,
-                                                                                                                        tensor_para_rank), dtype=self.weights_data_type)) if is_load(i) else torch.empty(0).to(type_map[self.weights_data_type]) for i in range(self.layer_num)])
-            w.extend([torch.from_numpy(np.fromfile(ckpt_path + "/model.layers.{}.after_ffn_adapter.dense_4h_to_h.bias.bin".format(i),
-                                                dtype=self.weights_data_type)) if is_load(i) else torch.empty(0).to(type_map[self.weights_data_type]) for i in range(self.layer_num)])
+            w.extend([load_to_torch(
+                f"{ckpt_path}/model.layers.{i}.after_attention_adapter.dense_h_to_4h.weight.{tp_rank}.bin", is_load(i)) for i in range(self.layer_num)])
+            w.extend([load_to_torch(
+                f"{ckpt_path}/model.layers.{i}.after_attention_adapter.dense_h_to_4h.bias.{tp_rank}.bin", is_load(i)) for i in range(self.layer_num)])
+            w.extend([load_to_torch(
+                f"{ckpt_path}/model.layers.{i}.after_attention_adapter.dense_4h_to_h.weight.{tp_rank}.bin", is_load(i)) for i in range(self.layer_num)])
+            w.extend([load_to_torch(
+                f"{ckpt_path}/model.layers.{i}.after_attention_adapter.dense_4h_to_h.bias.bin", is_load(i)) for i in range(self.layer_num)])
+            w.extend([load_to_torch(
+                f"{ckpt_path}/model.layers.{i}.after_ffn_adapter.dense_h_to_4h.weight.{tp_rank}.bin", is_load(i)) for i in range(self.layer_num)])
+            w.extend([load_to_torch(
+                f"{ckpt_path}/model.layers.{i}.after_ffn_adapter.dense_h_to_4h.bias.{tp_rank}.bin", is_load(i)) for i in range(self.layer_num)])
+            w.extend([load_to_torch(
+                f"{ckpt_path}/model.layers.{i}.after_ffn_adapter.dense_4h_to_h.weight.{tp_rank}.bin", is_load(i)) for i in range(self.layer_num)])
+            w.extend([load_to_torch(
+                f"{ckpt_path}/model.layers.{i}.after_ffn_adapter.dense_4h_to_h.bias.bin", is_load(i)) for i in range(self.layer_num)])
 
         # Reshape
         try:
@@ -251,21 +330,42 @@ class GPTWeights(object):
                 f"(idx: {i} expected shape: {self.w[i].shape} got shape: {w[i].shape})."
             )
 
-        #transpose calibrate quantize the kernel
+        # transpose calibrate quantize the kernel
         layer_num = self.layer_num
-        final_layernorm_w_offset = 2 if self.has_post_decoder_layernorm else 0
         if self.int8_mode != 0:
             for i in range(layer_num):
-                self.int8_w[i + 0*layer_num], self.scale[i + 0*layer_num] = self.weight_transpose_calibrate_quantize(self.w[2*layer_num + i])
-                self.int8_w[i + 1*layer_num], self.scale[i + 1*layer_num] = self.weight_transpose_calibrate_quantize(self.w[4*layer_num + i])
-                self.int8_w[i + 2*layer_num], self.scale[i + 2*layer_num] = self.weight_transpose_calibrate_quantize(self.w[8*layer_num + i])
-                self.int8_w[i + 3*layer_num], self.scale[i + 3*layer_num] = self.weight_transpose_calibrate_quantize(self.w[10*layer_num + i])
-                if self.has_adapters:
-                    self.int8_w[i + 4*layer_num], self.scale[i + 0*layer_num] = self.weight_transpose_calibrate_quantize(self.w[12*layer_num + i + 3 + final_layernorm_w_offset])
-                    self.int8_w[i + 5*layer_num], self.scale[i + 1*layer_num] = self.weight_transpose_calibrate_quantize(self.w[14*layer_num + i + 3 + final_layernorm_w_offset])
-                    self.int8_w[i + 6*layer_num], self.scale[i + 2*layer_num] = self.weight_transpose_calibrate_quantize(self.w[16*layer_num + i + 3 + final_layernorm_w_offset])
-                    self.int8_w[i + 7*layer_num], self.scale[i + 3*layer_num] = self.weight_transpose_calibrate_quantize(self.w[18*layer_num + i + 3 + final_layernorm_w_offset])
+                self.int8_w[i + 0 * layer_num], self.scale[i + 0 *
+                                                           layer_num] = self.weight_transpose_calibrate_quantize(self.w[2 * layer_num + i])
+                self.int8_w[i + 1 * layer_num], self.scale[i + 1 *
+                                                           layer_num] = self.weight_transpose_calibrate_quantize(self.w[4 * layer_num + i])
+                self.int8_w[i + 2 * layer_num], self.scale[i + 2 *
+                                                           layer_num] = self.weight_transpose_calibrate_quantize(self.w[8 * layer_num + i])
+                self.int8_w[i + 3 * layer_num], self.scale[i + 3 *
+                                                           layer_num] = self.weight_transpose_calibrate_quantize(self.w[10 * layer_num + i])
 
+                # We clear the original weights since they are no longer needed
+                if self.int8_mode == 1:
+                    self.w[2 * layer_num + i] = torch.empty(0).to(str_type_map[self.inference_data_type])
+                    self.w[4 * layer_num + i] = torch.empty(0).to(str_type_map[self.inference_data_type])
+                    self.w[8 * layer_num + i] = torch.empty(0).to(str_type_map[self.inference_data_type])
+                    self.w[10 * layer_num + i] = torch.empty(0).to(str_type_map[self.inference_data_type])
+
+                if self.has_adapters:
+                    self.int8_w[i + 4 * layer_num], self.scale[i + 4 * layer_num] = self.weight_transpose_calibrate_quantize(
+                        self.w[12 * layer_num + i + self.adapter_offset])
+                    self.int8_w[i + 5 * layer_num], self.scale[i + 5 * layer_num] = self.weight_transpose_calibrate_quantize(
+                        self.w[14 * layer_num + i + self.adapter_offset])
+                    self.int8_w[i + 6 * layer_num], self.scale[i + 6 * layer_num] = self.weight_transpose_calibrate_quantize(
+                        self.w[16 * layer_num + i + self.adapter_offset])
+                    self.int8_w[i + 7 * layer_num], self.scale[i + 7 * layer_num] = self.weight_transpose_calibrate_quantize(
+                        self.w[18 * layer_num + i + self.adapter_offset])
+
+                    # Similar to above:
+                    if self.int8_mode == 1:
+                        self.w[12 * layer_num + i + self.adapter_offset] = torch.empty(0).to(str_type_map[self.inference_data_type])
+                        self.w[14 * layer_num + i + self.adapter_offset] = torch.empty(0).to(str_type_map[self.inference_data_type])
+                        self.w[16 * layer_num + i + self.adapter_offset] = torch.empty(0).to(str_type_map[self.inference_data_type])
+                        self.w[18 * layer_num + i + self.adapter_offset] = torch.empty(0).to(str_type_map[self.inference_data_type])
         return True
 
 
@@ -273,15 +373,24 @@ class GPT(nn.Module):
     def __init__(self,
                  head_num, size_per_head,
                  vocab_size, start_id, end_id, layer_num,
-                 max_seq_len,
-                 tensor_para_size, pipeline_para_size,
-                 lib_path,
-                 layernorm_eps = 1e-6, layernorm_type = "pre_layernorm", # gpt_variant_params
-                 activation_type = "Gelu", has_post_decoder_layernorm = True, # gpt variant params
-                 has_adapters = False, adapter_inter_size = 0, # gpt variant params
-				 int8_mode = 0,
-                 weights_data_type: np.dtype = np.float32,
-                 shared_contexts_ratio=1.0):
+                 max_seq_len: int,
+                 tensor_para_size: int,
+                 pipeline_para_size: int,
+                 lib_path: typing.Union[str, pathlib.Path],
+                 inference_data_type: str,
+                 # gpt_variant_params
+                 layernorm_eps: float = 1e-6,
+                 layernorm_type: typing.Literal['pre_layernorm', 'post_layernorm'] = "pre_layernorm",
+                 activation_type: str = "Gelu",
+                 has_positional_encoding: bool = True,
+                 has_pre_decoder_layernorm: bool = False,
+                 has_post_decoder_layernorm: bool = True,
+                 has_adapters: bool = False,
+                 adapter_inter_size: int = 0,
+                 use_attention_linear_bias: bool = False,
+                 int8_mode: int = 0,
+                 weights_data_type: typing.Union[str, np.dtype] = np.float32,
+                 shared_contexts_ratio: float = 1.0):
         super().__init__()
         self.head_num = head_num
         self.size_per_head = size_per_head
@@ -289,13 +398,18 @@ class GPT(nn.Module):
         self.start_id = start_id
         self.end_id = end_id
         self.layer_num = layer_num
+
         # gpt_variant_params
         self.layernorm_eps = layernorm_eps
         self.layernorm_type = layernorm_type
         self.activation_type = activation_type
+        self.has_positional_encoding = has_positional_encoding
+        self.has_pre_decoder_layernorm = has_pre_decoder_layernorm
         self.has_post_decoder_layernorm = has_post_decoder_layernorm
         self.has_adapters = has_adapters
         self.adapter_inter_size = adapter_inter_size
+        self.use_attention_linear_bias = use_attention_linear_bias
+
         # multi-gpu params
         self.tensor_para_size = tensor_para_size
         self.pipeline_para_size = pipeline_para_size
@@ -303,7 +417,7 @@ class GPT(nn.Module):
         self.build_model = False
         self.int8_mode = int8_mode
         self.weights_data_type = weights_data_type
-        self.shared_contexts_ratio= shared_contexts_ratio
+        self.shared_contexts_ratio = shared_contexts_ratio
 
         assert torch.cuda.is_available(), "CUDA is required for this model."
 
@@ -316,10 +430,13 @@ class GPT(nn.Module):
         # Prepare weights
         self.weights = GPTWeights(head_num, size_per_head, layer_num, vocab_size,
                                   max_seq_len, tensor_para_size, pipeline_para_size,
-                                  has_post_decoder_layernorm = has_post_decoder_layernorm,
-                                  has_adapters = has_adapters,
-                                  adapter_inter_size = adapter_inter_size,
                                   weights_data_type=weights_data_type,
+                                  inference_data_type=inference_data_type,
+                                  has_positional_encoding=self.has_positional_encoding,
+                                  has_pre_decoder_layernorm=self.has_pre_decoder_layernorm,
+                                  has_post_decoder_layernorm=self.has_post_decoder_layernorm,
+                                  has_adapters=self.has_adapters,
+                                  adapter_inter_size=self.adapter_inter_size,
                                   int8_mode=int8_mode)
 
         # Prepare for tensor/pipeline parallel
@@ -338,27 +455,16 @@ class GPT(nn.Module):
         self.tensor_para_rank = self.rank % self.tensor_para_size
         self.pipeline_para_rank = self.rank // self.tensor_para_size
 
-        # Create and copy model to the device.
-        self.cuda()
-
     def load(self, ckpt_path):
-        is_load = self.weights.load(ckpt_path, tensor_para_rank=self.tensor_para_rank,
+        is_load = self.weights.load(ckpt_path, tp_rank=self.tensor_para_rank,
                                     pipeline_para_rank=self.pipeline_para_rank)
         self.cuda()
+        torch.cuda.empty_cache()  # clean cache for model weight preprocessing
         return is_load
-
-    def half(self):
-        self.weights._map(lambda w: w.half())
-        self.cuda()
-
-    def bfloat16(self):
-        self.weights._map(lambda w: w.bfloat16())
-        self.cuda()
 
     def sparse(self):
         if not self.use_sparse_gemm:
             self.use_sparse_gemm = True
-            self.cuda()
 
     def cuda(self):
         self.weights._map(lambda w: w.cuda(self.device))
@@ -368,12 +474,22 @@ class GPT(nn.Module):
         if self.build_model:
             del self.model
             self.build_model = False
-        self.model = torch.classes.FasterTransformer.GptOp(self.head_num, self.size_per_head, 4 * self.head_num * self.size_per_head,
-                                                           self.layer_num, self.vocab_size, self.start_id, self.end_id,
-                                                           self.use_sparse_gemm,
-                                                           self.layernorm_eps, self.layernorm_type, self.activation_type,
-                                                           self.has_post_decoder_layernorm, self.has_adapters, self.adapter_inter_size, # gpt_variant_params
-                                                           self.weights.w)
+
+        self.model = torch.classes.FasterTransformer.GptOp(
+            self.head_num, self.size_per_head, 4 * self.head_num * self.size_per_head,
+            self.layer_num, self.vocab_size, self.start_id, self.end_id,
+            self.use_sparse_gemm,
+            # gpt_variant_params
+            self.layernorm_eps,
+            self.layernorm_type,
+            self.activation_type,
+            self.has_positional_encoding,
+            self.has_pre_decoder_layernorm,
+            self.has_post_decoder_layernorm,
+            self.has_adapters,
+            self.adapter_inter_size,
+            self.use_attention_linear_bias,
+            self.weights.w)
         self.build_model = True
 
     def forward(self,
@@ -391,7 +507,9 @@ class GPT(nn.Module):
                 return_output_length=False,
                 return_cum_log_probs=0):
         if not self.build_model:
+            # for the cases we don't load model
             self.cuda()
+            torch.cuda.empty_cache()  # clean cache for model weight preprocessing
         input_len = start_ids.size(1)
         assert input_len > 0, "input len must be larger than zero. For an unconditional case, use start_id as the first token."
 
@@ -402,15 +520,15 @@ class GPT(nn.Module):
         outputs = self.model.forward(start_ids,
                                      start_lengths,
                                      output_len,
-                                     beam_width, # optional, can be None
-                                     top_k, # optional, can be None
-                                     top_p, # optional, can be None
-                                     beam_search_diversity_rate, # optional, can be None
-                                     temperature, # optional, can be None
-                                     len_penalty, # optional, can be None
-                                     repetition_penalty, # optional, can be None
-                                     random_seed, # optional, can be None
-                                     return_cum_log_probs) # optional, can be None
+                                     beam_width,  # optional, can be None
+                                     top_k,  # optional, can be None
+                                     top_p,  # optional, can be None
+                                     beam_search_diversity_rate,  # optional, can be None
+                                     temperature,  # optional, can be None
+                                     len_penalty,  # optional, can be None
+                                     repetition_penalty,  # optional, can be None
+                                     random_seed,  # optional, can be None
+                                     return_cum_log_probs)  # optional, can be None
         if return_cum_log_probs == 0:
             output_ids, output_lengths = outputs
         else:
@@ -451,20 +569,50 @@ class GptInitModelParameters:
     data_type: str
     int8_mode: int
     sparse: int
+    # GPT variant params.
+    layernorm_eps: float = 1e-6
+    layernorm_type: typing.Literal['pre_layernorm', 'post_layernorm'] = 'pre_layernorm'
+    activation_type: str = 'gelu'
+    has_positional_encoding: bool = True
+    has_pre_decoder_layernorm: bool = False
+    has_post_decoder_layernorm: bool = True
+    use_attention_linear_bias: bool = False
+
+    PREDEFINED_MODELS: typing.ClassVar[dict] = {
+        'default': dict(),
+        'opt-pre': dict(layernorm_eps=1e-5,
+                        layernorm_type='pre_layernorm',
+                        activation_type='relu',
+                        has_post_decoder_layernorm=True),
+        'opt-pre': dict(layernorm_eps=1e-5,
+                        layernorm_type='post_layernorm',
+                        activation_type='relu',
+                        has_post_decoder_layernorm=False),
+        'bloom': dict(layernorm_eps=1e-5,
+                      layernorm_type='pre_layernorm',
+                      activation_type='gelu',
+                      has_positional_encoding=False,
+                      has_pre_decoder_layernorm=True,
+                      has_post_decoder_layernorm=True,
+                      use_attention_linear_bias=True)
+    }
 
     def gpt_init_kwargs(self):
-        do_not_include = ["data_type", "sparse"]
-        return {k: v for k, v in dataclasses.asdict(self).items() if k not in do_not_include}
+        do_not_include = ["sparse", "data_type"]
+        args = {k: v for k, v in dataclasses.asdict(self).items() if k not in do_not_include}
+        args["inference_data_type"] = dataclasses.asdict(self)["data_type"]
+        return args
 
     @classmethod
     def from_args(cls, args, config_reader):
         model_name = args.model_name
-
-        return cls(
+        param = cls(
             head_num=config_reader.getint(model_name, "head_num"),
             size_per_head=config_reader.getint(model_name, "size_per_head"),
             layer_num=config_reader.getint(model_name, "num_layer"),
-            max_seq_len=config_reader.getint(model_name, "max_pos_seq_len"),
+            # There is no limitation on the length when no positional encoding,
+            # setting by a large enough integer.
+            max_seq_len=config_reader.getint(model_name, "max_pos_seq_len", fallback=int(1e7)),
             tensor_para_size=config_reader.getint(model_name, "tensor_para_size"),
             vocab_size=config_reader.getint(model_name, "vocab_size"),
             start_id=config_reader.getint(model_name, "start_id"),
@@ -473,16 +621,36 @@ class GptInitModelParameters:
             has_adapters=config_reader.getboolean(model_name, "has_adapters", fallback=False),
             adapter_inter_size=config_reader.getint(model_name, "adapter_inter_size", fallback=0),
             pipeline_para_size=(
-                args.pipeline_para_size or config_reader.getint("ft_instance_hyperparameter", "pipeline_para_size")
+                args.pipeline_para_size
+                or config_reader.getint("ft_instance_hyperparameter", "pipeline_para_size", fallback=1)
             ),
             int8_mode=(
                 args.int8_mode
                 if args.int8_mode is not None
-                else config_reader.getint("ft_instance_hyperparameter", "int8_mode")
+                else config_reader.getint("ft_instance_hyperparameter", "int8_mode", fallback=0)
             ),
-            data_type=(args.data_type or config_reader.get("ft_instance_hyperparameter", "data_type")),
-            sparse=int(args.sparse or False),
+            data_type=(
+                args.data_type or
+                config_reader.get("ft_instance_hyperparameter", "data_type",
+                                  fallback=config_reader.get(model_name, "weight_data_type"))
+            ),
+            sparse=int(getattr(args, 'sparse', False)),
         )
+
+        if config_reader.has_option(model_name, 'model_variant'):
+            model_type = config_reader.get(model_name, 'model_variant')
+            model_params = cls.PREDEFINED_MODELS[model_type]
+            param.update(model_params)
+
+        return param
+
+    def update(self, update_params: dict):
+        for k, v in update_params:
+            setattr(self, k, v)
+        return self
+
+    def asdict(self):
+        return dataclasses.asdict(self)
 
     @classmethod
     def update_argparser(cls, parser):
@@ -490,11 +658,8 @@ class GptInitModelParameters:
         parser.add_argument("--pipeline-para-size", type=int, help="size of pipeline parallelism")
         parser.add_argument("--data-type", type=str, help="data type", choices=["fp32", "bf16", "fp16"])
         parser.add_argument(
-            "--sparse",
-            type=int,
-            choices=[0, 1],
-            help="Set sparse matrix multiplication. (Need SM 8.0 or 8.6 and SPARSITY_SUPPORT=ON)",
-        )
+            "--sparse", action='store_true',
+            help="Enable sparse matrix multiplication. (Need SM 8.0 or 8.6 and SPARSITY_SUPPORT=ON)")
         parser.add_argument("--int8-mode", type=int, choices=[0, 1], help="Set int8 mode")
 
 
@@ -518,19 +683,23 @@ class GptRuntimeModelParameters:
             bs = batch_size
         return cls(
             beam_width=args.beam_width or config_reader.getint("ft_instance_hyperparameter", "beam_width"),
-            top_k=(args.sampling_top_k or config_reader.getint("ft_instance_hyperparameter", "top_k")) * torch.ones(size=[bs], dtype=torch.int32),
-            top_p=(args.sampling_top_p or config_reader.getfloat("ft_instance_hyperparameter", "top_p")) * torch.ones(size=[bs], dtype=torch.float32),
+            top_k=(args.sampling_top_k or config_reader.getint("ft_instance_hyperparameter", "top_k")) *
+            torch.ones(size=[bs], dtype=torch.int32),
+            top_p=(args.sampling_top_p or config_reader.getfloat("ft_instance_hyperparameter", "top_p")) *
+            torch.ones(size=[bs], dtype=torch.float32),
             beam_search_diversity_rate=(
                 args.beam_search_diversity_rate
                 or config_reader.getfloat("ft_instance_hyperparameter", "beam_search_diversity_rate")
             ) * torch.ones(size=[bs], dtype=torch.float32),
-            temperature=(args.temperature or config_reader.getfloat("ft_instance_hyperparameter", "temperature")) * torch.ones(size=[bs], dtype=torch.float32),
-            len_penalty=(args.len_penalty or config_reader.getfloat("ft_instance_hyperparameter", "len_penalty")) * torch.ones(size=[bs], dtype=torch.float32),
+            temperature=(args.temperature or config_reader.getfloat("ft_instance_hyperparameter",
+                         "temperature")) * torch.ones(size=[bs], dtype=torch.float32),
+            len_penalty=(args.len_penalty or config_reader.getfloat("ft_instance_hyperparameter",
+                         "len_penalty")) * torch.ones(size=[bs], dtype=torch.float32),
             repetition_penalty=(
                 args.repetition_penalty or config_reader.getfloat("ft_instance_hyperparameter", "repetition_penalty")
             ) * torch.ones(size=[bs], dtype=torch.float32),
         )
-    
+
     def slice_args(self, idx):
         return GptRuntimeModelParameters(
             beam_width=self.beam_width,
@@ -541,7 +710,7 @@ class GptRuntimeModelParameters:
             len_penalty=self.len_penalty[idx],
             repetition_penalty=self.repetition_penalty[idx],
         )
-        
+
     @classmethod
     def update_argparser(cls, parser):
         parser.add_argument("--beam-width", type=int, help="beam width")

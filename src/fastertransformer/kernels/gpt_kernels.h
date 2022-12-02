@@ -21,6 +21,7 @@
 #include <unordered_map>
 
 #include "src/fastertransformer/utils/Tensor.h"
+#include "src/fastertransformer/utils/memory_utils.h"
 
 namespace fastertransformer {
 
@@ -130,15 +131,11 @@ void invokeFindContextDups(int*         shared_contexts,
                            cudaStream_t stream = 0);
 
 template<typename T>
-void handleOptArg(const std::unordered_map<std::string, Tensor>* input_tensors,
-                  const std::string&                             arg_name,
-                  T*                                             d_ptr,
-                  T                                              default_value,
-                  size_t                                         size)
+void handleOptArg(TensorMap* input_tensors, const std::string& arg_name, T* d_ptr, T default_value, size_t size)
 {
-    if (input_tensors->find(arg_name) != input_tensors->end()) {
+    if (input_tensors->isExist(arg_name)) {
         FT_CHECK(input_tensors->at(arg_name).size() == size);
-        cudaH2Dcpy(d_ptr, (const T*)input_tensors->at(arg_name).data, size);
+        cudaH2Dcpy(d_ptr, input_tensors->at(arg_name).getPtr<const T>(), size);
     }
     else {
         deviceFill(d_ptr, size, default_value);
@@ -232,5 +229,13 @@ inline void invokeMaskPaddingTokens(bool*        masked_tokens,
                             beam_width,
                             stream);
 }
+
+template<typename T>
+void invokeSumLengthDimension(float*       out_buf,
+                              const T*     in_buf,
+                              const size_t batch_size,
+                              const size_t input_length,
+                              const size_t hidden_dim,
+                              cudaStream_t stream = 0);
 
 }  // namespace fastertransformer
