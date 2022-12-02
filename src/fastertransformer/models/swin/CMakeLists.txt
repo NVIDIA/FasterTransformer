@@ -18,17 +18,18 @@ add_library(SwinBlock STATIC SwinBlock.cc)
 set_property(TARGET SwinBlock PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET SwinBlock PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(SwinBlock PUBLIC -lcublasLt -lcublas -lcudart WindowAttention 
-    activation_kernels add_residual_kernels layernorm_kernels)
+    activation_kernels add_residual_kernels layernorm_kernels cuda_utils logger image_shift_partition_kernels)
 
 add_library(SwinBasicLayer STATIC SwinBasicLayer.cc)
 set_property(TARGET SwinBasicLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET SwinBasicLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(SwinBasicLayer PUBLIC -lcublasLt -lcublas -lcudart SwinBlock)
+target_link_libraries(SwinBasicLayer PUBLIC -lcublasLt -lcublas -lcudart SwinBlock cuda_utils logger image_merge_kernels)
 
 add_library(Swin STATIC Swin.cc)
 set_property(TARGET Swin PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET Swin PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(Swin PUBLIC -lcudart SwinBasicLayer memory_utils)
+target_link_libraries(Swin PUBLIC -lcudart SwinBasicLayer memory_utils cuda_utils logger)
 
 add_executable(swin_gemm swin_gemm.cc)
-target_link_libraries(swin_gemm PUBLIC -lcublas -lcublasLt -lcudart swin_igemm_func swin_gemm_func memory_utils tensor)
+target_link_libraries(swin_gemm PUBLIC -lcublas -lcublasLt -lcudart swin_igemm_func
+                      swin_gemm_func memory_utils tensor cuda_utils logger)

@@ -304,7 +304,7 @@ if __name__ == '__main__':
     parser.add_argument('-s', '--max_seq_len', type=int, metavar='NUMBER', default=128, help='max sequence length (default: 200)')
     parser.add_argument('--source', type=str, metavar='STRING', default="../examples/pytorch/decoding/utils/translation/test.en", help="Path to the source file.")
     parser.add_argument('--target', type=str, metavar='STRING', default="../examples/pytorch/decoding/utils/translation/test.de", help="Path to the target file.")
-    parser.add_argument('-diversity_rate', '--beam_search_diversity_rate', type=float, metavar='NUMBER', default=0.0, help='deviersity rate of beam search. default is 0. When diversity rate = 0, it is equivalent to the naive beams earch.')
+    parser.add_argument('-diversity_rate', '--beam_search_diversity_rate', type=float, metavar='NUMBER', default=0.0, help='deviersity rate of beam search. default is 0. When diversity rate = 0, it is equivalent to the naive beam search.')
     parser.add_argument('-topk', '--sampling_topk', type=int, metavar='NUMBER', default=4, help='Candidate (k) value of top k sampling in decoding. Default is 1.')
     parser.add_argument('-topp', '--sampling_topp', type=float, metavar='NUMBER', default=0.0, help='Probability (p) value of top p sampling in decoding. Default is 0.0. ')
     parser.add_argument('-d', '--data_type', type=str, metavar='STRING', default="fp32", help='data type (default: fp32)', choices=['fp32', 'fp16'])

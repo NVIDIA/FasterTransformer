@@ -26,7 +26,7 @@
 `model['model']['language_model']['encoder']['final_layernorm.bias']`
 `model['model']['word_embeddings_for_head']['weight']`
 
-In different pipeline paralle rank, they use `0` as start number of layer id.
+In different pipeline parallel rank, they use `0` as start number of layer id.
 
 ## Details
 

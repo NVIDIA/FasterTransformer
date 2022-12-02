@@ -56,9 +56,7 @@ In this demo, you can run Faster ViT as a C++ program.
 - Python 3 is recommended because some features are not supported in python 2
 - PyTorch: Verify on 1.10.0, >= 1.5.0 should work.
 
-Recommend to use image `nvcr.io/nvidia/pytorch:21.07-py3`.  
-
-> docker run -ti --gpus all --rm nvcr.io/nvidia/pytorch:21.07-py3 bash
+Recommend to use image `nvcr.io/nvidia/pytorch:22.09-py3`.  
 
 ### Setup
 
@@ -74,10 +72,10 @@ Recommend to use image `nvcr.io/nvidia/pytorch:21.07-py3`.
         --ulimit stack=67108864 \
         -v {YOUR_FASTER_TRANSFORMER_PROJECT_DIR_ON_HOST}:/workspace/FasterTransformer \
         --workdir /workspace/FasterTransformer \
-        nvcr.io/nvidia/pytorch:21.07-py3 bash
+        nvcr.io/nvidia/pytorch:22.09-py3 bash
     export WORKSPACE = /workspace/FasterTransformer
     ```
-    Here, we use `nvcr.io/nvidia/pytorch:21.07-py3`, you can also switch it to another CUDA-enabled PyTorch containers, but need to comply with the previous requirements.
+    Here, we use `nvcr.io/nvidia/pytorch:22.09-py3`, you can also switch it to another CUDA-enabled PyTorch containers, but need to comply with the previous requirements.
 
 2.  Install additional dependencies (not included by container)
     ```bash
@@ -92,7 +90,7 @@ Recommend to use image `nvcr.io/nvidia/pytorch:21.07-py3`.
     mkdir -p build
     cd build
     cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON -DBUILD_TRT=ON ..
-    make
+    make -j12
     ```
     Note: **xx** is the compute capability of your GPU. For example, 60 (P40) or 61 (P4) or 70 (V100) or 75(T4) or 80 (A100).
 

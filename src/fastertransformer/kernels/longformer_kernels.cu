@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@
 #endif
 
 #include "longformer_kernels.h"
-#include "src/fastertransformer/kernels/bfloat16_fallback_kenrels.cuh"
+#include "src/fastertransformer/utils/cuda_type_utils.cuh"
 #include "src/fastertransformer/utils/cuda_utils.h"
 
 #include <stdio.h>

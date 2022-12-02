@@ -83,7 +83,7 @@ if __name__ == "__main__":
                         help='cross check the answer of TF and OP. (default: True (1)), False is 0.',
                         choices=[0, 1])
     parser.add_argument('-diversity_rate', '--beam_search_diversity_rate', type=float, default=0.0, metavar='NUMBER',
-                        help='deviersity rate of beam search. default is 0. When diversity rate = 0, it is equivalent to the naive beams earch.')
+                        help='deviersity rate of beam search. default is 0. When diversity rate = 0, it is equivalent to the naive beam search.')
     parser.add_argument('-topk', '--sampling_topk', type=int, default=1, metavar='NUMBER',
                         help='Candidate (k) value of top k sampling in decoding. Default is 1.')
     parser.add_argument('-topp', '--sampling_topp', type=float, default=0.0, metavar='NUMBER',
@@ -194,14 +194,14 @@ if __name__ == "__main__":
                                                                             decoding_sampling_args,
                                                                             decoder_type=0)
     
-    finalized_op_output_ids, finalized_op_sequence_lengths, _, \
+    finalized_op_output_ids, finalized_op_sequence_lengths, cum_log_probs, \
         _, _ = ft_decoding(memory,
                            memory_sequence_length,
                            embedding_table,
                            all_vars,
                            ft_decoding_beamsearch_args)
         
-    op_sampling_target_ids, op_sampling_target_length, _, _, _ = ft_decoding(memory,
+    op_sampling_target_ids, op_sampling_target_length, op_sampling_cum_log_probs, _, _ = ft_decoding(memory,
                                                                             memory_sequence_length,
                                                                             embedding_table,
                                                                             all_vars,
@@ -229,8 +229,11 @@ if __name__ == "__main__":
             int_result_cross_check("Sequence lengths", tf_sequence_lengths_result, 
                                    finalized_op_sequence_lengths_result, shape=[batch_size, beam_width, 1])
             
-            op_sampling_ids, op_sampling_length = sess.run([op_sampling_target_ids,
-                                                           op_sampling_target_length])
+            op_sampling_ids, op_sampling_length, op_sampling_cum_log_probs = sess.run([op_sampling_target_ids,
+                                                           op_sampling_target_length,
+                                                           op_sampling_cum_log_probs])
+            print("[INFO] Cumulative log probabilities:")
+            print(op_sampling_cum_log_probs)
             tf_sampling_ids, tf_sampling_length = sess.run([tf_sampling_target_ids,
                                                            tf_sampling_target_length])
             print("[INFO] Sampling cross check:")

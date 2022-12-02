@@ -26,8 +26,8 @@ public:
     explicit TestFailureError(std::string name, std::string msg = "") {
         msg_ = fmtstr("TEST FAIL [%s] %s", name.c_str(), msg.c_str());
     }
-	const char* what () const throw () {
-    	return msg_.c_str();
+    const char* what () const throw () {
+        return msg_.c_str();
     }
 };
 

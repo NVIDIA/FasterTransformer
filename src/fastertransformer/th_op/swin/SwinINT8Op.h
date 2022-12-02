@@ -48,6 +48,7 @@ public:
     float mlp_ratio_;
     bool  qkv_bias_;
     float qk_scale_;
+    int   version_;
 
     SwinTransformerINT8Func(const int                      int8_mode,
                             const int                      max_batch,
@@ -64,6 +65,7 @@ public:
                             const float                    mlp_ratio,
                             const bool                     qkv_bias,
                             const float                    qk_scale,
+                            const int                      version,
                             const std::vector<th::Tensor>& w):
         weights_(w),
         int8_mode_(int8_mode),
@@ -80,7 +82,8 @@ public:
         layer_num_(layer_num),
         mlp_ratio_(mlp_ratio),
         qkv_bias_(qkv_bias),
-        qk_scale_(qk_scale)
+        qk_scale_(qk_scale),
+        version_(version)
     {
         ft::check_cuda_error(cublasCreate(&cublas_handle_));
         ft::check_cuda_error(cublasLtCreate(&cublaslt_handle_));
@@ -97,16 +100,16 @@ public:
         cublas_wrapper_mutex_ = new std::mutex();
 
         // We arrange weights layer by layer and block by block inside each layer;
-        // each block has 13 weights
-        // each layer has a block list && 4 weights
+        // each block has has 16 weights for version 1 or 17 weights for version 2
+        // each layer has a block list && 5 weights
         // each swin transformer has a layer list && 6 weights && 3 handles
 
         int weight_num = 6;
         for (int l = 0; l < layer_num; l++) {
             for (int di = 0; di < depths[l]; di++) {
-                weight_num += 15;
+                weight_num += (version_ == 1 ? 16 : 17);
             }
-            weight_num += 4;
+            weight_num += 5;
         }
         if (weight_num != weights_.size()) {
             printf("[ERROR][SwinTransformerINT8Func] weights number %lu does not match expected number %d!\n",
@@ -116,7 +119,6 @@ public:
         }
 
         int weight_idx = 0;
-        int hidden_dim = embed_dim;
         for (int l = 0; l < layer_num; l++) {
             ft::SwinTransformerINT8BasicLayerWeight<T> bl;
             for (int di = 0; di < depths[l]; di++) {
@@ -140,15 +142,16 @@ public:
                 p.scalelist.d_scale_list_     = get_ptr<float>(weights_[weight_idx++]);
                 p.scalelist.h_scale_list_     = get_ptr<float>(weights_[weight_idx++]);
                 p.attention_relative_pos_bias = get_ptr<T>(weights_[weight_idx++]);
+                p.trt_relative_position_bias  = get_ptr<T>(weights_[weight_idx++]);
+                p.attention_logit_scale       = (version_ == 1) ? nullptr : get_ptr<T>(weights_[weight_idx++]);
                 bl.block_weight_list.push_back(p);
             }
             bl.merge_layernorm_weights.gamma = get_ptr<T>(weights_[weight_idx++]);
             bl.merge_layernorm_weights.beta  = get_ptr<T>(weights_[weight_idx++]);
             bl.merge_linear_weights.kernel   = get_ptr<T>(weights_[weight_idx++]);
             bl.attn_mask                     = get_ptr<T>(weights_[weight_idx++]);
-
+            bl.trt_attn_mask                 = get_ptr<T>(weights_[weight_idx++]);
             params_.basic_layer_weight_list.push_back(bl);
-            hidden_dim *= 2;
         }
         params_.patchEmbed_linear_weights.kernel = get_ptr<T>(weights_[weight_idx++]);
         params_.patchEmbed_linear_weights.bias   = get_ptr<T>(weights_[weight_idx++]);
@@ -202,22 +205,26 @@ public:
                                                                                       allocator,
                                                                                       true,
                                                                                       qkv_bias_,
-                                                                                      qk_scale_);
+                                                                                      qk_scale_,
+                                                                                      version_);
 
-        ft::DataType            data_type     = ft::getTensorType<T>();
-        int                     sm_ptr[1]     = {sm_};
-        std::vector<ft::Tensor> input_tensors = std::vector<ft::Tensor>{
-            ft::Tensor{ft::MEMORY_GPU,
-                       data_type,
-                       std::vector<size_t>{(size_t)batch_size, (size_t)img_size_ * img_size_, (size_t)in_chans_},
-                       get_ptr<T>(input)},
-            ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT8, std::vector<size_t>{1}, sm_ptr}};
+        ft::DataType  data_type = ft::getTensorType<T>();
+        int           sm_ptr[1] = {sm_};
+        ft::TensorMap input_tensors{
+            {"input_query",
+             ft::Tensor{
+                 ft::MEMORY_GPU,
+                 data_type,
+                 std::vector<size_t>{(size_t)batch_size, (size_t)in_chans_, (size_t)img_size_, (size_t)img_size_},
+                 get_ptr<T>(input)}},
+            {"additional_params", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT8, std::vector<size_t>{1}, sm_ptr}}};
 
-        std::vector<ft::Tensor> output_tensors = std::vector<ft::Tensor>{
-            ft::Tensor{ft::MEMORY_GPU,
-                       data_type,
-                       std::vector<size_t>{(size_t)batch_size, (size_t)img_size_ * img_size_, (size_t)in_chans_},
-                       get_ptr<T>(output)}};
+        ft::TensorMap output_tensors{
+            {"hidden_features",
+             ft::Tensor{ft::MEMORY_GPU,
+                        data_type,
+                        std::vector<size_t>{(size_t)batch_size, (size_t)(int(pow(2, layer_num_ - 1)) * in_chans_)},
+                        get_ptr<T>(output)}}};
 
         swin_transformer->forward(&output_tensors, &input_tensors, params_);
         delete swin_transformer;
@@ -252,7 +259,8 @@ public:
                              int64_t                 layer_num,
                              double                  mlp_ratio,
                              bool                    qkv_bias = true,
-                             double                  qk_scale = 1.0);
+                             double                  qk_scale = 1.0,
+                             int64_t                 version  = 1);
 
     ~SwinTransformerINT8Class();
 

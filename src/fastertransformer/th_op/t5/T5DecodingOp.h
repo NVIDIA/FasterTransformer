@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,44 +26,49 @@ namespace torch_ext {
 class IFTT5Decoding {
 public:
     virtual ~IFTT5Decoding() {}
-    virtual std::vector<th::Tensor> forward(th::optional<int64_t> beam_width_opt,
-                                            size_t                max_seq_len,
-                                            th::optional<int64_t> top_k_opt,
-                                            th::optional<double>  top_p_opt,
-                                            th::optional<double>  beam_search_diversity_rate_opt,
-                                            th::optional<double>  temperature_opt,
-                                            th::optional<double>  len_penalty_opt,
-                                            th::optional<double>  repetition_penalty_opt,
-                                            th::optional<int64_t> random_seed_opt,
-                                            th::optional<bool>    is_return_output_log_probs_opt,
-                                            th::optional<bool>    is_return_cum_log_probs_opt,
-                                            th::optional<bool>    is_return_cross_attentions_opt,
-                                            th::Tensor            memory,
-                                            th::Tensor            memory_seq_lens) = 0;
+    virtual std::vector<th::Tensor> forward(th::optional<int64_t>    beam_width_opt,
+                                            size_t                   max_seq_len,
+                                            th::optional<int64_t>    top_k_opt,
+                                            th::optional<double>     top_p_opt,
+                                            th::optional<double>     beam_search_diversity_rate_opt,
+                                            th::optional<double>     temperature_opt,
+                                            th::optional<double>     len_penalty_opt,
+                                            th::optional<double>     repetition_penalty_opt,
+                                            th::optional<int64_t>    random_seed_opt,
+                                            th::Tensor               memory,
+                                            th::Tensor               memory_seq_lens,
+                                            th::optional<bool>       is_return_output_log_probs_opt,
+                                            th::optional<bool>       is_return_cum_log_probs_opt,
+                                            th::optional<bool>       is_return_cross_attentions_opt,
+                                            th::optional<th::Tensor> bad_words_list,
+                                            th::optional<th::Tensor> stop_words_list) = 0;
 };
 
 template<typename T>
 class FTT5Decoding: public IFTT5Decoding {
 public:
-    FTT5Decoding(int                            head_num,
-                 int                            size_per_head,
-                 int                            inter_size,
-                 int                            mem_d_model,
-                 int                            d_model,
-                 int                            layer_num,
-                 int                            vocab_size,
-                 int                            num_bucket,
-                 int                            max_distance,
+    FTT5Decoding(int64_t                        head_num,
+                 int64_t                        size_per_head,
+                 int64_t                        inter_size,
+                 int64_t                        mem_d_model,
+                 int64_t                        d_model,
+                 int64_t                        layer_num,
+                 int64_t                        vocab_size,
+                 int64_t                        num_bucket,
+                 int64_t                        expert_num,
+                 int64_t                        max_distance,
                  double                         q_scaling,
-                 int                            start_id,
-                 int                            end_id,
-                 int                            tensor_para_size,
-                 int                            pipeline_para_size,
+                 int64_t                        start_id,
+                 int64_t                        end_id,
+                 int64_t                        tensor_para_size,
+                 int64_t                        pipeline_para_size,
                  bool                           t5_with_bias,
+                 int64_t                        moe_k,
                  ft::PositionEmbeddingType      position_embedding_type,
                  ft::ActivationType             activation_type,
                  bool                           tie_word_embeddings,
-                 const std::vector<th::Tensor>& w):
+                 const std::vector<th::Tensor>& w,
+                 std::vector<int64_t>           moe_layer_index):
         head_num_(head_num),
         size_per_head_(size_per_head),
         inter_size_(inter_size),
@@ -72,12 +77,15 @@ public:
         layer_num_(layer_num),
         vocab_size_(vocab_size),
         num_bucket_(num_bucket),
+        expert_num_(expert_num),
         max_distance_(max_distance),
         q_scaling_(q_scaling),
         start_id_(start_id),
         end_id_(end_id),
         t5_with_bias_(t5_with_bias),
+        moe_k_(moe_k),
         position_embedding_type_(position_embedding_type),
+        moe_layer_index_(moe_layer_index),
         activation_type_(activation_type),
         tie_word_embeddings_(tie_word_embeddings),
         _weights(w)
@@ -92,6 +100,9 @@ public:
         decoding_weights.resizeLayer(layer_num_);
         decoding_weights.setT5StructureDiff(t5_with_bias, use_gated_activation, position_embedding_type);
         const int hidden_dim = head_num_ * size_per_head_;
+
+        int dense_weight_index     = 0;  // the inter and out kernel has the same index
+        int moe_dense_weight_index = 0;  // the moe inter and out kernel has the same index
 
         for (int i = 0; i < layer_num_; ++i) {
             int local_num_layer = (int)(ceil(layer_num_ * 1.0f / pipeline_para_.world_size_));
@@ -120,14 +131,17 @@ public:
             decoding_weights.decoder_layer_weights[i]->cross_attn_layernorm_weights.gamma =
                 get_ptr<T>(_weights[8]) + (i - first_layer_index) * d_model;
             decoding_weights.decoder_layer_weights[i]->ffn_weights.intermediate_weight.kernel =
-                get_ptr<T>(_weights[9]) + (i - first_layer_index) * d_model * inter_size_ / tensor_para_.world_size_;
+                get_ptr<T>(_weights[9]) + dense_weight_index * d_model * inter_size_ / tensor_para_.world_size_
+                + moe_dense_weight_index * expert_num_ * d_model * inter_size_ / tensor_para_.world_size_;
+
             if (use_gated_activation) {
                 decoding_weights.decoder_layer_weights[i]->ffn_weights.intermediate_weight2.kernel =
-                    get_ptr<T>(_weights[10])
-                    + (i - first_layer_index) * d_model * inter_size_ / tensor_para_.world_size_;
+                    get_ptr<T>(_weights[10]) + dense_weight_index * d_model * inter_size_ / tensor_para_.world_size_;
             }
+
             decoding_weights.decoder_layer_weights[i]->ffn_weights.output_weight.kernel =
-                get_ptr<T>(_weights[11]) + (i - first_layer_index) * inter_size_ / tensor_para_.world_size_ * d_model;
+                get_ptr<T>(_weights[11]) + dense_weight_index * inter_size_ / tensor_para_.world_size_ * d_model
+                + moe_dense_weight_index * expert_num_ * inter_size_ / tensor_para_.world_size_ * d_model;
 
             if (t5_with_bias_) {
                 decoding_weights.decoder_layer_weights[i]->pre_layernorm_weights.beta =
@@ -149,13 +163,26 @@ public:
                 decoding_weights.decoder_layer_weights[i]->cross_attn_layernorm_weights.beta =
                     get_ptr<T>(_weights[24]) + (i - first_layer_index) * d_model;
                 decoding_weights.decoder_layer_weights[i]->ffn_weights.intermediate_weight.bias =
-                    get_ptr<T>(_weights[25]) + (i - first_layer_index) * inter_size_ / tensor_para_.world_size_;
+                    get_ptr<T>(_weights[25]) + dense_weight_index * inter_size_ / tensor_para_.world_size_
+                    + moe_dense_weight_index * expert_num_ * inter_size_ / tensor_para_.world_size_;
+
                 if (use_gated_activation) {
                     decoding_weights.decoder_layer_weights[i]->ffn_weights.intermediate_weight2.bias =
                         get_ptr<T>(_weights[26]) + (i - first_layer_index) * inter_size_ / tensor_para_.world_size_;
                 }
+
                 decoding_weights.decoder_layer_weights[i]->ffn_weights.output_weight.bias =
-                    get_ptr<T>(_weights[27]) + (i - first_layer_index) * d_model;
+                    get_ptr<T>(_weights[27]) + dense_weight_index * d_model
+                    + moe_dense_weight_index * expert_num_ * d_model;
+            }
+            if (std::find(moe_layer_index.begin(), moe_layer_index.end(), i) == moe_layer_index.end()) {
+                dense_weight_index += 1;
+            }
+
+            if (std::find(moe_layer_index.begin(), moe_layer_index.end(), i) != moe_layer_index.end()) {
+                decoding_weights.decoder_layer_weights[i]->ffn_weights.gating_weight.kernel =
+                    get_ptr<T>(_weights[30]) + moe_dense_weight_index * d_model * expert_num_;
+                moe_dense_weight_index += 1;
             }
         }
         decoding_weights.post_decoder_layernorm.gamma            = get_ptr<T>(_weights[12]);
@@ -180,20 +207,22 @@ public:
         delete cublas_wrapper_mutex_;
     }
 
-    std::vector<th::Tensor> forward(th::optional<int64_t> beam_width_opt,
-                                    size_t                max_seq_len,
-                                    th::optional<int64_t> top_k_opt,
-                                    th::optional<double>  top_p_opt,
-                                    th::optional<double>  beam_search_diversity_rate_opt,
-                                    th::optional<double>  temperature_opt,
-                                    th::optional<double>  len_penalty_opt,
-                                    th::optional<double>  repetition_penalty_opt,
-                                    th::optional<int64_t> random_seed_opt,
-                                    th::optional<bool>    is_return_output_log_probs_opt,
-                                    th::optional<bool>    is_return_cum_log_probs_opt,
-                                    th::optional<bool>    is_return_cross_attentions_opt,
-                                    th::Tensor            memory,
-                                    th::Tensor            memory_seq_lens) override
+    std::vector<th::Tensor> forward(th::optional<int64_t>    beam_width_opt,
+                                    size_t                   max_seq_len,
+                                    th::optional<int64_t>    top_k_opt,
+                                    th::optional<double>     top_p_opt,
+                                    th::optional<double>     beam_search_diversity_rate_opt,
+                                    th::optional<double>     temperature_opt,
+                                    th::optional<double>     len_penalty_opt,
+                                    th::optional<double>     repetition_penalty_opt,
+                                    th::optional<int64_t>    random_seed_opt,
+                                    th::Tensor               memory,
+                                    th::Tensor               memory_seq_lens,
+                                    th::optional<bool>       is_return_output_log_probs_opt,
+                                    th::optional<bool>       is_return_cum_log_probs_opt,
+                                    th::optional<bool>       is_return_cross_attentions_opt,
+                                    th::optional<th::Tensor> bad_words_list_opt,
+                                    th::optional<th::Tensor> stop_words_list_opt) override
     {
         // input validation
         size_t beam_width = beam_width_opt.has_value() ? (size_t)beam_width_opt.value() : 1;
@@ -245,7 +274,9 @@ public:
                                                        layer_num_,
                                                        vocab_size_,
                                                        num_bucket_,
+                                                       expert_num_,
                                                        max_distance_,
+                                                       moe_k_,
                                                        q_scaling_,
                                                        start_id_,
                                                        end_id_,
@@ -255,6 +286,7 @@ public:
                                                        temperature,
                                                        len_penalty,
                                                        repetition_penalty,
+                                                       moe_layer_index_,
                                                        stream,
                                                        &cublas_wrapper,
                                                        &allocator,
@@ -266,17 +298,17 @@ public:
                                                        tie_word_embeddings_);
         ft::DataType      data_type = ft::getTensorType<T>();
 
-        std::unordered_map<std::string, ft::Tensor> input_tensors = std::unordered_map<std::string, ft::Tensor>{
-            {"encoder_output",
-             ft::Tensor{ft::MEMORY_GPU,
-                        data_type,
-                        std::vector<size_t>{(size_t)memory.size(0), (size_t)memory.size(1), (size_t)memory.size(2)},
-                        get_ptr<T>(memory)}},
-            {"encoder_sequence_length",
-             ft::Tensor{ft::MEMORY_GPU,
-                        ft::TYPE_INT32,
-                        std::vector<size_t>{(size_t)memory_seq_lens.size(0)},
-                        get_ptr<T>(memory_seq_lens)}}};
+        ft::TensorMap input_tensors(
+            {{"encoder_output",
+              ft::Tensor{ft::MEMORY_GPU,
+                         data_type,
+                         std::vector<size_t>{(size_t)memory.size(0), (size_t)memory.size(1), (size_t)memory.size(2)},
+                         get_ptr<T>(memory)}},
+             {"encoder_sequence_length",
+              ft::Tensor{ft::MEMORY_GPU,
+                         ft::TYPE_INT32,
+                         std::vector<size_t>{(size_t)memory_seq_lens.size(0)},
+                         get_ptr<T>(memory_seq_lens)}}});
 
         if (beam_width > 1) {
             input_tensors.insert(
@@ -308,24 +340,30 @@ public:
             input_tensors.insert(
                 {"random_seed", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_UINT64, std::vector<size_t>{1}, &random_seed}});
         }
+        if (stop_words_list_opt.has_value()) {
+            input_tensors.insert({"stop_words_list", convert_tensor<int>(stop_words_list_opt.value())});
+        }
+        if (bad_words_list_opt.has_value()) {
+            input_tensors.insert({"bad_words_list", convert_tensor<int>(bad_words_list_opt.value())});
+        }
 
-        auto                    output_ids        = torch::empty({(long int)(batch_size * beam_width * max_seq_len)},
+        auto output_ids      = torch::empty({(long int)(batch_size * beam_width * max_seq_len)},
                                        torch::dtype(torch::kInt32).device(torch::kCUDA).requires_grad(false));
-        auto                    sequence_length   = torch::empty({(long int)(batch_size * beam_width)},
+        auto sequence_length = torch::empty({(long int)(batch_size * beam_width)},
                                             torch::dtype(torch::kInt32).device(torch::kCUDA).requires_grad(false));
+
         std::vector<th::Tensor> th_output_tensors = {output_ids, sequence_length};
 
-        std::unordered_map<std::string, ft::Tensor> output_tensors = std::unordered_map<std::string, ft::Tensor>{
-            {"output_ids",
-             ft::Tensor{ft::MEMORY_GPU,
-                        ft::TYPE_INT32,
-                        std::vector<size_t>{batch_size, beam_width, max_seq_len},
-                        get_ptr<int>(output_ids)}},
-            {"sequence_length",
-             ft::Tensor{ft::MEMORY_GPU,
-                        ft::TYPE_INT32,
-                        std::vector<size_t>{batch_size, beam_width},
-                        get_ptr<int>(sequence_length)}}};
+        ft::TensorMap output_tensors({{"output_ids",
+                                       ft::Tensor{ft::MEMORY_GPU,
+                                                  ft::TYPE_INT32,
+                                                  std::vector<size_t>{batch_size, beam_width, max_seq_len},
+                                                  get_ptr<int>(output_ids)}},
+                                      {"sequence_length",
+                                       ft::Tensor{ft::MEMORY_GPU,
+                                                  ft::TYPE_INT32,
+                                                  std::vector<size_t>{batch_size, beam_width},
+                                                  get_ptr<int>(sequence_length)}}});
 
         if (is_return_output_log_probs) {
             auto output_log_probs = torch::empty({(long int)(batch_size * beam_width * max_seq_len)},
@@ -368,22 +406,25 @@ public:
     }
 
 private:
-    const int                       head_num_;
-    const int                       size_per_head_;
-    const int                       inter_size_;
-    const int                       mem_d_model_;
-    const int                       d_model_;
-    const int                       layer_num_;
-    const int                       vocab_size_;
-    const int                       num_bucket_;
-    const int                       max_distance_;
+    const int64_t                   head_num_;
+    const int64_t                   size_per_head_;
+    const int64_t                   inter_size_;
+    const int64_t                   mem_d_model_;
+    const int64_t                   d_model_;
+    const int64_t                   layer_num_;
+    const int64_t                   vocab_size_;
+    const int64_t                   num_bucket_;
+    const int64_t                   expert_num_;
+    const int64_t                   max_distance_;
     double                          q_scaling_;
-    const int                       start_id_;
-    const int                       end_id_;
+    const int64_t                   start_id_;
+    const int64_t                   end_id_;
+    const int64_t                   moe_k_;
     const bool                      t5_with_bias_;
     const ft::PositionEmbeddingType position_embedding_type_;
     const ft::ActivationType        activation_type_;
     const bool                      tie_word_embeddings_;
+    std::vector<int64_t>            moe_layer_index_;
 
     std::vector<th::Tensor> _weights;
     cublasLtHandle_t        cublasltHandle_;
@@ -398,71 +439,77 @@ private:
 
 class FasterTransformerT5Decoding: public torch::jit::CustomClassHolder {
 public:
-    FasterTransformerT5Decoding(int64_t     head_num,
-                                int64_t     size_per_head,
-                                int64_t     inter_size,
-                                int64_t     mem_d_model,
-                                int64_t     d_model,
-                                int64_t     layer_num,
-                                int64_t     vocab_size,
-                                int64_t     num_bucket,
-                                int64_t     max_distance,
-                                double      q_scaling,
-                                int64_t     start_id,
-                                int64_t     end_id,
-                                int64_t     tensor_para_size,
-                                int64_t     pipeline_para_size,
-                                bool        t5_with_bias,
-                                int64_t     position_embedding_type,
-                                std::string activaiton_type,
-                                bool        tie_word_embeddings,
-                                th::Tensor  self_layernorm_gamma,
-                                th::Tensor  self_kernel_qkv,
-                                th::Tensor  self_output_kernel,
-                                th::Tensor  cross_layernorm_gamma,
-                                th::Tensor  cross_kernel_q,
-                                th::Tensor  cross_kernel_k,
-                                th::Tensor  cross_kernel_v,
-                                th::Tensor  cross_output_kernel,
-                                th::Tensor  ffn_layernorm_gamma,
-                                th::Tensor  inter_kernel,
-                                th::Tensor  inter_kernel2,
-                                th::Tensor  output_kernel,
-                                th::Tensor  decoding_gamma,
-                                th::Tensor  embedding_table,
-                                th::Tensor  lm_head,
-                                th::Tensor  absolute_or_relative_position_embedding,
-                                th::Tensor  self_layernorm_beta,
-                                th::Tensor  self_bias_qkv,
-                                th::Tensor  self_output_bias,
-                                th::Tensor  cross_layernorm_beta,
-                                th::Tensor  cross_bias_q,
-                                th::Tensor  cross_bias_k,
-                                th::Tensor  cross_bias_v,
-                                th::Tensor  cross_output_bias,
-                                th::Tensor  ffn_layernorm_beta,
-                                th::Tensor  inter_bias,
-                                th::Tensor  inter_bias2,
-                                th::Tensor  output_bias,
-                                th::Tensor  decoding_beta,
-                                th::Tensor  embedding_bias);
+    FasterTransformerT5Decoding(int64_t              head_num,
+                                int64_t              size_per_head,
+                                int64_t              inter_size,
+                                int64_t              mem_d_model,
+                                int64_t              d_model,
+                                int64_t              layer_num,
+                                int64_t              vocab_size,
+                                int64_t              num_bucket,
+                                int64_t              expert_num,
+                                int64_t              max_distance,
+                                double               q_scaling,
+                                int64_t              start_id,
+                                int64_t              end_id,
+                                int64_t              tensor_para_size,
+                                int64_t              pipeline_para_size,
+                                bool                 t5_with_bias,
+                                int64_t              position_embedding_type,
+                                int64_t              moe_k,
+                                std::string          activaiton_type,
+                                bool                 tie_word_embeddings,
+                                std::vector<int64_t> moe_layer_index,
+                                th::Tensor           self_layernorm_gamma,
+                                th::Tensor           self_kernel_qkv,
+                                th::Tensor           self_output_kernel,
+                                th::Tensor           cross_layernorm_gamma,
+                                th::Tensor           cross_kernel_q,
+                                th::Tensor           cross_kernel_k,
+                                th::Tensor           cross_kernel_v,
+                                th::Tensor           cross_output_kernel,
+                                th::Tensor           ffn_layernorm_gamma,
+                                th::Tensor           inter_kernel,
+                                th::Tensor           inter_kernel2,
+                                th::Tensor           output_kernel,
+                                th::Tensor           decoding_gamma,
+                                th::Tensor           embedding_table,
+                                th::Tensor           lm_head,
+                                th::Tensor           absolute_or_relative_position_embedding,
+                                th::Tensor           self_layernorm_beta,
+                                th::Tensor           self_bias_qkv,
+                                th::Tensor           self_output_bias,
+                                th::Tensor           cross_layernorm_beta,
+                                th::Tensor           cross_bias_q,
+                                th::Tensor           cross_bias_k,
+                                th::Tensor           cross_bias_v,
+                                th::Tensor           cross_output_bias,
+                                th::Tensor           ffn_layernorm_beta,
+                                th::Tensor           inter_bias,
+                                th::Tensor           inter_bias2,
+                                th::Tensor           output_bias,
+                                th::Tensor           decoding_beta,
+                                th::Tensor           embedding_bias,
+                                th::Tensor           moe_gate);
 
     ~FasterTransformerT5Decoding();
 
-    std::vector<th::Tensor> forward(th::optional<int64_t> beam_width,
-                                    int64_t               max_seq_len,
-                                    th::optional<int64_t> top_k,
-                                    th::optional<double>  top_p,
-                                    th::optional<double>  beam_search_diversity_rate,
-                                    th::optional<double>  temperature,
-                                    th::optional<double>  len_penalty,
-                                    th::optional<double>  repetition_penalty,
-                                    th::optional<int64_t> random_seed,
-                                    th::optional<bool>    is_return_output_log_probs,
-                                    th::optional<bool>    is_return_cum_log_probs,
-                                    th::optional<bool>    is_return_cross_attentions,
-                                    th::Tensor            memory,
-                                    th::Tensor            memory_seq_lens);
+    std::vector<th::Tensor> forward(th::optional<int64_t>    beam_width,
+                                    int64_t                  max_seq_len,
+                                    th::optional<int64_t>    top_k,
+                                    th::optional<double>     top_p,
+                                    th::optional<double>     beam_search_diversity_rate,
+                                    th::optional<double>     temperature,
+                                    th::optional<double>     len_penalty,
+                                    th::optional<double>     repetition_penalty,
+                                    th::optional<int64_t>    random_seed,
+                                    th::Tensor               memory,
+                                    th::Tensor               memory_seq_lens,
+                                    th::optional<bool>       is_return_output_log_probs,
+                                    th::optional<bool>       is_return_cum_log_probs,
+                                    th::optional<bool>       is_return_cross_attentions,
+                                    th::optional<th::Tensor> bad_words_list,
+                                    th::optional<th::Tensor> stop_words_list);
 
     std::vector<th::Tensor> get_pickle_info() const;
 

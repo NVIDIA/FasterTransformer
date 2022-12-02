@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,32 +37,38 @@ public:
 template<typename T>
 class FTT5Encoder: public IFT5Encoder {
 public:
-    FTT5Encoder(int                            head_num,
-                int                            head_size,
-                int                            inter_size,
-                int                            d_model,
-                int                            layer_num,
-                int                            num_bucket,
-                int                            max_distance,
+    FTT5Encoder(int64_t                        head_num,
+                int64_t                        head_size,
+                int64_t                        inter_size,
+                int64_t                        d_model,
+                int64_t                        layer_num,
+                int64_t                        num_bucket,
+                int64_t                        expert_num,
+                int64_t                        max_distance,
                 bool                           sparse,
                 float                          q_scaling,
-                int                            tensor_para_size,
-                int                            pipeline_para_size,
+                int64_t                        moe_k,
+                int64_t                        tensor_para_size,
+                int64_t                        pipeline_para_size,
                 bool                           t5_with_bias,
                 ft::PositionEmbeddingType      position_embedding_type,
                 ft::ActivationType             activation_type,
-                const std::vector<th::Tensor>& w):
+                const std::vector<th::Tensor>& w,
+                const std::vector<int64_t>     moe_layer_index):
         _head_num(head_num),
         _head_size(head_size),
         _inter_size(inter_size),
         _d_model(d_model),
         _layer_num(layer_num),
         _num_bucket(num_bucket),
+        _expert_num(expert_num),
         _max_distance(max_distance),
         _weights(w),
         _sparse(sparse),
         _q_scaling(q_scaling),
+        _moe_k(moe_k),
         _t5_with_bias(t5_with_bias),
+        _moe_layer_index(moe_layer_index),
         _position_embedding_type(position_embedding_type),
         _activation_type(activation_type)
     {
@@ -90,6 +96,9 @@ public:
 
         t5_encoder_weights.resizeLayer(_layer_num);
         t5_encoder_weights.setT5StructureDiff(t5_with_bias, use_gated_activation, position_embedding_type);
+        int dense_weight_index     = 0;  // the inter and out kernel has the same index
+        int moe_dense_weight_index = 0;  // the moe inter and out kernel has the same index
+
         for (int i = 0; i < _layer_num; i++) {
             int local_num_layer = (int)(ceil(_layer_num * 1.0f / pipeline_para_.world_size_));
             if (!(i < _layer_num && (i >= local_num_layer * pipeline_para_.rank_)
@@ -98,48 +107,64 @@ public:
             }
             const int first_layer_index = local_num_layer * pipeline_para_.rank_;
 
-            t5_encoder_weights.t5_encoder_layer_weights[i]->attn_layernorm_weights.gamma =
+            t5_encoder_weights.t5_encoder_layer_weights[i]->attn_layernorm_weights_.gamma =
                 get_ptr<T>(_weights[0]) + _d_model * (i - first_layer_index);
-            t5_encoder_weights.t5_encoder_layer_weights[i]->attention_weights.query_weight.kernel =
+            t5_encoder_weights.t5_encoder_layer_weights[i]->attention_weights_.query_weight.kernel =
                 get_ptr<T>(_weights[1]) + _d_model * hidden_dim / tensor_para_.world_size_ * (i - first_layer_index);
-            t5_encoder_weights.t5_encoder_layer_weights[i]->attention_weights.key_weight.kernel =
+            t5_encoder_weights.t5_encoder_layer_weights[i]->attention_weights_.key_weight.kernel =
                 get_ptr<T>(_weights[2]) + _d_model * hidden_dim / tensor_para_.world_size_ * (i - first_layer_index);
-            t5_encoder_weights.t5_encoder_layer_weights[i]->attention_weights.value_weight.kernel =
+            t5_encoder_weights.t5_encoder_layer_weights[i]->attention_weights_.value_weight.kernel =
                 get_ptr<T>(_weights[3]) + _d_model * hidden_dim / tensor_para_.world_size_ * (i - first_layer_index);
-            t5_encoder_weights.t5_encoder_layer_weights[i]->attention_weights.attention_output_weight.kernel =
+            t5_encoder_weights.t5_encoder_layer_weights[i]->attention_weights_.attention_output_weight.kernel =
                 get_ptr<T>(_weights[4]) + hidden_dim / tensor_para_.world_size_ * _d_model * (i - first_layer_index);
-            t5_encoder_weights.t5_encoder_layer_weights[i]->ffn_layernorm_weights.gamma =
+            t5_encoder_weights.t5_encoder_layer_weights[i]->ffn_layernorm_weights_.gamma =
                 get_ptr<T>(_weights[5]) + _d_model * (i - first_layer_index);
-            t5_encoder_weights.t5_encoder_layer_weights[i]->ffn_weights.intermediate_weight.kernel =
-                get_ptr<T>(_weights[6]) + _d_model * _inter_size / tensor_para_.world_size_ * (i - first_layer_index);
+            t5_encoder_weights.t5_encoder_layer_weights[i]->ffn_weights_.intermediate_weight.kernel =
+                get_ptr<T>(_weights[6]) + _d_model * _inter_size / tensor_para_.world_size_ * dense_weight_index
+                + _expert_num * _d_model * _inter_size / tensor_para_.world_size_ * moe_dense_weight_index;
             if (use_gated_activation) {
-                t5_encoder_weights.t5_encoder_layer_weights[i]->ffn_weights.intermediate_weight2.kernel =
+                t5_encoder_weights.t5_encoder_layer_weights[i]->ffn_weights_.intermediate_weight2.kernel =
                     get_ptr<T>(_weights[7])
                     + _d_model * _inter_size / tensor_para_.world_size_ * (i - first_layer_index);
             }
-            t5_encoder_weights.t5_encoder_layer_weights[i]->ffn_weights.output_weight.kernel =
-                get_ptr<T>(_weights[8]) + _inter_size / tensor_para_.world_size_ * _d_model * (i - first_layer_index);
+            t5_encoder_weights.t5_encoder_layer_weights[i]->ffn_weights_.output_weight.kernel =
+                get_ptr<T>(_weights[8]) + _inter_size / tensor_para_.world_size_ * _d_model * dense_weight_index
+                + _expert_num * _d_model * _inter_size / tensor_para_.world_size_ * moe_dense_weight_index;
+
             if (_t5_with_bias) {
-                t5_encoder_weights.t5_encoder_layer_weights[i]->attn_layernorm_weights.beta =
+                t5_encoder_weights.t5_encoder_layer_weights[i]->attn_layernorm_weights_.beta =
                     get_ptr<T>(_weights[12]) + _d_model * (i - first_layer_index);
-                t5_encoder_weights.t5_encoder_layer_weights[i]->attention_weights.query_weight.bias =
+                t5_encoder_weights.t5_encoder_layer_weights[i]->attention_weights_.query_weight.bias =
                     get_ptr<T>(_weights[13]) + hidden_dim / tensor_para_.world_size_ * (i - first_layer_index);
-                t5_encoder_weights.t5_encoder_layer_weights[i]->attention_weights.key_weight.bias =
+                t5_encoder_weights.t5_encoder_layer_weights[i]->attention_weights_.key_weight.bias =
                     get_ptr<T>(_weights[14]) + hidden_dim / tensor_para_.world_size_ * (i - first_layer_index);
-                t5_encoder_weights.t5_encoder_layer_weights[i]->attention_weights.value_weight.bias =
+                t5_encoder_weights.t5_encoder_layer_weights[i]->attention_weights_.value_weight.bias =
                     get_ptr<T>(_weights[15]) + hidden_dim / tensor_para_.world_size_ * (i - first_layer_index);
-                t5_encoder_weights.t5_encoder_layer_weights[i]->attention_weights.attention_output_weight.bias =
+                t5_encoder_weights.t5_encoder_layer_weights[i]->attention_weights_.attention_output_weight.bias =
                     get_ptr<T>(_weights[16]) + _d_model * (i - first_layer_index);
-                t5_encoder_weights.t5_encoder_layer_weights[i]->ffn_layernorm_weights.beta =
+                t5_encoder_weights.t5_encoder_layer_weights[i]->ffn_layernorm_weights_.beta =
                     get_ptr<T>(_weights[17]) + _d_model * (i - first_layer_index);
-                t5_encoder_weights.t5_encoder_layer_weights[i]->ffn_weights.intermediate_weight.bias =
-                    get_ptr<T>(_weights[18]) + _inter_size / tensor_para_.world_size_ * (i - first_layer_index);
+                t5_encoder_weights.t5_encoder_layer_weights[i]->ffn_weights_.intermediate_weight.bias =
+                    get_ptr<T>(_weights[18]) + _inter_size / tensor_para_.world_size_ * dense_weight_index
+                    + _expert_num * _inter_size / tensor_para_.world_size_ * moe_dense_weight_index;
+
                 if (use_gated_activation) {
-                    t5_encoder_weights.t5_encoder_layer_weights[i]->ffn_weights.intermediate_weight2.bias =
+                    t5_encoder_weights.t5_encoder_layer_weights[i]->ffn_weights_.intermediate_weight2.bias =
                         get_ptr<T>(_weights[19]) + _inter_size / tensor_para_.world_size_ * (i - first_layer_index);
                 }
-                t5_encoder_weights.t5_encoder_layer_weights[i]->ffn_weights.output_weight.bias =
-                    get_ptr<T>(_weights[20]) + _d_model * (i - first_layer_index);
+
+                t5_encoder_weights.t5_encoder_layer_weights[i]->ffn_weights_.output_weight.bias =
+                    get_ptr<T>(_weights[20]) + _d_model * dense_weight_index
+                    + _expert_num * _d_model * moe_dense_weight_index;
+            }
+            if (std::find(moe_layer_index.begin(), moe_layer_index.end(), i) == moe_layer_index.end()) {
+                dense_weight_index += 1;
+            }
+
+            if (std::find(moe_layer_index.begin(), moe_layer_index.end(), i) != moe_layer_index.end()) {
+                t5_encoder_weights.t5_encoder_layer_weights[i]->ffn_weights_.gating_weight.kernel =
+                    get_ptr<T>(_weights[22]) + _d_model * _expert_num * moe_dense_weight_index;
+                moe_dense_weight_index += 1;
             }
         }
         t5_encoder_weights.post_transformer_layernorm_weights.gamma = get_ptr<T>(_weights[9]);
@@ -222,7 +247,8 @@ public:
             cublas_wrapper->setFP32GemmConfig();
         }
 
-        ft::AttentionType attention_type = ft::getAttentionType<T>(_head_size, sm_, removing_padding, seq_len, false);
+        ft::AttentionType attention_type =
+            ft::getAttentionType<T>(_head_size, sm_, removing_padding, seq_len, false, true);
 
         ft::T5Encoder<T>* t5_encoder = new ft::T5Encoder<T>(batch_size,
                                                             seq_len,
@@ -232,9 +258,12 @@ public:
                                                             _d_model,
                                                             _layer_num,
                                                             _num_bucket,
+                                                            _expert_num,
                                                             _max_distance,
+                                                            _moe_k,
                                                             sm_,
                                                             _q_scaling,
+                                                            _moe_layer_index,
                                                             stream,
                                                             cublas_wrapper,
                                                             allocator,
@@ -246,8 +275,7 @@ public:
                                                             tensor_para_,
                                                             pipeline_para_);
 
-        std::unordered_map<std::string, ft::Tensor> input_tensors =
-            std::unordered_map<std::string, ft::Tensor>{{"sequence_length", convert_tensor<int>(sequence_lengths)}};
+        ft::TensorMap input_tensors({{"sequence_length", convert_tensor<int>(sequence_lengths)}});
 
         if (inputs_embeds.has_value()) {
             if (std::is_same<T, float>::value) {
@@ -256,15 +284,14 @@ public:
             else if (std::is_same<T, half>::value) {
                 TORCH_CHECK(inputs_embeds.value().dtype() == torch::kFloat16, "inputs_embeds dtype should be float16");
             }
-            input_tensors.insert({"inputs_embeds", convert_tensor<T>(inputs_embeds.value())});
+            input_tensors.insert("inputs_embeds", convert_tensor<T>(inputs_embeds.value()));
         }
         else {
             // already check that input_ids and input_embeds cannot be empty at the same time
-            input_tensors.insert({"input_ids", convert_tensor<int>(input_ids.value())});
+            input_tensors.insert("input_ids", convert_tensor<int>(input_ids.value()));
         }
 
-        std::unordered_map<std::string, ft::Tensor> output_tensors =
-            std::unordered_map<std::string, ft::Tensor>{{"output_hidden_state", convert_tensor<T>(output)}};
+        ft::TensorMap output_tensors({{"output_hidden_state", convert_tensor<T>(output)}});
 
         try {
             t5_encoder->forward(&output_tensors, &input_tensors, &t5_encoder_weights);
@@ -283,15 +310,18 @@ public:
     }
 
 private:
-    const int                 _head_num;
-    const int                 _head_size;
-    const int                 _inter_size;
-    const int                 _d_model;
-    const int                 _layer_num;
-    const int                 _num_bucket;
-    const int                 _max_distance;
+    const int64_t             _head_num;
+    const int64_t             _head_size;
+    const int64_t             _inter_size;
+    const int64_t             _d_model;
+    const int64_t             _layer_num;
+    const int64_t             _num_bucket;
+    const int64_t             _expert_num;
+    const int64_t             _max_distance;
+    const int64_t             _moe_k;
     std::vector<th::Tensor>   _weights;
     bool                      _t5_with_bias;
+    std::vector<int64_t>      _moe_layer_index;
     ft::PositionEmbeddingType _position_embedding_type;
     ft::ActivationType        _activation_type;
     bool                      _sparse;
@@ -311,43 +341,47 @@ private:
 
 class FasterTransformerT5Encoder: public th::jit::CustomClassHolder {
 public:
-    FasterTransformerT5Encoder(th::Tensor  attr_output_layernorm_gamma,
-                               th::Tensor  q_kernel,
-                               th::Tensor  k_kernel,
-                               th::Tensor  v_kernel,
-                               th::Tensor  attr_output_kernel,
-                               th::Tensor  output_layernorm_gamma,
-                               th::Tensor  inter_kernel,
-                               th::Tensor  inter_kernel2,
-                               th::Tensor  output_kernel,
-                               th::Tensor  post_transformer_layernorm_gamma,
-                               th::Tensor  absolute_or_relative_position_embedding,
-                               th::Tensor  embedding_table,
-                               th::Tensor  attr_output_layernorm_beta,
-                               th::Tensor  q_bias,
-                               th::Tensor  k_bias,
-                               th::Tensor  v_bias,
-                               th::Tensor  attr_output_bias,
-                               th::Tensor  output_layernorm_beta,
-                               th::Tensor  inter_bias,
-                               th::Tensor  inter_bias2,
-                               th::Tensor  output_bias,
-                               th::Tensor  post_transformer_layernorm_beta,
-                               int64_t     head_num,
-                               int64_t     head_size,
-                               int64_t     inter_size,
-                               int64_t     d_model,
-                               bool        remove_padding,
-                               int64_t     layer_num,
-                               int64_t     num_bucket,
-                               int64_t     max_distance,
-                               bool        sparse,
-                               double      q_scaling,
-                               int64_t     tensor_para_size,
-                               int64_t     pipeline_para_size,
-                               bool        t5_with_bias,
-                               int64_t     position_embedding_type,
-                               std::string activation_type);
+    FasterTransformerT5Encoder(th::Tensor           attr_output_layernorm_gamma,
+                               th::Tensor           q_kernel,
+                               th::Tensor           k_kernel,
+                               th::Tensor           v_kernel,
+                               th::Tensor           attr_output_kernel,
+                               th::Tensor           output_layernorm_gamma,
+                               th::Tensor           inter_kernel,
+                               th::Tensor           inter_kernel2,
+                               th::Tensor           output_kernel,
+                               th::Tensor           post_transformer_layernorm_gamma,
+                               th::Tensor           absolute_or_relative_position_embedding,
+                               th::Tensor           embedding_table,
+                               th::Tensor           attr_output_layernorm_beta,
+                               th::Tensor           q_bias,
+                               th::Tensor           k_bias,
+                               th::Tensor           v_bias,
+                               th::Tensor           attr_output_bias,
+                               th::Tensor           output_layernorm_beta,
+                               th::Tensor           inter_bias,
+                               th::Tensor           inter_bias2,
+                               th::Tensor           output_bias,
+                               th::Tensor           post_transformer_layernorm_beta,
+                               th::Tensor           moe_gate,
+                               std::vector<int64_t> moe_layer_index,
+                               int64_t              head_num,
+                               int64_t              head_size,
+                               int64_t              inter_size,
+                               int64_t              d_model,
+                               bool                 remove_padding,
+                               int64_t              layer_num,
+                               int64_t              num_bucket,
+                               int64_t              expert_num,
+                               int64_t              max_distance,
+                               bool                 sparse,
+                               double               q_scaling,
+                               int64_t              tensor_para_size,
+                               int64_t              pipeline_para_size,
+                               bool                 t5_with_bias,
+                               int64_t              position_embedding_type,
+                               int64_t              moe_k,
+                               std::string          activation_type);
 
     ~FasterTransformerT5Encoder();
 

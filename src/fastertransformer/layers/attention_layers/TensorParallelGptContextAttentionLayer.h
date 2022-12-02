@@ -29,6 +29,7 @@ private:
     std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm_;
     int                                 enable_custom_all_reduce_;
     bool                                do_all_reduce_;
+    T*                                  attention_out_fp_ = nullptr;
 
 public:
     TensorParallelGptContextAttentionLayer(size_t                              max_batch_size,
@@ -43,6 +44,7 @@ public:
                                            bool                                is_free_buffer_after_forward,
                                            bool                                is_qk_buf_float,
                                            bool                                sparse                   = false,
+                                           int                                 int8_mode                = 0,
                                            std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
                                            int                                 enable_custom_all_reduce = 0);
 
@@ -60,16 +62,16 @@ public:
                                            bool                                is_free_buffer_after_forward,
                                            bool                                is_qk_buf_float,
                                            bool                                sparse                   = false,
+                                           int                                 int8_mode                = 0,
                                            std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
                                            int                                 enable_custom_all_reduce = 0);
 
     TensorParallelGptContextAttentionLayer(TensorParallelGptContextAttentionLayer<T> const& attention_layer);
 
-    ~TensorParallelGptContextAttentionLayer() = default;
+    virtual ~TensorParallelGptContextAttentionLayer();
 
-    void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                 const std::vector<fastertransformer::Tensor>* input_tensors,
-                 const AttentionWeight<T>*                     attention_weights) override;
+    void
+    forward(TensorMap* output_tensors, TensorMap* input_tensors, const AttentionWeight<T>* attention_weights) override;
 };
 
 }  // namespace fastertransformer

@@ -32,7 +32,7 @@ from SwinTransformer.config import get_config
 from SwinTransformerINT8Weight import SwinTransformerINT8Weight
 
 def parse_option():
-    parser = argparse.ArgumentParser('Swin Transformer training and evaluation script', add_help=False)
+    parser = argparse.ArgumentParser('Swin Transformer evaluation script', add_help=False)
     parser.add_argument('--cfg', type=str, required=True, metavar="FILE", help='path to config file', )
     parser.add_argument(
         "--opts",
@@ -42,6 +42,9 @@ def parse_option():
     )
 
     # easy config modification
+    parser.add_argument('--version', type=int, default=1, help='version of swin', )
+    parser.add_argument('--disable_amp', type=bool, default=True, help='disable amp', )
+    parser.add_argument('--fused_window_process', type=bool, default=False, help='whether use fused window process', )
     parser.add_argument('--batch-size', type=int, help="max batch size")
     parser.add_argument('--th-path', type=str, help='path to pytorch library')
     parser.add_argument('--data-path', type=str, help='path to dataset', default=None)
@@ -90,42 +93,58 @@ def set_output_name(layer, prefix, name, out_idx = 0):
     set_tensor_name(layer.get_output(out_idx), prefix, name)
 
 def swin_transformer(network, config, args, input_img, weights_dict):
-    depths = config.MODEL.SWIN.DEPTHS
-    num_heads = config.MODEL.SWIN.NUM_HEADS
-    if config.MODEL.SWIN.QK_SCALE is not None:
-        qk_scale = config.MODEL.SWIN.QK_SCALE
-    else:
+    if args.version == 1:
+        depths = config.MODEL.SWIN.DEPTHS
+        num_heads = config.MODEL.SWIN.NUM_HEADS
+        window_size = config.MODEL.SWIN.WINDOW_SIZE
+        patch_size = config.MODEL.SWIN.PATCH_SIZE
+        in_chans = config.MODEL.SWIN.IN_CHANS
+        embed_dim = config.MODEL.SWIN.EMBED_DIM
+        ape = config.MODEL.SWIN.APE
+        patch_norm = config.MODEL.SWIN.PATCH_NORM
+        mlp_ratio = config.MODEL.SWIN.MLP_RATIO
+        qkv_bias = config.MODEL.SWIN.QKV_BIAS
+        if config.MODEL.SWIN.QK_SCALE is not None:
+            qk_scale = config.MODEL.SWIN.QK_SCALE
+        else:
+            qk_scale = 1.0
+    elif args.version == 2:
+        depths = config.MODEL.SWINV2.DEPTHS
+        num_heads = config.MODEL.SWINV2.NUM_HEADS
+        window_size = config.MODEL.SWINV2.WINDOW_SIZE
+        patch_size = config.MODEL.SWINV2.PATCH_SIZE
+        in_chans = config.MODEL.SWINV2.IN_CHANS
+        embed_dim = config.MODEL.SWINV2.EMBED_DIM
+        ape = config.MODEL.SWINV2.APE
+        patch_norm = config.MODEL.SWINV2.PATCH_NORM
+        mlp_ratio = config.MODEL.SWINV2.MLP_RATIO
+        qkv_bias = config.MODEL.SWINV2.QKV_BIAS
         qk_scale = 1.0
-    if config.MODEL.SWIN.APE:
-        ape = 1
-    else:
-        ape = 0
-    if config.MODEL.SWIN.PATCH_NORM:
-        patch_norm = 1
-    else:
-        patch_norm = 0
-    if config.MODEL.SWIN.QKV_BIAS:
-        qkv_bias = 1
-    else:
-        qkv_bias = 0
+    version = args.version
+    th_path = args.th_path
+    layer_num = len(depths)
+    max_batch = config.DATA.BATCH_SIZE
+    img_size = config.DATA.IMG_SIZE
 
     int8_mode = trt.PluginField("int8_mode", np.array([args.int8_mode]).astype(np.int32), trt.PluginFieldType.INT32)
-    max_batch_size = trt.PluginField("max_batch_size", np.array([config.DATA.BATCH_SIZE]).astype(np.int32), trt.PluginFieldType.INT32)
-    img_size = trt.PluginField("img_size", np.array([config.DATA.IMG_SIZE]).astype(np.int32), trt.PluginFieldType.INT32)
-    patch_size = trt.PluginField("patch_size", np.array([config.MODEL.SWIN.PATCH_SIZE]).astype(np.int32), trt.PluginFieldType.INT32)
-    in_chans = trt.PluginField("in_chans", np.array([config.MODEL.SWIN.IN_CHANS]).astype(np.int32), trt.PluginFieldType.INT32)
-    embed_dim = trt.PluginField("embed_dim", np.array([config.MODEL.SWIN.EMBED_DIM]).astype(np.int32), trt.PluginFieldType.INT32)
-    window_size = trt.PluginField("window_size", np.array([config.MODEL.SWIN.WINDOW_SIZE]).astype(np.int32), trt.PluginFieldType.INT32)
+    max_batch_size = trt.PluginField("max_batch_size", np.array([max_batch]).astype(np.int32), trt.PluginFieldType.INT32)
+    img_size = trt.PluginField("img_size", np.array([img_size]).astype(np.int32), trt.PluginFieldType.INT32)
+    patch_size = trt.PluginField("patch_size", np.array([patch_size]).astype(np.int32), trt.PluginFieldType.INT32)
+    in_chans = trt.PluginField("in_chans", np.array([in_chans]).astype(np.int32), trt.PluginFieldType.INT32)
+    embed_dim = trt.PluginField("embed_dim", np.array([embed_dim]).astype(np.int32), trt.PluginFieldType.INT32)
+    window_size_f = trt.PluginField("window_size", np.array([window_size]).astype(np.int32), trt.PluginFieldType.INT32)
     ape = trt.PluginField("ape", np.array([ape]).astype(np.int32), trt.PluginFieldType.INT32)
     patch_norm = trt.PluginField("patch_norm", np.array([patch_norm]).astype(np.int32), trt.PluginFieldType.INT32)
-    layer_num = trt.PluginField("layer_num", np.array([len(depths)]).astype(np.int32), trt.PluginFieldType.INT32)
-    mlp_ratio = trt.PluginField("mlp_ratio", np.array([config.MODEL.SWIN.MLP_RATIO]).astype(np.float32), trt.PluginFieldType.FLOAT32)
+    layer_num_f = trt.PluginField("layer_num", np.array([layer_num]).astype(np.int32), trt.PluginFieldType.INT32)
+    mlp_ratio = trt.PluginField("mlp_ratio", np.array([mlp_ratio]).astype(np.float32), trt.PluginFieldType.FLOAT32)
     qkv_bias = trt.PluginField("qkv_bias", np.array([qkv_bias]).astype(np.int32), trt.PluginFieldType.INT32)
     qk_scale = trt.PluginField("qk_scale", np.array([qk_scale]).astype(np.float32), trt.PluginFieldType.FLOAT32)
+    version_f = trt.PluginField("version", np.array([version]).astype(np.int32), trt.PluginFieldType.INT32)
     depths_f = trt.PluginField("depths", np.array(depths).astype(np.int32), trt.PluginFieldType.INT32)
     num_heads_f = trt.PluginField("num_heads", np.array(num_heads).astype(np.int32), trt.PluginFieldType.INT32)
    
-    sw_weights = SwinTransformerINT8Weight(len(depths), config.MODEL.SWIN.WINDOW_SIZE, depths, num_heads, args.th_path, weights_dict)   
+    sw_weights = SwinTransformerINT8Weight(
+        layer_num, window_size, depths, num_heads, th_path, weights_dict, version)   
 
     for i in range(len(sw_weights.weights)):
         sw_weights.weights[i] = sw_weights.weights[i].cpu()
@@ -164,6 +183,11 @@ def swin_transformer(network, config, args, input_img, weights_dict):
             weight_idx += 1
             part_fc.append(trt.PluginField("attention_relative_pos_bias_{}_{}".format(l, b), np.array(sw_weights.weights[weight_idx].cpu()).astype(np.float16), trt.PluginFieldType.FLOAT16))
             weight_idx += 1
+            part_fc.append(trt.PluginField("trt_relative_position_bias_{}_{}".format(l, b), np.array(sw_weights.weights[weight_idx].cpu()).astype(np.float16), trt.PluginFieldType.FLOAT16))
+            weight_idx += 1
+            if version == 2:
+                part_fc.append(trt.PluginField("attention_logit_scale_{}_{}".format(l, b), np.array(sw_weights.weights[weight_idx].cpu()).astype(np.float16), trt.PluginFieldType.FLOAT16))
+                weight_idx += 1
 
         part_fc.append(trt.PluginField("patchMerge_norm_gamma_{}".format(l), np.array(sw_weights.weights[weight_idx]).astype(np.float16), trt.PluginFieldType.FLOAT16))
         weight_idx += 1
@@ -172,6 +196,8 @@ def swin_transformer(network, config, args, input_img, weights_dict):
         part_fc.append(trt.PluginField("patchMerge_linear_kernel_{}".format(l), np.array(sw_weights.weights[weight_idx]).astype(np.float16), trt.PluginFieldType.FLOAT16))
         weight_idx += 1
         part_fc.append(trt.PluginField("attn_mask_{}".format(l), np.array(sw_weights.weights[weight_idx]).astype(np.float16), trt.PluginFieldType.FLOAT16))
+        weight_idx += 1
+        part_fc.append(trt.PluginField("trt_attn_mask_{}".format(l), np.array(sw_weights.weights[weight_idx]).astype(np.float16), trt.PluginFieldType.FLOAT16))
         weight_idx += 1
 
     part_fc.append(trt.PluginField("patchEmbed_proj_kernel", np.array(sw_weights.weights[weight_idx]).astype(np.float16), trt.PluginFieldType.FLOAT16))
@@ -185,9 +211,9 @@ def swin_transformer(network, config, args, input_img, weights_dict):
     part_fc.append(trt.PluginField("norm_gamma", np.array(sw_weights.weights[weight_idx]).astype(np.float16), trt.PluginFieldType.FLOAT16))
     weight_idx += 1
     part_fc.append(trt.PluginField("norm_beta", np.array(sw_weights.weights[weight_idx]).astype(np.float16), trt.PluginFieldType.FLOAT16))
+    weight_idx += 1
 
-
-    pfc = trt.PluginFieldCollection([int8_mode, max_batch_size, img_size, patch_size, in_chans, embed_dim, window_size, ape, patch_norm, layer_num, mlp_ratio, qkv_bias, qk_scale, depths_f, num_heads_f] + part_fc)
+    pfc = trt.PluginFieldCollection([int8_mode, max_batch_size, img_size, patch_size, in_chans, embed_dim, window_size_f, ape, patch_norm, layer_num_f, mlp_ratio, qkv_bias, qk_scale, version_f, depths_f, num_heads_f] + part_fc)
     fn = swinTransformer_plg_creator.create_plugin("swin_transformer", pfc)
     inputs = [input_img]
     sw = network.add_plugin_v2(inputs, fn) 
@@ -203,7 +229,6 @@ def load_weights(inputbase, config):
         # tensor_dict = tensor_dict['model']
         # remove training-related variables in the checkpoint
         param_names = [key for key in sorted(tensor_dict)]
-
         for pn in param_names:
             if isinstance(tensor_dict[pn], np.ndarray):
                 tensor = tensor_dict[pn]
@@ -216,7 +241,7 @@ def load_weights(inputbase, config):
             if "index" in pn:
                 flat_tensor = tensor.astype(dtype=np.int64)
                 weights_dict[pn] = torch.tensor(flat_tensor, dtype=torch.int64).cuda()
-            elif "table" in pn:
+            elif ("table" in pn or "cpb_mlp" in pn):
                 flat_tensor = tensor.astype(dtype=np.float32)
                 weights_dict[pn] = torch.tensor(flat_tensor, dtype=torch.float32).cuda()
             else:
@@ -244,9 +269,9 @@ def build_engine(config, args, weights_dict):
         input_img = network.add_input(name="input_img", dtype=trt.float16, shape=(-1, config.MODEL.SWIN.IN_CHANS, config.DATA.IMG_SIZE, config.DATA.IMG_SIZE))
    
         # Specify profiles 
-        ##TODO: There is a bug in TRT when opt batch is large
         profile = builder.create_optimization_profile()
         min_shape = (1, config.MODEL.SWIN.IN_CHANS, config.DATA.IMG_SIZE, config.DATA.IMG_SIZE)
+        ##TODO: There is a bug in TRT when opt batch is large
         max_shape = (config.DATA.BATCH_SIZE, config.MODEL.SWIN.IN_CHANS, config.DATA.IMG_SIZE, config.DATA.IMG_SIZE)
         profile.set_shape("input_img", min=min_shape, opt=min_shape, max=max_shape)
         builder_config.add_optimization_profile(profile)

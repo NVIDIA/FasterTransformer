@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,43 +19,47 @@
 namespace th = torch;
 namespace torch_ext {
 
-FasterTransformerT5Encoder::FasterTransformerT5Encoder(th::Tensor  attr_output_layernorm_gamma,
-                                                       th::Tensor  q_kernel,
-                                                       th::Tensor  k_kernel,
-                                                       th::Tensor  v_kernel,
-                                                       th::Tensor  attr_output_kernel,
-                                                       th::Tensor  output_layernorm_gamma,
-                                                       th::Tensor  inter_kernel,
-                                                       th::Tensor  inter_kernel2,
-                                                       th::Tensor  output_kernel,
-                                                       th::Tensor  post_transformer_layernorm_gamma,
-                                                       th::Tensor  absolute_or_relative_position_embedding,
-                                                       th::Tensor  embedding_table,
-                                                       th::Tensor  attr_output_layernorm_beta,
-                                                       th::Tensor  q_bias,
-                                                       th::Tensor  k_bias,
-                                                       th::Tensor  v_bias,
-                                                       th::Tensor  attr_output_bias,
-                                                       th::Tensor  output_layernorm_beta,
-                                                       th::Tensor  inter_bias,
-                                                       th::Tensor  inter_bias2,
-                                                       th::Tensor  output_bias,
-                                                       th::Tensor  post_transformer_layernorm_beta,
-                                                       int64_t     head_num,
-                                                       int64_t     head_size,
-                                                       int64_t     inter_size,
-                                                       int64_t     d_model,
-                                                       bool        remove_padding,
-                                                       int64_t     layer_num,
-                                                       int64_t     num_bucket,
-                                                       int64_t     max_distance,
-                                                       bool        sparse,
-                                                       double      q_scaling,
-                                                       int64_t     tensor_para_size,
-                                                       int64_t     pipeline_para_size,
-                                                       bool        t5_with_bias,
-                                                       int64_t     position_embedding_type,
-                                                       std::string activation_type):
+FasterTransformerT5Encoder::FasterTransformerT5Encoder(th::Tensor           attr_output_layernorm_gamma,
+                                                       th::Tensor           q_kernel,
+                                                       th::Tensor           k_kernel,
+                                                       th::Tensor           v_kernel,
+                                                       th::Tensor           attr_output_kernel,
+                                                       th::Tensor           output_layernorm_gamma,
+                                                       th::Tensor           inter_kernel,
+                                                       th::Tensor           inter_kernel2,
+                                                       th::Tensor           output_kernel,
+                                                       th::Tensor           post_transformer_layernorm_gamma,
+                                                       th::Tensor           absolute_or_relative_position_embedding,
+                                                       th::Tensor           embedding_table,
+                                                       th::Tensor           attr_output_layernorm_beta,
+                                                       th::Tensor           q_bias,
+                                                       th::Tensor           k_bias,
+                                                       th::Tensor           v_bias,
+                                                       th::Tensor           attr_output_bias,
+                                                       th::Tensor           output_layernorm_beta,
+                                                       th::Tensor           inter_bias,
+                                                       th::Tensor           inter_bias2,
+                                                       th::Tensor           output_bias,
+                                                       th::Tensor           post_transformer_layernorm_beta,
+                                                       th::Tensor           moe_gate,
+                                                       std::vector<int64_t> moe_layer_index,
+                                                       int64_t              head_num,
+                                                       int64_t              head_size,
+                                                       int64_t              inter_size,
+                                                       int64_t              d_model,
+                                                       bool                 remove_padding,
+                                                       int64_t              layer_num,
+                                                       int64_t              num_bucket,
+                                                       int64_t              expert_num,
+                                                       int64_t              max_distance,
+                                                       bool                 sparse,
+                                                       double               q_scaling,
+                                                       int64_t              tensor_para_size,
+                                                       int64_t              pipeline_para_size,
+                                                       bool                 t5_with_bias,
+                                                       int64_t              position_embedding_type,
+                                                       int64_t              moe_k,
+                                                       std::string          activation_type):
     d_model_(d_model),
     _st(q_kernel.scalar_type()),
     _remove_padding(remove_padding),
@@ -80,7 +84,8 @@ FasterTransformerT5Encoder::FasterTransformerT5Encoder(th::Tensor  attr_output_l
             inter_bias,
             inter_bias2,
             output_bias,
-            post_transformer_layernorm_beta}
+            post_transformer_layernorm_beta,
+            moe_gate}
 {
     CHECK_INPUT(q_kernel, _st);                                 // d_model, hidden_dim
     CHECK_INPUT(k_kernel, _st);                                 // d_model, hidden_dim
@@ -106,6 +111,9 @@ FasterTransformerT5Encoder::FasterTransformerT5Encoder(th::Tensor  attr_output_l
         CHECK_INPUT(output_layernorm_beta, _st);            // d_model
         CHECK_INPUT(post_transformer_layernorm_beta, _st);  // d_model
     }
+    if (expert_num != 0) {
+        CHECK_INPUT(moe_gate, _st);  // hidden_dim, num_experts
+    }
 
     switch (_st) {
         case at::ScalarType::Float:
@@ -115,15 +123,18 @@ FasterTransformerT5Encoder::FasterTransformerT5Encoder(th::Tensor  attr_output_l
                                                    d_model,
                                                    layer_num,
                                                    num_bucket,
+                                                   expert_num,
                                                    max_distance,
                                                    sparse,
                                                    q_scaling,
+                                                   moe_k,
                                                    tensor_para_size,
                                                    pipeline_para_size,
                                                    t5_with_bias,
                                                    ft::PositionEmbeddingType(position_embedding_type),
                                                    ft::getActivationType(activation_type),
-                                                   weights);
+                                                   weights,
+                                                   moe_layer_index);
             break;
         case at::ScalarType::Half:
             ft_t5_encoder = new FTT5Encoder<half>(head_num,
@@ -132,15 +143,18 @@ FasterTransformerT5Encoder::FasterTransformerT5Encoder(th::Tensor  attr_output_l
                                                   d_model,
                                                   layer_num,
                                                   num_bucket,
+                                                  expert_num,
                                                   max_distance,
                                                   sparse,
                                                   q_scaling,
+                                                  moe_k,
                                                   tensor_para_size,
                                                   pipeline_para_size,
                                                   t5_with_bias,
                                                   ft::PositionEmbeddingType(position_embedding_type),
                                                   ft::getActivationType(activation_type),
-                                                  weights);
+                                                  weights,
+                                                  moe_layer_index);
             break;
 #ifdef ENABLE_BF16
         case at::ScalarType::BFloat16:
@@ -150,15 +164,18 @@ FasterTransformerT5Encoder::FasterTransformerT5Encoder(th::Tensor  attr_output_l
                                                            d_model,
                                                            layer_num,
                                                            num_bucket,
+                                                           expert_num,
                                                            max_distance,
                                                            sparse,
                                                            q_scaling,
+                                                           moe_k,
                                                            tensor_para_size,
                                                            pipeline_para_size,
                                                            t5_with_bias,
                                                            ft::PositionEmbeddingType(position_embedding_type),
                                                            ft::getActivationType(activation_type),
-                                                           weights);
+                                                           weights,
+                                                           moe_layer_index);
             break;
 #endif
         default:
@@ -239,11 +256,14 @@ static auto fasterTransformerT5EncoderTHS =
                               th::Tensor,
                               th::Tensor,
                               th::Tensor,
+                              th::Tensor,
+                              std::vector<int64_t>,
                               int64_t,
                               int64_t,
                               int64_t,
                               int64_t,
                               bool,
+                              int64_t,
                               int64_t,
                               int64_t,
                               int64_t,
@@ -252,6 +272,7 @@ static auto fasterTransformerT5EncoderTHS =
                               int64_t,
                               int64_t,
                               bool,
+                              int64_t,
                               int64_t,
                               std::string>())
         .def("forward", &torch_ext::FasterTransformerT5Encoder::forward);

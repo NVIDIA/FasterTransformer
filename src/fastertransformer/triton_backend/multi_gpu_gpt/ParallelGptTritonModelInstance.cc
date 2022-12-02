@@ -71,13 +71,16 @@ std::unordered_map<std::string, ft::Tensor> ParallelGptTritonModelInstance<T>::c
 
     const int input_data_len = input_tensors->at("input_ids").shape[1];
     h_total_output_lengths_  = reinterpret_cast<uint32_t*>(malloc(request_batch_size * sizeof(uint32_t)));
+    const bool continue_interactive =
+        input_tensors->count("START") && reinterpret_cast<const int32_t*>(input_tensors->at("START").data)[0] == 0;
     for (int i = 0; i < request_batch_size; ++i) {
-        h_total_output_lengths_[i] =
-            reinterpret_cast<const uint32_t*>(input_tensors->at("request_output_len").data)[i] + input_data_len;
+        h_total_output_lengths_[i] = reinterpret_cast<const uint32_t*>(input_tensors->at("request_output_len").data)[i]
+                                     + input_data_len + (continue_interactive ? gpt_->getStep() : 0);
     }
 
     std::unordered_map<std::string, ft::Tensor> ft_input_tensors{
         {"input_ids", as_GPU_tensor(input_tensors->at("input_ids"), d_input_ids_)},
+        {"input_lengths_h", as_CPU_tensor(input_tensors->at("input_lengths"))},
         {"input_lengths", as_GPU_tensor(input_tensors->at("input_lengths"), d_input_lengths_)},
         {"output_seq_len",
          ft::Tensor{ft::MEMORY_CPU,
@@ -89,6 +92,8 @@ std::unordered_map<std::string, ft::Tensor> ParallelGptTritonModelInstance<T>::c
         && input_tensors->count("request_prompt_type")) {
 
         move_tensor_H2D(input_tensors->at("request_prompt_lengths"), d_request_prompt_lengths_, &allocator_);
+        ft_input_tensors.insert(
+            {"request_prompt_lengths_h", as_CPU_tensor(input_tensors->at("request_prompt_lengths"))});
         ft_input_tensors.insert(
             {"request_prompt_lengths",
              as_GPU_tensor(input_tensors->at("request_prompt_lengths"), d_request_prompt_lengths_)});
@@ -111,12 +116,28 @@ std::unordered_map<std::string, ft::Tensor> ParallelGptTritonModelInstance<T>::c
             {"stop_words_list", as_GPU_tensor(input_tensors->at("stop_words_list"), d_input_stop_words_)});
     }
 
+    if (input_tensors->find("top_p_decay") != input_tensors->end()) {
+        move_tensor_H2D(input_tensors->at("top_p_decay"), d_top_p_decay_, &allocator_);
+        ft_input_tensors.insert({"top_p_decay", as_GPU_tensor(input_tensors->at("top_p_decay"), d_top_p_decay_)});
+    }
+    if (input_tensors->find("top_p_min") != input_tensors->end()) {
+        move_tensor_H2D(input_tensors->at("top_p_min"), d_top_p_min_, &allocator_);
+        ft_input_tensors.insert({"top_p_min", as_GPU_tensor(input_tensors->at("top_p_min"), d_top_p_min_)});
+    }
+    if (input_tensors->find("top_p_reset_ids") != input_tensors->end()) {
+        move_tensor_H2D(input_tensors->at("top_p_reset_ids"), d_top_p_reset_ids_, &allocator_);
+        ft_input_tensors.insert(
+            {"top_p_reset_ids", as_GPU_tensor(input_tensors->at("top_p_reset_ids"), d_top_p_reset_ids_)});
+    }
+
     for (auto t = input_tensors->begin(); t != input_tensors->end(); ++t) {
         if (t->first.find("input_ids") == std::string::npos && t->first.find("input_lengths") == std::string::npos
             && t->first.find("output_seq_len") == std::string::npos
             && t->first.find("request_prompt_embedding") == std::string::npos
             && t->first.find("request_prompt_lengths") == std::string::npos) {
-            ft_input_tensors.insert({t->first, t->second.convertTritonTensorToFt()});
+            if (ft_input_tensors.count(t->first) == 0) {
+                ft_input_tensors.insert({t->first, t->second.convertTritonTensorToFt()});
+            }
         }
     }
 
@@ -146,9 +167,9 @@ std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> ParallelGptTrit
     ft::FT_CHECK_WITH_INFO(input_tensors->at("input_lengths").shape.size() == 1,
                            "input_tensors->at(\"input_lengths\").shape.size() == 1");
     const size_t request_batch_size     = input_tensors->at("input_ids").shape[0];
-    size_t max_request_output_len = (size_t)*std::max_element(
-        (int*)input_tensors->at("request_output_len").data,
-        (int*)input_tensors->at("request_output_len").data + input_tensors->at("request_output_len").shape[0]);
+    size_t       max_request_output_len = (size_t)*std::max_element((int*)input_tensors->at("request_output_len").data,
+                                                              (int*)input_tensors->at("request_output_len").data
+                                                                  + input_tensors->at("request_output_len").shape[0]);
     size_t beam_width = input_tensors->count("beam_width") ? (size_t)(*(uint*)input_tensors->at("beam_width").data) : 1;
 
     size_t total_length = max_request_output_len + input_tensors->at("input_ids").shape[1];
@@ -160,22 +181,21 @@ std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> ParallelGptTrit
     }
 
     std::unordered_map<std::string, ft::Tensor> ft_input_tensors = convert_inputs(input_tensors);
-    // If input_tensors don't contain "START" flag, then it is non-interactive generation, allocate buffer directly.
-    // If input_tensors contains "START" flag, then only allocate buffer when "START == 1".
-    if (ft_input_tensors.count("START") == 0
-        || (ft_input_tensors.count("START") && ft_input_tensors.at("START").getVal<int32_t>() == 1)) {
-        if (ft_input_tensors.count("session_len")) {
-            total_length = ft_input_tensors.at("session_len").getVal<uint32_t>();
-            max_request_output_len = ft_input_tensors.at("session_len").getVal<uint32_t>();
-        }
-        size_t max_prefix_soft_prompt_length = 0;
-        if (input_tensors->count("request_prompt_lengths")) {
-            max_prefix_soft_prompt_length =
-                (size_t)*std::max_element((int*)input_tensors->at("request_prompt_lengths").data,
-                                          (int*)input_tensors->at("request_prompt_lengths").data + request_batch_size);
-        }
-        total_length += max_prefix_soft_prompt_length;
-        allocateBuffer(request_batch_size, beam_width, total_length, max_request_output_len);
+
+    const bool interactive_mode  = ft_input_tensors.count("START");
+    const bool start_interactive = interactive_mode && ft_input_tensors["START"].getVal<int32_t>() == 1;
+
+    if (interactive_mode && !start_interactive) {
+        ft_input_tensors.insert({"continue_gen", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_BOOL, {1}, &interactive_mode}});
+        total_length += gpt_->getStep();
+    }
+
+    if (!interactive_mode || start_interactive) {
+        size_t session_len = start_interactive ? ft_input_tensors.at("session_len").getVal<uint32_t>() : 0;
+        allocateBuffer(request_batch_size,
+                       beam_width,
+                       start_interactive ? session_len : total_length,
+                       start_interactive ? session_len : max_request_output_len);
     }
 
     std::unordered_map<std::string, ft::Tensor> output_tensors = std::unordered_map<std::string, ft::Tensor>{
@@ -185,10 +205,16 @@ std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> ParallelGptTrit
                     std::vector<size_t>{request_batch_size, beam_width, total_length},
                     d_output_ids_}},
         {"sequence_length",
+         ft::Tensor{
+             ft::MEMORY_GPU, ft::TYPE_INT32, std::vector<size_t>{request_batch_size, beam_width}, d_sequence_lengths_}},
+        {"response_input_lengths",
          ft::Tensor{ft::MEMORY_GPU,
                     ft::TYPE_INT32,
                     std::vector<size_t>{request_batch_size, beam_width},
-                    d_sequence_lengths_}}};
+                    d_response_input_lengths_}},
+        {"is_finished",
+         ft::Tensor{
+             ft::MEMORY_GPU, ft::TYPE_BOOL, std::vector<size_t>{request_batch_size, beam_width}, d_is_finished_}}};
 
     if (input_tensors->count("is_return_log_probs") && *((bool*)input_tensors->at("is_return_log_probs").data)) {
         output_tensors.insert({"output_log_probs",
@@ -201,6 +227,14 @@ std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> ParallelGptTrit
                                           ft::TYPE_FP32,
                                           std::vector<size_t>{request_batch_size, beam_width},
                                           d_cum_log_probs_}});
+    }
+    if (input_tensors->count("is_return_context_embeddings")
+        && *((bool*)input_tensors->at("is_return_context_embeddings").data)) {
+        output_tensors.insert({"context_embeddings",
+                               ft::Tensor{ft::MEMORY_GPU,
+                                          ft::TYPE_FP32,
+                                          std::vector<size_t>{request_batch_size, beam_width, gpt_->getHiddenUnits()},
+                                          d_output_ctx_emb_}});
     }
 
     if (stream_cb_ != nullptr) {
@@ -232,10 +266,16 @@ void ParallelGptTritonModelInstance<T>::allocateBuffer(const size_t request_batc
         d_output_ids_, sizeof(int) * request_batch_size * beam_width * total_output_len, false));
     d_sequence_lengths_ =
         (int*)(allocator_->reMalloc(d_sequence_lengths_, sizeof(int) * request_batch_size * beam_width, false));
+    d_response_input_lengths_ =
+        (int*)(allocator_->reMalloc(d_response_input_lengths_, sizeof(int) * request_batch_size * beam_width, false));
     d_output_log_probs_ = (float*)(allocator_->reMalloc(
         d_output_log_probs_, sizeof(float) * request_batch_size * beam_width * request_output_len, false));
+    d_output_ctx_emb_   = (float*)(allocator_->reMalloc(
+        d_output_ctx_emb_, sizeof(float) * request_batch_size * beam_width * gpt_->getHiddenUnits(), false));
     d_cum_log_probs_ =
         (float*)(allocator_->reMalloc(d_cum_log_probs_, sizeof(float) * request_batch_size * beam_width, false));
+    d_is_finished_ =
+        (bool*)(allocator_->reMalloc(d_is_finished_, sizeof(bool) * request_batch_size * beam_width, false));
 }
 
 template<typename T>
@@ -243,8 +283,11 @@ void ParallelGptTritonModelInstance<T>::freeBuffer()
 {
     allocator_->free((void**)(&d_output_ids_));
     allocator_->free((void**)(&d_sequence_lengths_));
+    allocator_->free((void**)(&d_response_input_lengths_));
     allocator_->free((void**)(&d_output_log_probs_));
+    allocator_->free((void**)(&d_output_ctx_emb_));
     allocator_->free((void**)(&d_cum_log_probs_));
+    allocator_->free((void**)(&d_is_finished_));
 }
 
 template struct ParallelGptTritonModelInstance<float>;

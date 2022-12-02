@@ -32,6 +32,24 @@ from SwinTransformer.models import build_model
 test_time = 100
 warmup_time = 10
 
+def maxdiff(A, B):
+    A = A.flatten()
+    B = B.flatten()
+    maxDiff = -1000000
+    maxDiff_a = 0
+    maxDiff_b = 0
+    avgDiff = 0
+    num = 0
+    for a, b in zip(A, B):
+        diff = abs(a-b)
+        if diff > maxDiff:
+            maxDiff = diff
+            maxDiff_a = a
+            maxDiff_b = b
+        avgDiff += diff
+    avgDiff /= len(A)
+    print("torch_output vs plugin_output , avg diff : ", avgDiff, "maxDiff : ", maxDiff, "at {} vs {}".format(maxDiff_a, maxDiff_b))
+
 def parse_option():
     parser = argparse.ArgumentParser('Swin Transformer evaluation script', add_help=False)
     parser.add_argument('--cfg', type=str, required=True, metavar="FILE", help='path to config file', )
@@ -43,6 +61,9 @@ def parse_option():
     )
 
     # easy config modification
+    parser.add_argument('--version', type=int, default=1, help='version of swin', )
+    parser.add_argument('--disable_amp', type=bool, default=True, help='disable amp', )
+    parser.add_argument('--fused_window_process', type=bool, default=False, help='whether use fused window process', )
     parser.add_argument('--engine', type=str, help='path to TRT engine')
     parser.add_argument('--th-path', type=str, help='path to pytorch library')
     parser.add_argument('--batch-size', type=int, default=32, help="batch size for single GPU")
@@ -117,11 +138,13 @@ def run_swintransformer_plugin(args, config, model, images):
             context.execute_async_v2(bindings=[d_inp.data_ptr() for d_inp in d_inputs] + [d_output.data_ptr()], stream_handle=stream.cuda_stream)
 
         #ignore the last fc layer
+        torch.cuda.synchronize()
         op_end = time.time()
         for i in range(test_time):
             context.execute_async_v2(bindings=[d_inp.data_ptr() for d_inp in d_inputs] + [d_output.data_ptr()], stream_handle=stream.cuda_stream)
         stream.synchronize()
 
+        torch.cuda.synchronize()
         print("plugin time : ", (time.time() - op_end)/test_time*1000.0, "ms")
 
         return d_output.cpu().numpy()
@@ -134,15 +157,14 @@ def run_torch(model, images, mark):
 
     torch.cuda.synchronize()
     torch_start = time.time()
-    #_nvtx.rangePushA("torch")
+
     for i in range(test_time):
         torch_output = model.forward_features(images)
     #_nvtx.rangePop()
     torch.cuda.synchronize()
-    torch_end = time.time()
-    torch_output = torch_output.cpu().numpy()
-    print(mark + " time : ", (torch_end - torch_start)/test_time*1000.0, "ms")
-    return torch_output
+    print(mark + " time : ", (time.time() - torch_start)/test_time*1000.0, "ms")
+    
+    return torch_output.cpu().numpy()
 
 @torch.no_grad()
 def validate_with_random_data(config, args, model):

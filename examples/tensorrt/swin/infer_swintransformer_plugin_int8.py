@@ -46,6 +46,9 @@ def parse_option():
     )
 
     # easy config modification
+    parser.add_argument('--version', type=int, default=1, help='version of swin', )
+    parser.add_argument('--disable_amp', type=bool, default=True, help='disable amp', )
+    parser.add_argument('--fused_window_process', type=bool, default=False, help='whether use fused window process', )
     parser.add_argument('--engine', type=str, help='path to TRT engine')
     parser.add_argument('--th-path', type=str, help='path to pytorch library')
     parser.add_argument('--batch-size', type=int, default=32, help="batch size for single GPU")
@@ -73,8 +76,7 @@ def parse_option():
     parser.add_argument("--local_rank", type=int, default=0, help='local rank for DistributedDataParallel')
     quant_utils.add_arguments(parser)
     args, unparsed = parser.parse_known_args()
-    if args.quant_mode is not None:
-        args = quant_utils.set_args(args)
+    args = quant_utils.set_args(args)
     quant_utils.set_default_quantizers(args)
 
     config = get_config(args)
@@ -112,7 +114,6 @@ def run_swintransformer_plugin(args, config, model, images):
 
         stream = torch.cuda.Stream()
 
-        #import pdb;pdb.set_trace()
         context.set_binding_shape(0, (max_batch, in_chans, img_size, img_size))
         output_shape = tuple(context.get_binding_shape(1))
         print('output_shape binding:', output_shape)
@@ -138,19 +139,8 @@ def run_swintransformer_plugin(args, config, model, images):
 
 @torch.no_grad()
 def run_torch(model, images, mark):
-    # warm up
-    for i in range(warmup_time):
-        output = model.forward_features(images)
-
-    torch.cuda.synchronize()
-    torch_start = time.time()
-    for i in range(test_time):
-        torch_output = model.forward_features(images)
-    torch.cuda.synchronize()
-    torch_end = time.time()
-    torch_output = torch_output.cpu().numpy()
-    print(mark + " time : ", (torch_end - torch_start)/test_time*1000.0, "ms")
-    return torch_output
+    torch_output = model.forward_features(images)
+    return torch_output.cpu().numpy()
 
 @torch.no_grad()
 def validate_with_random_data(config, args, model):

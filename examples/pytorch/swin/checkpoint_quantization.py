@@ -24,7 +24,7 @@ INT8O_GEMM_NUM = 7
 TRT_FUSED_MHA_AMAX_NUM = 3
 SCALE_RESERVE_NUM = 8
 
-def extract_amaxlist(init_dict, depths, ths_path='../lib/libpyt_swintransformer.so', verbose=True):
+def extract_amaxlist(init_dict, depths, version=1, ths_path='../../../build/lib/libpyt_swintransformer.so', verbose=True):
     # print("Quantizing checkpoint ...")
     torch.classes.load_library(ths_path)
     weight_quantize = torch.ops.fastertransformer.swin_weight_quantize
@@ -51,8 +51,8 @@ def extract_amaxlist(init_dict, depths, ths_path='../lib/libpyt_swintransformer.
                       "mlp.fc1._aftergemm_quantizer",
                       "mlp.fc2._input_quantizer",
                       "mlp.fc2._aftergemm_quantizer",
-                      "add1_residual_input_quantizer",
-                      "add2_residual_input_quantizer"
+                      "add1_residual_input_quantizer" if version == 1 else "attn.mha_q_input_quantizer",
+                      "add2_residual_input_quantizer" if version == 1 else "attn.mha_k_input_quantizer"
                       ]
 
     int8O_gemm_weight_amax_list = [0 for i in range(INT8O_GEMM_NUM)]
@@ -60,7 +60,7 @@ def extract_amaxlist(init_dict, depths, ths_path='../lib/libpyt_swintransformer.
                               "attn.proj",
                               "mlp.fc1",
                               "mlp.fc2",
-                              "attn.matmul_k_input_quantizer",
+                              "attn.matmul_k_input_quantizer" if version == 1 else "attn.mha_k_input_quantizer",
                               "attn.matmul_v_input_quantizer"]
 
     int8O_gemm_input_amax_list = [0 for i in range(INT8O_GEMM_NUM)]
@@ -68,7 +68,7 @@ def extract_amaxlist(init_dict, depths, ths_path='../lib/libpyt_swintransformer.
                              "attn.proj._input_quantizer",
                              "mlp.fc1._input_quantizer",
                              "mlp.fc2._input_quantizer",
-                             "attn.matmul_q_input_quantizer",
+                             "attn.matmul_q_input_quantizer" if version == 1 else "attn.mha_q_input_quantizer",
                              "attn.matmul_a_input_quantizer"]
     
     int8O_gemm_output_amax_list = [0 for i in range(INT8O_GEMM_NUM)]
@@ -83,7 +83,6 @@ def extract_amaxlist(init_dict, depths, ths_path='../lib/libpyt_swintransformer.
     downsample_weight = "downsample.reduction._weight_quantizer"
     downsample_out = "downsample.reduction._aftergemm_quantizer"
 
-    factor = 1000000.0
     for i in range(layer_num):
         for depth in range(depths[i]):
             amaxList = np.zeros([amaxTotalNum]).astype(np.float32)
@@ -105,10 +104,10 @@ def extract_amaxlist(init_dict, depths, ths_path='../lib/libpyt_swintransformer.
                 amax_id += 1
                 amaxList[amax_id] = 127.0/amax
                 amax_id += 1
-                # if verbose:
-                #     print(i, amax_name)
-                #     print('quant_max:', quant_max)
-                #     print('amax:', amax)
+                if verbose:
+                    print(i, amax_name)
+                    print('quant_max:', quant_max)
+                    print('amax:', amax)
             if i != layer_num - 1:
                 amax = init_dict["layers.{}.{}._amax".format(i, downsample_input)].item()
                 amaxList[amax_id] = amax
@@ -144,17 +143,17 @@ def extract_amaxlist(init_dict, depths, ths_path='../lib/libpyt_swintransformer.
                 #     quant_max_processed = torch.full((kernel.size(1),), amax2.item(), dtype=amax2.dtype, device=amax2.device)
                 # else:
                 #     quant_max_processed = amax2.view(-1)
-                kernel_processed = weight_quantize(kernel, amax2.cuda())
+                kernel_processed = weight_quantize(kernel.half(), amax2.cuda())
                 init_dict["layers.{}.blocks.{}.{}.weight".format(i, depth, kernel_name)] = kernel_processed
                 if kernel_name in int8O_gemm_weight_list:
                     int8O_gemm_weight_amax_list[int8O_gemm_weight_list.index(kernel_name)] = amax2.item()
                 amaxList[amax_id] = amax2
                 amax_id += 1
-                # if verbose:
-                #     print(i, kernel_name)
-                #     print('kernel:', kernel)
-                #     print('quant_max2:', quant_max2)
-                #     print('quant_max_processed_:', quant_max_processed)
+                if verbose:
+                    print(i, kernel_id, kernel_name)
+                    print('kernel:', kernel)
+                    print('quant_max2:', quant_max2)
+                    # print('quant_max_processed_:', quant_max_processed)
             if i != layer_num - 1:
                 amaxList[amax_id] = init_dict["layers.{}.downsample.reduction._weight_quantizer._amax".format(i)].item()
             amax_id += 1
@@ -164,8 +163,9 @@ def extract_amaxlist(init_dict, depths, ths_path='../lib/libpyt_swintransformer.
             for j in range(INT8O_GEMM_NUM - 1):
                 amaxList[amax_id] = (int8O_gemm_input_amax_list[j]*int8O_gemm_weight_amax_list[j])/(127.0*int8O_gemm_output_amax_list[j])
                 
-                # print('layernum:', i, 'j:', j, ' gemm_int8IO_scale:',amaxList[amax_id])
-                # print(int8O_gemm_input_amax_list[j], int8O_gemm_weight_amax_list[j], int8O_gemm_output_amax_list[j])
+                if verbose:
+                    print('layernum:', i, 'j:', j, ' gemm_int8IO_scale:',amaxList[amax_id])
+                    print(int8O_gemm_input_amax_list[j], int8O_gemm_weight_amax_list[j], int8O_gemm_output_amax_list[j])
                 amax_id += 1
             
             if i != layer_num - 1:
@@ -187,8 +187,11 @@ def extract_amaxlist(init_dict, depths, ths_path='../lib/libpyt_swintransformer.
             # #### bmm2 amax
             # amaxList[amax_id] = amaxList[8]
             # amax_id += 1
-            qkvMax = np.maximum(np.maximum(amaxList[16],amaxList[20]), amaxList[24])
-            amaxList[amax_id] = amaxList[16] * amaxList[20] / (127.0 * 127.0)
+            # qkvMax = np.maximum(np.maximum(amaxList[16],amaxList[20]), amaxList[24])
+            if version == 2:
+                amaxList[amax_id] = amaxList[52] * amaxList[56] / (127.0 * 127.0)
+            else:
+                amaxList[amax_id] = amaxList[16] * amaxList[20] / (127.0 * 127.0)
             amax_id += 1
             amaxList[amax_id] = 127.0 / amaxList[28]
             amax_id += 1
@@ -205,7 +208,7 @@ def extract_amaxlist(init_dict, depths, ths_path='../lib/libpyt_swintransformer.
             amax2 = abs(quant_max2)
 
             kernel = kernel.transpose(-1, -2).contiguous()
-            kernel_processed = weight_quantize(kernel, amax2.cuda())
+            kernel_processed = weight_quantize(kernel.half(), amax2.cuda())
             
             init_dict["layers.{}.downsample.reduction.weight".format(i)] = kernel_processed
 
@@ -215,5 +218,5 @@ def extract_amaxlist(init_dict, depths, ths_path='../lib/libpyt_swintransformer.
 
 
 if __name__ == '__main__':
-    weights = torch.load('pytorch_model.bin')
-    extract_amaxlist(weights, [2, 2, 6, 2])
+    weights = torch.load('Swin-Transformer-Quantization/calib-checkpoint/swinv2_tiny_patch4_window8_256_calib.pth')
+    extract_amaxlist(weights, [2, 2, 6, 2], version=2, verbose=True)

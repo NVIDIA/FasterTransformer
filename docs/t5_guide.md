@@ -13,7 +13,7 @@ The FasterTransformer T5 implements the huggingface t5 model (https://huggingfac
     - [Optimization](#optimization)
   - [Setup](#setup)
     - [Requirements](#requirements)
-    - [Build the FasterTransformer](#build-the-fastertransformer)
+    - [Build FasterTransformer](#build-fastertransformer)
       - [Prepare](#prepare)
       - [Build the project](#build-the-project)
   - [How to use](#how-to-use)
@@ -83,16 +83,22 @@ The source codes are put in `src/fastertransformer/models/t5`.
 |      [18]      |        layernorm_type        |   LayerNormType    |                                                     Determine using pre-layernorm or post-layernorm, which is declared in `src/fastertransformer/kernels/layernorm_kernels.h`                                                     |
 |      [19]      |         tensor_para          |     NcclParam      |                                                                   Tensor Parallel information, which is declared in `src/fastertransformer/utils/nccl_utils.h`                                                                    |
 |      [20]      |        pipeline_para         |     NcclParam      |                                                                  Pipeline Parallel information, which is declared in `src/fastertransformer/utils/nccl_utils.h`                                                                   |
-|      [21]      |    custom_all_reduce_comm    | AbstractCustomComm |                                                Custom all reduction communication for custom all reduction in model parallelism. It is only supported in 8-way tensor parallelism                                                 |
-|      [22]      |   enable_custom_all_reduce   |        int         |                                                                                           Flag of enabling custom all reduction or not                                                                                            |
+|      [21]      |   prompt_learning_start_id   |        int         |                                                                                         The start id of virtual token in p/prompt-tuning                                                                                          |
+|      [22]      |     prompt_learning_type     | PromptLearningType |                                   The type of prompt learning when we load the prompt embedding in constructor. FT supports `no_prompt`, `soft_prompt`, `prefix_prompt`, `p_prompt_tuning` now                                    |
+|      [23]      |    custom_all_reduce_comm    | AbstractCustomComm |                                                Custom all reduction communication for custom all reduction in model parallelism. It is only supported in 8-way tensor parallelism                                                 |
+|      [24]      |   enable_custom_all_reduce   |        int         |                                                                                           Flag of enabling custom all reduction or not                                                                                            |
 
 * Input of T5 Encoder
 
-|      Name       |     Tensor/Parameter Shape     | Location |   Data Type    |                                                         Description                                                         |
-| :-------------: | :----------------------------: | :------: | :------------: | :-------------------------------------------------------------------------------------------------------------------------: |
-|    input_ids    |     [batch_size, seq_len]      |   GPU    |      int       |                                                        The input ids                                                        |
-| sequence_length |          [batch_size]          |   GPU    |      int       |                                                  The lengths of input ids                                                   |
-|  inputs_embeds  | [batch_size, seq_len, d_model] |   GPU    | fp32/fp16/bf16 | **Optional**. The embedding after embedding lookup. If this input is not null, using this embedding as input of transformer |
+|             Name              |            Tensor/Parameter Shape             | Location |   Data Type    |                                                           Description                                                           |
+| :---------------------------: | :-------------------------------------------: | :------: | :------------: | :-----------------------------------------------------------------------------------------------------------------------------: |
+|           input_ids           |             [batch_size, seq_len]             |   GPU    |      int       |                                                          The input ids                                                          |
+|        sequence_length        |                 [batch_size]                  |   GPU    |      int       |                                                    The lengths of input ids                                                     |
+|         inputs_embeds         |        [batch_size, seq_len, d_model]         |   GPU    | fp32/fp16/bf16 |   **Optional**. The embedding after embedding lookup. If this input is not null, using this embedding as input of transformer   |
+| prompt_learning_task_name_ids |                 [batch_size]                  |   CPU    |      int       |                                        **Optional**. Task name ids for prompt learning.                                         |
+|    request_prompt_lengths     |                 [batch_size],                 |   GPU    |      int       | **Optional**. Length of prefix soft prompt embedding. This describes how many tokens of soft prompt embedding in each sentence. |
+|   request_prompt_embedding    | [batch_size, max_prompt_length, hidden_units] |   GPU    |     float      |             **Optional**. Prefix soft prompt embedding. FT will concat them with results of embedding lookup kernel             |
+|           ia3_tasks           |                 [batch_size]                  |   GPU    |      int       |                                    **Optional**. Which IA3 weights to use for each sequence.                                    |
 
 * Output of T5 Encoder
 
@@ -139,21 +145,22 @@ The source codes are put in `src/fastertransformer/models/t5`.
 
 * Input of T5 Decoding
 
-|            Name            |            Tensor/Parameter Shape             | Location |       Data Type        |                                                              Description                                                               |
-| :------------------------: | :-------------------------------------------: | :------: | :--------------------: | :------------------------------------------------------------------------------------------------------------------------------------: |
-|       encoder_output       | [batch_size, mem_max_seq_len, memory_d_model] |   GPU    |     fp32/fp16/bf16     |                                                        The output of T5 Encoder                                                        |
-|  encoder_sequence_length   |                 [batch_size]                  |   GPU    |          int           |                                              The sequence length of encoder input/output                                               |
-|      stop_words_list       |      [batch_size, 2, stop_words_length]       |   GPU    |          int           |                **Optional**. When FT generates words in this list, it will stop the generation. An extension of stop id                |
-|       bad_words_list       |       [batch_size, 2, bad_words_length]       |   GPU    |          int           | **Optional**. The words in the list will be When FT generates words in this list, it will stop the generation. An extension of stop id |
-|          start_id          |                 [batch_size]                  |   CPU    |          int           |                            **Optional**. If FT receives this input, FT will replace default start id by it                             |
-|           end_id           |                 [batch_size]                  |   CPU    |          int           |                             **Optional**. If FT receives this input, FT will replace default end id by it                              |
-|       runtime_top_k        |              [1] or [batch_size]              |   CPU    |          uint          |                                              **Optional**. top_k value for top k sampling                                              |
-|       runtime_top_p        |              [1] or [batch_size]              |   CPU    |         float          |                                              **Optional**. top_p value for top p sampling                                              |
-| beam_search_diversity_rate |              [1] or [batch_size]              |   CPU    |         float          |               **Optional**. A hyper hyper-parameter for [simple diverse decoding](https://arxiv.org/pdf/1611.08562.pdf)                |
-|        temperature         |              [1] or [batch_size]              |   CPU    |         float          |                             **Optional**. Temperature applied to logits for both beam search and sampling                              |
-|        len_penalty         |              [1] or [batch_size]              |   CPU    |         float          |                                  **Optional**. Length penalty applied to logits for only beam search                                   |
-|     repetition_penalty     |              [1] or [batch_size]              |   CPU    |         float          |                          **Optional**. Repetition penalty applied to logits for both beam search and sampling                          |
-|        random_seed         |              [1] or [batch_size]              |   CPU    | unsigned long long int |                                 **Optional**. Random seed to initialize the random table in sampling.                                  |
+|            Name            |            Tensor/Parameter Shape             | Location |       Data Type        |                                                Description                                                |
+| :------------------------: | :-------------------------------------------: | :------: | :--------------------: | :-------------------------------------------------------------------------------------------------------: |
+|       encoder_output       | [batch_size, mem_max_seq_len, memory_d_model] |   GPU    |     fp32/fp16/bf16     |                                         The output of T5 Encoder                                          |
+|  encoder_sequence_length   |                 [batch_size]                  |   GPU    |          int           |                                The sequence length of encoder input/output                                |
+|      stop_words_list       |      [batch_size, 2, stop_words_length]       |   GPU    |          int           | **Optional**. When FT generates words in this list, it will stop the generation. An extension of stop id  |
+|       bad_words_list       |       [batch_size, 2, bad_words_length]       |   GPU    |          int           |                        **Optional**. The words in the list will never be sampled.                         |
+|          start_id          |                 [batch_size]                  |   CPU    |          int           |              **Optional**. If FT receives this input, FT will replace default start id by it              |
+|           end_id           |                 [batch_size]                  |   CPU    |          int           |               **Optional**. If FT receives this input, FT will replace default end id by it               |
+|       runtime_top_k        |              [1] or [batch_size]              |   CPU    |          uint          |                               **Optional**. top_k value for top k sampling                                |
+|       runtime_top_p        |              [1] or [batch_size]              |   CPU    |         float          |                               **Optional**. top_p value for top p sampling                                |
+| beam_search_diversity_rate |              [1] or [batch_size]              |   CPU    |         float          | **Optional**. A hyper hyper-parameter for [simple diverse decoding](https://arxiv.org/pdf/1611.08562.pdf) |
+|        temperature         |              [1] or [batch_size]              |   CPU    |         float          |               **Optional**. Temperature applied to logits for both beam search and sampling               |
+|        len_penalty         |              [1] or [batch_size]              |   CPU    |         float          |                    **Optional**. Length penalty applied to logits for only beam search                    |
+|     repetition_penalty     |              [1] or [batch_size]              |   CPU    |         float          |           **Optional**. Repetition penalty applied to logits for both beam search and sampling            |
+|        random_seed         |              [1] or [batch_size]              |   CPU    | unsigned long long int |                   **Optional**. Random seed to initialize the random table in sampling.                   |
+|         ia3_tasks          |                 [batch_size]                  |   GPU    |          int           |                         **Optional**. Which IA3 weights to use for each sequence.                         |
 
 * Output of T5 Decoding
 
@@ -181,7 +188,7 @@ The following section lists the requirements to use FasterTransformer.
 - Python: Only verify on Python 3.
 - PyTorch: Verify on 1.10.0, >= 1.5.0 should work.
 
-Recommend use nvcr image like `nvcr.io/nvidia/pytorch:22.07-py3`.
+Recommend use nvcr image like `nvcr.io/nvidia/pytorch:22.09-py3`.
 
 Ensure you have the following components:
 - [NVIDIA Docker](https://github.com/NVIDIA/nvidia-docker) and NGC container are recommended
@@ -195,14 +202,14 @@ For more information about how to get started with NGC containers, see the follo
 
 For those unable to use the NGC container, to set up the required environment or create your own container, see the versioned [NVIDIA Container Support Matrix](https://docs.nvidia.com/deeplearning/frameworks/support-matrix/index.html).
 
-### Build the FasterTransformer
+### Build FasterTransformer
 
 #### Prepare
 
-You can choose the pytorch version and python version you want. Here, we suggest image `nvcr.io/nvidia/pytorch:22.07-py3`, which contains the PyTorch 1.8.0 and python 3.8.
+You can choose the pytorch version and python version you want. Here, for pytorch user, we suggest image `nvcr.io/nvidia/pytorch:22.09-py3`, which contains the PyTorch 1.13.0 and python 3.8. For tensorflow user, we suggest image `nvcr.io/nvidia/tensorflow:22.09-tf2-py3`, which contains tensorflow 2.9.1 and python 3.8.
 
     ```bash
-    nvidia-docker run -ti --rm nvcr.io/nvidia/pytorch:22.07-py3 bash
+    nvidia-docker run -ti --shm-size 5g --rm nvcr.io/nvidia/pytorch:22.09-py3 bash
     git clone https://github.com/NVIDIA/FasterTransformer.git
     mkdir -p FasterTransformer/build
     cd FasterTransformer/build
@@ -229,18 +236,25 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
 
     ```bash
     cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON -DBUILD_MULTI_GPU=ON ..
-    make
+    make -j12
     ```
 
     This will build the TorchScript custom class. Please make sure that the `PyTorch >= 1.5.0`.
 
 2. build with TensorRT
   
-    Can use `nvcr.io/nvidia/pytorch:22.07-py3` docker image, too.
+    Can use `nvcr.io/nvidia/pytorch:22.09-py3` docker image, too.
 
     ```bash
     cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_TRT=ON -DBUILD_MULTI_GPU=ON ..
-    make
+    make -j12
+    ```
+
+3. build with Tensorflow 2
+
+    ```bash
+    cmake -DSM=80 -DCMAKE_BUILD_TYPE=Release -DBUILD_TF2=ON -DTF_PATH=/usr/local/lib/python3.8/dist-packages/tensorflow/ -DBUILD_MULTI_GPU=ON ..
+    make -j12
     ```
 
 ## How to use
@@ -280,6 +294,13 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
 
     ```bash
     ./bin/t5_gemm 8 4 32 512 8 64 2048 512 8 64 2048 32128 0 2 1
+    ```
+
+    If the application may have multiple different shapes (like different batch size), users can run multiple time and set `is_append` to be true. For example
+
+    ```bash
+    ./bin/t5_gemm 8 4 32 512 8 64 2048 512 8 64 2048 32128 0 2 1 # bs 8, not append, will create a new gemm_config.ini
+    ./bin/t5_gemm 16 4 32 512 8 64 2048 512 8 64 2048 32128 0 2 1 # bs 16, append results in existed gemm_config.ini
     ```
 
     1.2 Run the PyTorch T5 example: 
@@ -379,7 +400,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
 |       [1]       |                 []                  |      int32      |              max_seq_len              |
 |       [2]       |                 []                  |      int32      |            mem_max_seq_len            |
 |       [3]       |                 []                  |      int32      |              beam_width               |
-|       [4]       |                 []                  |      int32      |               usaeFP16                |
+|       [4]       |                 []                  |      int32      |                useFp16                |
 |       [5]       |                 []                  |     string      | checkpoint path of converted FT model |
 |  output tensor  |                                     |                 |                                       |
 |       [0]       | [batch_size,beam_width,max_seq_len] | float32/float16 |            decoding output            |
@@ -394,6 +415,88 @@ python ../examples/tensorrt/t5/extractT5ModelToBIN.py \
 ```
 
 users can see the model configuration in `./ft_t5_small/1-gpu/config.ini`
+
+3. Run FasterTransformer T5 on Tensorflow 2
+
+    Please install utils first before running the demos by
+
+    ```bash
+    pip install -r ../examples/tensorflow/t5/requirement.txt
+    ```
+
+    3.1 Generate the `gemm_config.in` file:
+
+    `./bin/t5_gemm` can generate the best GEMM configuration.
+
+    Assume the settings of decoding are as follows.
+
+    - `batch_size` = 8
+    - `beam_width` = 4
+    - `max_mem_seq_len` = 32
+    - `encoder_d_model` = 512
+    - `encoder_head_num` = 8
+    - `encoder_size_per_head` = 64
+    - `encoder_inter_size` = 2048
+    - `decoder_d_model` = 512
+    - `decoder_head_num` = 8
+    - `decoder_size_per_head` = 64
+    - `decoder_inter_size` = 2048
+    - `decoder_vocab_size` = 32128
+    - `data_type` = 0 (FP32) or 1 (FP16) or 2 (BF16)
+    - `tensor_para_size` = 2
+
+    Then the following scripts can generate the best GEMM configuration under such settings and record the configuration into the `gemm_config.in` file.
+
+    ```bash
+    ./bin/t5_gemm 8 4 32 512 8 64 2048 512 8 64 2048 32128 0 2 1
+    ```
+
+    3.2 Run the Tensorflow T5 example: 
+
+    ```bash
+    python ../examples/tensorflow/t5/translate_example.py \
+        --batch_size 32 \
+        --beam_width 4 \
+        --max_seq_len 128 \
+        --data_type fp32 \
+        --test_time 13 \
+        --sampling_topk 4 \
+        --model t5-small
+    ```
+
+    Data Type can be `fp32`, `fp16` and `bf16`
+
+    The outputs should be like to the following:
+
+    ```bash
+    2022-11-09 01:34:30,687 __main__ [INFO] ft-beamsearch translates 94 batches taking 17.75 sec to translate 99719 tokens, BLEU score: 25.38, 5617 tokens/sec. (62035 words, 3494 words/sec)
+    2022-11-09 01:34:30,687 __main__ [INFO] ft-sampling translates 94 batches taking 14.80 sec to translate 99745 tokens, BLEU score: 25.36, 6740 tokens/sec. (62029 words, 4191 words/sec)
+    ```
+
+    3.3 Run the Tensorflow T5 v1_1 example: 
+
+    ```bash
+    python ../examples/tensorflow/t5/translate_example.py \
+        --batch_size 32 \
+        --beam_width 4 \
+        --max_seq_len 128 \
+        --data_type fp32 \
+        --test_time 0123 \
+        --sampling_topk 4 \
+        --max_ite 10 \
+        --model google/t5-v1_1-small
+    ```
+
+    Data Type can be `fp32`, `fp16` and `bf16`
+
+    The outputs should be like to the following:
+
+    ```bash
+    2022-11-18 08:53:25,056 __main__ [INFO] hf-beamsearch translates 10 batches taking 218.60 sec to translate 12261 tokens, BLEU score: 0.41, 56 tokens/sec. (8198 words, 38 words/sec)
+    2022-11-18 08:53:25,056 __main__ [INFO] ft-beamsearch translates 10 batches taking 3.28 sec to translate 10488 tokens, BLEU score: 0.47, 3201 tokens/sec. (7016 words, 2141 words/sec)
+    2022-11-18 08:53:25,056 __main__ [INFO] hf-sampling translates 10 batches taking 124.60 sec to translate 11607 tokens, BLEU score: 0.29, 93 tokens/sec. (7842 words, 63 words/sec)
+    2022-11-18 08:53:25,056 __main__ [INFO] ft-sampling translates 10 batches taking 2.91 sec to translate 11755 tokens, BLEU score: 0.29, 4034 tokens/sec. (8113 words, 2784 words/sec)
+    ```
 
 ### Running UL2 on FasterTransformer Pytorch op
 

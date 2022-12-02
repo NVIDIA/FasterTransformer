@@ -68,6 +68,13 @@ public:
         mNumMats = B * mNumHeads;
     }
 
+    virtual void setup_causal_masked_fmha(const int S, const int B)
+    {
+        setup(S, B);
+    };
+
+    virtual bool fmha_supported(bool causal_mask) { return false; };
+
     virtual void setup(const int S, const int B, const int window_num)
     {
         setup(S, B);
@@ -75,15 +82,20 @@ public:
 
     virtual void run(const void* input, const void* mask, void* workspace, void* output, cudaStream_t stream) = 0; 
     virtual void run(const void* input, const void* mask, const void* seqlen, void* workspace, void* output, cudaStream_t stream) = 0; 
-    virtual void run(const void* input, const void* mask, const void* relatice_position_bias, const int actual_seqlen, void* workspace, void* output, cudaStream_t stream) = 0;
+    virtual void run_causal_masked_fmha(const void* input, const void* cu_seqlens, void* output, bool causal_mask, cudaStream_t stream)
+    {
+        // unimplemented
+        ;
+    }
+    virtual void run(const void* input, const void* mask, const void* relative_position_bias, const int actual_seqlen, void* workspace, void* output, cudaStream_t stream) = 0;
 
     virtual void setScaleList(const float scaleQkv, const float dqProbs, const float scaleCtx) = 0;
 
     virtual size_t getWorkspaceSize() const = 0;
 
-    virtual bool isValid(int s) const = 0;
+    virtual bool isValid(int s, const bool withRelativePositionBias) const = 0;
 
-    virtual int getSFromMaxSeqLen(const int max_seq_len) = 0;
+    virtual int getSFromMaxSeqLen(const int max_seq_len, const bool withRelativePositionBias = false) = 0;
 protected:
 
     int mS;
@@ -108,19 +120,23 @@ public:
     ~FusedMHARunnerFP16v2() = default; // for pimpl
 
     virtual void setup(const int S, const int B) override;
+    virtual void setup_causal_masked_fmha(const int S, const int B) override;
     virtual void setup(const int S, const int B, const int window_num) override;
+
+    virtual bool fmha_supported(bool causal_mask) override;
 
     void run(const void* input, const void* mask, void* workspace, void* output, cudaStream_t stream);
     void run(const void* input, const void* mask, const void* seqlen, void* workspace, void* output, cudaStream_t stream) override;
-    void run(const void* input, const void* mask, const void* relatice_position_bias, const int actual_seqlen, void* workspace, void* output, cudaStream_t stream) override;
+    void run_causal_masked_fmha(const void* input, const void* cu_seqlens, void* output, bool causal_mask, cudaStream_t stream) override;
+    void run(const void* input, const void* mask, const void* relative_position_bias, const int actual_seqlen, void* workspace, void* output, cudaStream_t stream) override;
 
     void setScaleList(const float scaleQkv, const float dqProbs, const float scaleCtx) override; 
 
     size_t getWorkspaceSize() const override;
 
-    bool isValid(int s) const override;
+    bool isValid(int s, const bool withRelativePositionBias) const override;
 
-    int getSFromMaxSeqLen(const int max_seq_len) override;
+    int getSFromMaxSeqLen(const int max_seq_len, const bool withRelativePositionBias = false) override;
 
 private:
     int mSm;
@@ -141,13 +157,13 @@ public:
 
     void run(const void* input, const void* mask, void* workspace, void* output, cudaStream_t stream);
     void run(const void* input, const void* mask, const void* seqlen, void* workspace, void* output, cudaStream_t stream) override;
-    void run(const void* input, const void* mask, const void* relatice_position_bias, const int actual_seqlen, void* workspace, void* output, cudaStream_t stream) override;
+    void run(const void* input, const void* mask, const void* relative_position_bias, const int actual_seqlen, void* workspace, void* output, cudaStream_t stream) override;
 
     size_t getWorkspaceSize() const override;
 
-    bool isValid(int s) const override;
+    bool isValid(int s, const bool withRelativePositionBias) const override;
 
-    int getSFromMaxSeqLen(const int max_seq_len) override;
+    int getSFromMaxSeqLen(const int max_seq_len, const bool withRelativePositionBias = false) override;
 
 private:
     float mDqProbs, mScaleQkv, mScaleCtx;

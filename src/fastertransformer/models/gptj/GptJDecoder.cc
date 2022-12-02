@@ -43,6 +43,7 @@ void GptJDecoder<T>::initialize()
                                                    1,
                                                    head_num_,
                                                    size_per_head_,
+                                                   0,  // expert_num
                                                    inter_size_,
                                                    tensor_para_,
                                                    stream_,
@@ -218,11 +219,11 @@ void GptJDecoder<T>::forward(std::unordered_map<std::string, Tensor>*       outp
 
     const DataType data_type        = getTensorType<T>();
     const size_t   local_batch_size = input_tensors->at("decoder_input").shape[0];
-    const int      ite              = *((int*)(input_tensors->at("ite").data));
+    const int      ite              = input_tensors->at("ite").getVal<const int>();
     allocateBuffer(local_batch_size);
 
-    T* decoder_input  = (T*)input_tensors->at("decoder_input").data;
-    T* decoder_output = (T*)output_tensors->at("decoder_output").data;
+    T* decoder_input  = input_tensors->at("decoder_input").getPtr<T>();
+    T* decoder_output = output_tensors->at("decoder_output").getPtr<T>();
 
     Tensor&             k_cache = output_tensors->at("key_cache");
     Tensor&             v_cache = output_tensors->at("value_cache");
@@ -266,20 +267,14 @@ void GptJDecoder<T>::forward(std::unordered_map<std::string, Tensor>*       outp
                                layernorm_eps_,
                                local_batch_size,
                                hidden_units_,
+                               (float*)nullptr,
+                               0,
                                stream_);
         sync_check_cuda_error();
 
-        std::vector<Tensor> self_attention_input_tensors{
-            Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, decoder_normed_input_},
-            input_tensors->at("finished"),
-            input_tensors->at("sequence_lengths"),
-            input_tensors->at("total_padding_tokens"),
-            input_tensors->at("d_prefix_prompt_lengths"),
-            input_tensors->at("max_prefix_prompt_length"),
-            input_tensors->at("max_input_length"),
-            input_tensors->at("step"),
-            input_tensors->at("cache_indirection"),
-            input_tensors->at("masked_tokens")};
+        TensorMap self_attention_input_tensors(*input_tensors);
+        self_attention_input_tensors.insert(
+            "input_query", Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, decoder_normed_input_});
 
         size_t cache_offset = l - getFirstLayerParallelId();
         for (auto t = k_cache.shape.begin() + 1; t != k_cache.shape.end(); ++t) {
@@ -291,19 +286,19 @@ void GptJDecoder<T>::forward(std::unordered_map<std::string, Tensor>*       outp
         }
         cache_offset += ite_cache_offset;
 
-        std::vector<Tensor> self_attention_output_tensors{
-            Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, self_attn_output_},
-            Tensor{MEMORY_GPU, data_type, self_k_cache_size, ((const T*)k_cache.data) + cache_offset},
-            Tensor{MEMORY_GPU, data_type, self_v_cache_size, ((const T*)v_cache.data) + cache_offset}};
+        TensorMap self_attention_output_tensors{
+            {"hidden_features", Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, self_attn_output_}},
+            {"key_cache", Tensor{MEMORY_GPU, data_type, self_k_cache_size, k_cache.getPtrWithOffset(cache_offset)}},
+            {"value_cache", Tensor{MEMORY_GPU, data_type, self_v_cache_size, v_cache.getPtrWithOffset(cache_offset)}}};
 
         self_attention_layer_->forward(&self_attention_output_tensors,
                                        &self_attention_input_tensors,
                                        &gpt_decoder_layer_weight->at(l).self_attention_weights);
 
-        std::vector<Tensor> ffn_input_tensors{
-            Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, decoder_normed_input_}};
-        std::vector<Tensor> ffn_output_tensors{
-            Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, ffn_output_}};
+        TensorMap ffn_input_tensors(
+            {{"ffn_input", Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, decoder_normed_input_}}});
+        TensorMap ffn_output_tensors(
+            {{"ffn_output", Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, ffn_output_}}});
         ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &gpt_decoder_layer_weight->at(l).ffn_weights);
 
         invokeAddBiasAttentionFfnResidual(layer_output,

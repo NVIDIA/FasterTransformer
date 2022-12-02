@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,8 @@
  */
 
 #include "src/fastertransformer/kernels/quantize_weight.h"
+#include <cstdio>
+
 namespace fastertransformer {
 
 __device__ __host__ int index_CUBLASLT_ORDER_COL4_4R2_8C(int col_id, int row_id, int m_32)

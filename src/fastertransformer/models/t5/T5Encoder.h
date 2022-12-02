@@ -22,6 +22,7 @@
 #include "src/fastertransformer/kernels/bert_preprocess_kernels.h"
 #include "src/fastertransformer/kernels/gpt_kernels.h"
 #include "src/fastertransformer/kernels/layernorm_kernels.h"
+#include "src/fastertransformer/kernels/moe_kernels.h"
 #include "src/fastertransformer/layers/TensorParallelGeluFfnLayer.h"
 #include "src/fastertransformer/layers/TensorParallelReluFfnLayer.h"
 #include "src/fastertransformer/layers/TensorParallelSiluFfnLayer.h"
@@ -40,19 +41,24 @@ private:
     size_t max_seq_len_    = 0;
 
     // meta data
-    const size_t           head_num_;
-    const size_t           size_per_head_;
-    const size_t           inter_size_;
-    const size_t           hidden_units_;
-    const size_t           d_model_;
-    const size_t           num_layer_;
-    const size_t           num_bucket_or_max_seq_len_;
-    const size_t           max_distance_;
-    int                    sm_;
-    constexpr static float layernorm_eps_ = 1e-6f;
-    float                  q_scaling_;
-    AttentionType          attention_type_;
-    bool                   sparse_;
+    const size_t             head_num_;
+    const size_t             size_per_head_;
+    const size_t             inter_size_;
+    const size_t             hidden_units_;
+    const size_t             d_model_;
+    const size_t             num_layer_;
+    const size_t             num_bucket_or_max_seq_len_;
+    const size_t             expert_num_;
+    const size_t             max_distance_;
+    const size_t             moe_k_;
+    std::vector<int64_t>     moe_layer_index_;
+    int                      sm_;
+    constexpr static float   layernorm_eps_ = 1e-6f;
+    float                    q_scaling_;
+    AttentionType            attention_type_;
+    bool                     sparse_;
+    const int                prompt_learning_start_id_;
+    const PromptLearningType prompt_learning_type_;
 
     BaseAttentionLayer<T>* attention_layer_;
     FfnLayer<T>*           ffn_layer_;
@@ -92,6 +98,14 @@ protected:
     T* normed_from_tensor_  = nullptr;
     T* normed_attn_out_buf_ = nullptr;
 
+    T*   expert_scales_                            = nullptr;
+    int* expanded_source_row_to_expanded_dest_row_ = nullptr;
+    int* expert_for_source_row_                    = nullptr;
+    T*   fc2_result_                               = nullptr;
+
+    const T** prompt_learning_weight_batch_ = nullptr;
+    int*      tiled_prompt_lengths_buf_     = nullptr;
+
 public:
     T5Encoder(size_t                              max_batch_size,
               size_t                              max_seq_len,
@@ -101,9 +115,12 @@ public:
               size_t                              d_model,
               size_t                              num_layer,
               size_t                              num_bucket_or_max_seq_len,
+              size_t                              expert_num,
               size_t                              max_distance,
+              size_t                              moe_k,
               int                                 sm,
               float                               q_scaling,
+              std::vector<int64_t>                moe_layer_index,
               cudaStream_t                        stream,
               cublasMMWrapper*                    cublas_wrapper,
               IAllocator*                         allocator,
@@ -114,6 +131,8 @@ public:
               LayerNormType                       layernorm_type,
               NcclParam                           tensor_para,
               NcclParam                           pipeline_para,
+              int                                 prompt_learning_start_id = 0,
+              PromptLearningType                  prompt_learning_type     = PromptLearningType::no_prompt,
               std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
               int                                 enable_custom_all_reduce = 0);
 
@@ -129,10 +148,23 @@ public:
                  const std::unordered_map<std::string, Tensor>* input_tensors,
                  const T5EncoderWeight<T>*                      t5_weights);
 
+    void forward(TensorMap* output_tensors, TensorMap* input_tensors, const T5EncoderWeight<T>* t5_encoder_weights);
+
     inline size_t getDModel()
     {
         return d_model_;
     }
+
+    inline size_t getNumLayers()
+    {
+        return num_layer_;
+    }
+
+    inline size_t getNumHeads()
+    {
+        return head_num_;
+    }
+
     void setStream(cudaStream_t stream) override;
 };
 

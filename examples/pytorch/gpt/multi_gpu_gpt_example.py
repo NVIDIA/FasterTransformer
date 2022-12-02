@@ -13,21 +13,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from __future__ import print_function
-
-from torch.nn.utils.rnn import pad_sequence
-import random
+import argparse
 import os
 import sys
-import argparse
 import timeit
+
 import torch
+from torch.nn.utils.rnn import pad_sequence
+
 dir_path = os.path.dirname(os.path.realpath(__file__))
-sys.path.append(dir_path + "/../../..")
-from examples.pytorch.gpt.utils.parallel_gpt import ParallelGPT
+sys.path.append(os.path.join(dir_path, "../../.."))
 import examples.pytorch.gpt.utils.gpt_token_encoder as encoder
+from examples.pytorch.gpt.utils import comm
+from examples.pytorch.gpt.utils import gpt_decoder
+from examples.pytorch.gpt.utils.parallel_gpt import ParallelGPT
 
 
+@torch.no_grad()
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--layer_num', type=int, default=24,
@@ -76,7 +78,7 @@ def main():
                         help='repetition penalty')
     parser.add_argument('--max_seq_len', type=int, default=1024,
                         help='max sequence length for position embedding table.')
-    parser.add_argument('--data_type', type=str, choices=['fp32', 'fp16', 'bf16'], default='fp32')
+    parser.add_argument('--inference_data_type', '--data_type', type=str, choices=['fp32', 'fp16', 'bf16'], default='fp32')
     parser.add_argument('--time', action='store_true',
                         help='whether or not to measure time elapsed.')
     parser.add_argument('--sample_input_file', type=str, default=None,
@@ -85,8 +87,10 @@ def main():
                         help='path to sample output file.')
     parser.add_argument('--enable_random_seed', action='store_true',
                         help='is use the random seed for sentences in a batch.')
-    parser.add_argument('--int8_mode', type=int, default=0,
-                        help='int8 mode.')
+    parser.add_argument('--int8_mode', type=int, default=0, choices=[0, 1],
+                        help='The level of quantization to perform.'
+                             ' 0: No quantization. All computation in data_type'
+                             ' 1: Quantize weights to int8, all compute occurs in fp16/bf16. Not supported when data_type is fp32')
     parser.add_argument(
         '--weights_data_type',
         type=str,
@@ -99,12 +103,12 @@ def main():
                              ' 0: do not return the cumulative log probs '
                              ' 1: return the cumulative log probs of generated sequences'
                              ' 2: return the cumulative log probs of sequences')
-
     parser.add_argument('--shared_contexts_ratio', type=float, default=1.0,
                         help='Triggers the shared context optimization when'
                              'compact_size <= shared_contexts_ratio * batch_size'
                              'A value of 0.0 deactivate the optimization')
-
+    parser.add_argument('--use_gpt_decoder_ops', action='store_true',
+                        help='Use separate decoder FT operators instead of end-to-end model op.')
     args = parser.parse_args()
 
     layer_num = args.layer_num
@@ -125,19 +129,22 @@ def main():
     max_batch_size = args.max_batch_size
     max_seq_len = args.max_seq_len
     repetition_penalty = args.repetition_penalty
-    int8_mode = args.int8_mode
     weights_data_type = args.weights_data_type
     return_cum_log_probs = args.return_cum_log_probs
     return_output_length = return_cum_log_probs > 0
     shared_contexts_ratio = args.shared_contexts_ratio
 
-    print("\n=============== Arguments ===============")
-    for arg in vars(args):
-        print("{}: {}".format(arg, getattr(args, arg)))
-    print("=========================================\n")
+    print('\n=================== Arguments ===================')
+    for k, v in vars(args).items():
+        print(f'{k.ljust(30, ".")}: {v}')
+    print('=================================================\n')
 
     enc = encoder.get_encoder(args.vocab_file, args.merges_file)
     torch.manual_seed(0)
+
+    comm.initialize_model_parallel(args.tensor_para_size, args.pipeline_para_size)
+    rank = comm.get_rank()
+    device = comm.get_device()
 
     # Inputs
     contexts = []
@@ -146,104 +153,118 @@ def main():
             contexts = f.read().splitlines()
             batch_size = min(len(contexts), max_batch_size)
         contexts = contexts[:batch_size]
-        start_ids = [torch.IntTensor(enc.encode(c)) for c in contexts]
+        start_ids = [torch.tensor(enc.encode(c), dtype=torch.int32, device=device) for c in contexts]
     else:  # unconditional case
         batch_size = max_batch_size
         contexts = ['<|endoftext|>'] * batch_size
         start_ids = [torch.IntTensor([end_id for _ in range(args.input_len)])] * batch_size
 
     start_lengths = [len(ids) for ids in start_ids]
-    input_len = max(start_lengths)
 
     start_ids = pad_sequence(start_ids, batch_first=True, padding_value=end_id)
     start_lengths = torch.IntTensor(start_lengths)
 
-    if args.enable_random_seed == True:
+
+    # Prepare model.
+    if not args.use_gpt_decoder_ops:
+        gpt = ParallelGPT(head_num, size_per_head, vocab_size, start_id, end_id,
+                          layer_num, max_seq_len, tensor_para_size, pipeline_para_size,
+                          lib_path=args.lib_path, inference_data_type=args.inference_data_type,
+                          int8_mode=args.int8_mode, weights_data_type=weights_data_type,
+                          shared_contexts_ratio=shared_contexts_ratio)
+        if not gpt.load(ckpt_path=args.ckpt_path):
+            print("[WARNING] Checkpoint file not found. Model loading is skipped.")
+    else:
+        gpt = gpt_decoder.Gpt(
+            num_heads=head_num,
+            size_per_head=size_per_head,
+            num_layers=layer_num,
+            vocab_size=vocab_size,
+            start_id=start_id,
+            end_id=end_id,
+            tensor_para_size=tensor_para_size,
+            pipeline_para_size=pipeline_para_size,
+            lib_path = args.lib_path,
+            max_seq_len=max_seq_len,
+            int8_mode=args.int8_mode,
+            weights_data_type=args.weights_data_type)
+        gpt.load(args.ckpt_path, args.inference_data_type)
+
+    if args.enable_random_seed:
         random_seed_tensor = torch.randint(0, 10000, size=[max_batch_size], dtype=torch.int64)
     else:
         random_seed_tensor = torch.zeros([max_batch_size], dtype=torch.int64)
 
-    # Prepare model.
-    gpt = ParallelGPT(head_num, size_per_head, vocab_size, start_id, end_id,
-                      layer_num, max_seq_len, tensor_para_size, pipeline_para_size,
-                      lib_path=args.lib_path, int8_mode=args.int8_mode, weights_data_type=weights_data_type,
-                      shared_contexts_ratio=shared_contexts_ratio)
-    if not gpt.load(ckpt_path=args.ckpt_path):
-        print("[WARNING] Checkpoint file not found. Model loading is skipped.")
-    if args.data_type == 'fp16':
-        gpt.half()
-    elif args.data_type == 'bf16':
-        gpt.bfloat16()
+    infer_decode_args = dict(
+        beam_width=beam_width,
+        top_k=top_k * torch.ones(max_batch_size, dtype=torch.int32),
+        top_p=top_p * torch.ones(max_batch_size, dtype=torch.float32),
+        temperature=temperature * torch.ones(max_batch_size, dtype=torch.float32),
+        repetition_penalty=repetition_penalty * torch.ones(max_batch_size, dtype=torch.float32),
+        beam_search_diversity_rate=beam_search_diversity_rate * torch.ones(max_batch_size, dtype=torch.float32),
+        len_penalty=len_penalty * torch.ones(size=[max_batch_size], dtype=torch.float32),
+        random_seed=random_seed_tensor
+    )
 
-    with torch.no_grad():
-        # Generate tokens.
-        tokens_batch = gpt(start_ids,
-                           start_lengths,
-                           output_len,
-                           beam_width,
-                           top_k * torch.ones(size=[max_batch_size], dtype=torch.int32),
-                           top_p * torch.ones(size=[max_batch_size], dtype=torch.float32),
-                           beam_search_diversity_rate * torch.ones(size=[max_batch_size], dtype=torch.float32),
-                           temperature * torch.ones(size=[max_batch_size], dtype=torch.float32),
-                           len_penalty * torch.ones(size=[max_batch_size], dtype=torch.float32),
-                           repetition_penalty * torch.ones(size=[max_batch_size], dtype=torch.float32),
-                           random_seed_tensor,
-                           return_output_length,
-                           return_cum_log_probs)
-        # only a thread (rank 0) gets the output, while the others are supposed to return None.
-        if tokens_batch is not None:
+    if not args.use_gpt_decoder_ops:
+        def gpt_generate_fn():
+            tokens_batch = gpt(start_ids,
+                               start_lengths,
+                               output_len,
+                               return_output_length=return_output_length,
+                               return_cum_log_probs=return_cum_log_probs,
+                               **infer_decode_args)
+            return tokens_batch
+    else:
+        def gpt_generate_fn():
+            output_dict = gpt.generate(input_token_ids=start_ids,
+                                       input_lengths=start_lengths,
+                                       gen_length=output_len,
+                                       eos_token_id=end_id,
+                                       return_output_length=return_output_length,
+                                       return_log_probs=return_cum_log_probs,
+                                       **infer_decode_args)
+            return output_dict
+
+    # Generate tokens.
+    gen_outputs = gpt_generate_fn()
+
+    if rank == 0:
+        if not args.use_gpt_decoder_ops:
             if return_cum_log_probs > 0:
-                tokens_batch, _, cum_log_probs = tokens_batch
-                print('[INFO] Log probs of sentences:', cum_log_probs)
-            outputs = []
-            tokens_batch = tokens_batch.cpu().numpy()
-            for i, (context, tokens) in enumerate(zip(contexts, tokens_batch)):
-                for beam_id in range(beam_width):
-                    token = tokens[beam_id][start_lengths[i]:]  # exclude context input from the output
-                    output = enc.decode(token)
-                    outputs.append(output)
-                    print(f"[INFO] batch {i}, beam {beam_id}: \n[Context]\n{context}\n\n[Output]\n{output}\n")
+                tokens_batch, _, cum_log_probs = gen_outputs
+            else:
+                tokens_batch, cum_log_probs = gen_outputs, None
+        else:
+            tokens_batch = gen_outputs['output_token_ids']
+            cum_log_probs = gen_outputs['cum_log_probs'] if return_cum_log_probs > 0 else None
+        if cum_log_probs is not None:
+            print('[INFO] Log probs of sentences:', cum_log_probs)
 
-            if args.sample_output_file:
-                with open(args.sample_output_file, "w+") as f:
-                    outputs = [o.replace("\n", "\\n") for o in outputs]
-                    f.writelines("\n".join(outputs))
+        outputs = []
+        tokens_batch = tokens_batch.cpu().numpy()
+        for i, (context, tokens) in enumerate(zip(contexts, tokens_batch)):
+            for beam_id in range(beam_width):
+                token = tokens[beam_id][start_lengths[i]:]  # exclude context input from the output
+                output = enc.decode(token)
+                outputs.append(output)
+                print(f'[INFO] batch {i}, beam {beam_id}:\n[Context]\n{context}\n\n[Output]\n{output}\n')
 
-        # Measure inference time.
-        if args.time:
-            iterations = 10
-            for i in range(iterations):
-                tokens_batch = gpt(start_ids,
-                                   start_lengths,
-                                   output_len,
-                                   beam_width,
-                                   top_k * torch.ones(size=[max_batch_size], dtype=torch.int32),
-                                   top_p * torch.ones(size=[max_batch_size], dtype=torch.float32),
-                                   beam_search_diversity_rate * torch.ones(size=[max_batch_size], dtype=torch.float32),
-                                   temperature * torch.ones(size=[max_batch_size], dtype=torch.float32),
-                                   len_penalty * torch.ones(size=[max_batch_size], dtype=torch.float32),
-                                   repetition_penalty * torch.ones(size=[max_batch_size], dtype=torch.float32),
-                                   random_seed_tensor,
-                                   return_output_length,
-                                   return_cum_log_probs)
+        if args.sample_output_file:
+            with open(args.sample_output_file, "w+") as f:
+                outputs = [o.replace("\n", "\\n") for o in outputs]
+                f.writelines("\n".join(outputs))
 
-            time = timeit.default_timer()
-            for i in range(iterations):
-                tokens_batch = gpt(start_ids,
-                                   start_lengths,
-                                   output_len,
-                                   beam_width,
-                                   top_k * torch.ones(size=[max_batch_size], dtype=torch.int32),
-                                   top_p * torch.ones(size=[max_batch_size], dtype=torch.float32),
-                                   beam_search_diversity_rate * torch.ones(size=[max_batch_size], dtype=torch.float32),
-                                   temperature * torch.ones(size=[max_batch_size], dtype=torch.float32),
-                                   len_penalty * torch.ones(size=[max_batch_size], dtype=torch.float32),
-                                   repetition_penalty * torch.ones(size=[max_batch_size], dtype=torch.float32),
-                                   random_seed_tensor,
-                                   return_output_length,
-                                   return_cum_log_probs)
-            time_elapsed = timeit.default_timer() - time
-            print("[INFO] GPT time costs: {:.2f} ms".format(time_elapsed * 1000 / iterations))
+    # Measure inference time.
+    if args.time:
+        iterations = 10
+        for _ in range(iterations):
+            gpt_generate_fn()
+        time = timeit.default_timer()
+        for _ in range(iterations):
+            gpt_generate_fn()
+        time_elapsed = timeit.default_timer() - time
+        print(f'[INFO] GPT time costs: {time_elapsed * 1000 / iterations:.2f} ms')
 
 
 if __name__ == '__main__':

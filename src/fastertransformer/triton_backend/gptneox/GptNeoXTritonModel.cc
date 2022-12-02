@@ -134,7 +134,14 @@ std::unique_ptr<AbstractTransformerModelInstance> GptNeoXTritonModel<T>::createM
     ft::NcclParam tensor_para   = nccl_params.first[comms_rank];
     ft::NcclParam pipeline_para = nccl_params.second[comms_rank];
 
-    auto gpt = std::make_unique<ft::GptNeoX<T>>(
+    ft::AttentionType attention_type = ft::getAttentionType<T>(size_per_head_,
+                                                               ft::getSMVersion(),
+                                                               true,   // remove_padding
+                                                               0,      // gpt supports any-seq-length fmha
+                                                               true,   // is_fuse
+                                                               false,  // with_relative_position_bias
+                                                               true);  // causal_mask
+    auto              gpt            = std::make_unique<ft::GptNeoX<T>>(
         ft::GptNeoX<T>(head_num_,
                        size_per_head_,
                        inter_size_,
@@ -160,6 +167,7 @@ std::unique_ptr<AbstractTransformerModelInstance> GptNeoXTritonModel<T>::createM
                        allocator.get(),
                        false,
                        cuda_device_prop_ptr.get(),
+                       attention_type,
                        custom_all_reduce_comm,
                        enable_custom_all_reduce_));
 

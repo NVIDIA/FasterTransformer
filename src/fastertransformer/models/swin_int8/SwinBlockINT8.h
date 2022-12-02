@@ -19,6 +19,7 @@
 #include "src/fastertransformer/kernels/activation_int8_kernels.h"
 #include "src/fastertransformer/kernels/add_residual_kernels.h"
 #include "src/fastertransformer/kernels/dequantize_kernels.h"
+#include "src/fastertransformer/kernels/image_shift_partition_kernels.h"
 #include "src/fastertransformer/kernels/layernorm_int8_kernels.h"
 #include "src/fastertransformer/layers/FfnINT8Weight.h"
 #include "src/fastertransformer/layers/attention_layers_int8/WindowAttentionINT8.h"
@@ -27,17 +28,11 @@ namespace fastertransformer {
 template<typename T>
 class SwinTransformerINT8Block: public BaseLayer {
 private:
-    int    int8_mode           = 0;
-    int    max_batch_          = 1;
-    int    window_size_        = 7;
-    int    window_len_         = 49;
-    int    patches_resolution_ = 56;
-    int    embed_dim_          = 96;
-    float  mlp_ratio_          = 4.0f;
-    float  layernorm_eps_;
-    bool   qkv_bias_     = true;
-    float  qk_scale_     = 1.0f;
-    size_t max_buf_size_ = 0;
+    int   int8_mode    = 0;
+    int   window_size_ = 7;
+    float mlp_ratio_   = 4.0f;
+    float layernorm_eps_;
+    int   version_ = 1;
 
     int8_t* buf_ = nullptr;
 
@@ -45,7 +40,8 @@ private:
     int8_t *mlp_output_ = nullptr, *input_int8 = nullptr;
     WindowAttentionINT8<T>* atten_ = nullptr;
 
-    void allocateBuffer();
+    void allocateBuffer() override;
+    void allocateBuffer(int batch, int input_resolution, int dim);
 
     void freeBuffer();
 
@@ -53,8 +49,6 @@ public:
     SwinTransformerINT8Block(int              int8_mode,
                              int              max_batch,
                              int              window_size,
-                             int              patches_resolution,
-                             int              embed_dim,
                              float            mlp_ratio,
                              float            layernorm_eps_,
                              bool             qkv_bias,
@@ -62,13 +56,13 @@ public:
                              cublasMMWrapper* cublas_wrapper,
                              IAllocator*      allocator,
                              bool             is_free_buffer_after_forward,
-                             float            qk_scale = 1.0f);
+                             float            qk_scale = 1.0f,
+                             int              version  = 1);
 
     ~SwinTransformerINT8Block();
 
-    void forward(std::vector<Tensor>*               output_tensors,
-                 const std::vector<Tensor>*         input_tensors,
-                 SwinTransformerINT8BlockWeight<T>& swin_block_weights);
+    void
+    forward(TensorMap* output_tensors, TensorMap* input_tensors, SwinTransformerINT8BlockWeight<T>& swin_block_weights);
 
 };  // class SwinTransformerINT8Block
 }  // namespace fastertransformer

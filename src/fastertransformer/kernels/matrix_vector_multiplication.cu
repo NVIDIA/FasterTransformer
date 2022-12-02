@@ -14,14 +14,15 @@
  * limitations under the License.
  */
 
+#include "stdio.h"
 #include <cassert>
 #include <cmath>
 #include <cuda_fp16.h>
 
-#include "bfloat16_fallback_kenrels.cuh"
 #include "matrix_vector_multiplication.h"
 #include "reduce_kernel_utils.cuh"
 #include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
+#include "src/fastertransformer/utils/cuda_type_utils.cuh"
 
 namespace fastertransformer {
 

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,23 +14,11 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/kernels/bfloat16_fallback_kenrels.cuh"
+#include "src/fastertransformer/utils/cuda_type_utils.cuh"
 #include "xlnet_preprocess_kernels.h"
 
 namespace fastertransformer {
 /*************Device Function**************/
-template<typename T>
-T __device__ cast(float v)
-{
-    return (T)v;
-}
-
-template<>
-__half __device__ cast(float v)
-{
-    return __float2half(v);
-}
-
 template<typename T>
 int numPerThread()
 {
@@ -95,7 +83,7 @@ void __global__ getAttnMask(T* attn_mask, float* input_mask, int seq_len)
         tmp.y = input_mask[batch * seq_len + col] * data;
 
         int out_index               = (batch * seq_len * seq_len + row * seq_len + col) >> 1;
-        ((T2*)attn_mask)[out_index] = float22type2<T2>(tmp);
+        ((T2*)attn_mask)[out_index] = cuda_cast<T2>(tmp);
     }
 }
 
@@ -111,7 +99,7 @@ void __global__ getAttnMask(float* attn_mask, float* input_mask, int seq_len)
         data = 0;
     }
     float mask                                                 = input_mask[batch * seq_len + col];
-    attn_mask[batch * seq_len * seq_len + row * seq_len + col] = cast<float>(data * mask);
+    attn_mask[batch * seq_len * seq_len + row * seq_len + col] = cuda_cast<float>(data * mask);
 }
 
 // Applied to half or bfloat16
@@ -135,7 +123,7 @@ void __global__ getSegMat(T* seg_mat, int* seg_id, int seq_len)
     tmp_w.x = w[d * 2 + 0];
     tmp_w.y = w[d * 2 + 1];
 
-    ((T2*)seg_mat)[index] = float22type2<T2>(tmp_w);
+    ((T2*)seg_mat)[index] = cuda_cast<T2>(tmp_w);
 }
 
 template<>
@@ -172,8 +160,8 @@ void __global__ relativePosition(T* attr_k_head_r, int hidden_dim, int seq_len)
     float s       = sinf(pos_emd);
     float c       = cosf(pos_emd);
 
-    attr_k_head_r[row * hidden_dim + col]                  = cast<T>(s);
-    attr_k_head_r[row * hidden_dim + hidden_dim / 2 + col] = cast<T>(c);
+    attr_k_head_r[row * hidden_dim + col]                  = cuda_cast<T>(s);
+    attr_k_head_r[row * hidden_dim + hidden_dim / 2 + col] = cuda_cast<T>(c);
 }
 
 /***********************Pre-Process************************/

@@ -98,6 +98,7 @@ def translate(args_dict):
     ## relative position embedding -> 0, absolute position embedding -> 1
     t5_with_bias = False
     use_gated_activation = False
+    t5_with_moe = False
     position_embedding_type = 0
     weight_data_type = np.float32
     ## only huggingface model path supported
@@ -107,7 +108,7 @@ def translate(args_dict):
     ## read checkpoint config if exists
     ckpt_config = configparser.ConfigParser()
     activation_type = "relu"
-    if (model_type == "Megatron"):
+    if (model_type in ["Megatron", "Megatron-DeepSpeed"]):
         ckpt_config_path = os.path.join(ckpt_path, 'config.ini')
         if os.path.isfile(ckpt_config_path):
             ckpt_config.read(ckpt_config_path)
@@ -115,8 +116,16 @@ def translate(args_dict):
             t5_with_bias = ckpt_config.getboolean('structure', 't5_with_bias')
             position_embedding_type = 0 if ckpt_config.get('structure', 'position_embedding_type') == 'relative' else 1
             use_gated_activation = ckpt_config.getboolean('structure', 'use_gated_activation')
+            t5_with_moe= ckpt_config.getint('structure', 't5_with_moe') == 1
             weight_data_type = {"fp16": np.float16, "fp32": np.float32}[ckpt_config.get("encoder", "weight_data_type")]
             activation_type = "gated-gelu" if use_gated_activation else "gelu" # change to gelu, which is default setting of Megatron T5
+            moe_layers_in_encoder = []
+            moe_layers_in_decoder = []
+            if (ckpt_config.get('structure', 'moe_layers_in_encoder') != '[]'):
+                moe_layers_in_encoder = [int(n) for n in ckpt_config.get('structure', 'moe_layers_in_encoder')[1:-1].replace(" ", "").split(',')]
+            if (ckpt_config.get('structure', 'moe_layers_in_decoder') != '[]'):
+                moe_layers_in_decoder = [int(n) for n in ckpt_config.get('structure', 'moe_layers_in_encoder')[1:-1].replace(" ", "").split(',')]
+
         else:
             raise Exception("config file does exist with the ckpt !")
 
@@ -148,8 +157,13 @@ def translate(args_dict):
 
     encoder_config = t5_model.encoder.config
     decoder_config = t5_model.decoder.config
+    encoder_config.update({"num_experts": 0})
+    decoder_config.update({"num_experts": 0})
+    encoder_config.update({"moe_layer_index": []})
+    decoder_config.update({"moe_layer_index": []})
+
     q_scaling = 1.0 / (math.sqrt(encoder_config.d_kv))
-    if (model_type == "Megatron"):
+    if (model_type in ["Megatron", "Megatron-DeepSpeed"]):
         ## update configs when using Megatron model structure
         q_scaling = 1.0
 
@@ -160,6 +174,9 @@ def translate(args_dict):
         encoder_config.d_ff = ckpt_config.getint('encoder', 'd_ff')
         encoder_config.num_layers = ckpt_config.getint('encoder', 'num_layers')
         encoder_config.relative_attention_num_buckets = ckpt_config.getint('encoder', 'relative_attention_num_buckets_or_max_pos_seq_len')
+        if model_type == "Megatron-DeepSpeed":
+            encoder_config.num_experts = ckpt_config.getint('encoder', 'num_experts')
+            encoder_config.moe_layer_index = moe_layers_in_encoder
 
         decoder_config.d_model = ckpt_config.getint('decoder', 'd_model')
         decoder_config.vocab_size = ckpt_config.getint('decoder', 'vocab_size')
@@ -168,8 +185,11 @@ def translate(args_dict):
         decoder_config.d_ff = ckpt_config.getint('decoder', 'd_ff')
         decoder_config.num_layers = ckpt_config.getint('decoder', 'num_layers')
         decoder_config.relative_attention_num_buckets = ckpt_config.getint('decoder', 'relative_attention_num_buckets_or_max_pos_seq_len')
-        decoder_config.decoder_start_token_id = 30522 # Only for megatron t5 model
-        decoder_config.eos_token_id = 30523 # Only for megatron t5 model
+        if model_type == "Megatron-DeepSpeed":
+            decoder_config.num_experts = ckpt_config.getint('decoder', 'num_experts')
+            decoder_config.moe_layer_index = moe_layers_in_decoder
+        decoder_config.decoder_start_token_id = ckpt_config.getint('decoder', 'decoder_start_token_id')
+        decoder_config.eos_token_id = ckpt_config.getint('decoder', 'eos_token_id')
 
     print(f"{model_type} encoder_config: {encoder_config}")
     print(f"{model_type} decoder_config: {decoder_config}")
@@ -215,6 +235,7 @@ def translate(args_dict):
             pipeline_para_size,
             t5_with_bias=t5_with_bias,
             use_gated_activation=use_gated_activation,
+            t5_with_moe=t5_with_moe,
             position_embedding_type=position_embedding_type,
             weight_data_type=weight_data_type
         )
@@ -224,13 +245,14 @@ def translate(args_dict):
             pipeline_para_size,
             t5_with_bias=t5_with_bias,
             use_gated_activation=use_gated_activation,
+            t5_with_moe=t5_with_moe,
             position_embedding_type=position_embedding_type,
             weight_data_type=weight_data_type,
         )
 
         if args_dict["ckpt_path"] is not None:
-            ft_encoder_weight.load_from_bin(args_dict["ckpt_path"])
-            ft_decoding_weight.load_from_bin(args_dict["ckpt_path"])
+            ft_encoder_weight.load_from_bin(args_dict["ckpt_path"], model_type=model_type)
+            ft_decoding_weight.load_from_bin(args_dict["ckpt_path"], model_type=model_type)
         else:
             ft_encoder_weight.load_from_model(t5_model)
             ft_decoding_weight.load_from_model(t5_model)
@@ -245,9 +267,9 @@ def translate(args_dict):
         ft_encoder = FTT5Encoder(ft_encoder_weight.w, lib_path, encoder_config.num_heads,
                                 encoder_config.d_kv, encoder_config.d_ff,
                                 encoder_config.d_model, remove_padding, encoder_config.num_layers,
-                                encoder_config.relative_attention_num_buckets,
+                                encoder_config.relative_attention_num_buckets, encoder_config.num_experts, encoder_config.moe_layer_index,
                                 128, False, q_scaling, tensor_para_size, pipeline_para_size, t5_with_bias,
-                                position_embedding_type, activation_type)
+                                position_embedding_type, 0, activation_type)
         ft_decoding = FTT5Decoding(ft_decoding_weight.w, lib_path,
                                 decoder_config.num_heads, decoder_config.d_kv,
                                 decoder_config.d_ff, encoder_config.d_model,
@@ -258,9 +280,9 @@ def translate(args_dict):
                                 -1,
                                 decoder_config.vocab_size,
                                 q_scaling,
-                                decoder_config.relative_attention_num_buckets, max_distance=128,
+                                decoder_config.relative_attention_num_buckets, decoder_config.num_experts, decoder_config.moe_layer_index, max_distance=128,
                                 tensor_para_size=tensor_para_size, pipeline_para_size=pipeline_para_size,
-                                t5_with_bias=t5_with_bias, activation_type=activation_type,
+                                t5_with_bias=t5_with_bias, moe_k=0, activation_type=activation_type,
                                 position_embedding_type = position_embedding_type)
 
         ft_t5 = FTT5(ft_encoder, ft_decoding)
@@ -354,13 +376,15 @@ if __name__ == "__main__":
                             'e.g., if you want to test tf_beamsearch and ft_sampling, 
                             then you need to use -time '03' ''')
     parser.add_argument('-diversity_rate', '--beam_search_diversity_rate', type=float, default=0.0, metavar='NUMBER',
-                        help='deviersity rate of beam search. default is 0. When diversity rate = 0, it is equivalent to the naive beams earch.')
+                        help='deviersity rate of beam search. default is 0. When diversity rate = 0, it is equivalent to the naive beam search.')
     parser.add_argument('-topk', '--sampling_topk', type=int, default=1, metavar='NUMBER',
                         help='Candidate (k) value of top k sampling in decoding. Default is 1.')
     parser.add_argument('-topp', '--sampling_topp', type=float, default=0.0, metavar='NUMBER',
                         help='Probability (p) value of top p sampling in decoding. Default is 0.0. ')
     parser.add_argument('-d', '--data_type', type=str, default="fp32", metavar='STRING',
-                        help='data type (default: fp32)', choices=['fp32', 'fp16'])
+                        help='data type for inference (default: fp32)', choices=['fp32', 'fp16'])
+    parser.add_argument('-ld', '--load_data_type', type=str, default="fp32", metavar='STRING',
+                        help='data type for loading weights (default: fp32)', choices=['fp32', 'fp16'])
     parser.add_argument('-lib_path', '--lib_path', type=str, default="lib/libth_t5.so", metavar='STRING',
                         help='the path of FasterTransformer pytorch t5 op library.')
     parser.add_argument('-model_path', '--model_path', type=str, default=None, metavar='STRING',
@@ -373,7 +397,7 @@ if __name__ == "__main__":
                         help='size of pipeline parallelism (default: 1)')
     # assume checkpoint config is also in the same path
     parser.add_argument('--ckpt_path', type=str, help='path to the checkpoint file.')
-    parser.add_argument('--model_type', type=str, default="Huggingface", choices=["Huggingface", "Megatron"],
+    parser.add_argument('--model_type', type=str, default="Huggingface", choices=["Huggingface", "Megatron", "Megatron-DeepSpeed"],
                         help='Megatron T5 uses bias and supports both absulte and relative positional embedding;'
                         'Huggingface T4 adopts the paper\'s implementation and has no bias')
     # flags for performance benchmarking

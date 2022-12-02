@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@ namespace fastertransformer {
 
 // This class is only used when we satisfy the following conditions:
 // 1. INT8
-// 2. Temporally add seqlen <= 384 limitation because the
+// 2. Temporally add seqlen <= 512 limitation because the
 template<typename T>
 class FusedAttentionLayerINT8: public BaseAttentionLayer<T> {
 private:
@@ -86,9 +86,8 @@ public:
 
     ~FusedAttentionLayerINT8();
 
-    void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                 const std::vector<fastertransformer::Tensor>* input_tensors,
-                 const AttentionWeight<T>*                     attention_weights) override;
+    void
+    forward(TensorMap* output_tensors, TensorMap* input_tensors, const AttentionWeight<T>* attention_weights) override;
 
     void invokeTrtAddQkvBias(size_t token_num, const AttentionWeight<T>* attention_weights);
 };

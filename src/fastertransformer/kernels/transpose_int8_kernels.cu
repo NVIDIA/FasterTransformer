@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -472,6 +472,41 @@ void invokeTransposeCOL32ToRowRebuildPadding(int8_t*       dst,
                                                            out_scale_ptr,
                                                            seq_len * size_per_head,
                                                            head_num * size_per_head);
+}
+
+__global__ void transpose_int8_tensor(int8_t* arr_t, const int8_t* arr, size_t dim_0, size_t dim_1)
+{
+    extern __shared__ int8_t shmem[];
+
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+
+    int local_id = threadIdx.y * blockDim.x + threadIdx.x;
+
+    if (x >= dim_1 || y >= dim_0) {
+        return;
+    }
+
+    shmem[local_id] = arr[y * dim_1 + x];
+    __syncthreads();
+
+    int new_x = local_id % blockDim.y;
+    int new_y = local_id / blockDim.y;
+
+    int x_t                  = blockIdx.y * blockDim.y + new_x;
+    int y_t                  = blockIdx.x * blockDim.x + new_y;
+    arr_t[y_t * dim_0 + x_t] = shmem[new_x * blockDim.x + new_y];
+}
+
+void invokeTransposeInt8Tensor(const Tensor& x_t, const Tensor& x, cudaStream_t stream)
+{
+    dim3 block_dim(32, 16);
+    dim3 grid_dim((x.shape[1] + block_dim.x - 1) / block_dim.x, (x.shape[0] + block_dim.y - 1) / block_dim.y);
+
+    const size_t shmem_size = block_dim.x * block_dim.y * sizeof(int8_t);
+
+    transpose_int8_tensor<<<grid_dim, block_dim, shmem_size, stream>>>(
+        x_t.getPtr<int8_t>(), x.getPtr<int8_t>(), x.shape[0], x.shape[1]);
 }
 
 }  // namespace fastertransformer

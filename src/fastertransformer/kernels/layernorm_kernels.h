@@ -64,6 +64,7 @@ void invokeAddBiasResidualLayerNorm(T*           out,
 template<typename T>
 void invokeGeneralAddBiasResidualPreLayerNorm(T*           output,
                                               T*           norm_output,
+                                              const T*     input,
                                               const T*     residual1,
                                               const T*     residual2,
                                               const T*     gamma,
@@ -72,6 +73,10 @@ void invokeGeneralAddBiasResidualPreLayerNorm(T*           output,
                                               const float  layernorm_eps,
                                               int          m,
                                               int          n,
+                                              const float* scale_inter,
+                                              const float* scale_out,
+                                              const float* scale,
+                                              const int    int8_mode,
                                               cudaStream_t stream,
                                               int          opt_version = 2);
 
@@ -79,17 +84,37 @@ template<typename T>
 void invokeGeneralAddBiasResidualPreLayerNorm(T*           output,
                                               T*           norm_output,
                                               const T*     input,
+                                              const T*     residual1,
                                               const T*     gamma,
                                               const T*     beta,
                                               const T*     bias,
                                               const float  layernorm_eps,
                                               int          m,
                                               int          n,
+                                              const float* scale_inter,
+                                              const float* scale_out,
+                                              const float* scale,
+                                              const int    int8_mode,
                                               cudaStream_t stream,
                                               int          opt_version = 2)
 {
-    invokeGeneralAddBiasResidualPreLayerNorm(
-        output, norm_output, input, (const T*)nullptr, gamma, beta, bias, layernorm_eps, m, n, stream, opt_version);
+    invokeGeneralAddBiasResidualPreLayerNorm(output,
+                                             norm_output,
+                                             input,
+                                             residual1,
+                                             (const T*)nullptr,
+                                             gamma,
+                                             beta,
+                                             bias,
+                                             layernorm_eps,
+                                             m,
+                                             n,
+                                             scale_inter,
+                                             scale_out,
+                                             scale,
+                                             int8_mode,
+                                             stream,
+                                             opt_version);
 }
 
 template<typename T>
@@ -100,6 +125,8 @@ void invokeGeneralLayerNorm(T*           out,
                             const float  layernorm_eps,
                             const int    m,
                             const int    n,
+                            const float* scale,
+                            const int    int8_mode,
                             cudaStream_t stream,
                             int          opt_version = 2);
 
@@ -172,4 +199,14 @@ void invokeMergeLayernorm(T*           output,
                           int          n,
                           cudaStream_t stream);
 
+template<typename T>
+void invokeAddBiasLayernormAddRes(T*           out,
+                                  const T*     input,
+                                  const T*     bias,
+                                  const T*     gamma,
+                                  const T*     beta,
+                                  const float  layernorm_eps,
+                                  int          m,
+                                  int          n,
+                                  cudaStream_t stream);
 }  // namespace fastertransformer

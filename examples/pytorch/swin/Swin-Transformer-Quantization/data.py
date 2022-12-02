@@ -26,7 +26,6 @@ from torchvision import datasets, transforms
 from timm.data.constants import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD
 from timm.data import Mixup
 from timm.data import create_transform
-from timm.data.transforms import _pil_interp
 
 from SwinTransformer.data.samplers import SubsetRandomSampler
 from SwinTransformer.data.build import build_dataset

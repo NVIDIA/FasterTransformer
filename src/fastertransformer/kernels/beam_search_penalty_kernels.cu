@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,7 +37,7 @@ __global__ void add_bias_temperature(T*          logits,
     logits += bbid * vocab_size_padded;
 
     const T MASK_VAL = (std::is_same<T, half>::value) ? -HALF_FLT_MAX : -FLT_MAX;
-    const T inv_temp = static_cast<T>(1.0f / temperature);
+    const T inv_temp = static_cast<T>(1.0f / (temperature + 1e-6f));
     for (int i = tid + bid * blockDim.x; i < vocab_size_padded; i += blockDim.x * gridDim.x) {
         if (i < vocab_size) {
             T bias_val = bias == nullptr ? (T)(0.0f) : bias[i];
@@ -66,7 +66,7 @@ __global__ void add_bias_temperature(half2*       logits,
     const int bbid = blockIdx.y;
 
     const half2 mask_val = __float2half2_rn(-HALF_FLT_MAX);
-    const half2 inv_temp = __float2half2_rn(1.0f / temperature);
+    const half2 inv_temp = __float2half2_rn(1.0f / (temperature + 1e-6f));
 
     const int half_vocab_size        = vocab_size / 2;
     const int half_vocab_size_padded = vocab_size_padded / 2;

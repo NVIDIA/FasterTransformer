@@ -60,48 +60,19 @@ def add_arguments(parser):
     group.add_argument('--narrow-range', action='store_true',
                         help='use [-127, 127] range for activations rather than [-128, 127]')
     group.add_argument('--quant-mode', type=str, default="ft2",
-                        help='predefined quantization mode, choices: ["ft1", "ft2", "ft3", "trt"]')
+                        help='predefined quantization mode, choices: ["ft1", "ft2", "ft3", "trt"](Deprecated)')
 
 
 def set_args(args):
-    if args.quant_mode == 'ft1':
-        args.wprec = 8
-        args.aprec = 8
-        args.quant_per_tensor = False
-        args.quant_disable = False
-        args.quant_disable_keyword = ['final_input', 'layernorm_input', 'softmax_input', 'residual_input', 'local_input', 'aftergemm']
-        args.fuse_qkv = False
-        args.narrow_range = False
-    elif args.quant_mode == 'ft2':
-        args.wprec = 8
-        args.aprec = 8
-        args.quant_per_tensor = True
-        args.quant_disable = False
-        args.quant_disable_keyword = ['final_input', 'layernorm_input', 'softmax_input', 'local_input', 'residual_input']
-        # '[2n]._aftergemm']
-        if args.int8_mode == 2:
-            args.quant_disable_keyword.append('[2n]._aftergemm')
-        args.fuse_qkv = True
-        args.narrow_range = False
-    elif args.quant_mode == 'ft3':
-        args.wprec = 8
-        args.aprec = 8
-        args.quant_per_tensor = True
-        args.quant_disable = False
-        args.quant_disable_keyword = ['final_input', 'layernorm_input', 'local_input']
-        args.fuse_qkv = True
-        args.narrow_range = False
-    elif args.quant_mode == 'trt':
-        # for demobert
-        args.wprec = 8
-        args.aprec = 8
-        args.quant_per_tensor = True
-        args.quant_disable = False
-        args.quant_disable_keyword = ['layernorm_input', 'softmax_input', 'aftergemm']
-        args.fuse_qkv = True
-        args.narrow_range = False
-    else:
-        raise ValueError("wrong argument value for 'quant_mode'")
+    args.wprec = 8
+    args.aprec = 8
+    args.quant_per_tensor = True
+    args.quant_disable = False
+    args.quant_disable_keyword = ['final_input', 'layernorm_input', 'softmax_input', 'local_input', 'residual_input']
+    if args.int8_mode == 2:
+        args.quant_disable_keyword.append('[2n]._aftergemm')
+    args.fuse_qkv = True
+    args.narrow_range = False
     return args
 
 def set_default_quantizers(args):
@@ -144,14 +115,10 @@ def configure_model(model, args, calib=False):
         if args.quant_disable_keyword:
             set_quantizer_by_name(model, args.quant_disable_keyword, _disabled=True)
 
-        #if args.fuse_qkv:
-        #    fuse_qkv(model, args)
+        if args.fuse_qkv:
+           fuse_qkv(model, args)
 
-    # if args.local_rank in [-1, 0] and not calib:
-        # print_quant_summary(model)
-        # time.sleep(1) # prevent eval printing overlap
     print('Configure calib={}'.format(str(calib)))
-    #exit(0)
 
 
 def enable_calibration(model):
@@ -234,8 +201,6 @@ def print_quant_summary(model):
             if '.' in pname:
                 continue
             counters['params'] += param.numel()
-            # fullname = f'{name}.{pname}'
-            # print(f'{fullname:80} {param.numel():12}')
             weight_quantizer = getattr(mod, '_weight_quantizer', None)
             if pname == 'weight':
                 counters['weights'] += param.numel()
@@ -277,7 +242,6 @@ def set_quantizers(name, mod, which='both', **kwargs):
             set_quantizer(name, mod, '_input_quantizer', k, v)
         if which in ['weight', 'both']:
             set_quantizer(name, mod, '_weight_quantizer', k, v)
-    logger.info(s)
 
 
 def set_quantizer_by_name(model, names, **kwargs):
@@ -295,4 +259,3 @@ def set_quantizer_by_name(model, names, **kwargs):
                     for k, v in kwargs.items():
                         s += (f' {k}={v}')
                         setattr(mod, k, v)
-                    logger.info(s)

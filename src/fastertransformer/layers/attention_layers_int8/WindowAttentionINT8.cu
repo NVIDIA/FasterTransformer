@@ -125,71 +125,51 @@ int WindowAttentionINT8<T>::trt_getS(const int actual_seqlen)
     if (actual_seqlen <= 64) {
         S = 64;
     }
-    else if (actual_seqlen <= 128) {
-        S = 128;
-    }
     else if (actual_seqlen <= 256) {
         S = 256;
-    }
-    else if (actual_seqlen <= 384) {
-        S = 384;
     }
     return S;
 }
 
 template<typename T>
-size_t WindowAttentionINT8<T>::roundByteSize(const size_t size, const int factor)
+void WindowAttentionINT8<T>::allocateBuffer()
 {
-    return (size + factor - 1) / factor * factor;
+    assert(false && "WindowAttentionINT8<T>::allocateBuffer() not implemented");
 }
 
 template<typename T>
-void WindowAttentionINT8<T>::allocateBuffer()
+void WindowAttentionINT8<T>::allocateBuffer(int batch, int window_num, int window_len, int embed_dim, int num_head)
 {
-    int num_head = num_head_;
-    if (!is_free_buffer_after_forward_) {
-        num_head = num_head * 8;
-    }
     if (is_allocate_buffer_ == false) {
+        FT_LOG_DEBUG("WindowAttentionINT8<T>::allocateBuffer()");
         if (use_trt_) {
-            int S               = trt_getS(window_len_);
-            trt_attention_mask_ = (half*)allocator_->reMalloc(
-                trt_attention_mask_, roundByteSize(window_num_ * S * S * sizeof(T), 4), false);
-            trt_relative_position_bias_ = (half*)allocator_->reMalloc(
-                trt_relative_position_bias_, roundByteSize(num_head * S * S * sizeof(T), 4), false);
-            Q_buf_   = (int8_t*)allocator_->reMalloc(Q_buf_,
-                                                   3 * max_batch_ * patches_resolution_ * patches_resolution_
-                                                       * embed_dim_ * sizeof(int8_t),
-                                                   false);
-            K_buf_   = Q_buf_ + max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_;
-            V_buf_   = K_buf_ + max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_;
-            q_buf_   = (int8_t*)allocator_->reMalloc(q_buf_,
-                                                   3 * max_batch_ * patches_resolution_ * patches_resolution_
-                                                       * embed_dim_ * sizeof(int8_t),
-                                                   false);
-            k_buf_   = q_buf_ + max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_;
-            v_buf_   = k_buf_ + max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_;
+            Q_buf_ = (int8_t*)allocator_->reMalloc(
+                Q_buf_, 3 * batch * window_num * window_len * embed_dim * sizeof(int8_t), false);
+            K_buf_ = Q_buf_ + batch * window_num * window_len * embed_dim;
+            V_buf_ = K_buf_ + batch * window_num * window_len * embed_dim;
+            q_buf_ = (int8_t*)allocator_->reMalloc(
+                q_buf_, 3 * batch * window_num * window_len * embed_dim * sizeof(int8_t), false);
+            k_buf_   = q_buf_ + batch * window_num * window_len * embed_dim;
+            v_buf_   = k_buf_ + batch * window_num * window_len * embed_dim;
             dst_buf_ = (int8_t*)allocator_->reMalloc(
-                dst_buf_, max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_ * sizeof(int8_t), false);
+                dst_buf_, batch * window_num * window_len * embed_dim * sizeof(int8_t), false);
         }
         else {
-            int padded_winlen = (window_len_ + 31) / 32 * 32;
-            Q_buf_            = (int8_t*)allocator_->reMalloc(Q_buf_,
-                                                   3 * max_batch_ * patches_resolution_ * patches_resolution_
-                                                       * embed_dim_ * sizeof(int8_t),
-                                                   false);
-            K_buf_            = Q_buf_ + max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_;
-            V_buf_            = K_buf_ + max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_;
-            q_buf_            = (int8_t*)allocator_->reMalloc(
-                q_buf_, max_batch_ * window_num_ * window_len_ * embed_dim_ * sizeof(int8_t), false);
+            int padded_winlen = (window_len + 31) / 32 * 32;
+            Q_buf_            = (int8_t*)allocator_->reMalloc(
+                Q_buf_, 3 * batch * window_num * window_len * embed_dim * sizeof(int8_t), false);
+            K_buf_ = Q_buf_ + batch * window_num * window_len * embed_dim;
+            V_buf_ = K_buf_ + batch * window_num * window_len * embed_dim;
+            q_buf_ = (int8_t*)allocator_->reMalloc(
+                q_buf_, batch * window_num * window_len * embed_dim * sizeof(int8_t), false);
             k_buf_ = (int8_t*)allocator_->reMalloc(
-                k_buf_, max_batch_ * window_num_ * padded_winlen * embed_dim_ * sizeof(int8_t), false);
+                k_buf_, batch * window_num * padded_winlen * embed_dim * sizeof(int8_t), false);
             v_buf_ = (int8_t*)allocator_->reMalloc(
-                v_buf_, max_batch_ * window_num_ * padded_winlen * embed_dim_ * sizeof(int8_t), false);
+                v_buf_, batch * window_num * padded_winlen * embed_dim * sizeof(int8_t), false);
             qk_buf_ = (int8_t*)allocator_->reMalloc(
-                qk_buf_, max_batch_ * window_num_ * num_head * window_len_ * padded_winlen, false);
+                qk_buf_, batch * window_num * num_head * window_len * padded_winlen, false);
             dst_buf_ = (int8_t*)allocator_->reMalloc(
-                dst_buf_, max_batch_ * window_num_ * window_len_ * embed_dim_ * sizeof(int8_t), false);
+                dst_buf_, batch * window_num * window_len * embed_dim * sizeof(int8_t), false);
         }
         is_allocate_buffer_ = true;
     }
@@ -200,8 +180,6 @@ void WindowAttentionINT8<T>::freeBuffer()
 {
     if (is_allocate_buffer_ == true) {
         if (use_trt_) {
-            allocator_->free((void**)(&trt_attention_mask_));
-            allocator_->free((void**)(&trt_relative_position_bias_));
             allocator_->free((void**)(&Q_buf_));
             allocator_->free((void**)(&q_buf_));
             allocator_->free((void**)(&dst_buf_));
@@ -211,6 +189,7 @@ void WindowAttentionINT8<T>::freeBuffer()
             allocator_->free((void**)(&q_buf_));
             allocator_->free((void**)(&k_buf_));
             allocator_->free((void**)(&v_buf_));
+            allocator_->free((void**)(&qk_buf_));
             allocator_->free((void**)(&dst_buf_));
         }
         is_allocate_buffer_ = false;
@@ -220,23 +199,20 @@ void WindowAttentionINT8<T>::freeBuffer()
 template<typename T>
 WindowAttentionINT8<T>::WindowAttentionINT8(int              max_batch,
                                             int              window_size,
-                                            int              patches_resolution,
-                                            int              embed_dim,
                                             cudaStream_t     stream,
                                             cublasMMWrapper* cublas_wrapper,
                                             IAllocator*      allocator,
                                             bool             is_free_buffer_after_forward,
                                             bool             qkv_bias,
-                                            float            qk_scale):
+                                            float            qk_scale,
+                                            int              version):
     BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
-    patches_resolution_(patches_resolution),
-    embed_dim_(embed_dim),
     max_batch_(max_batch),
     window_size_(window_size),
     qkv_bias_(qkv_bias),
-    qk_scale_(qk_scale)
+    qk_scale_(qk_scale),
+    version_(version)
 {
-    window_len_ = window_size_ * window_size_;
 }
 
 template<typename T>
@@ -245,47 +221,56 @@ WindowAttentionINT8<T>::~WindowAttentionINT8()
 }
 
 template<typename T>
-void WindowAttentionINT8<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                                     const std::vector<fastertransformer::Tensor>* input_tensors,
-                                     const AttentionWeight<T>*                     attention_weights)
+void WindowAttentionINT8<T>::forward(TensorMap*                output_tensors,
+                                     TensorMap*                input_tensors,
+                                     const AttentionWeight<T>* attention_weights)
 {
     // input_tensors:
     //      input [batch * window_num * window_len, dim]
     //      attention_mask [window_num, window_len, window_len]
+    //      trt_attention_mask [window_num, window_len, window_len]
     //      attention_relative_position_bias [num_head, window_len, window_len]
-    //      input_parameters [6] {batch, dim, input_resolution, num_head, shift_size, sm}
+    //      trt_relative_position_bias [num_head, window_len, window_len]
+    //      attention_logit_scale [num_head]
+    //      additional_params [9] {batch, dim, input_resolution, num_head, shift_size, sm, window_size_in_use,
+    //      basic_layer_id, block_id}
     // output_tensors:
-    //      output [batch * window_num * window_len, dim]
+    //      hidden_features [batch * window_num * window_len, dim]
 
     cublasINT8MMWrapper* cublas_wrapper              = (cublasINT8MMWrapper*)cublas_wrapper_;
-    int8_t*              attention_out               = (int8_t*)output_tensors->at(0).data;
-    const int8_t*        from_tensor                 = (const int8_t*)input_tensors->at(0).data;
-    const T*             attention_mask              = (const T*)input_tensors->at(1).data;
-    const T*             attention_relative_pos_bias = (const T*)input_tensors->at(2).data;
-    const int*           input_parameters            = (const int*)input_tensors->at(3).data;
-    const int            batch                       = input_parameters[0];
-    const int            dim                         = input_parameters[1];
-    const int            input_resolution            = input_parameters[2];
-    const int            num_head                    = input_parameters[3];
-    const int            shift_size                  = input_parameters[4];
-    const int            sm                          = input_parameters[5];
+    int8_t*              attention_out               = output_tensors->getPtr<int8_t>("hidden_features");
+    const int8_t*        from_tensor                 = input_tensors->getPtr<int8_t>("input_query");
+    const T*             attention_mask              = input_tensors->getPtr<T>("attention_mask", nullptr);
+    const T*             trt_attention_mask          = input_tensors->getPtr<T>("trt_attention_mask", nullptr);
+    const T*             attention_relative_pos_bias = input_tensors->getPtr<T>("attention_relative_position_bias");
+    const T*             trt_relative_position_bias  = input_tensors->getPtr<T>("trt_relative_position_bias", nullptr);
+    const int            window_len_in_use           = input_tensors->at("attention_relative_position_bias").shape[1];
+    const T*             attention_logit_scale       = input_tensors->getPtr<T>("attn_logit_scale", nullptr);
+    const int*           additional_params           = input_tensors->getPtr<int>("additional_params");
+    const int            batch                       = additional_params[0];
+    const int            dim                         = additional_params[1];
+    const int            input_resolution            = additional_params[2];
+    const int            num_head                    = additional_params[3];
+    const int            shift_size                  = additional_params[4];
+    const int            sm                          = additional_params[5];
+    const int            window_size_in_use          = additional_params[6];
+    const int            basic_layer_id              = additional_params[7];
+    const int            block_id                    = additional_params[8];
 
     int use_ORDER_COL32_2R_4R4 = (sm >= 80 ? 1 : 0);
 
     int size_per_head = dim / num_head;
     int trt_S         = 1024;
-    if ((sm == 75 || sm == 80 || sm == 86) && size_per_head == 32 && window_len_ <= TRT_MAX_LEN
+    // we should decide whether to use trt fmha based on window_size_ * window_size_
+    if ((sm == 75 || sm == 80 || sm == 86) && size_per_head == 32 && window_size_ * window_size_ <= TRT_MAX_LEN
         && std::is_same<T, half>::value) {
-        trt_S    = trt_getS(window_len_);
+        trt_S    = trt_getS(window_len_in_use);
         use_trt_ = true;
     }
-    num_head_           = num_head;
-    patches_resolution_ = input_resolution;
-    window_num_         = (input_resolution / window_size_) * (input_resolution / window_size_);
-    embed_dim_          = dim;
-    allocateBuffer();
+    int window_num = (input_resolution / window_size_in_use) * (input_resolution / window_size_in_use);
+    allocateBuffer(batch, window_num, window_len_in_use, dim, num_head);
 
-    float scale = 1.0f / sqrt(size_per_head);
+    float scale = (version_ == 1) ? (1.0f / sqrt(size_per_head)) : 1.0f;
     if (fabs(qk_scale_ - 1.0f) > 0.0001) {
         scale = qk_scale_;
     }
@@ -293,7 +278,8 @@ void WindowAttentionINT8<T>::forward(std::vector<fastertransformer::Tensor>*    
     if (use_trt_) {
         if (dispatcher_int8_.get() && num_head == dispatcher_int8_num_head_) {}
         else {
-            dispatcher_int8_.reset(new FusedMHARunnerInt8v2(num_head, size_per_head, sm, scale));
+            float fmha_qk_scaling = (version_ == 1) ? 1.0f : (1.0f / sqrt(size_per_head));
+            dispatcher_int8_.reset(new FusedMHARunnerInt8v2(num_head, size_per_head, sm, fmha_qk_scaling));
             dispatcher_int8_num_head_ = num_head;
         }
     }
@@ -302,7 +288,7 @@ void WindowAttentionINT8<T>::forward(std::vector<fastertransformer::Tensor>*    
 
     cublas_wrapper->Gemm(Q_buf_,
                          1,
-                         batch * window_num_ * window_len_,
+                         batch * window_num * window_len_in_use,
                          3 * dim,
                          dim,
                          0,
@@ -316,7 +302,7 @@ void WindowAttentionINT8<T>::forward(std::vector<fastertransformer::Tensor>*    
     if (use_trt_ && dispatcher_int8_.get()) {
         S = trt_S;
     }
-    if (use_trt_ && dispatcher_int8_.get() && dispatcher_int8_->isValid(S)) {
+    if (use_trt_ && dispatcher_int8_.get() && dispatcher_int8_->isValid(S, true)) {
         const T* bias_Q = attention_weights->query_weight.bias;
         const T* bias_K = attention_weights->query_weight.bias + dim;
         const T* bias_V = attention_weights->query_weight.bias + (dim << 1);
@@ -325,7 +311,7 @@ void WindowAttentionINT8<T>::forward(std::vector<fastertransformer::Tensor>*    
                                       bias_Q,
                                       bias_K,
                                       bias_V,
-                                      batch * window_num_ * window_len_,
+                                      batch * window_num * window_len_in_use,
                                       num_head,
                                       size_per_head,
                                       &(scale_list->d_scale_list_[16 + 3]),
@@ -334,30 +320,40 @@ void WindowAttentionINT8<T>::forward(std::vector<fastertransformer::Tensor>*    
                                       scale_list->h_scale_list_[4 + 1],
                                       stream_);
 
-        half* trt_attention_mask = nullptr;
-        if (shift_size != 0) {
-            invokeTransformMask(trt_attention_mask_, (const half*)attention_mask, window_num_, window_len_, stream_);
-            trt_attention_mask = trt_attention_mask_;
-        }
+        const int B = batch * window_num;
 
-        invokeTransformMask(
-            trt_relative_position_bias_, (const half*)attention_relative_pos_bias, num_head, window_len_, stream_);
-
-        const int B = batch * window_num_;
-        // dispatcher_int8_->setScaleList(scale_list->h_scale_list_[scale_list->p4_offset_]/127.0f,
-        //                                scale_list->h_scale_list_[scale_list->p4_offset_ + 1]/127.0f,
-        //                                scale_list->h_scale_list_[scale_list->p4_offset_ + 2]/127.0f);
         dispatcher_int8_->setScaleList(scale_list->h_scale_list_[scale_list->p4_offset_],
                                        scale_list->h_scale_list_[scale_list->p4_offset_ + 1],
                                        scale_list->h_scale_list_[scale_list->p4_offset_ + 2]);
-        dispatcher_int8_->setup(S, B, window_num_);
-        dispatcher_int8_->run(
-            q_buf_, trt_attention_mask, trt_relative_position_bias_, window_len_, nullptr, dst_buf_, stream_);
-        invokeRowMajorToCOL32(v_buf_, dst_buf_, batch * window_num_ * window_len_, dim, stream_);
+        dispatcher_int8_->setup(S, B, window_num);
+
+        if (version_ == 2) {
+            invokeNormalizeForFMHA(q_buf_,
+                                   attention_logit_scale,
+                                   B,
+                                   window_len_in_use,
+                                   num_head,
+                                   size_per_head,
+                                   stream_,
+                                   scale_list->h_scale_list_[16 + 1],
+                                   scale_list->h_scale_list_[20 + 1],
+                                   scale_list->h_scale_list_[52 + 3],
+                                   scale_list->h_scale_list_[56 + 3]);
+        }
+
+        dispatcher_int8_->run(q_buf_,
+                              shift_size != 0 ? trt_attention_mask : nullptr,
+                              trt_relative_position_bias,
+                              window_len_in_use,
+                              nullptr,
+                              dst_buf_,
+                              stream_);
+
+        invokeRowMajorToCOL32(v_buf_, dst_buf_, batch * window_num * window_len_in_use, dim, stream_);
 
         cublas_wrapper->Gemm(q_buf_,
                              1,
-                             batch * window_num_ * window_len_,
+                             batch * window_num * window_len_in_use,
                              dim,
                              dim,
                              0,
@@ -377,8 +373,8 @@ void WindowAttentionINT8<T>::forward(std::vector<fastertransformer::Tensor>*    
                                  bias_Q,
                                  K_buf_,
                                  bias_K,
-                                 batch * window_num_,
-                                 window_len_,
+                                 batch * window_num,
+                                 window_len_in_use,
                                  num_head,
                                  size_per_head,
                                  &(scale_list->d_scale_list_[4 + 1]),
@@ -391,8 +387,8 @@ void WindowAttentionINT8<T>::forward(std::vector<fastertransformer::Tensor>*    
         invokeAddVBiasTransform(v_buf_,
                                 V_buf_,
                                 bias_V,
-                                batch * window_num_,
-                                window_len_,
+                                batch * window_num,
+                                window_len_in_use,
                                 num_head,
                                 size_per_head,
                                 &(scale_list->d_scale_list_[4 + 1]),
@@ -400,15 +396,36 @@ void WindowAttentionINT8<T>::forward(std::vector<fastertransformer::Tensor>*    
                                 use_ORDER_COL32_2R_4R4,
                                 stream_);
 
-        int padded_winlen = (window_len_ + 31) / 32 * 32;
+        int padded_winlen = (window_len_in_use + 31) / 32 * 32;
+        if (version_ == 2) {
+            invokeNormalize(q_buf_,
+                            attention_logit_scale,
+                            batch * window_num,
+                            window_len_in_use,
+                            num_head,
+                            size_per_head,
+                            stream_,
+                            scale_list->h_scale_list_[16 + 1],
+                            scale_list->h_scale_list_[52 + 3]);
+            invokeNormalize(k_buf_,
+                            (const T*)nullptr,
+                            batch * window_num,
+                            padded_winlen,
+                            num_head,
+                            size_per_head,
+                            stream_,
+                            scale_list->h_scale_list_[20 + 1],
+                            scale_list->h_scale_list_[56 + 3]);
+        }
+
         cublas_wrapper->Gemm(qk_buf_,
-                             batch * window_num_ * num_head,
-                             window_len_,
+                             batch * window_num * num_head,
+                             window_len_in_use,
                              padded_winlen,
                              size_per_head,
-                             window_len_ * size_per_head,
+                             window_len_in_use * size_per_head,
                              padded_winlen * size_per_head,
-                             window_len_ * padded_winlen,
+                             window_len_in_use * padded_winlen,
                              scale_list->h_scale_list_[scale_list->p3_offset_ + 4],
                              q_buf_,
                              k_buf_);
@@ -420,8 +437,8 @@ void WindowAttentionINT8<T>::forward(std::vector<fastertransformer::Tensor>*    
                                              attention_relative_pos_bias,
                                              batch,
                                              num_head,
-                                             window_num_,
-                                             window_len_,
+                                             window_num,
+                                             window_len_in_use,
                                              scale,
                                              &(scale_list->d_scale_list_[32 + 1]),
                                              &(scale_list->d_scale_list_[28 + 3]),
@@ -435,8 +452,8 @@ void WindowAttentionINT8<T>::forward(std::vector<fastertransformer::Tensor>*    
                                              attention_relative_pos_bias,
                                              batch,
                                              num_head,
-                                             window_num_,
-                                             window_len_,
+                                             window_num,
+                                             window_len_in_use,
                                              scale,
                                              &(scale_list->d_scale_list_[32 + 1]),
                                              &(scale_list->d_scale_list_[28 + 3]),
@@ -444,21 +461,21 @@ void WindowAttentionINT8<T>::forward(std::vector<fastertransformer::Tensor>*    
         }
 
         cublas_wrapper->Gemm(dst_buf_,
-                             batch * window_num_ * num_head,
-                             window_len_,
+                             batch * window_num * num_head,
+                             window_len_in_use,
                              size_per_head,
                              padded_winlen,
-                             window_len_ * padded_winlen,
+                             window_len_in_use * padded_winlen,
                              size_per_head * padded_winlen,
-                             window_len_ * size_per_head,
+                             window_len_in_use * size_per_head,
                              scale_list->h_scale_list_[scale_list->p3_offset_ + 5],
                              qk_buf_,
                              v_buf_);
 
         invokeTransposeCOL32(v_buf_,
                              dst_buf_,
-                             batch * window_num_,
-                             window_len_,
+                             batch * window_num,
+                             window_len_in_use,
                              num_head,
                              size_per_head,
                              &(scale_list->d_scale_list_[36 + 1]),
@@ -467,7 +484,7 @@ void WindowAttentionINT8<T>::forward(std::vector<fastertransformer::Tensor>*    
 
         cublas_wrapper->Gemm(q_buf_,
                              1,
-                             batch * window_num_ * window_len_,
+                             batch * window_num * window_len_in_use,
                              dim,
                              dim,
                              0,
@@ -481,9 +498,9 @@ void WindowAttentionINT8<T>::forward(std::vector<fastertransformer::Tensor>*    
     invokeReverseRollCol32(attention_out,
                            q_buf_,
                            batch,
-                           window_num_,
-                           window_len_,
-                           window_size_,
+                           window_num,
+                           window_len_in_use,
+                           window_size_in_use,
                            input_resolution,
                            input_resolution,
                            dim,

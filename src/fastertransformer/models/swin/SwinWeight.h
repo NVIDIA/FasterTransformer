@@ -26,10 +26,12 @@ template<typename T>
 class SwinTransformerBlockWeight {
 public:
     AttentionWeight<T> attention_weights;
+    const T*           attention_logit_scale = nullptr;  // for Version 2
     FfnWeight<T>       ffn_weights;
     LayerNormWeight<T> attn_layernorm_weights;
     LayerNormWeight<T> ffn_layernorm_weights;
     const T*           attention_relative_pos_bias = nullptr;
+    const T*           trt_relative_position_bias  = nullptr;
 };  // SwinTransformerBlockWeight
 
 template<typename T>
@@ -37,7 +39,8 @@ class SwinTransformerBasicLayerWeight {
 public:
     LayerNormWeight<T>                         merge_layernorm_weights;
     DenseWeight<T>                             merge_linear_weights;
-    const T*                                   attn_mask = nullptr;
+    const T*                                   attn_mask     = nullptr;
+    const T*                                   trt_attn_mask = nullptr;
     std::vector<SwinTransformerBlockWeight<T>> block_weight_list;
 };  // SwinTransformerBasicLayerWeight
 

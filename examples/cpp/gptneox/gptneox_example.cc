@@ -171,7 +171,7 @@ void gptneox_example(const INIReader reader)
     cudaH2Dcpy(d_stop_words, tiled_stop_words.data(), tiled_stop_words.size());
 
     // Read ids of request from file.
-    int              max_input_len = -1;
+    size_t           max_input_len = -1;
     std::vector<int> v_start_lengths;
     std::vector<int> v_start_ids;
     read_start_ids(request_batch_size,
@@ -283,6 +283,14 @@ void gptneox_example(const INIReader reader)
         mpi::bcast(&random_seed, 1, mpi::MPI_TYPE_UNSIGNED_LONG_LONG, 0, mpi::COMM_WORLD);
     }
 
+    AttentionType attention_type = getAttentionType<T>(size_per_head,
+                                                       getSMVersion(),
+                                                       true,   // remove_padding
+                                                       0,      // gpt supports any-seq-length fmha
+                                                       true,   // is_fuse
+                                                       false,  // with_relative_position_bias
+                                                       true);  // causal_mask
+
     GptNeoX<T> gpt = GptNeoX<T>(head_num,
                                 size_per_head,
                                 inter_size,
@@ -307,7 +315,8 @@ void gptneox_example(const INIReader reader)
                                 &cublas_wrapper,
                                 &allocator,
                                 false,
-                                &prop);
+                                &prop,
+                                attention_type);
 
     int* d_output_ids;
     int* d_sequence_lengths;

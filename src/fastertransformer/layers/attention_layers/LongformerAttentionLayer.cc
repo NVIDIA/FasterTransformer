@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -81,10 +81,10 @@ void LongformerAttentionLayer<T>::forward(std::vector<Tensor>* output_tensors, c
     const void* qg                = input_tensors->at(3).data;
     const void* kg                = input_tensors->at(4).data;
     const void* vg                = input_tensors->at(5).data;
-    const void* local_attn_mask   = (const T*)input_tensors->at(6).data;
-    const void* global_attn_mask  = (const T*)input_tensors->at(7).data;
-    const int*  global_idx        = (const int*)input_tensors->at(8).data;
-    const int*  global_token_nums = (const int*)input_tensors->at(9).data;
+    const void* local_attn_mask   = input_tensors->at(6).getPtr<const T>();
+    const void* global_attn_mask  = input_tensors->at(7).getPtr<const T>();
+    const int*  global_idx        = input_tensors->at(8).getPtr<const int>();
+    const int*  global_token_nums = input_tensors->at(9).getPtr<const int>();
 
     void* output = (void*)output_tensors->at(0).data;
 

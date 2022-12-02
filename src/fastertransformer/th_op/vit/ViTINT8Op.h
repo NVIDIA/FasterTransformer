@@ -160,7 +160,7 @@ public:
         }
 
         int               seq_len = (img_size_ / patch_size_) * (img_size_ / patch_size_) + (with_cls_token_ ? 1 : 0);
-        ft::AttentionType attention_type = ft::getAttentionType<T>(head_dim_, sm_, true, seq_len);
+        ft::AttentionType attention_type = ft::getAttentionTypeINT8<T>(head_dim_, sm_, true, seq_len, int8_mode_);
 
         auto vit = new ft::ViTTransformerINT8<T>(max_batch_,
                                                  img_size_,

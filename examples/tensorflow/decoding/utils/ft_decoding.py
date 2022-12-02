@@ -109,7 +109,7 @@ def ft_decoding(memory_tensor,
         cross_key_bias_list.append(cross_key_bias)
         cross_value_bias_list.append(cross_value_bias)
 
-    output_ids, parent_ids, sequence_lengths = decoding_op_module.decoding(
+    output_ids, parent_ids, sequence_lengths, cum_log_probs = decoding_op_module.decoding(
         extended_memory, # 1
         extended_memory_sequence_length, # 2
         [var_dict["transformer/decoder/layer_%d/masked_multi_head/LayerNorm/beta:0" % l] for l in range(decoder_args.num_layer)], # 7
@@ -153,13 +153,15 @@ def ft_decoding(memory_tensor,
         top_p=decoding_args.top_p,
         temperature=1.0,
         len_penalty=0.0,
-        repetition_penalty=1.0)
+        repetition_penalty=1.0,
+        return_cum_log_probs=True
+        )
 
     if decoder_args.beam_width > 1:
         output_ids = tf.transpose(output_ids, [1, 2, 0])
         # TODO(bhsueh) Remove useless outputs
-        return output_ids, sequence_lengths, None, None, None
+        return output_ids, sequence_lengths, cum_log_probs, None, None
     else:
         output_ids = tf.transpose(output_ids, [1, 0])
         
-        return output_ids, sequence_lengths, None, None, None
+        return output_ids, sequence_lengths, cum_log_probs, None, None

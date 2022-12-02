@@ -15,10 +15,10 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/kernels/bfloat16_fallback_kenrels.cuh"
 #include "src/fastertransformer/kernels/decoder_masked_multihead_attention_utils.h"
 #include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
 #include "src/fastertransformer/kernels/unfused_attention_kernels.h"
+#include "src/fastertransformer/utils/cuda_type_utils.cuh"
 #include "src/fastertransformer/utils/cuda_utils.h"
 
 namespace fastertransformer {
@@ -29,24 +29,82 @@ __inline__ __device__ int target_index(int id1, int id2, int id3, int id4, int d
 }
 
 template<typename T>
-__global__ void addQKVBiasTranspose(T* q_out,
-                                    T* k_out,
-                                    T* v_out,
-                                    const T* __restrict q_in,
-                                    const T* __restrict bias_q,
-                                    const T* __restrict k_in,
-                                    const T* __restrict bias_k,
-                                    const T* __restrict v_in,
-                                    const T* __restrict bias_v,
-                                    const int batch_size,
-                                    const int seq_len,
-                                    const int head_num,
-                                    const int size_per_head)
+__global__ void addQKVBiasIA3Transpose(T* q_out,
+                                       T* k_out,
+                                       T* v_out,
+                                       const T* __restrict q_in,
+                                       const T* __restrict bias_q,
+                                       const T* __restrict k_in,
+                                       const T* __restrict bias_k,
+                                       const T* __restrict v_in,
+                                       const T* __restrict bias_v,
+                                       const int* ia3_tasks,
+                                       const T*   ia3_key_weights,
+                                       const T*   ia3_value_weights,
+                                       const int  batch_size,
+                                       const int  seq_len,
+                                       const int  head_num,
+                                       const int  size_per_head)
 {
     const int n        = head_num * size_per_head;
     const int batch_id = blockIdx.x;
     const int word_id  = blockIdx.y;
     const int row_id   = batch_id * seq_len + word_id;
+
+    const bool use_ia3       = ia3_tasks != nullptr;
+    const int  ia3_task      = use_ia3 ? ia3_tasks[batch_id] : 0;
+    const bool use_ia3_key   = use_ia3 && (ia3_key_weights != nullptr);
+    const bool use_ia3_value = use_ia3 && (ia3_value_weights != nullptr);
+
+    for (int col_id = threadIdx.x; col_id < n; col_id += blockDim.x) {
+        const int head_id   = col_id / size_per_head;
+        const int size_id   = col_id % size_per_head;
+        const int target_id = batch_id * (head_num * seq_len * size_per_head) + head_id * seq_len * size_per_head
+                              + word_id * size_per_head + size_id;
+        const int src_id = row_id * n + col_id;
+
+        T q              = ldg(&q_in[src_id]);
+        q_out[target_id] = add(q, ldg(&bias_q[col_id]));
+
+        T k = add(ldg(&k_in[src_id]), ldg(&bias_k[col_id]));
+        if (use_ia3_key) {
+            k = k * ia3_key_weights[ia3_task * n + col_id];
+        }
+        k_out[target_id] = k;
+
+        T v = add(ldg(&v_in[src_id]), ldg(&bias_v[col_id]));
+        if (use_ia3_value) {
+            v = v * ia3_value_weights[ia3_task * n + col_id];
+        }
+        v_out[target_id] = v;
+    }
+}
+
+template<typename T>
+__global__ void QKVIA3Transpose(T* q_out,
+                                T* k_out,
+                                T* v_out,
+                                const T* __restrict q_in,
+                                const T* __restrict k_in,
+                                const T* __restrict v_in,
+                                const int* ia3_tasks,
+                                const T* __restrict ia3_key_weights,
+                                const T* __restrict ia3_value_weights,
+                                const int batch_size,
+                                const int seq_len,
+                                const int head_num,
+                                const int size_per_head)
+{
+    const int n        = head_num * size_per_head;
+    const int batch_id = blockIdx.x;
+    const int word_id  = blockIdx.y;
+    const int row_id   = batch_id * seq_len + word_id;
+
+    const bool use_ia3       = ia3_tasks != nullptr;
+    const int  ia3_task      = use_ia3 ? ia3_tasks[batch_id] : 0;
+    const bool use_ia3_key   = use_ia3 && (ia3_key_weights != nullptr);
+    const bool use_ia3_value = use_ia3 && (ia3_value_weights != nullptr);
+
     for (int col_id = threadIdx.x; col_id < n; col_id += blockDim.x) {
         const int head_id   = col_id / size_per_head;
         const int size_id   = col_id % size_per_head;
@@ -55,60 +113,39 @@ __global__ void addQKVBiasTranspose(T* q_out,
         const int src_id = row_id * n + col_id;
 
         q_out[target_id] = ldg(&q_in[src_id]);
-        q_out[target_id] = add(q_out[target_id], ldg(&bias_q[col_id]));
 
-        k_out[target_id] = ldg(&k_in[src_id]);
-        k_out[target_id] = add(k_out[target_id], ldg(&bias_k[col_id]));
+        T k = ldg(&k_in[src_id]);
+        if (use_ia3_key) {
+            k = k * ia3_key_weights[ia3_task * n + col_id];
+        }
+        k_out[target_id] = k;
 
-        v_out[target_id] = ldg(&v_in[src_id]);
-        v_out[target_id] = add(v_out[target_id], ldg(&bias_v[col_id]));
+        T v = ldg(&v_in[src_id]);
+        if (use_ia3_value) {
+            v = v * ia3_value_weights[ia3_task * n + col_id];
+        }
+        v_out[target_id] = v;
     }
 }
 
 template<typename T>
-__global__ void QKVTranspose(T* q_out,
-                             T* k_out,
-                             T* v_out,
-                             const T* __restrict q_in,
-                             const T* __restrict k_in,
-                             const T* __restrict v_in,
-                             const int batch_size,
-                             const int seq_len,
-                             const int head_num,
-                             const int size_per_head)
-{
-    const int n        = head_num * size_per_head;
-    const int batch_id = blockIdx.x;
-    const int word_id  = blockIdx.y;
-    const int row_id   = batch_id * seq_len + word_id;
-    for (int col_id = threadIdx.x; col_id < n; col_id += blockDim.x) {
-        const int head_id   = col_id / size_per_head;
-        const int size_id   = col_id % size_per_head;
-        const int target_id = batch_id * (head_num * seq_len * size_per_head) + head_id * seq_len * size_per_head
-                              + word_id * size_per_head + size_id;
-        const int src_id = row_id * n + col_id;
-
-        q_out[target_id] = ldg(&q_in[src_id]);
-        k_out[target_id] = ldg(&k_in[src_id]);
-        v_out[target_id] = ldg(&v_in[src_id]);
-    }
-}
-
-template<typename T>
-void invokeAddQKVBiasTranspose(T*           q_buf,
-                               T*           k_buf,
-                               T*           v_buf,
-                               T*           Q,
-                               const T*     bias_Q,
-                               T*           K,
-                               const T*     bias_K,
-                               T*           V,
-                               const T*     bias_V,
-                               const int    batch_size,
-                               const int    seq_len,
-                               const int    head_num,
-                               const int    size_per_head,
-                               cudaStream_t stream)
+void invokeAddQKVBiasIA3Transpose(T*           q_buf,
+                                  T*           k_buf,
+                                  T*           v_buf,
+                                  T*           Q,
+                                  const T*     bias_Q,
+                                  T*           K,
+                                  const T*     bias_K,
+                                  T*           V,
+                                  const T*     bias_V,
+                                  const int    batch_size,
+                                  const int    seq_len,
+                                  const int    head_num,
+                                  const int    size_per_head,
+                                  const int*   ia3_tasks,
+                                  const T*     ia3_key_weights,
+                                  const T*     ia3_value_weights,
+                                  cudaStream_t stream)
 {
     const int k = head_num * size_per_head;
     dim3      grid(batch_size, seq_len);
@@ -116,12 +153,37 @@ void invokeAddQKVBiasTranspose(T*           q_buf,
     if (sizeof(T) == 4 || k % 2 != 0) {
         dim3 block(min(k, 512));
         if (is_add_bias) {
-            addQKVBiasTranspose<T><<<grid, block, 0, stream>>>(
-                q_buf, k_buf, v_buf, Q, bias_Q, K, bias_K, V, bias_V, batch_size, seq_len, head_num, size_per_head);
+            addQKVBiasIA3Transpose<T><<<grid, block, 0, stream>>>(q_buf,
+                                                                  k_buf,
+                                                                  v_buf,
+                                                                  Q,
+                                                                  bias_Q,
+                                                                  K,
+                                                                  bias_K,
+                                                                  V,
+                                                                  bias_V,
+                                                                  ia3_tasks,
+                                                                  ia3_key_weights,
+                                                                  ia3_value_weights,
+                                                                  batch_size,
+                                                                  seq_len,
+                                                                  head_num,
+                                                                  size_per_head);
         }
         else {
-            QKVTranspose<T><<<grid, block, 0, stream>>>(
-                q_buf, k_buf, v_buf, Q, K, V, batch_size, seq_len, head_num, size_per_head);
+            QKVIA3Transpose<T><<<grid, block, 0, stream>>>(q_buf,
+                                                           k_buf,
+                                                           v_buf,
+                                                           Q,
+                                                           K,
+                                                           V,
+                                                           ia3_tasks,
+                                                           ia3_key_weights,
+                                                           ia3_value_weights,
+                                                           batch_size,
+                                                           seq_len,
+                                                           head_num,
+                                                           size_per_head);
         }
         sync_check_cuda_error();
     }
@@ -129,109 +191,117 @@ void invokeAddQKVBiasTranspose(T*           q_buf,
         using T2 = typename TypeConverter<T>::Type;  // fp16 to half2, bf16 to bf162
         dim3 block(min(k / 2, 512));
         if (is_add_bias) {
-            addQKVBiasTranspose<T2><<<grid, block, 0, stream>>>((T2*)q_buf,
-                                                                (T2*)k_buf,
-                                                                (T2*)v_buf,
-                                                                (const T2*)Q,
-                                                                (const T2*)bias_Q,
-                                                                (const T2*)K,
-                                                                (const T2*)bias_K,
-                                                                (const T2*)V,
-                                                                (const T2*)bias_V,
-                                                                batch_size,
-                                                                seq_len,
-                                                                head_num,
-                                                                size_per_head / 2);
+            addQKVBiasIA3Transpose<T2><<<grid, block, 0, stream>>>((T2*)q_buf,
+                                                                   (T2*)k_buf,
+                                                                   (T2*)v_buf,
+                                                                   (const T2*)Q,
+                                                                   (const T2*)bias_Q,
+                                                                   (const T2*)K,
+                                                                   (const T2*)bias_K,
+                                                                   (const T2*)V,
+                                                                   (const T2*)bias_V,
+                                                                   ia3_tasks,
+                                                                   (const T2*)ia3_key_weights,
+                                                                   (const T2*)ia3_value_weights,
+                                                                   batch_size,
+                                                                   seq_len,
+                                                                   head_num,
+                                                                   size_per_head / 2);
         }
         else {
-            QKVTranspose<T2><<<grid, block, 0, stream>>>((T2*)q_buf,
-                                                         (T2*)k_buf,
-                                                         (T2*)v_buf,
-                                                         (const T2*)Q,
-                                                         (const T2*)K,
-                                                         (const T2*)V,
-                                                         batch_size,
-                                                         seq_len,
-                                                         head_num,
-                                                         size_per_head / 2);
+            QKVIA3Transpose<T2><<<grid, block, 0, stream>>>((T2*)q_buf,
+                                                            (T2*)k_buf,
+                                                            (T2*)v_buf,
+                                                            (const T2*)Q,
+                                                            (const T2*)K,
+                                                            (const T2*)V,
+                                                            ia3_tasks,
+                                                            (const T2*)ia3_key_weights,
+                                                            (const T2*)ia3_value_weights,
+                                                            batch_size,
+                                                            seq_len,
+                                                            head_num,
+                                                            size_per_head / 2);
         }
         sync_check_cuda_error();
     }
 }
 
-template void invokeAddQKVBiasTranspose(float*       q_buf,
-                                        float*       k_buf,
-                                        float*       v_buf,
-                                        float*       Q,
-                                        const float* bias_Q,
-                                        float*       K,
-                                        const float* bias_K,
-                                        float*       V,
-                                        const float* bias_V,
-                                        const int    batch_size,
-                                        const int    seq_len,
-                                        const int    head_num,
-                                        const int    size_per_head,
-                                        cudaStream_t stream);
-
-template void invokeAddQKVBiasTranspose(half*        q_buf,
-                                        half*        k_buf,
-                                        half*        v_buf,
-                                        half*        Q,
-                                        const half*  bias_Q,
-                                        half*        K,
-                                        const half*  bias_K,
-                                        half*        V,
-                                        const half*  bias_V,
-                                        const int    batch_size,
-                                        const int    seq_len,
-                                        const int    head_num,
-                                        const int    size_per_head,
-                                        cudaStream_t stream);
+#define INSTANTIATEADDQKVBIASIA3TRANSPOSE(T)                                                                           \
+    template void invokeAddQKVBiasIA3Transpose(T*           q_buf,                                                     \
+                                               T*           k_buf,                                                     \
+                                               T*           v_buf,                                                     \
+                                               T*           Q,                                                         \
+                                               const T*     bias_Q,                                                    \
+                                               T*           K,                                                         \
+                                               const T*     bias_K,                                                    \
+                                               T*           V,                                                         \
+                                               const T*     bias_V,                                                    \
+                                               const int    batch_size,                                                \
+                                               const int    seq_len,                                                   \
+                                               const int    head_num,                                                  \
+                                               const int    size_per_head,                                             \
+                                               const int*   ia3_tasks,                                                 \
+                                               const T*     ia3_key_weights,                                           \
+                                               const T*     ia3_value_weights,                                         \
+                                               cudaStream_t stream)
+INSTANTIATEADDQKVBIASIA3TRANSPOSE(float);
+INSTANTIATEADDQKVBIASIA3TRANSPOSE(half);
 #ifdef ENABLE_BF16
-template void invokeAddQKVBiasTranspose(__nv_bfloat16*       q_buf,
-                                        __nv_bfloat16*       k_buf,
-                                        __nv_bfloat16*       v_buf,
-                                        __nv_bfloat16*       Q,
-                                        const __nv_bfloat16* bias_Q,
-                                        __nv_bfloat16*       K,
-                                        const __nv_bfloat16* bias_K,
-                                        __nv_bfloat16*       V,
-                                        const __nv_bfloat16* bias_V,
-                                        const int            batch_size,
-                                        const int            seq_len,
-                                        const int            head_num,
-                                        const int            size_per_head,
-                                        cudaStream_t         stream);
+INSTANTIATEADDQKVBIASIA3TRANSPOSE(__nv_bfloat16);
 #endif
+#undef INSTANTIATEADDQKVBIASTRANSPOSE
 
-// TODO(bhsueh) Rename the softmax_kernel_v4 to softmax_kernel
-template<int ITEMS_PER_THREAD, typename T, typename T_IN>
-__global__ void softmax_kernel_v4(T*          qk_buf_,
-                                  const T_IN* qk_buf_src,  // shape [batch_size, head_num, seq_len_1, seq_len_2]
-                                  const T*    attr_mask,   // shape [batch_size, seq_len_1, seq_len_2]
-                                  const int   batch_size,
-                                  const int   head_num,
-                                  const int   seq_len_1,
-                                  const int   seq_len_2,
-                                  const T     scalar)
+template<typename T, typename T_IN, int ITEMS_PER_THREAD>
+__global__ void softmax_kernel(T*          attn_score,
+                               const T_IN* qk,
+                               const T*    attn_mask,
+                               const T*    linear_bias_slopes,
+                               const int   batch_size,
+                               const int   head_num,
+                               const int   q_length,
+                               const int   k_length,
+                               const float qk_scale)
 {
-    for (int seq_id = blockIdx.x; seq_id < seq_len_1; seq_id += gridDim.x) {
-        float            data[ITEMS_PER_THREAD];
-        int              qk_offset;
-        __shared__ float s_mean, s_max;
-        float            local_max = -1e20f;
-        for (int i = 0; blockDim.x * i + threadIdx.x < seq_len_2; i++) {
-            qk_offset =
-                ((blockIdx.y * head_num + blockIdx.z) * seq_len_1 + seq_id) * seq_len_2 + blockDim.x * i + threadIdx.x;
-            int mask_offset = (blockIdx.y * seq_len_1 + seq_id) * seq_len_2 + blockDim.x * i + threadIdx.x;
+    // attn_score, [batch_size, num_heads, q_length, k_length]
+    // qk, [batch_size, num_heads, q_length, k_length]
+    // attn_mask, [batch_size, q_length, k_length]
+    // linear_bias_slopes, [num_heads]
 
-            float qk       = static_cast<float>(qk_buf_src[qk_offset]);
-            float mask_val = static_cast<float>(ldg(&attr_mask[mask_offset]));
+    const int bi = blockIdx.y;  // Batch index.
+    const int hi = blockIdx.z;  // Head index.
 
-            mask_val = (1.0f - mask_val) * -10000.0f;
+    __shared__ float s_mean, s_max;
 
-            data[i]   = qk * static_cast<float>(scalar) + mask_val;
+    const float linear_bias_slope = linear_bias_slopes != nullptr ? (float)linear_bias_slopes[hi] : 0.0f;
+
+    // Loop along with Q dimension.
+    for (int qi = blockIdx.x; qi < q_length; qi += gridDim.x) {
+
+        float data[ITEMS_PER_THREAD];
+        int   qk_offset;
+        float local_max = -1e20f;
+
+        // Loop along with K dimension.
+        for (int i = 0; blockDim.x * i + threadIdx.x < k_length; i++) {
+            int ki    = blockDim.x * i + threadIdx.x;  // Index of K dimension.
+            qk_offset = ((bi * head_num + hi) * q_length + qi) * k_length + ki;
+
+            float qk_val  = static_cast<float>(qk[qk_offset]);
+            float qk_bias = 0.0f;
+
+            if (linear_bias_slopes != nullptr) {
+                // We don't handle the upper diagonal (ki > qi) separately, whose values
+                // are negligible due to the negative infinity mask. And it matches with
+                // the HF's implementation.
+                qk_bias += static_cast<float>(linear_bias_slope * (ki - qi));
+            }
+
+            int   mask_offset = (bi * q_length + qi) * k_length + ki;
+            float mask_val    = static_cast<float>(ldg(&attn_mask[mask_offset]));
+            qk_bias += (1.0f - mask_val) * -10000.0f;
+
+            data[i]   = qk_scale * qk_val + qk_bias;
             local_max = fmax(local_max, data[i]);
         }
 
@@ -242,10 +312,11 @@ __global__ void softmax_kernel_v4(T*          qk_buf_,
         __syncthreads();
 
         float local_sum = 0;
-        for (int i = 0; blockDim.x * i + threadIdx.x < seq_len_2; i++) {
+        for (int i = 0; blockDim.x * i + threadIdx.x < k_length; i++) {
             data[i] = __expf(data[i] - s_max);
             local_sum += data[i];
         }
+
         float sum_val = blockDim.x <= 32 ? warpReduceSum(local_sum) : blockReduceSum<float>(local_sum);
         if (threadIdx.x == 0) {
             s_mean = sum_val + 1e-6f;
@@ -253,43 +324,83 @@ __global__ void softmax_kernel_v4(T*          qk_buf_,
         }
         __syncthreads();
 
-        for (int i = 0; blockDim.x * i + threadIdx.x < seq_len_2; i++) {
-            qk_offset =
-                ((blockIdx.y * head_num + blockIdx.z) * seq_len_1 + seq_id) * seq_len_2 + blockDim.x * i + threadIdx.x;
-            qk_buf_[qk_offset] = (T)(data[i] * s_mean);
+        for (int i = 0; blockDim.x * i + threadIdx.x < k_length; i++) {
+            qk_offset             = ((bi * head_num + hi) * q_length + qi) * k_length + blockDim.x * i + threadIdx.x;
+            attn_score[qk_offset] = (T)(data[i] * s_mean);
         }
     }
 }
 
 template<typename T, int ITEMS_PER_THREAD>
-__global__ void softmax_kernel_v4_half2(T*        qk_buf_,
-                                        const T*  attr_mask,
-                                        const int batch_size,
-                                        const int head_num,
-                                        const int seq_len_1,
-                                        const int seq_len_2,
-                                        const T   scalar)
+__global__ void softmax_kernel_h2(T*        attn_score,
+                                  const T*  qk_buf,
+                                  const T*  attn_mask,
+                                  const T*  linear_bias_slopes,
+                                  const int batch_size,
+                                  const int head_num,
+                                  const int q_length,
+                                  const int k_length,
+                                  const T   qk_scale)
 {
-    using T2                  = typename TypeConverter<T>::Type;
-    T2*       qk_buf_half2    = (T2*)qk_buf_;
-    const T2* attr_mask_half2 = (const T2*)attr_mask;
+    // attn_score, [batch_size, num_heads, q_length, k_length]
+    // qk, [batch_size, num_heads, q_length, k_length]
+    // attn_mask, [batch_size, q_length, k_length]
+    // linear_bias_slopes, [num_heads]
 
-    for (int seq_id = blockIdx.x; seq_id < seq_len_1; seq_id += gridDim.x) {
-        T2               data[ITEMS_PER_THREAD];
-        int              qk_offset;
-        __shared__ float s_mean, s_max;
-        float            local_max = -1e20f;
-        for (int i = 0; blockDim.x * i + threadIdx.x < (seq_len_2 / 2) && i < ITEMS_PER_THREAD; i++) {
-            qk_offset = ((blockIdx.y * head_num + blockIdx.z) * seq_len_1 + seq_id) * (seq_len_2 / 2) + blockDim.x * i
-                        + threadIdx.x;
-            int mask_offset = (blockIdx.y * seq_len_1 + seq_id) * (seq_len_2 / 2) + blockDim.x * i + threadIdx.x;
+    using T2 = typename TypeConverter<T>::Type;
 
-            T2 qk       = qk_buf_half2[qk_offset];
-            T2 mask_val = ldg(&attr_mask_half2[mask_offset]);
-            mask_val    = hmul2<T2>(hsub2<T2>(float2type2<T2>(1.0f), mask_val), float2type2<T2>(-10000.0f));
+    T2*       attn_score_h2 = reinterpret_cast<T2*>(attn_score);
+    const T2* qk_buf_h2     = reinterpret_cast<const T2*>(qk_buf);
+    const T2* attn_mask_h2  = reinterpret_cast<const T2*>(attn_mask);
 
-            data[i] = hadd2<T2>(hmul2<T2>(qk, type2type2<T, T2>(scalar)), mask_val);
+    const int bi = blockIdx.y;  // Batch index
+    const int hi = blockIdx.z;  // Head index.
 
+    __shared__ float s_mean, s_max;
+
+    // Constant values that will be used repeately in the q/k loop.
+    const T2 ONE       = cuda_cast<T2>(1.0f);
+    const T2 ZERO      = cuda_cast<T2>(0.0f);
+    const T2 NEG_INFTY = cuda_cast<T2>(-10000.0f);
+
+    // The normalization factor of QK.
+    const T2 qk_scale_h2 = cuda_cast<T2>(qk_scale);
+    // The slope of a linear position bias of the current attention head.
+    const T2 linear_bias_slope = linear_bias_slopes != nullptr ? cuda_cast<T2>(linear_bias_slopes[hi]) : ZERO;
+
+    // Loop over q dimension.
+    for (int qi = blockIdx.x; qi < q_length; qi += gridDim.x) {
+        T2    data[ITEMS_PER_THREAD];
+        int   qk_offset;
+        float local_max = -1e20f;
+
+        // Loop over k dimension.
+        for (int i = 0; blockDim.x * i + threadIdx.x < (k_length / 2) && i < ITEMS_PER_THREAD; i++) {
+            // The half of the index of k dimension. We will use the elements at {2 * ki, 2 * ki + 1}.
+            int ki          = blockDim.x * i + threadIdx.x;
+            qk_offset       = ((bi * head_num + hi) * q_length + qi) * (k_length / 2) + ki;
+            int mask_offset = (bi * q_length + qi) * (k_length / 2) + ki;
+
+            // The value of QK^T matrix at (qi, ki).
+            T2 qk = qk_buf_h2[qk_offset];
+            // The bias value to the position (qi, ki) including both mask and positional bias.
+            T2 qk_bias = ZERO;
+
+            if (linear_bias_slopes != nullptr) {
+                // The position bias depends on the distance between qi/ki and is zero if qi >= 2*ki
+                // or qi >= 2*ki+1. For T2 vectorization, we should handle every two elements along
+                // with k-dim simultaneously. To do this, we check qi / 2 > ki at ones instead of
+                // qi >= 2*ki or 2*ki+1. It works because an diagonal element for an odd qi will be
+                // zero due to slope * (qi - 2*ki+1) = 0. Thus, we don't handle the upper diagonal
+                // separately, whose values are negligible due to the negative infinity mask.
+                T2 dist(2.0f * ki - qi, 2.0f * ki + 1 - qi);
+                qk_bias = hadd2<T2>(qk_bias, hmul2<T2>(linear_bias_slope, dist));
+            }
+
+            T2 mask_val = ldg(&attn_mask_h2[mask_offset]);
+            qk_bias     = hadd2<T2>(qk_bias, hmul2<T2>(hsub2<T2>(ONE, mask_val), NEG_INFTY));
+
+            data[i]   = hadd2<T2>(hmul2<T2>(qk, qk_scale_h2), qk_bias);
             local_max = fmax(local_max, fmax((float)data[i].x, (float)data[i].y));
         }
 
@@ -299,9 +410,9 @@ __global__ void softmax_kernel_v4_half2(T*        qk_buf_,
         }
         __syncthreads();
 
-        float local_sum = 0;
-        for (int i = 0; blockDim.x * i + threadIdx.x < (seq_len_2 / 2) && i < ITEMS_PER_THREAD; i++) {
-            data[i] = hexp2<T2>(hsub2<T2>(data[i], float2type2<T2>(s_max)));
+        float local_sum = 0.0f;
+        for (int i = 0; blockDim.x * i + threadIdx.x < (k_length / 2) && i < ITEMS_PER_THREAD; i++) {
+            data[i] = hexp2<T2>(hsub2<T2>(data[i], cuda_cast<T2>(s_max)));
             local_sum += (float)(data[i].x + data[i].y);
         }
 
@@ -313,373 +424,339 @@ __global__ void softmax_kernel_v4_half2(T*        qk_buf_,
         }
         __syncthreads();
 
-        for (int i = 0; blockDim.x * i + threadIdx.x < (seq_len_2 / 2) && i < ITEMS_PER_THREAD; i++) {
-            qk_offset = ((blockIdx.y * head_num + blockIdx.z) * seq_len_1 + seq_id) * (seq_len_2 / 2) + blockDim.x * i
-                        + threadIdx.x;
-            qk_buf_half2[qk_offset] = hmul2<T2>(data[i], float2type2<T2>(s_mean));
+        for (int i = 0; blockDim.x * i + threadIdx.x < (k_length / 2) && i < ITEMS_PER_THREAD; i++) {
+            qk_offset = ((bi * head_num + hi) * q_length + qi) * (k_length / 2) + blockDim.x * i + threadIdx.x;
+            attn_score_h2[qk_offset] = hmul2<T2>(data[i], cuda_cast<T2>(s_mean));
         }
     }
 }
 
-template<typename T, int ITEMS_PER_THREAD, int NUM>
-__global__ void softmax_kernel_v5_half2(T*        qk_buf_,
-                                        const T*  attr_mask,
-                                        const int batch_size,
-                                        const int head_num,
-                                        const int seq_len_1,
-                                        const int seq_len_2,
-                                        const T   scalar)
+template<typename T, int K_ITEMS_PER_THREAD, int Q_ITEMS_PER_THREAD>
+__global__ void softmax_kernel_h2_v2(T*        attn_score,
+                                     const T*  qk_buf,
+                                     const T*  attn_mask,
+                                     const T*  linear_bias_slopes,
+                                     const int batch_size,
+                                     const int head_num,
+                                     const int q_length,
+                                     const int k_length,
+                                     const T   scalar)
 {
-    using T2                  = typename TypeConverter<T>::Type;
-    T2*       qk_buf_half2    = (T2*)qk_buf_;
-    const T2* attr_mask_half2 = (const T2*)attr_mask;
+    // attn_score, [batch_size, num_heads, q_length, k_length]
+    // qk, [batch_size, num_heads, q_length, k_length]
+    // attn_mask, [batch_size, q_length, k_length]
+    // linear_bias_slopes, [num_heads]
 
-    for (int seq_id = blockIdx.x; seq_id < seq_len_1; seq_id += gridDim.x * NUM) {
-        T2 data[NUM][ITEMS_PER_THREAD];
+    using T2 = typename TypeConverter<T>::Type;
 
-        int qk_offset[NUM];
+    // QK^T matrix of shape (batch_size, head_num, q_length, k_length / 2)
+    T2*       attn_score_h2 = reinterpret_cast<T2*>(attn_score);
+    const T2* qk_buf_h2     = reinterpret_cast<const T2*>(qk_buf);
+    const T2* attn_mask_h2  = reinterpret_cast<const T2*>(attn_mask);
 
-        __shared__ float s_sum[NUM], s_max[NUM];
-        float            local_max[NUM];
+    const int bi = blockIdx.y;  // Batch index
+    const int hi = blockIdx.z;  // Head index.
+
+    // Constant values that will be used repeately in the q/k loop.
+    const T2 ONE       = cuda_cast<T2>(1.0f);
+    const T2 ZERO      = cuda_cast<T2>(0.0f);
+    const T2 NEG_INFTY = cuda_cast<T2>(-10000.0f);
+
+    // The normalization factor of QK.
+    const T2 qk_scale = cuda_cast<T2>(scalar);
+    // The slope of a linear position bias of the current attention head.
+    const T2 linear_bias_slope = linear_bias_slopes != nullptr ? cuda_cast<T2>(linear_bias_slopes[hi]) : ZERO;
+
+    __shared__ float s_sum[Q_ITEMS_PER_THREAD], s_max[Q_ITEMS_PER_THREAD];
+
+    // Loop over q dimension.
+    for (int qi = blockIdx.x; qi < q_length; qi += gridDim.x * Q_ITEMS_PER_THREAD) {
+        T2 data[Q_ITEMS_PER_THREAD][K_ITEMS_PER_THREAD];
+
+        int qk_offset[Q_ITEMS_PER_THREAD];
+
+        float local_max[Q_ITEMS_PER_THREAD];
 #pragma unroll
-        for (int j = 0; j < NUM; j++) {
+        for (int j = 0; j < Q_ITEMS_PER_THREAD; j++) {
             local_max[j] = -1e20f;
         }
 
-        const int MAX_NUM = min((seq_len_1 - seq_id + gridDim.x - 1) / gridDim.x, NUM);
-        for (int i = 0; blockDim.x * i + threadIdx.x < (seq_len_2 / 2) && i < ITEMS_PER_THREAD; i++) {
-            int mask_offset[NUM];
+        // Loop over k dimension.
+        const int Q_ITEMS = min((q_length - qi + gridDim.x - 1) / gridDim.x, Q_ITEMS_PER_THREAD);
+        for (int i = 0; blockDim.x * i + threadIdx.x < k_length / 2 && i < K_ITEMS_PER_THREAD; ++i) {
+            // The half of the index of k dimension. We will use the elements at {2 * ki, 2 * ki + 1}.
+            int ki = blockDim.x * i + threadIdx.x;
+
+            int mask_offset[Q_ITEMS_PER_THREAD];
 #pragma unroll
-            for (int j = 0; j < MAX_NUM; j++) {
-                qk_offset[j] =
-                    ((blockIdx.y * head_num + blockIdx.z) * seq_len_1 + seq_id + j * gridDim.x) * (seq_len_2 / 2)
-                    + blockDim.x * i + threadIdx.x;
-                mask_offset[j] =
-                    (blockIdx.y * seq_len_1 + seq_id + j * gridDim.x) * (seq_len_2 / 2) + blockDim.x * i + threadIdx.x;
+            for (int j = 0; j < Q_ITEMS; j++) {
+                qk_offset[j]   = ((bi * head_num + hi) * q_length + qi + j * gridDim.x) * (k_length / 2) + ki;
+                mask_offset[j] = (bi * q_length + qi + j * gridDim.x) * (k_length / 2) + ki;
             }
 
-            T2 mask_val[NUM];
+            T2 mask_val[Q_ITEMS_PER_THREAD];
 #pragma unroll
-            for (int j = 0; j < MAX_NUM; j++) {
-                mask_val[j] = ldg(&attr_mask_half2[mask_offset[j]]);
+            for (int j = 0; j < Q_ITEMS; j++) {
+                mask_val[j] = ldg(&attn_mask_h2[mask_offset[j]]);
             }
 
-            T2 qk[NUM];
+            T2 qk[Q_ITEMS_PER_THREAD];
 #pragma unroll
-            for (int j = 0; j < MAX_NUM; j++) {
-                qk[j] = qk_buf_half2[qk_offset[j]];
+            for (int j = 0; j < Q_ITEMS; j++) {
+                qk[j] = qk_buf_h2[qk_offset[j]];
+            }
+
+            T2 pos_bias[Q_ITEMS_PER_THREAD];
+            if (linear_bias_slopes != nullptr) {
+#pragma unroll
+                for (int j = 0; j < Q_ITEMS; j++) {
+                    // The position bias depends on the distance between qi/ki and is zero if qi >= 2*ki
+                    // or qi >= 2*ki+1. For T2 vectorization, we should handle every two elements along
+                    // with k-dim simultaneously. To do this, we check qi / 2 > ki at ones instead of
+                    // qi >= 2*ki or 2*ki+1. It works because an diagonal element for an odd qi will be
+                    // zero due to slope * (qi - 2*ki+1) = 0. Thus, we don't handle the upper diagonal
+                    // separately, whose values are negligible due to the negative infinity mask.
+                    int qidx = qi + j * gridDim.x;
+                    T2  dist(2.0f * ki - qidx, 2.0f * ki + 1 - qidx);
+                    pos_bias[j] = hmul2<T2>(linear_bias_slope, dist);
+                }
+            }
+#pragma unroll
+            for (int j = 0; j < Q_ITEMS; j++) {
+                mask_val[j] = hmul2<T2>(hsub2<T2>(ONE, mask_val[j]), NEG_INFTY);
             }
 
 #pragma unroll
-            for (int j = 0; j < MAX_NUM; j++) {
-                mask_val[j] = hmul2<T2>(hsub2<T2>(float2type2<T2>(1.0f), mask_val[j]), float2type2<T2>(-10000.0f));
-            }
-
-#pragma unroll
-            for (int j = 0; j < MAX_NUM; j++) {
-                data[j][i]   = hadd2<T2>(hmul2<T2>(qk[j], type2type2<T, T2>(scalar)), mask_val[j]);
+            for (int j = 0; j < Q_ITEMS; j++) {
+                T2 val = hadd2<T2>(hmul2<T2>(qk_scale, qk[j]), mask_val[j]);
+                if (linear_bias_slopes != nullptr) {
+                    val = hadd2<T2>(val, pos_bias[j]);
+                }
+                data[j][i]   = val;
                 local_max[j] = fmax(local_max[j], fmax((float)data[j][i].x, (float)data[j][i].y));
             }
         }
 
         if (blockDim.x <= 32) {
-            warpReduceMaxV2<float, NUM>(local_max);
+            warpReduceMaxV2<float, Q_ITEMS_PER_THREAD>(local_max);
         }
         else {
-            blockReduceMaxV2<float, NUM>(local_max);
+            blockReduceMaxV2<float, Q_ITEMS_PER_THREAD>(local_max);
         }
 
         if (threadIdx.x == 0) {
 #pragma unroll
-            for (int j = 0; j < NUM; j++) {
+            for (int j = 0; j < Q_ITEMS_PER_THREAD; j++) {
                 s_max[j] = local_max[j];
             }
         }
         __syncthreads();
 
-        float local_sum[NUM];
+        float local_sum[Q_ITEMS_PER_THREAD];
 #pragma unroll
-        for (int j = 0; j < NUM; j++) {
+        for (int j = 0; j < Q_ITEMS_PER_THREAD; j++) {
             local_sum[j] = {0.f};
         }
 
-        for (int i = 0; blockDim.x * i + threadIdx.x < (seq_len_2 / 2) && i < ITEMS_PER_THREAD; i++) {
+        for (int i = 0; blockDim.x * i + threadIdx.x < k_length / 2 && i < K_ITEMS_PER_THREAD; ++i) {
 #pragma unroll
-            for (int j = 0; j < MAX_NUM; j++) {
-                data[j][i] = hexp2<T2>(hsub2<T2>(data[j][i], float2type2<T2>(s_max[j])));
+            for (int j = 0; j < Q_ITEMS; ++j) {
+                data[j][i] = hexp2<T2>(hsub2<T2>(data[j][i], cuda_cast<T2>(s_max[j])));
             }
 
 #pragma unroll
-            for (int j = 0; j < MAX_NUM; j++) {
+            for (int j = 0; j < Q_ITEMS; j++) {
                 local_sum[j] += (float)(data[j][i].x + data[j][i].y);
             }
         }
 
         if (blockDim.x <= 32) {
-            warpReduceSumV2<float, NUM>(local_sum);
+            warpReduceSumV2<float, Q_ITEMS_PER_THREAD>(local_sum);
         }
         else {
-            blockReduceSumV2<float, NUM>(local_sum);
+            blockReduceSumV2<float, Q_ITEMS_PER_THREAD>(local_sum);
         }
 
         if (threadIdx.x == 0) {
 #pragma unroll
-            for (int j = 0; j < NUM; j++) {
+            for (int j = 0; j < Q_ITEMS_PER_THREAD; j++) {
                 s_sum[j] = __fdividef(1.0f, local_sum[j] + 1e-6f);
             }
         }
         __syncthreads();
 
-        for (int i = 0; blockDim.x * i + threadIdx.x < (seq_len_2 / 2) && i < ITEMS_PER_THREAD; i++) {
+        for (int i = 0; blockDim.x * i + threadIdx.x < k_length / 2 && i < K_ITEMS_PER_THREAD; ++i) {
 #pragma unroll
-            for (int j = 0; j < MAX_NUM; j++) {
-                qk_offset[j] =
-                    ((blockIdx.y * head_num + blockIdx.z) * seq_len_1 + seq_id + j * gridDim.x) * (seq_len_2 / 2)
-                    + blockDim.x * i + threadIdx.x;
+            for (int j = 0; j < Q_ITEMS; j++) {
+                qk_offset[j] = ((bi * head_num + hi) * q_length + qi + j * gridDim.x) * (k_length / 2) + blockDim.x * i
+                               + threadIdx.x;
             }
 
 #pragma unroll
-            for (int j = 0; j < MAX_NUM; j++) {
-                qk_buf_half2[qk_offset[j]] = hmul2<T2>(data[j][i], float2type2<T2>(s_sum[j]));
+            for (int j = 0; j < Q_ITEMS; j++) {
+                attn_score_h2[qk_offset[j]] = hmul2<T2>(data[j][i], cuda_cast<T2>(s_sum[j]));
             }
         }
     }
 }
 
-#define SOFTMAX_KERNEL(ITEMS_PER_THREAD)                                                                               \
+#define LAUNCH_MAKSED_SOFTMAX_(T_, ITEMS_PER_THREAD)                                                                   \
     block.x /= ITEMS_PER_THREAD;                                                                                       \
     assert(block.x <= 1024);                                                                                           \
     if (is_half2) {                                                                                                    \
         if (grid.x % 4 == 0) {                                                                                         \
             grid.x /= 4;                                                                                               \
-            softmax_kernel_v5_half2<half, ITEMS_PER_THREAD, 4><<<grid, block, 0, stream>>>((half*)buffer,              \
-                                                                                           (const half*)attr_mask,     \
-                                                                                           batch_size,                 \
-                                                                                           head_num,                   \
-                                                                                           seq_len_1,                  \
-                                                                                           seq_len_2,                  \
-                                                                                           (const half)scalar);        \
+            softmax_kernel_h2_v2<T_, ITEMS_PER_THREAD, 4>                                                              \
+                <<<grid, block, 0, stream>>>((T_*)param.attention_score,                                               \
+                                             (const T_*)param.qk,                                                      \
+                                             (const T_*)param.attention_mask,                                          \
+                                             (const T_*)param.linear_bias_slopes,                                      \
+                                             param.batch_size,                                                         \
+                                             param.num_heads,                                                          \
+                                             param.q_length,                                                           \
+                                             param.k_length,                                                           \
+                                             (const T_)param.qk_scale);                                                \
         }                                                                                                              \
         else {                                                                                                         \
-            softmax_kernel_v4_half2<half, ITEMS_PER_THREAD><<<grid, block, 0, stream>>>((half*)buffer,                 \
-                                                                                        (const half*)attr_mask,        \
-                                                                                        batch_size,                    \
-                                                                                        head_num,                      \
-                                                                                        seq_len_1,                     \
-                                                                                        seq_len_2,                     \
-                                                                                        (const half)scalar);           \
+            softmax_kernel_h2<T_, ITEMS_PER_THREAD><<<grid, block, 0, stream>>>((T_*)param.attention_score,            \
+                                                                                (const T_*)param.qk,                   \
+                                                                                (const T_*)param.attention_mask,       \
+                                                                                (const T_*)param.linear_bias_slopes,   \
+                                                                                param.batch_size,                      \
+                                                                                param.num_heads,                       \
+                                                                                param.q_length,                        \
+                                                                                param.k_length,                        \
+                                                                                (const T_)param.qk_scale);             \
         }                                                                                                              \
     }                                                                                                                  \
     else {                                                                                                             \
-        softmax_kernel_v4<ITEMS_PER_THREAD, T, T_IN><<<grid, block, 0, stream>>>(                                      \
-            buffer, buffer_src, attr_mask, batch_size, head_num, seq_len_1, seq_len_2, scalar);                        \
+        softmax_kernel<T, T_IN, ITEMS_PER_THREAD><<<grid, block, 0, stream>>>(param.attention_score,                   \
+                                                                              param.qk,                                \
+                                                                              param.attention_mask,                    \
+                                                                              param.linear_bias_slopes,                \
+                                                                              param.batch_size,                        \
+                                                                              param.num_heads,                         \
+                                                                              param.q_length,                          \
+                                                                              param.k_length,                          \
+                                                                              param.qk_scale);                         \
     }
 
-#ifdef ENABLE_BF16
-#define SOFTMAX_KERNEL_BF16(ITEMS_PER_THREAD)                                                                          \
-    block.x /= ITEMS_PER_THREAD;                                                                                       \
-    assert(block.x <= 1024);                                                                                           \
-    if (is_half2) {                                                                                                    \
-        if (grid.x % 4 == 0) {                                                                                         \
-            grid.x /= 4;                                                                                               \
-            softmax_kernel_v5_half2<__nv_bfloat16, ITEMS_PER_THREAD, 4>                                                \
-                <<<grid, block, 0, stream>>>((__nv_bfloat16*)buffer,                                                   \
-                                             (const __nv_bfloat16*)attr_mask,                                          \
-                                             batch_size,                                                               \
-                                             head_num,                                                                 \
-                                             seq_len_1,                                                                \
-                                             seq_len_2,                                                                \
-                                             (const __nv_bfloat16)scalar);                                             \
-        }                                                                                                              \
-        else {                                                                                                         \
-            softmax_kernel_v4_half2<__nv_bfloat16, ITEMS_PER_THREAD>                                                   \
-                <<<grid, block, 0, stream>>>((__nv_bfloat16*)buffer,                                                   \
-                                             (const __nv_bfloat16*)attr_mask,                                          \
-                                             batch_size,                                                               \
-                                             head_num,                                                                 \
-                                             seq_len_1,                                                                \
-                                             seq_len_2,                                                                \
-                                             (const __nv_bfloat16)scalar);                                             \
-        }                                                                                                              \
-    }                                                                                                                  \
-    else {                                                                                                             \
-        softmax_kernel_v4<ITEMS_PER_THREAD, __nv_bfloat16, T_IN><<<grid, block, 0, stream>>>(                          \
-            buffer, buffer_src, attr_mask, batch_size, head_num, seq_len_1, seq_len_2, scalar);                        \
-    }
-#endif  // ENABLE_BF16
+#define LAUNCH_MAKSED_SOFTMAX(ITEMS_PER_THREAD) LAUNCH_MAKSED_SOFTMAX_(half, ITEMS_PER_THREAD)
 
 template<typename T, typename T_IN>
-void invokeMaskedSoftMax(T*           buffer,
-                         const T_IN*  buffer_src,
-                         const T*     attr_mask,
-                         const int    batch_size,
-                         const int    seq_len_1,
-                         const int    seq_len_2,
-                         const int    head_num,
-                         const T      scalar,
-                         cudaStream_t stream)
+void invokeMaskedSoftmax(MaskedSoftmaxParam<T, T_IN>& param, cudaStream_t stream)
 {
-    // NOTE: attention scores shape (batch_size, head_num, seq_len_1, seq_len_2)
+    // attention_score,    (batch_size, head_num, q_length, k_length), softmax output.
+    // qk,                 (batch_size, head_num, q_length, k_length), QK^T.
+    // attention_mask,     (batch_size, q_length, k_length), attention mask.
+    // linear_bias_slopes, (head_num,) the slopes of the linear position bias.
 
-    dim3 grid(seq_len_1, batch_size, head_num);
-    if (batch_size * head_num > 360) {
-        grid.x = ceil(float(seq_len_1) / 32.0f);
+    dim3 grid(param.q_length, param.batch_size, param.num_heads);
+    if (param.batch_size * param.num_heads > 360) {
+        grid.x = ceil(float(param.q_length) / 32.0f);
     }
 
-    bool is_half2 = sizeof(T) == 2 && sizeof(T_IN) == 2 && seq_len_2 % 2 == 0;
-    dim3 block((seq_len_2 / (is_half2 ? 2 : 1) + 31) / 32 * 32);
+    bool is_half2 = sizeof(T) == 2 && sizeof(T_IN) == 2 && param.k_length % 2 == 0;
+    dim3 block((param.k_length / (is_half2 ? 2 : 1) + 31) / 32 * 32);
 
     if (block.x > 2048 && block.x <= 4096) {
-        SOFTMAX_KERNEL(4)
+        LAUNCH_MAKSED_SOFTMAX(4)
     }
     else if (block.x > 1024) {
-        SOFTMAX_KERNEL(2)
+        LAUNCH_MAKSED_SOFTMAX(2)
     }
     else if (block.x > 0) {
-        SOFTMAX_KERNEL(1)
+        LAUNCH_MAKSED_SOFTMAX(1)
     }
     else {
-        FT_CHECK(seq_len_2 <= 4096);
+        FT_CHECK(param.k_length <= 4096);
     }
 }
+
+template void invokeMaskedSoftmax(MaskedSoftmaxParam<float, float>& param, cudaStream_t stream);
+template void invokeMaskedSoftmax(MaskedSoftmaxParam<half, float>& param, cudaStream_t stream);
+template void invokeMaskedSoftmax(MaskedSoftmaxParam<half, half>& param, cudaStream_t stream);
 
 #ifdef ENABLE_BF16
 template<>
-void invokeMaskedSoftMax(__nv_bfloat16*       buffer,
-                         const __nv_bfloat16* buffer_src,
-                         const __nv_bfloat16* attr_mask,
-                         const int            batch_size,
-                         const int            seq_len_1,
-                         const int            seq_len_2,
-                         const int            head_num,
-                         const __nv_bfloat16  scalar,
-                         cudaStream_t         stream)
+void invokeMaskedSoftmax(MaskedSoftmaxParam<__nv_bfloat16, float>& param, cudaStream_t stream)
 {
+    // attention_score,    (batch_size, head_num, q_length, k_length), softmax output.
+    // qk,                 (batch_size, head_num, q_length, k_length), QK^T.
+    // attention_mask,     (batch_size, q_length, k_length), attention mask.
+    // linear_bias_slopes, (head_num,) the slopes of the linear position bias.
 
-    using T_IN = __nv_bfloat16;
-    dim3 grid(seq_len_1, batch_size, head_num);
-    if (batch_size * head_num > 360) {
-        grid.x = ceil(float(seq_len_1) / 32.0f);
-    }
-
-    bool is_half2 = seq_len_2 % 2 == 0;
-    dim3 block((seq_len_2 / (is_half2 ? 2 : 1) + 31) / 32 * 32);
-
-    if (block.x > 2048 && block.x <= 4096) {
-        SOFTMAX_KERNEL_BF16(4)
-    }
-    else if (block.x > 1024) {
-        SOFTMAX_KERNEL_BF16(2)
-    }
-    else if (block.x > 0) {
-        SOFTMAX_KERNEL_BF16(1)
-    }
-    else {
-        FT_CHECK(seq_len_2 <= 4096);
-    }
-}
-
-template<>
-void invokeMaskedSoftMax(__nv_bfloat16*       buffer,
-                         const float*         buffer_src,
-                         const __nv_bfloat16* attr_mask,
-                         const int            batch_size,
-                         const int            seq_len_1,
-                         const int            seq_len_2,
-                         const int            head_num,
-                         const __nv_bfloat16  scalar,
-                         cudaStream_t         stream)
-{
+    using T    = __nv_bfloat16;
     using T_IN = float;
-    dim3 grid(seq_len_1, batch_size, head_num);
-    if (batch_size * head_num > 360) {
-        grid.x = ceil(float(seq_len_1) / 32.0f);
+
+    dim3 grid(param.q_length, param.batch_size, param.num_heads);
+    if (param.batch_size * param.num_heads > 360) {
+        grid.x = ceil(float(param.q_length) / 32.0f);
     }
 
-    bool is_half2 = false;
-    dim3 block((seq_len_2 / (is_half2 ? 2 : 1) + 31) / 32 * 32);
+    bool is_half2 = sizeof(T) == 2 && sizeof(T_IN) == 2 && param.k_length % 2 == 0;
+    dim3 block((param.k_length / (is_half2 ? 2 : 1) + 31) / 32 * 32);
 
     if (block.x > 2048 && block.x <= 4096) {
-        SOFTMAX_KERNEL_BF16(4)
+        LAUNCH_MAKSED_SOFTMAX_(__nv_bfloat16, 4);
     }
     else if (block.x > 1024) {
-        SOFTMAX_KERNEL_BF16(2)
+        LAUNCH_MAKSED_SOFTMAX_(__nv_bfloat16, 2);
     }
     else if (block.x > 0) {
-        SOFTMAX_KERNEL_BF16(1)
+        LAUNCH_MAKSED_SOFTMAX_(__nv_bfloat16, 1);
     }
     else {
-        FT_CHECK(seq_len_2 <= 4096);
+        FT_CHECK(param.k_length <= 4096);
     }
 }
-#endif  // ENABLE_BF16
+template<>
+void invokeMaskedSoftmax(MaskedSoftmaxParam<__nv_bfloat16, __nv_bfloat16>& param, cudaStream_t stream)
+{
+    // attention_score,    (batch_size, head_num, q_length, k_length), softmax output.
+    // qk,                 (batch_size, head_num, q_length, k_length), QK^T.
+    // attention_mask,     (batch_size, q_length, k_length), attention mask.
+    // linear_bias_slopes, (head_num,) the slopes of the linear position bias.
 
-template void invokeMaskedSoftMax(float*       buffer,
-                                  const float* buffer_src,
-                                  const float* attr_mask,
-                                  const int    batch_size,
-                                  const int    seq_len_1,
-                                  const int    seq_len_2,
-                                  const int    head_num,
-                                  const float  scalar,
-                                  cudaStream_t stream);
+    using T    = __nv_bfloat16;
+    using T_IN = __nv_bfloat16;
 
-template void invokeMaskedSoftMax(half*        buffer,
-                                  const float* buffer_src,
-                                  const half*  attr_mask,
-                                  const int    batch_size,
-                                  const int    seq_len_1,
-                                  const int    seq_len_2,
-                                  const int    head_num,
-                                  const half   scalar,
-                                  cudaStream_t stream);
+    dim3 grid(param.q_length, param.batch_size, param.num_heads);
+    if (param.batch_size * param.num_heads > 360) {
+        grid.x = ceil(float(param.q_length) / 32.0f);
+    }
 
-template void invokeMaskedSoftMax(half*        buffer,
-                                  const half*  buffer_src,
-                                  const half*  attr_mask,
-                                  const int    batch_size,
-                                  const int    seq_len_1,
-                                  const int    seq_len_2,
-                                  const int    head_num,
-                                  const half   scalar,
-                                  cudaStream_t stream);
+    bool is_half2 = sizeof(T) == 2 && sizeof(T_IN) == 2 && param.k_length % 2 == 0;
+    dim3 block((param.k_length / (is_half2 ? 2 : 1) + 31) / 32 * 32);
 
-#ifdef ENABLE_BF16
-template void invokeMaskedSoftMax(__nv_bfloat16*       buffer,
-                                  const __nv_bfloat16* buffer_src,
-                                  const __nv_bfloat16* attr_mask,
-                                  const int            batch_size,
-                                  const int            seq_len_1,
-                                  const int            seq_len_2,
-                                  const int            head_num,
-                                  const __nv_bfloat16  scalar,
-                                  cudaStream_t         stream);
+    if (block.x > 2048 && block.x <= 4096) {
+        LAUNCH_MAKSED_SOFTMAX_(__nv_bfloat16, 4);
+    }
+    else if (block.x > 1024) {
+        LAUNCH_MAKSED_SOFTMAX_(__nv_bfloat16, 2);
+    }
+    else if (block.x > 0) {
+        LAUNCH_MAKSED_SOFTMAX_(__nv_bfloat16, 1);
+    }
+    else {
+        FT_CHECK(param.k_length <= 4096);
+    }
+}
 
-template void invokeMaskedSoftMax(__nv_bfloat16*       buffer,
-                                  const float*         buffer_src,
-                                  const __nv_bfloat16* attr_mask,
-                                  const int            batch_size,
-                                  const int            seq_len_1,
-                                  const int            seq_len_2,
-                                  const int            head_num,
-                                  const __nv_bfloat16  scalar,
-                                  cudaStream_t         stream);
-#endif  // ENABLE_BF16
+#endif
+
+#undef LAUNCH_MAKSED_SOFTMAX
+#undef LAUNCH_MAKSED_SOFTMAX_
 
 template<typename T>
-__global__ void
-transpose(T* src, T* dst, const int batch_size, const int seq_len, const int head_num, const int size_per_head)
-{
-    int batch_id       = blockIdx.x / (head_num * seq_len);
-    int seq_id         = blockIdx.x % seq_len;
-    int head_id        = (blockIdx.x % (head_num * seq_len)) / seq_len;
-    dst[batch_id * (head_num * seq_len * size_per_head) + seq_id * head_num * size_per_head + head_id * size_per_head
-        + threadIdx.x] = src[blockIdx.x * size_per_head + threadIdx.x];
-}
-
-template<>
-__global__ void
-transpose(half* src, half* dst, const int batch_size, const int seq_len, const int head_num, const int size_per_head)
+__global__ void transpose(const T*     src,
+                          T*           dst,
+                          const int    batch_size,
+                          const int    seq_len,
+                          const int    head_num,
+                          const int    size_per_head,
+                          const float* scale,
+                          int          int8_mode)
 {
     int tid = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -690,66 +767,45 @@ transpose(half* src, half* dst, const int batch_size, const int seq_len, const i
 
     int target_id = target_index(batch_id, head_id, seq_id, id, batch_size, head_num, seq_len, size_per_head);
 
-    dst[target_id] = src[tid];
+    if (int8_mode == 2) {
+        using Int8_Packed_T  = typename packed_as<int8_t, num_elems<T>::value>::type;
+        using Float_Packed_T = typename packed_as<float, num_elems<T>::value>::type;
+
+        const Float_Packed_T scale_val = cuda_cast<Float_Packed_T>(*scale);
+        reinterpret_cast<Int8_Packed_T*>(dst)[target_id] =
+            cuda_cast<Int8_Packed_T>(cuda_cast<Float_Packed_T>(src[tid]) * scale_val);
+    }
+    else {
+        dst[target_id] = src[tid];
+    }
 }
 
 template<>
-__global__ void
-transpose(half2* src, half2* dst, const int batch_size, const int seq_len, const int head_num, const int size_per_head)
+__global__ void transpose(const float* src,
+                          float*       dst,
+                          const int    batch_size,
+                          const int    seq_len,
+                          const int    head_num,
+                          const int    size_per_head,
+                          const float* scale,
+                          int          int8_mode)
 {
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
+    int batch_id = blockIdx.x / (head_num * seq_len);
+    int seq_id   = blockIdx.x % seq_len;
+    int head_id  = (blockIdx.x % (head_num * seq_len)) / seq_len;
 
-    int batch_id = tid / (head_num * seq_len * size_per_head);
-    int head_id  = (tid % (head_num * seq_len * size_per_head)) / (seq_len * size_per_head);
-    int seq_id   = (tid % (seq_len * size_per_head)) / size_per_head;
-    int id       = tid % size_per_head;
+    const int target_id = batch_id * (head_num * seq_len * size_per_head) + seq_id * head_num * size_per_head
+                          + head_id * size_per_head + threadIdx.x;
+    const int src_id = blockIdx.x * size_per_head + threadIdx.x;
 
-    int target_id = target_index(batch_id, head_id, seq_id, id, batch_size, head_num, seq_len, size_per_head);
-
-    dst[target_id] = src[tid];
+    if (int8_mode == 2) {
+        const float scale_val                     = *scale;
+        reinterpret_cast<int8_t*>(dst)[target_id] = cuda_cast<int8_t>(src[src_id] * scale_val);
+    }
+    else {
+        dst[target_id] = src[src_id];
+    }
 }
-
-#ifdef ENABLE_BF16
-template<>
-__global__ void transpose(__nv_bfloat16* src,
-                          __nv_bfloat16* dst,
-                          const int      batch_size,
-                          const int      seq_len,
-                          const int      head_num,
-                          const int      size_per_head)
-{
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-    int batch_id = tid / (head_num * seq_len * size_per_head);
-    int head_id  = (tid % (head_num * seq_len * size_per_head)) / (seq_len * size_per_head);
-    int seq_id   = (tid % (seq_len * size_per_head)) / size_per_head;
-    int id       = tid % size_per_head;
-
-    int target_id = target_index(batch_id, head_id, seq_id, id, batch_size, head_num, seq_len, size_per_head);
-
-    dst[target_id] = src[tid];
-}
-
-template<>
-__global__ void transpose(__nv_bfloat162* src,
-                          __nv_bfloat162* dst,
-                          const int       batch_size,
-                          const int       seq_len,
-                          const int       head_num,
-                          const int       size_per_head)
-{
-    int tid = blockIdx.x * blockDim.x + threadIdx.x;
-
-    int batch_id = tid / (head_num * seq_len * size_per_head);
-    int head_id  = (tid % (head_num * seq_len * size_per_head)) / (seq_len * size_per_head);
-    int seq_id   = (tid % (seq_len * size_per_head)) / size_per_head;
-    int id       = tid % size_per_head;
-
-    int target_id = target_index(batch_id, head_id, seq_id, id, batch_size, head_num, seq_len, size_per_head);
-
-    dst[target_id] = src[tid];
-}
-#endif
 
 template<typename T>
 void invokeTransposeQKV(T*           dst,
@@ -758,6 +814,8 @@ void invokeTransposeQKV(T*           dst,
                         const int    seq_len,
                         const int    head_num,
                         const int    size_per_head,
+                        const float* scale,
+                        const int    int8_mode,
                         cudaStream_t stream)
 {
     dim3 grid, block;
@@ -775,75 +833,82 @@ void invokeTransposeQKV(T*           dst,
             block.x = seq_per_block * size_per_head / 2;
             if (std::is_same<T, half>::value) {
                 transpose<half2><<<grid, block, 0, stream>>>(
-                    (half2*)src, (half2*)dst, batch_size, seq_len, head_num, size_per_head / 2);
+                    (half2*)src, (half2*)dst, batch_size, seq_len, head_num, size_per_head / 2, scale, int8_mode);
             }
 #ifdef ENABLE_BF16
             else {
-                transpose<__nv_bfloat162><<<grid, block, 0, stream>>>(
-                    (__nv_bfloat162*)src, (__nv_bfloat162*)dst, batch_size, seq_len, head_num, size_per_head / 2);
+                transpose<__nv_bfloat162><<<grid, block, 0, stream>>>((__nv_bfloat162*)src,
+                                                                      (__nv_bfloat162*)dst,
+                                                                      batch_size,
+                                                                      seq_len,
+                                                                      head_num,
+                                                                      size_per_head / 2,
+                                                                      scale,
+                                                                      int8_mode);
             }
 #endif
         }
         else {
             block.x = seq_per_block * size_per_head;
-            transpose<T><<<grid, block, 0, stream>>>(src, dst, batch_size, seq_len, head_num, size_per_head);
+            transpose<T>
+                <<<grid, block, 0, stream>>>(src, dst, batch_size, seq_len, head_num, size_per_head, scale, int8_mode);
         }
     }
     else {
         const int seq_per_block = 1;
         grid.x                  = batch_size * head_num * seq_len / seq_per_block;
         block.x                 = seq_per_block * size_per_head;
-        transpose<T><<<grid, block, 0, stream>>>(src, dst, batch_size, seq_len, head_num, size_per_head);
+        transpose<T>
+            <<<grid, block, 0, stream>>>(src, dst, batch_size, seq_len, head_num, size_per_head, scale, int8_mode);
     }
 }
 
-template void invokeTransposeQKV(float*       src,
-                                 float*       dst,
-                                 const int    batch_size,
-                                 const int    seq_len,
-                                 const int    head_num,
-                                 const int    size_per_head,
-                                 cudaStream_t stream);
-
-template void invokeTransposeQKV(half*        src,
-                                 half*        dst,
-                                 const int    batch_size,
-                                 const int    seq_len,
-                                 const int    head_num,
-                                 const int    size_per_head,
-                                 cudaStream_t stream);
-
+#define INSTANTIATETRANSPOSEQKV(T)                                                                                     \
+    template void invokeTransposeQKV(T*           src,                                                                 \
+                                     T*           dst,                                                                 \
+                                     const int    batch_size,                                                          \
+                                     const int    seq_len,                                                             \
+                                     const int    head_num,                                                            \
+                                     const int    size_per_head,                                                       \
+                                     const float* scale,                                                               \
+                                     const int    int8_mode,                                                           \
+                                     cudaStream_t stream)
+INSTANTIATETRANSPOSEQKV(float);
+INSTANTIATETRANSPOSEQKV(half);
 #ifdef ENABLE_BF16
-template void invokeTransposeQKV(__nv_bfloat16* src,
-                                 __nv_bfloat16* dst,
-                                 const int      batch_size,
-                                 const int      seq_len,
-                                 const int      head_num,
-                                 const int      size_per_head,
-                                 cudaStream_t   stream);
+INSTANTIATETRANSPOSEQKV(__nv_bfloat16);
 #endif
+#undef INSTANTIATETRANSPOSEQKV
 
 template<typename T>
-__global__ void add_QKV_bias_rebuild_padding(const T*   Q,
-                                             const T*   bias_Q,
-                                             const T*   K,
-                                             const T*   bias_K,
-                                             const T*   V,
-                                             const T*   bias_V,
-                                             T*         q_buf_,
-                                             T*         k_buf_,
-                                             T*         v_buf_,
-                                             const int  batch_size,
-                                             const int  seq_len,
-                                             const int  head_num,
-                                             const int  size_per_head,
-                                             const int* mask_offset)
+__global__ void add_QKV_bias_rebuild_padding_ia3(const T*   Q,
+                                                 const T*   bias_Q,
+                                                 const T*   K,
+                                                 const T*   bias_K,
+                                                 const T*   V,
+                                                 const T*   bias_V,
+                                                 T*         q_buf_,
+                                                 T*         k_buf_,
+                                                 T*         v_buf_,
+                                                 const int* ia3_tasks,
+                                                 const T*   ia3_key_weights,
+                                                 const T*   ia3_value_weights,
+                                                 const int  batch_size,
+                                                 const int  seq_len,
+                                                 const int  head_num,
+                                                 const int  size_per_head,
+                                                 const int* mask_offset)
 {
     const int bid = blockIdx.x;
 
     const int tgt_batch_id = (bid + mask_offset[bid]) / seq_len;
     const int tgt_seq_id   = (bid + mask_offset[bid]) % seq_len;
     const int n            = head_num * size_per_head;
+
+    const bool use_ia3       = ia3_tasks != nullptr;
+    const int  ia3_task      = use_ia3 ? ia3_tasks[bid] : 0;
+    const bool use_ia3_key   = use_ia3 && (ia3_key_weights != nullptr);
+    const bool use_ia3_value = use_ia3 && (ia3_value_weights != nullptr);
     for (int idx = threadIdx.x; idx < n; idx += blockDim.x) {
         const int tgt_head_id   = idx / size_per_head;
         const int tgt_hidden_id = idx % size_per_head;
@@ -853,29 +918,47 @@ __global__ void add_QKV_bias_rebuild_padding(const T*   Q,
                            + tgt_seq_id * size_per_head + tgt_hidden_id;
 
         q_buf_[tgt_id] = add(ldg(&Q[src_id]), ldg(&bias_Q[idx]));
-        k_buf_[tgt_id] = add(ldg(&K[src_id]), ldg(&bias_K[idx]));
-        v_buf_[tgt_id] = add(ldg(&V[src_id]), ldg(&bias_V[idx]));
+
+        T k = ldg(&K[src_id]);
+        if (use_ia3_key) {
+            k = k * ia3_key_weights[ia3_task * n + idx];
+        }
+        k_buf_[tgt_id] = add(k, ldg(&bias_K[idx]));
+
+        T v = ldg(&V[src_id]);
+        if (use_ia3_value) {
+            v = v * ia3_value_weights[ia3_task * n + idx];
+        }
+        v_buf_[tgt_id] = add(v, ldg(&bias_V[idx]));
     }
 }
 
 template<typename T>
-__global__ void rebuild_padding(const T*   Q,
-                                const T*   K,
-                                const T*   V,
-                                T*         q_buf_,
-                                T*         k_buf_,
-                                T*         v_buf_,
-                                const int  batch_size,
-                                const int  seq_len,
-                                const int  head_num,
-                                const int  size_per_head,
-                                const int* mask_offset)
+__global__ void rebuild_padding_ia3(const T*   Q,
+                                    const T*   K,
+                                    const T*   V,
+                                    T*         q_buf_,
+                                    T*         k_buf_,
+                                    T*         v_buf_,
+                                    const int* ia3_tasks,
+                                    const T*   ia3_key_weights,
+                                    const T*   ia3_value_weights,
+                                    const int  batch_size,
+                                    const int  seq_len,
+                                    const int  head_num,
+                                    const int  size_per_head,
+                                    const int* mask_offset)
 {
     const int bid = blockIdx.x;
 
     const int tgt_batch_id = (bid + mask_offset[bid]) / seq_len;
     const int tgt_seq_id   = (bid + mask_offset[bid]) % seq_len;
     const int n            = head_num * size_per_head;
+
+    const bool use_ia3       = ia3_tasks != nullptr;
+    const int  ia3_task      = use_ia3 ? ia3_tasks[bid] : 0;
+    const bool use_ia3_key   = use_ia3 && (ia3_key_weights != nullptr);
+    const bool use_ia3_value = use_ia3 && (ia3_value_weights != nullptr);
     for (int idx = threadIdx.x; idx < n; idx += blockDim.x) {
         const int tgt_head_id   = idx / size_per_head;
         const int tgt_hidden_id = idx % size_per_head;
@@ -885,28 +968,41 @@ __global__ void rebuild_padding(const T*   Q,
                            + tgt_seq_id * size_per_head + tgt_hidden_id;
 
         q_buf_[tgt_id] = ldg(&Q[src_id]);
-        k_buf_[tgt_id] = ldg(&K[src_id]);
-        v_buf_[tgt_id] = ldg(&V[src_id]);
+
+        T k = ldg(&K[src_id]);
+        if (use_ia3_key) {
+            k = k * ia3_key_weights[ia3_task * n + idx];
+        }
+        k_buf_[tgt_id] = k;
+
+        T v = ldg(&V[src_id]);
+        if (use_ia3_value) {
+            v = v * ia3_value_weights[ia3_task * n + idx];
+        }
+        v_buf_[tgt_id] = v;
     }
 }
 
 template<typename T>
-void invokeAddQKVBiasRebuildPadding(T*           Q,
-                                    const T*     bias_Q,
-                                    T*           K,
-                                    const T*     bias_K,
-                                    T*           V,
-                                    const T*     bias_V,
-                                    T*           q_buf,
-                                    T*           k_buf,
-                                    T*           v_buf,
-                                    const int    batch_size,
-                                    const int    seq_len,
-                                    const int    head_num,
-                                    const int    size_per_head,
-                                    const int    valid_word_num,
-                                    const int*   mask_offset,
-                                    cudaStream_t stream)
+void invokeAddQKVBiasIA3RebuildPadding(T*           Q,
+                                       const T*     bias_Q,
+                                       T*           K,
+                                       const T*     bias_K,
+                                       T*           V,
+                                       const T*     bias_V,
+                                       T*           q_buf,
+                                       T*           k_buf,
+                                       T*           v_buf,
+                                       const int    batch_size,
+                                       const int    seq_len,
+                                       const int    head_num,
+                                       const int    size_per_head,
+                                       const int    valid_word_num,
+                                       const int*   mask_offset,
+                                       const int*   ia3_tasks,
+                                       const T*     ia3_key_weights,
+                                       const T*     ia3_value_weights,
+                                       cudaStream_t stream)
 {
 #ifdef ENABLE_BF16
     bool is_half2 = (std::is_same<T, half>::value || std::is_same<T, __nv_bfloat16>::value) && (size_per_head % 2 == 0);
@@ -933,55 +1029,76 @@ void invokeAddQKVBiasRebuildPadding(T*           Q,
 
     if (bias_Q == nullptr && bias_K == nullptr && bias_V == nullptr) {
         if (is_half2) {
-            rebuild_padding<<<valid_word_num, block_size, 0, stream>>>((T2*)Q,
-                                                                       (T2*)K,
-                                                                       (T2*)V,
-                                                                       (T2*)q_buf,
-                                                                       (T2*)k_buf,
-                                                                       (T2*)v_buf,
-                                                                       batch_size,
-                                                                       seq_len,
-                                                                       head_num,
-                                                                       size_per_head / 2,
-                                                                       mask_offset);
+            rebuild_padding_ia3<<<valid_word_num, block_size, 0, stream>>>((T2*)Q,
+                                                                           (T2*)K,
+                                                                           (T2*)V,
+                                                                           (T2*)q_buf,
+                                                                           (T2*)k_buf,
+                                                                           (T2*)v_buf,
+                                                                           ia3_tasks,
+                                                                           (const T2*)ia3_key_weights,
+                                                                           (const T2*)ia3_value_weights,
+                                                                           batch_size,
+                                                                           seq_len,
+                                                                           head_num,
+                                                                           size_per_head / 2,
+                                                                           mask_offset);
         }
         else {
-            rebuild_padding<<<valid_word_num, block_size, 0, stream>>>(
-                Q, K, V, q_buf, k_buf, v_buf, batch_size, seq_len, head_num, size_per_head, mask_offset);
+            rebuild_padding_ia3<<<valid_word_num, block_size, 0, stream>>>(Q,
+                                                                           K,
+                                                                           V,
+                                                                           q_buf,
+                                                                           k_buf,
+                                                                           v_buf,
+                                                                           ia3_tasks,
+                                                                           ia3_key_weights,
+                                                                           ia3_value_weights,
+                                                                           batch_size,
+                                                                           seq_len,
+                                                                           head_num,
+                                                                           size_per_head,
+                                                                           mask_offset);
         }
     }
     else if (bias_Q != nullptr && bias_K != nullptr && bias_V != nullptr) {
         if (is_half2) {
-            add_QKV_bias_rebuild_padding<<<valid_word_num, block_size, 0, stream>>>((T2*)Q,
-                                                                                    (const T2*)bias_Q,
-                                                                                    (T2*)K,
-                                                                                    (const T2*)bias_K,
-                                                                                    (T2*)V,
-                                                                                    (const T2*)bias_V,
-                                                                                    (T2*)q_buf,
-                                                                                    (T2*)k_buf,
-                                                                                    (T2*)v_buf,
-                                                                                    batch_size,
-                                                                                    seq_len,
-                                                                                    head_num,
-                                                                                    size_per_head / 2,
-                                                                                    mask_offset);
+            add_QKV_bias_rebuild_padding_ia3<<<valid_word_num, block_size, 0, stream>>>((T2*)Q,
+                                                                                        (const T2*)bias_Q,
+                                                                                        (T2*)K,
+                                                                                        (const T2*)bias_K,
+                                                                                        (T2*)V,
+                                                                                        (const T2*)bias_V,
+                                                                                        (T2*)q_buf,
+                                                                                        (T2*)k_buf,
+                                                                                        (T2*)v_buf,
+                                                                                        ia3_tasks,
+                                                                                        (const T2*)ia3_key_weights,
+                                                                                        (const T2*)ia3_value_weights,
+                                                                                        batch_size,
+                                                                                        seq_len,
+                                                                                        head_num,
+                                                                                        size_per_head / 2,
+                                                                                        mask_offset);
         }
         else {
-            add_QKV_bias_rebuild_padding<<<valid_word_num, block_size, 0, stream>>>(Q,
-                                                                                    bias_Q,
-                                                                                    K,
-                                                                                    bias_K,
-                                                                                    V,
-                                                                                    bias_V,
-                                                                                    q_buf,
-                                                                                    k_buf,
-                                                                                    v_buf,
-                                                                                    batch_size,
-                                                                                    seq_len,
-                                                                                    head_num,
-                                                                                    size_per_head,
-                                                                                    mask_offset);
+            add_QKV_bias_rebuild_padding_ia3<<<valid_word_num, block_size, 0, stream>>>(Q,
+                                                                                        bias_Q,
+                                                                                        K,
+                                                                                        bias_K,
+                                                                                        V,
+                                                                                        bias_V,
+                                                                                        q_buf,
+                                                                                        k_buf,
+                                                                                        v_buf,
+                                                                                        ia3_tasks,
+                                                                                        ia3_key_weights,
+                                                                                        ia3_value_weights,
+                                                                                        batch_size,
+                                                                                        seq_len,
+                                                                                        head_num,
+                                                                                        size_per_head,
+                                                                                        mask_offset);
         }
     }
     else {
@@ -989,67 +1106,43 @@ void invokeAddQKVBiasRebuildPadding(T*           Q,
     }
 }
 
-template void invokeAddQKVBiasRebuildPadding(float*       Q,
-                                             const float* bias_Q,
-                                             float*       K,
-                                             const float* bias_K,
-                                             float*       V,
-                                             const float* bias_V,
-                                             float*       q_buf,
-                                             float*       k_buf,
-                                             float*       v_buf,
-                                             const int    batch_size,
-                                             const int    seq_len,
-                                             const int    head_num,
-                                             const int    size_per_head,
-                                             const int    valid_word_num,
-                                             const int*   mask_offset,
-                                             cudaStream_t stream);
-
-template void invokeAddQKVBiasRebuildPadding(half*        Q,
-                                             const half*  bias_Q,
-                                             half*        K,
-                                             const half*  bias_K,
-                                             half*        V,
-                                             const half*  bias_V,
-                                             half*        q_buf,
-                                             half*        k_buf,
-                                             half*        v_buf,
-                                             const int    batch_size,
-                                             const int    seq_len,
-                                             const int    head_num,
-                                             const int    size_per_head,
-                                             const int    valid_word_num,
-                                             const int*   mask_offset,
-                                             cudaStream_t stream);
-
+#define INSTANTIATEADDQKVBIASIA3REBUILDPADDING(T)                                                                      \
+    template void invokeAddQKVBiasIA3RebuildPadding(T*           Q,                                                    \
+                                                    const T*     bias_Q,                                               \
+                                                    T*           K,                                                    \
+                                                    const T*     bias_K,                                               \
+                                                    T*           V,                                                    \
+                                                    const T*     bias_V,                                               \
+                                                    T*           q_buf,                                                \
+                                                    T*           k_buf,                                                \
+                                                    T*           v_buf,                                                \
+                                                    const int    batch_size,                                           \
+                                                    const int    seq_len,                                              \
+                                                    const int    head_num,                                             \
+                                                    const int    size_per_head,                                        \
+                                                    const int    valid_word_num,                                       \
+                                                    const int*   mask_offset,                                          \
+                                                    const int*   ia3_tasks,                                            \
+                                                    const T*     ia3_key_weights,                                      \
+                                                    const T*     ia3_value_weights,                                    \
+                                                    cudaStream_t stream)
+INSTANTIATEADDQKVBIASIA3REBUILDPADDING(float);
+INSTANTIATEADDQKVBIASIA3REBUILDPADDING(half);
 #ifdef ENABLE_BF16
-template void invokeAddQKVBiasRebuildPadding(__nv_bfloat16*       Q,
-                                             const __nv_bfloat16* bias_Q,
-                                             __nv_bfloat16*       K,
-                                             const __nv_bfloat16* bias_K,
-                                             __nv_bfloat16*       V,
-                                             const __nv_bfloat16* bias_V,
-                                             __nv_bfloat16*       q_buf,
-                                             __nv_bfloat16*       k_buf,
-                                             __nv_bfloat16*       v_buf,
-                                             const int            batch_size,
-                                             const int            seq_len,
-                                             const int            head_num,
-                                             const int            size_per_head,
-                                             const int            valid_word_num,
-                                             const int*           mask_offset,
-                                             cudaStream_t         stream);
+INSTANTIATEADDQKVBIASIA3REBUILDPADDING(__nv_bfloat16);
 #endif
+#undef INSTANTIATEADDQKVBIASREBUILDPADDING
 
 template<typename T>
-__global__ void transpose_remove_padding(const T*   src,
-                                         T*         dst,
-                                         const int  batch_size,
-                                         const int  seq_len,
-                                         const int  head_num,
-                                         const int  size_per_head,
-                                         const int* mask_offset)
+__global__ void transpose_remove_padding(const T*     src,
+                                         T*           dst,
+                                         const int    batch_size,
+                                         const int    seq_len,
+                                         const int    head_num,
+                                         const int    size_per_head,
+                                         const int*   mask_offset,
+                                         const float* scale,
+                                         const int    int8_mode)
 {
     // TODO: optimize this kernel?
     // do remove_sequence_length_padding
@@ -1063,13 +1156,26 @@ __global__ void transpose_remove_padding(const T*   src,
     const int src_offset_base = src_batch_id * seq_len * head_num * size_per_head + src_seq_id * size_per_head;
     const int dst_offset_base = dst_seq_id * head_num * size_per_head;
 
+    using Int8_Packed_T  = typename packed_as<int8_t, num_elems<T>::value>::type;
+    using Float_Packed_T = typename packed_as<float, num_elems<T>::value>::type;
+    const Float_Packed_T scale_val =
+        int8_mode == 2 ? cuda_cast<Float_Packed_T>(*scale) : cuda_cast<Float_Packed_T>(0.0f);
+
     for (int idx = threadIdx.x; idx < head_num * size_per_head; idx += blockDim.x) {
-        const int head_id          = idx / size_per_head;
-        const int hidden_id        = idx % size_per_head;
-        dst[dst_offset_base + idx] = ldg(&src[src_offset_base + head_id * seq_len * size_per_head + hidden_id]);
+        const int head_id   = idx / size_per_head;
+        const int hidden_id = idx % size_per_head;
+        const T   src_elem  = ldg(&src[src_offset_base + head_id * seq_len * size_per_head + hidden_id]);
+        if (int8_mode == 2) {
+            reinterpret_cast<Int8_Packed_T*>(dst)[dst_offset_base + idx] =
+                cuda_cast<Int8_Packed_T>(cuda_cast<Float_Packed_T>(src_elem) * scale_val);
+        }
+        else {
+            dst[dst_offset_base + idx] = src_elem;
+        }
     }
 }
 
+// clang-format off
 template<typename T>
 void invokeTransposeAttentionOutRemovePadding(T*           src,
                                               T*           dst,
@@ -1079,12 +1185,14 @@ void invokeTransposeAttentionOutRemovePadding(T*           src,
                                               const int    head_num,
                                               const int    size_per_head,
                                               const int*   mask_offset,
+                                              const float* scale,
+                                              const int    int8_mode,
                                               cudaStream_t stream)
 {
 #ifdef ENABLE_BF16
     bool is_half2 = (std::is_same<T, half>::value || std::is_same<T, __nv_bfloat16>::value) && (size_per_head % 2 == 0);
 #else
-    bool       is_half2 = (std::is_same<T, half>::value) && (size_per_head % 2 == 0);
+    bool is_half2 = (std::is_same<T, half>::value) && (size_per_head % 2 == 0);
 #endif
     using T2       = typename TypeConverter<T>::Type;  // fp16 to half2, bf16 to bf162
     int block_size = head_num * size_per_head;
@@ -1106,57 +1214,48 @@ void invokeTransposeAttentionOutRemovePadding(T*           src,
 
     if (is_half2) {
         transpose_remove_padding<T2><<<valid_word_num, block_size, 0, stream>>>(
-            (T2*)src, (T2*)dst, batch_size, seq_len, head_num, size_per_head / 2, mask_offset);
+            (T2*)src, (T2*)dst, batch_size, seq_len, head_num, size_per_head / 2, mask_offset, scale, int8_mode);
     }
     else {
         transpose_remove_padding<<<valid_word_num, block_size, 0, stream>>>(
-            src, dst, batch_size, seq_len, head_num, size_per_head, mask_offset);
+            src, dst, batch_size, seq_len, head_num, size_per_head, mask_offset, scale, int8_mode);
     }
 }
+// clang-format on
 
-template void invokeTransposeAttentionOutRemovePadding(float*       src,
-                                                       float*       dst,
-                                                       const int    valid_word_num,
-                                                       const int    batch_size,
-                                                       const int    seq_len,
-                                                       const int    head_num,
-                                                       const int    size_per_head,
-                                                       const int*   mask_offset,
-                                                       cudaStream_t stream);
-
-template void invokeTransposeAttentionOutRemovePadding(half*        src,
-                                                       half*        dst,
-                                                       const int    valid_word_num,
-                                                       const int    batch_size,
-                                                       const int    seq_len,
-                                                       const int    head_num,
-                                                       const int    size_per_head,
-                                                       const int*   mask_offset,
-                                                       cudaStream_t stream);
+#define INSTANTIATETRANSPOSEATTENTIONOUTREMOVEPADDING(T)                                                               \
+    template void invokeTransposeAttentionOutRemovePadding(T*           src,                                           \
+                                                           T*           dst,                                           \
+                                                           const int    valid_word_num,                                \
+                                                           const int    batch_size,                                    \
+                                                           const int    seq_len,                                       \
+                                                           const int    head_num,                                      \
+                                                           const int    size_per_head,                                 \
+                                                           const int*   mask_offset,                                   \
+                                                           const float* scale,                                         \
+                                                           const int    int8_mode,                                     \
+                                                           cudaStream_t stream)
+INSTANTIATETRANSPOSEATTENTIONOUTREMOVEPADDING(float);
+INSTANTIATETRANSPOSEATTENTIONOUTREMOVEPADDING(half);
 #ifdef ENABLE_BF16
-template void invokeTransposeAttentionOutRemovePadding(__nv_bfloat16* src,
-                                                       __nv_bfloat16* dst,
-                                                       const int      valid_word_num,
-                                                       const int      batch_size,
-                                                       const int      seq_len,
-                                                       const int      head_num,
-                                                       const int      size_per_head,
-                                                       const int*     mask_offset,
-                                                       cudaStream_t   stream);
+INSTANTIATETRANSPOSEATTENTIONOUTREMOVEPADDING(__nv_bfloat16);
 #endif
+#undef INSTANTIATETRANSPOSEATTENTIONOUTREMOVEPADDING
 
 template<typename T>
 __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
                                                    T* k_buf,
                                                    T* v_buf,
-                                                   const T* __restrict QKV,
+                                                   T* QKV,
                                                    const T* __restrict qkv_bias,
-                                                   const int* padding_offset,
-                                                   const int  batch_size,
-                                                   const int  seq_len,
-                                                   const int  token_num,
-                                                   const int  head_num,
-                                                   const int  size_per_head)
+                                                   const int*   padding_offset,
+                                                   const int    batch_size,
+                                                   const int    seq_len,
+                                                   const int    token_num,
+                                                   const int    head_num,
+                                                   const int    size_per_head,
+                                                   const float* scale,
+                                                   const int    int8_mode)
 {
     // QKV: [token_num, 3, n]
     // qkv_bias: [3, n]
@@ -1166,8 +1265,7 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
     const int n          = head_num * size_per_head;
     for (int index = blockDim.x * blockIdx.x + threadIdx.x; index < token_num * 3 * n;
          index += gridDim.x * blockDim.x) {
-        int bias_id = index % (3 * n);
-        T   val     = ldg(&QKV[index]) + ldg(&qkv_bias[bias_id]);
+        const int bias_id = index % (3 * n);
 
         const int token_idx        = index / (3 * n);
         const int token_padded_idx = token_idx + (padding_offset == nullptr ? 0 : padding_offset[token_idx]);
@@ -1177,6 +1275,22 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T* q_buf,
         const int qkv_id  = (index % (3 * n)) / n;
         const int head_id = (index % n) / size_per_head;
         const int size_id = index % size_per_head;
+
+        T val;
+        if (int8_mode == 2) {
+            val = cuda_cast<T>(cuda_cast<float>(reinterpret_cast<const int8_t*>(QKV)[index]) * scale[qkv_id]);
+        }
+        else {
+            val = ldg(&QKV[index]);
+        }
+        val = val + ldg(&qkv_bias[bias_id]);
+
+        if (int8_mode == 2) {
+            // TODO(mseznec): add support for int8 BMM with FusedAtt
+        }
+        else {
+            QKV[index] = val;
+        }
 
         qkv_ptr[qkv_id][target_batch_id * head_num * seq_len * size_per_head + head_id * seq_len * size_per_head
                         + seq_id * size_per_head + size_id] = val;
@@ -1213,7 +1327,7 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
                                                    T*                               k_buf,
                                                    T*                               v_buf,
                                                    PrefixPromptBatchWeightsParam<T> param,
-                                                   const T* __restrict QKV,
+                                                   T*                               QKV,
                                                    const T* __restrict qkv_bias,
                                                    const int* padding_offset,
                                                    const int  batch_size,
@@ -1287,12 +1401,10 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
     const int dst_kv_seq_idx = seq_idx + prefix_prompt_length;
 
     // NOTE: q has seq len excluding prefix prompt
-    const int batch_time_qkv_idx = seq_len * batch_idx + seq_idx;
-
     // src QKV: [batch, time, 3, head, hidden]
-    const int src_q_idx = batch_time_qkv_idx * 3 * n + hidden_idx;
-    const int src_k_idx = batch_time_qkv_idx * 3 * n + hidden_idx + n;
-    const int src_v_idx = batch_time_qkv_idx * 3 * n + hidden_idx + 2 * n;
+    const int src_q_idx = token_idx * 3 * n + hidden_idx;
+    const int src_k_idx = token_idx * 3 * n + hidden_idx + n;
+    const int src_v_idx = token_idx * 3 * n + hidden_idx + 2 * n;
 
     Vec_t q, k, v;
     Vec_t q_bias, k_bias, v_bias;
@@ -1350,6 +1462,11 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
             k = *reinterpret_cast<Vec_t*>(k_smem + half_idx * smem_pitch + intra_half_idx);
         }
     }
+    if (!is_masked) {
+        *reinterpret_cast<Vec_t*>(&QKV[src_q_idx]) = q;
+        *reinterpret_cast<Vec_t*>(&QKV[src_k_idx]) = k;
+        *reinterpret_cast<Vec_t*>(&QKV[src_v_idx]) = v;
+    }
 
     const int dest_q_idx = batch_idx * size_per_head * seq_len * head_num + head_idx * size_per_head * seq_len
                            + seq_idx * size_per_head + tidx * vec_size;
@@ -1395,6 +1512,8 @@ void invokeAddFusedQKVBiasTranspose(T*                               q_buf,
                                     const int                        size_per_head,
                                     const int                        rotary_embedding_dim,
                                     const int                        neox_rotary_style,
+                                    const float*                     scale,
+                                    const int                        int8_mode,
                                     cudaStream_t                     stream)
 {
     // [bs, seq_len, 3, head, Dh]
@@ -1413,9 +1532,12 @@ void invokeAddFusedQKVBiasTranspose(T*                               q_buf,
                                                                        seq_len,
                                                                        token_num,
                                                                        head_num,
-                                                                       size_per_head);
+                                                                       size_per_head,
+                                                                       scale,
+                                                                       int8_mode);
     }
     else {
+        FT_CHECK_WITH_INFO(int8_mode != 2, "w8a8 not yet implemented with prefix prompt");  // TODO(mseznec)
         // To implement rotary embeddings, each thread processes two QKV elems:
         dim3   block((size_per_head / Vec_t<T>::size + 31) / 32 * 32);
         dim3   grid(token_num + batch_size * param.max_prefix_prompt_length, head_num);
@@ -1433,55 +1555,30 @@ void invokeAddFusedQKVBiasTranspose(T*                               q_buf,
     }
 }
 
-template void invokeAddFusedQKVBiasTranspose(float*                               q_buf,
-                                             float*                               k_buf,
-                                             float*                               v_buf,
-                                             PrefixPromptBatchWeightsParam<float> param,
-                                             float*                               QKV,
-                                             const float*                         qkv_bias,
-                                             const int*                           padding_offset,
-                                             const int                            batch_size,
-                                             const int                            seq_len,
-                                             const int                            token_num,
-                                             const int                            head_num,
-                                             const int                            size_per_head,
-                                             const int                            rotary_embedding_dim,
-                                             const int                            neox_rotary_style,
-                                             cudaStream_t                         stream);
-
-template void invokeAddFusedQKVBiasTranspose(half*                               q_buf,
-                                             half*                               k_buf,
-                                             half*                               v_buf,
-                                             PrefixPromptBatchWeightsParam<half> param,
-                                             half*                               QKV,
-                                             const half*                         qkv_bias,
-                                             const int*                          padding_offset,
-                                             const int                           batch_size,
-                                             const int                           seq_len,
-                                             const int                           token_num,
-                                             const int                           head_num,
-                                             const int                           size_per_head,
-                                             const int                           rotary_embedding_dim,
-                                             const int                           neox_rotary_style,
-                                             cudaStream_t                        stream);
-
+#define INSTANTIATEADDFUSEDQKVBIASTRANSPOSE(T)                                                                         \
+    template void invokeAddFusedQKVBiasTranspose(T*                               q_buf,                               \
+                                                 T*                               k_buf,                               \
+                                                 T*                               v_buf,                               \
+                                                 PrefixPromptBatchWeightsParam<T> param,                               \
+                                                 T*                               QKV,                                 \
+                                                 const T*                         qkv_bias,                            \
+                                                 const int*                       padding_offset,                      \
+                                                 const int                        batch_size,                          \
+                                                 const int                        seq_len,                             \
+                                                 const int                        token_num,                           \
+                                                 const int                        head_num,                            \
+                                                 const int                        size_per_head,                       \
+                                                 const int                        rotary_embedding_dim,                \
+                                                 const int                        neox_rotary_style,                   \
+                                                 const float*                     scale,                               \
+                                                 const int                        int8_mode,                           \
+                                                 cudaStream_t                     stream)
+INSTANTIATEADDFUSEDQKVBIASTRANSPOSE(float);
+INSTANTIATEADDFUSEDQKVBIASTRANSPOSE(half);
 #ifdef ENABLE_BF16
-template void invokeAddFusedQKVBiasTranspose(__nv_bfloat16*                               q_buf,
-                                             __nv_bfloat16*                               k_buf,
-                                             __nv_bfloat16*                               v_buf,
-                                             PrefixPromptBatchWeightsParam<__nv_bfloat16> param,
-                                             __nv_bfloat16*                               QKV,
-                                             const __nv_bfloat16*                         qkv_bias,
-                                             const int*                                   padding_offset,
-                                             const int                                    batch_size,
-                                             const int                                    seq_len,
-                                             const int                                    token_num,
-                                             const int                                    head_num,
-                                             const int                                    size_per_head,
-                                             const int                                    rotary_embedding_dim,
-                                             const int                                    neox_rotary_style,
-                                             cudaStream_t                                 stream);
+INSTANTIATEADDFUSEDQKVBIASTRANSPOSE(__nv_bfloat16);
 #endif
+#undef INSTANTIATEADDFUSEDQKVBIASTRANSPOSE
 
 template<typename T>
 __global__ void transpose_4d(T*        dst,
@@ -1556,27 +1653,20 @@ void invokeTranspose4d(T*           dst,
         dst, src, local_batch_size, local_head_num, seq_len, size_per_head, batch_size, ite);
 }
 
-template void invokeTranspose4d(float*       dst,
-                                float*       src,
-                                const int    local_batch_size,
-                                const int    seq_len,
-                                const int    size_per_head,
-                                const int    local_hidden_units,
-                                const int    local_head_num,
-                                const int    batch_size,
-                                const int    ite,
-                                cudaStream_t stream);
-
-template void invokeTranspose4d(half*        dst,
-                                half*        src,
-                                const int    local_batch_size,
-                                const int    seq_len,
-                                const int    size_per_head,
-                                const int    local_hidden_units,
-                                const int    local_head_num,
-                                const int    batch_size,
-                                const int    ite,
-                                cudaStream_t stream);
+#define INSTANTIATETRANSPOSE4D(T)                                                                                      \
+    template void invokeTranspose4d(T*           dst,                                                                  \
+                                    T*           src,                                                                  \
+                                    const int    local_batch_size,                                                     \
+                                    const int    seq_len,                                                              \
+                                    const int    size_per_head,                                                        \
+                                    const int    local_hidden_units,                                                   \
+                                    const int    local_head_num,                                                       \
+                                    const int    batch_size,                                                           \
+                                    const int    ite,                                                                  \
+                                    cudaStream_t stream)
+INSTANTIATETRANSPOSE4D(float);
+INSTANTIATETRANSPOSE4D(half);
+#undef INSTANTIATETRANSPOSE4D
 
 template<typename T>
 __global__ void transpose_4d_batch_major_k_cache(
@@ -1658,40 +1748,23 @@ void invokeTranspose4dBatchMajor(T*           k_dst,
         v_dst, v_src, local_head_num, size_per_head, seq_len, max_seq_len);
 }
 
-template void invokeTranspose4dBatchMajor(float*       k_dst,
-                                          float*       v_dst,
-                                          const float* k_src,
-                                          const float* v_src,
-                                          const int    local_batch_size,
-                                          const int    seq_len,
-                                          const int    max_seq_len,
-                                          const int    size_per_head,
-                                          const int    local_head_num,
-                                          cudaStream_t stream);
-
-template void invokeTranspose4dBatchMajor(half*        k_dst,
-                                          half*        v_dst,
-                                          const half*  k_src,
-                                          const half*  v_src,
-                                          const int    local_batch_size,
-                                          const int    seq_len,
-                                          const int    max_seq_len,
-                                          const int    size_per_head,
-                                          const int    local_head_num,
-                                          cudaStream_t stream);
-
+#define INSTANTIATETRANSPOSE4DBATCHMAJOR(T)                                                                            \
+    template void invokeTranspose4dBatchMajor(T*           k_dst,                                                      \
+                                              T*           v_dst,                                                      \
+                                              const T*     k_src,                                                      \
+                                              const T*     v_src,                                                      \
+                                              const int    local_batch_size,                                           \
+                                              const int    seq_len,                                                    \
+                                              const int    max_seq_len,                                                \
+                                              const int    size_per_head,                                              \
+                                              const int    local_head_num,                                             \
+                                              cudaStream_t stream)
+INSTANTIATETRANSPOSE4DBATCHMAJOR(float);
+INSTANTIATETRANSPOSE4DBATCHMAJOR(half);
 #ifdef ENABLE_BF16
-template void invokeTranspose4dBatchMajor(__nv_bfloat16*       k_dst,
-                                          __nv_bfloat16*       v_dst,
-                                          const __nv_bfloat16* k_src,
-                                          const __nv_bfloat16* v_src,
-                                          const int            local_batch_size,
-                                          const int            seq_len,
-                                          const int            max_seq_len,
-                                          const int            size_per_head,
-                                          const int            local_head_num,
-                                          cudaStream_t         stream);
+INSTANTIATETRANSPOSE4DBATCHMAJOR(__nv_bfloat16);
 #endif
+#undef INSTANTIATETRANSPOSE4DBATCHMAJOR
 
 template<typename T>
 __global__ void addRelativeAttentionBias(
@@ -1735,27 +1808,19 @@ void invokeAddRelativeAttentionBias(T*           qk_buf,
     }
 }
 
-template void invokeAddRelativeAttentionBias(float*       qk_buf,
-                                             const float* relative_attention_bias,
-                                             const int    batch_size,
-                                             const int    head_num,
-                                             const int    seq_len,
-                                             cudaStream_t stream);
-
-template void invokeAddRelativeAttentionBias(half*        qk_buf,
-                                             const half*  relative_attention_bias,
-                                             const int    batch_size,
-                                             const int    head_num,
-                                             const int    seq_len,
-                                             cudaStream_t stream);
+#define INSTANTIATEADDRELATIVEATTENTIONBIAS(T)                                                                         \
+    template void invokeAddRelativeAttentionBias(T*           qk_buf,                                                  \
+                                                 const T*     relative_attention_bias,                                 \
+                                                 const int    batch_size,                                              \
+                                                 const int    head_num,                                                \
+                                                 const int    seq_len,                                                 \
+                                                 cudaStream_t stream)
+INSTANTIATEADDRELATIVEATTENTIONBIAS(float);
+INSTANTIATEADDRELATIVEATTENTIONBIAS(half);
 #ifdef ENABLE_BF16
-template void invokeAddRelativeAttentionBias(__nv_bfloat16*       qk_buf,
-                                             const __nv_bfloat16* relative_attention_bias,
-                                             const int            batch_size,
-                                             const int            head_num,
-                                             const int            seq_len,
-                                             cudaStream_t         stream);
+INSTANTIATEADDRELATIVEATTENTIONBIAS(__nv_bfloat16);
 #endif
+#undef INSTANTIATEADDRELATIVEATTENTIONBIAS
 
 /*******************  invokeAddHead3SizeQKVBias  ***********************/
 // m = batch*window_num*window_len
@@ -2037,45 +2102,26 @@ void invokeAddHead3SizeQKVBias(const T*     mm_qkv,
     }
 }
 
-template void invokeAddHead3SizeQKVBias<float>(const float* mm_qkv,
-                                               const float* bias_qkv,
-                                               float*       q_buf_,
-                                               float*       k_buf_,
-                                               float*       v_buf_,
-                                               const int    batch,
-                                               const int    window_num,
-                                               const int    window_len,
-                                               const int    num_head,
-                                               const int    size_per_head,
-                                               cudaStream_t stream);
-
-template void invokeAddHead3SizeQKVBias<half>(const half*  mm_qkv,
-                                              const half*  bias_qkv,
-                                              half*        q_buf_,
-                                              half*        k_buf_,
-                                              half*        v_buf_,
-                                              const int    batch,
-                                              const int    window_num,
-                                              const int    window_len,
-                                              const int    num_head,
-                                              const int    size_per_head,
-                                              cudaStream_t stream);
-
+#define INSTANTIATEADDHEAD3SIZEQKVBIAS(T)                                                                              \
+    template void invokeAddHead3SizeQKVBias<T>(const T*     mm_qkv,                                                    \
+                                               const T*     bias_qkv,                                                  \
+                                               T*           q_buf_,                                                    \
+                                               T*           k_buf_,                                                    \
+                                               T*           v_buf_,                                                    \
+                                               const int    batch,                                                     \
+                                               const int    window_num,                                                \
+                                               const int    window_len,                                                \
+                                               const int    num_head,                                                  \
+                                               const int    size_per_head,                                             \
+                                               cudaStream_t stream)
+INSTANTIATEADDHEAD3SIZEQKVBIAS(float);
+INSTANTIATEADDHEAD3SIZEQKVBIAS(half);
 #ifdef ENABLE_BF16
-template void invokeAddHead3SizeQKVBias<__nv_bfloat16>(const __nv_bfloat16* mm_qkv,
-                                                       const __nv_bfloat16* bias_qkv,
-                                                       __nv_bfloat16*       q_buf_,
-                                                       __nv_bfloat16*       k_buf_,
-                                                       __nv_bfloat16*       v_buf_,
-                                                       const int            batch,
-                                                       const int            window_num,
-                                                       const int            window_len,
-                                                       const int            num_head,
-                                                       const int            size_per_head,
-                                                       cudaStream_t         stream);
+INSTANTIATEADDHEAD3SIZEQKVBIAS(__nv_bfloat16);
 #endif
+#undef INSTANTIATEADDHEAD3SIZEQKVBIAS
 
-/*******************  invokeMaskedSoftMax  ***********************/
+/*******************  invokeMaskedSoftMaxWithRelPosBias  ***********************/
 
 // grid = (window_len/word_per_thread, window_num*num_head, batch_size)
 // block.x = max(32, (window_len + 31)/32*32)
@@ -2083,15 +2129,15 @@ template void invokeAddHead3SizeQKVBias<__nv_bfloat16>(const __nv_bfloat16* mm_q
 // attn_mask is [window_num, window_len, window_len] + row-major
 // relative_pos_bias is [num_head, window_len, window_len] + row-majot
 template<typename T>
-__global__ void softmax_kernel(T*          qk_buf,
-                               const T*    attn_mask,
-                               const T*    relative_pos_bias,
-                               const int   batch_size,
-                               const int   num_head,
-                               const int   window_num,
-                               const int   window_len,
-                               const int   window_len_x_window_len,
-                               const float qk_scale)
+__global__ void softmax_withRelPosBias_element1_kernel(T*          qk_buf,
+                                                       const T*    attn_mask,
+                                                       const T*    relative_pos_bias,
+                                                       const int   batch_size,
+                                                       const int   num_head,
+                                                       const int   window_num,
+                                                       const int   window_len,
+                                                       const int   window_len_x_window_len,
+                                                       const float qk_scale)
 {
 
     bool qual = threadIdx.x < window_len;
@@ -2131,6 +2177,166 @@ __global__ void softmax_kernel(T*          qk_buf,
     }
 }
 
+// grid = (window_len/word_per_thread, window_num*num_head, batch_size)
+// block.x = max(32, (window_len/2 + 31)/32*32)
+// qk_buf is [batch, window_num, num_head, window_len, window_len]
+// attn_mask is [window_num, window_len, window_len] + row-major
+// relative_pos_bias is [num_head, window_len, window_len] + row-majot
+template<typename T2, typename T>
+__global__ void softmax_withRelPosBias_element2_kernel(T2*         qk_buf,
+                                                       const T2*   attn_mask,
+                                                       const T2*   relative_pos_bias,
+                                                       const int   batch_size,
+                                                       const int   num_head,
+                                                       const int   window_num,
+                                                       const int   window_len,
+                                                       const int   window_len_x_window_len,
+                                                       const float qk_scale)
+{
+    const int window_len_2 = window_len / 2;
+    const int tidx         = threadIdx.x;
+    bool      qual         = tidx < window_len_2;
+    const T2  zero         = {T(0.0f), T(0.0f)};
+    const int bdim         = blockDim.x;
+    for (int window_id = blockIdx.x; window_id < window_len; window_id += gridDim.x) {
+        float            tmp = -1e20f;
+        __shared__ float s_mean, s_max;
+        int              qk_offset;
+        float2           local_qk_val;
+        T2               qk_val;
+        if (qual) {
+            const int offset_in_window = window_id * window_len + 2 * tidx;
+            qk_offset = ((blockIdx.z * gridDim.y + blockIdx.y) * window_len_x_window_len + offset_in_window) / 2;
+            const int relative_pos_bias_offset =
+                ((blockIdx.y % num_head) * window_len_x_window_len + offset_in_window) / 2;
+            T2 mask_val =
+                (attn_mask == nullptr) ?
+                    zero :
+                    ldg(attn_mask + ((blockIdx.y / num_head) * window_len_x_window_len + offset_in_window) / 2);
+            qk_val            = qk_buf[qk_offset];
+            local_qk_val.x    = static_cast<float>(qk_val.x);
+            local_qk_val.y    = static_cast<float>(qk_val.y);
+            const T2 bias_val = ldg(relative_pos_bias + relative_pos_bias_offset);
+            local_qk_val.x =
+                qk_scale * local_qk_val.x + static_cast<float>(mask_val.x) + static_cast<float>(bias_val.x);
+            local_qk_val.y =
+                qk_scale * local_qk_val.y + static_cast<float>(mask_val.y) + static_cast<float>(bias_val.y);
+            tmp = local_qk_val.x > local_qk_val.y ? local_qk_val.x : local_qk_val.y;
+        }
+
+        float max_val = bdim <= 32 ? warpReduceMax<float>(tmp) : blockReduceMax<float>(tmp);
+        if (tidx == 0) {
+            s_max = max_val;
+        }
+        __syncthreads();
+
+        local_qk_val.x = qual ? __expf(local_qk_val.x - s_max) : 0.0f;
+        local_qk_val.y = qual ? __expf(local_qk_val.y - s_max) : 0.0f;
+
+        float sum_val = bdim <= 32 ? warpReduceSum<float>(local_qk_val.x + local_qk_val.y) :
+                                     blockReduceSum<float>(local_qk_val.x + local_qk_val.y);
+        if (tidx == 0) {
+            s_mean = sum_val + 1e-6f;
+            s_mean = __fdividef(1.0f, s_mean);
+        }
+        __syncthreads();
+        if (qual) {
+            local_qk_val.x    = local_qk_val.x * s_mean;
+            local_qk_val.y    = local_qk_val.y * s_mean;
+            qk_val.x          = T(local_qk_val.x);
+            qk_val.y          = T(local_qk_val.y);
+            qk_buf[qk_offset] = qk_val;
+        }
+    }
+}
+
+// grid = (window_len/word_per_thread, window_num*num_head, batch_size)
+// block.x = max(32, (window_len/4 + 31)/32*32)
+// qk_buf is [batch, window_num, num_head, window_len, window_len]
+// attn_mask is [window_num, window_len, window_len] + row-major
+// relative_pos_bias is [num_head, window_len, window_len] + row-majot
+template<typename T4, typename T>
+__global__ void softmax_withRelPosBias_element4_kernel(T4*         qk_buf,
+                                                       const T4*   attn_mask,
+                                                       const T4*   relative_pos_bias,
+                                                       const int   batch_size,
+                                                       const int   num_head,
+                                                       const int   window_num,
+                                                       const int   window_len,
+                                                       const int   window_len_x_window_len,
+                                                       const float qk_scale)
+{
+    const int window_len_4 = window_len / 4;
+    const int tidx         = threadIdx.x;
+    bool      qual         = tidx < window_len_4;
+    const T4  zero         = {T(0.0f), T(0.0f), T(0.0f), T(0.0f)};
+    const int bdim         = blockDim.x;
+    for (int window_id = blockIdx.x; window_id < window_len; window_id += gridDim.x) {
+        float            tmp = -1e20f;
+        __shared__ float s_mean, s_max;
+        int              qk_offset;
+        float4           local_qk_val;
+        T4               qk_val;
+        if (qual) {
+            const int offset_in_window = window_id * window_len + 4 * tidx;
+            qk_offset = ((blockIdx.z * gridDim.y + blockIdx.y) * window_len_x_window_len + offset_in_window) / 4;
+            const int relative_pos_bias_offset =
+                ((blockIdx.y % num_head) * window_len_x_window_len + offset_in_window) / 4;
+            T4 mask_val       = (attn_mask == nullptr) ?
+                                    zero :
+                                    attn_mask[((blockIdx.y / num_head) * window_len_x_window_len + offset_in_window) / 4];
+            qk_val            = qk_buf[qk_offset];
+            local_qk_val.x    = static_cast<float>(qk_val.x);
+            local_qk_val.y    = static_cast<float>(qk_val.y);
+            local_qk_val.z    = static_cast<float>(qk_val.z);
+            local_qk_val.w    = static_cast<float>(qk_val.w);
+            const T4 bias_val = relative_pos_bias[relative_pos_bias_offset];
+            local_qk_val.x =
+                qk_scale * local_qk_val.x + static_cast<float>(mask_val.x) + static_cast<float>(bias_val.x);
+            local_qk_val.y =
+                qk_scale * local_qk_val.y + static_cast<float>(mask_val.y) + static_cast<float>(bias_val.y);
+            local_qk_val.z =
+                qk_scale * local_qk_val.z + static_cast<float>(mask_val.z) + static_cast<float>(bias_val.z);
+            local_qk_val.w =
+                qk_scale * local_qk_val.w + static_cast<float>(mask_val.w) + static_cast<float>(bias_val.w);
+            tmp = local_qk_val.x > local_qk_val.y ? local_qk_val.x : local_qk_val.y;
+            tmp = tmp > local_qk_val.z ? tmp : local_qk_val.z;
+            tmp = tmp > local_qk_val.w ? tmp : local_qk_val.w;
+        }
+
+        float max_val = bdim <= 32 ? warpReduceMax<float>(tmp) : blockReduceMax<float>(tmp);
+        if (tidx == 0) {
+            s_max = max_val;
+        }
+        __syncthreads();
+
+        local_qk_val.x = qual ? __expf(local_qk_val.x - s_max) : 0.0f;
+        local_qk_val.y = qual ? __expf(local_qk_val.y - s_max) : 0.0f;
+        local_qk_val.z = qual ? __expf(local_qk_val.z - s_max) : 0.0f;
+        local_qk_val.w = qual ? __expf(local_qk_val.w - s_max) : 0.0f;
+
+        float sum_val = bdim <= 32 ?
+                            warpReduceSum<float>(local_qk_val.x + local_qk_val.y + local_qk_val.z + local_qk_val.w) :
+                            blockReduceSum<float>(local_qk_val.x + local_qk_val.y + local_qk_val.z + local_qk_val.w);
+        if (tidx == 0) {
+            s_mean = sum_val + 1e-6f;
+            s_mean = __fdividef(1.0f, s_mean);
+        }
+        __syncthreads();
+        if (qual) {
+            local_qk_val.x    = local_qk_val.x * s_mean;
+            local_qk_val.y    = local_qk_val.y * s_mean;
+            local_qk_val.z    = local_qk_val.z * s_mean;
+            local_qk_val.w    = local_qk_val.w * s_mean;
+            qk_val.x          = T(local_qk_val.x);
+            qk_val.y          = T(local_qk_val.y);
+            qk_val.z          = T(local_qk_val.z);
+            qk_val.w          = T(local_qk_val.w);
+            qk_buf[qk_offset] = qk_val;
+        }
+    }
+}
+
 template<typename T>
 void invokeMaskedSoftMaxWithRelPosBias(T*           qk_buf,
                                        const T*     attn_mask,
@@ -2143,49 +2349,163 @@ void invokeMaskedSoftMaxWithRelPosBias(T*           qk_buf,
                                        cudaStream_t stream)
 {
     const int word_per_thread = 1;
-    dim3      grid(window_len / word_per_thread, window_num * num_head, batch_size);
-    dim3      block((window_len + 31) / 32 * 32);
-    softmax_kernel<<<grid, block, 0, stream>>>(qk_buf,
-                                               attn_mask,
-                                               relative_pos_bias,
-                                               batch_size,
-                                               num_head,
-                                               window_num,
-                                               window_len,
-                                               window_len * window_len,
-                                               qk_scale);
+    dim3      grid((window_len + word_per_thread - 1) / word_per_thread, window_num * num_head, batch_size);
+    if ((window_len % 4 == 0) && window_len / 4 >= 32) {
+        dim3 block((window_len / 4 + 31) / 32 * 32);
+        if (std::is_same<T, float>::value) {
+            softmax_withRelPosBias_element4_kernel<float4, float>
+                <<<grid, block, 0, stream>>>((float4*)qk_buf,
+                                             (const float4*)attn_mask,
+                                             (const float4*)relative_pos_bias,
+                                             batch_size,
+                                             num_head,
+                                             window_num,
+                                             window_len,
+                                             window_len * window_len,
+                                             qk_scale);
+        }
+        else if (std::is_same<T, half>::value) {
+            softmax_withRelPosBias_element4_kernel<half4, half>
+                <<<grid, block, 0, stream>>>((half4*)qk_buf,
+                                             (const half4*)attn_mask,
+                                             (const half4*)relative_pos_bias,
+                                             batch_size,
+                                             num_head,
+                                             window_num,
+                                             window_len,
+                                             window_len * window_len,
+                                             qk_scale);
+        }
+#ifdef ENABLE_BF16
+        else {
+            dim3 block((window_len + 31) / 32 * 32);
+            softmax_withRelPosBias_element1_kernel<<<grid, block, 0, stream>>>(qk_buf,
+                                                                               attn_mask,
+                                                                               relative_pos_bias,
+                                                                               batch_size,
+                                                                               num_head,
+                                                                               window_num,
+                                                                               window_len,
+                                                                               window_len * window_len,
+                                                                               qk_scale);
+        }
+#endif
+    }
+    else if (window_len % 2 == 0) {
+        dim3 block((window_len / 2 + 31) / 32 * 32);
+        if (std::is_same<T, float>::value) {
+            softmax_withRelPosBias_element2_kernel<float2, float>
+                <<<grid, block, 0, stream>>>((float2*)qk_buf,
+                                             (const float2*)attn_mask,
+                                             (const float2*)relative_pos_bias,
+                                             batch_size,
+                                             num_head,
+                                             window_num,
+                                             window_len,
+                                             window_len * window_len,
+                                             qk_scale);
+        }
+        else if (std::is_same<T, half>::value) {
+            softmax_withRelPosBias_element2_kernel<half2, half>
+                <<<grid, block, 0, stream>>>((half2*)qk_buf,
+                                             (const half2*)attn_mask,
+                                             (const half2*)relative_pos_bias,
+                                             batch_size,
+                                             num_head,
+                                             window_num,
+                                             window_len,
+                                             window_len * window_len,
+                                             qk_scale);
+        }
+#ifdef ENABLE_BF16
+        else {
+            dim3 block((window_len + 31) / 32 * 32);
+            softmax_withRelPosBias_element1_kernel<<<grid, block, 0, stream>>>(qk_buf,
+                                                                               attn_mask,
+                                                                               relative_pos_bias,
+                                                                               batch_size,
+                                                                               num_head,
+                                                                               window_num,
+                                                                               window_len,
+                                                                               window_len * window_len,
+                                                                               qk_scale);
+        }
+#endif
+    }
+    else {
+        dim3 block((window_len + 31) / 32 * 32);
+        softmax_withRelPosBias_element1_kernel<<<grid, block, 0, stream>>>(qk_buf,
+                                                                           attn_mask,
+                                                                           relative_pos_bias,
+                                                                           batch_size,
+                                                                           num_head,
+                                                                           window_num,
+                                                                           window_len,
+                                                                           window_len * window_len,
+                                                                           qk_scale);
+    }
 }
 
-template void invokeMaskedSoftMaxWithRelPosBias(float*       qk_buf,
-                                                const float* attn_mask,
-                                                const float* relative_pos_bias,
-                                                const int    batch_size,
-                                                const int    num_head,
-                                                const int    window_num,
-                                                const int    window_len,
-                                                const float  qk_scale,
-                                                cudaStream_t stream);
-
-template void invokeMaskedSoftMaxWithRelPosBias(half*        qk_buf,
-                                                const half*  attn_mask,
-                                                const half*  relative_pos_bias,
-                                                const int    batch_size,
-                                                const int    num_head,
-                                                const int    window_num,
-                                                const int    window_len,
-                                                const float  qk_scale,
-                                                cudaStream_t stream);
-
+#define INSTANTIATEMASKEDSOFTMAXWITHRELPOSBIAS(T)                                                                      \
+    template void invokeMaskedSoftMaxWithRelPosBias(T*           qk_buf,                                               \
+                                                    const T*     attn_mask,                                            \
+                                                    const T*     relative_pos_bias,                                    \
+                                                    const int    batch_size,                                           \
+                                                    const int    num_head,                                             \
+                                                    const int    window_num,                                           \
+                                                    const int    window_len,                                           \
+                                                    const float  qk_scale,                                             \
+                                                    cudaStream_t stream)
+INSTANTIATEMASKEDSOFTMAXWITHRELPOSBIAS(float);
+INSTANTIATEMASKEDSOFTMAXWITHRELPOSBIAS(half);
 #ifdef ENABLE_BF16
-template void invokeMaskedSoftMaxWithRelPosBias(__nv_bfloat16*       qk_buf,
-                                                const __nv_bfloat16* attn_mask,
-                                                const __nv_bfloat16* relative_pos_bias,
-                                                const int            batch_size,
-                                                const int            num_head,
-                                                const int            window_num,
-                                                const int            window_len,
-                                                const float          qk_scale,
-                                                cudaStream_t         stream);
+INSTANTIATEMASKEDSOFTMAXWITHRELPOSBIAS(__nv_bfloat16);
 #endif
+#undef INSTANTIATEMASKEDSOFTMAXWITHRELPOSBIAS
+
+template<typename T>
+__global__ void transpose_attentions(
+    T* attentions_out, const T* attentions_in, size_t batch_size, size_t num_layers, size_t num_heads, size_t seq_len)
+{
+    // attentions_in  shape [B, H, S, S]
+    // attentions_out shape [B, L, H, S, S].
+    // Note that we write the L dimension as if it was index 0.
+    // In reality, the pointer has already been shifted to point to the correct layer.
+
+    const auto batch_idx = blockIdx.x;
+    const auto head_idx  = blockIdx.y;
+
+    const auto dst_offset = (batch_idx * num_layers * num_heads + head_idx) * seq_len * seq_len;
+    const auto src_offset = (batch_idx * num_heads + head_idx) * seq_len * seq_len;
+
+    for (auto x = threadIdx.x; x < seq_len * seq_len; x += blockDim.x) {
+        attentions_out[dst_offset + x] = attentions_in[src_offset + x];
+    }
+}
+
+template<typename T>
+void invokeTransposeAttentions(Tensor& attentions_out, const Tensor& attentions_in, cudaStream_t stream)
+{
+    const size_t batch_size = attentions_in.shape[0];
+    const size_t num_heads  = attentions_in.shape[1];
+    const size_t seq_len    = attentions_in.shape[2];
+    const size_t num_layers = attentions_out.shape[1];
+
+    const dim3 gridSize(batch_size, num_heads);
+    const dim3 blockSize(512);
+
+    transpose_attentions<<<gridSize, blockSize, 0, stream>>>(
+        attentions_out.getPtr<T>(), attentions_in.getPtr<const T>(), batch_size, num_layers, num_heads, seq_len);
+}
+
+#define INSTANTIATETRANSPOSEATTENTIONS(T)                                                                              \
+    template void invokeTransposeAttentions<T>(                                                                        \
+        Tensor & attentions_out, const Tensor& attentions_in, cudaStream_t stream)
+INSTANTIATETRANSPOSEATTENTIONS(float);
+INSTANTIATETRANSPOSEATTENTIONS(half);
+#ifdef ENABLE_BF16
+INSTANTIATETRANSPOSEATTENTIONS(__nv_bfloat16);
+#endif
+#undef INSTANTIATETRANSPOSEATTENTIONS
 
 }  // namespace fastertransformer

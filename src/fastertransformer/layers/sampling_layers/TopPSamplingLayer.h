@@ -24,22 +24,22 @@ namespace fastertransformer {
 template<typename T>
 class TopPSamplingLayer: public BaseSamplingLayer<T> {
 private:
-    void runSampling(std::vector<fastertransformer::Tensor>*       output_tensors,
-                     const std::vector<fastertransformer::Tensor>* input_tensors) override;
-    void runSampling(std::unordered_map<std::string, Tensor>*       output_tensors,
-                     const std::unordered_map<std::string, Tensor>* input_tensors) override;
-
+    void runSampling(TensorMap* output_tensors, TensorMap* input_tensors) override;
     void allocateBuffer() override;
     void allocateBuffer(size_t batch_size, Tensor top_k, Tensor top_p) override;
     void freeBuffer() override;
 
-    uint*  runtime_top_k_buf_ = nullptr;
-    float* runtime_top_p_buf_ = nullptr;
-    float  runtime_max_top_p_;
+    uint*    runtime_top_k_buf_ = nullptr;
+    float*   runtime_top_p_buf_ = nullptr;
+    float    runtime_max_top_p_;
+    float*   initial_top_p_buf_   = nullptr;
+    float*   top_p_decay_buf_     = nullptr;
+    float*   top_p_min_buf_       = nullptr;
+    int32_t* top_p_reset_ids_buf_ = nullptr;
 
-    int*   topp_id_vals_buf_;
-    int*   topp_offset_buf_;
-    int*   begin_topp_offset_buf_;
+    int*   topp_id_vals_buf_      = nullptr;
+    int*   topp_offset_buf_       = nullptr;
+    int*   begin_topp_offset_buf_ = nullptr;
     size_t cub_temp_storage_size_;
 
     using BaseSamplingLayer<T>::vocab_size_;
@@ -78,9 +78,7 @@ public:
     TopPSamplingLayer(TopPSamplingLayer<T> const& top_p_sampling_layer);
     ~TopPSamplingLayer();
 
-    void setup(const size_t                                   batch_size,
-               const size_t                                   beam_width,
-               const std::unordered_map<std::string, Tensor>* runtime_args) override;
+    void setup(const size_t batch_size, const size_t beam_width, TensorMap* runtime_args) override;
 };
 
 }  // namespace fastertransformer

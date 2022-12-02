@@ -28,7 +28,7 @@ def generate_gpt_config(args):
         "pipeline_para_size": "{}".format(args['pipeline_para_size']),
         "data_type": "{}".format(args['data_type']),
         "sparse": "0",
-        "int8_mode": "0",
+        "int8_mode": "{}".format(args["int8_mode"]),
         "enable_custom_all_reduce": "0",
         "model_name": "tmp_model",
         "model_dir": "{}".format(args['model_dir']),
@@ -42,6 +42,8 @@ def generate_gpt_config(args):
         "request_output_len": "{}".format(args['request_output_len']),
         "return_log_probs": "false",
         "context_log_probs": "false",
+        "remove_padding": "true",
+        "context_embeddings": "true"
     }
 
     config["tmp_model"] = {
@@ -53,8 +55,10 @@ def generate_gpt_config(args):
         "start_id": "{}".format(args['start_id']),
         "end_id": "{}".format(args['end_id']),
     }
+    if args['model_variant'] is not None:
+        config["tmp_model"]["model_variant"] = args["model_variant"]
 
-    with open('.tmp.config.ini', 'w') as configfile:
+    with open(args['destination'], 'w') as configfile:
         config.write(configfile)
 
 if __name__ == "__main__":
@@ -106,6 +110,15 @@ if __name__ == "__main__":
                         help='beam_search_diversity_rate (default: 0.0)')
     parser.add_argument('-memory_len', '--memory_len', type=int, default=None, metavar='NUMBER',
                         help='Memory length (how many time steps to keep in memory) (default: None)')
+    parser.add_argument('-model_variant', '--model_variant', type=str, default=None, metavar='STRING',
+                        help='Model variant (needed for OPT models) (default: None)')
+    parser.add_argument('--destination', type=str, default=".tmp.config.ini", metavar='STRING',
+                        help='Configuration save file. Default is ".tmp.config.ini".')
+    parser.add_argument('--int8_mode', type=int, default=0, choices=[0, 1, 2],
+                        help='The level of quantization to perform.'
+                             ' 0: No quantization. All computation in data_type'
+                             ' 1: Quantize weights to int8, all compute occurs in fp16/bf16. Not supported for when data_type is fp32'
+                             ' 2: Data path is mostly w8a8')
 
     args = parser.parse_args()
     generate_gpt_config(vars(args))

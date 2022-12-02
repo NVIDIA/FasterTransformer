@@ -20,20 +20,23 @@
 namespace fastertransformer {
 
 template<typename T>
-T5EncoderWeight<T>::T5EncoderWeight(const size_t                head_num,
-                                    const size_t                size_per_head,
-                                    const size_t                d_model,
-                                    const size_t                inter_size,
-                                    const size_t                vocab_size,
-                                    const size_t                num_layer,
-                                    const size_t                num_bucket_or_max_seq_len,
-                                    const size_t                tensor_para_size,
-                                    const size_t                tensor_para_rank,
-                                    const size_t                pipeline_para_size,
-                                    const size_t                pipeline_para_rank,
-                                    const bool                  t5_with_bias_para,
-                                    const bool                  use_gated_activation_para,
-                                    const PositionEmbeddingType pe_type):
+T5EncoderWeight<T>::T5EncoderWeight(const size_t                               head_num,
+                                    const size_t                               size_per_head,
+                                    const size_t                               d_model,
+                                    const size_t                               inter_size,
+                                    const size_t                               vocab_size,
+                                    const size_t                               num_layer,
+                                    const size_t                               num_bucket_or_max_seq_len,
+                                    const size_t                               tensor_para_size,
+                                    const size_t                               tensor_para_rank,
+                                    const size_t                               pipeline_para_size,
+                                    const size_t                               pipeline_para_rank,
+                                    const bool                                 t5_with_bias_para,
+                                    const bool                                 use_gated_activation_para,
+                                    const PositionEmbeddingType                pe_type,
+                                    PromptLearningType                         prompt_learning_type,
+                                    std::map<std::string, std::pair<int, int>> prompt_learning_pair,
+                                    const size_t                               ia3_num_tasks):
     head_num_(head_num),
     size_per_head_(size_per_head),
     d_model_(d_model),
@@ -48,7 +51,10 @@ T5EncoderWeight<T>::T5EncoderWeight(const size_t                head_num,
     t5_with_bias(t5_with_bias_para),
     use_gated_activation(use_gated_activation_para),
     position_embedding_type(pe_type),
-    real_weights_num_(t5_with_bias ? 4 : 3)
+    prompt_learning_type_(prompt_learning_type),
+    prompt_learning_pair_(prompt_learning_pair),
+    real_weights_num_(t5_with_bias ? 4 : 3),
+    ia3_num_tasks_(ia3_num_tasks)
 {
     FT_LOG_DEBUG("T5EncoderWeight " + std::string(__func__) + " start");
     FT_CHECK(num_layer_ % pipeline_para_size_ == 0);
@@ -66,7 +72,8 @@ T5EncoderWeight<T>::T5EncoderWeight(const size_t                head_num,
                                                                            tensor_para_size_,
                                                                            tensor_para_rank_,
                                                                            t5_with_bias,
-                                                                           use_gated_activation));
+                                                                           use_gated_activation,
+                                                                           ia3_num_tasks_));
         }
         else {
             // Don't malloc and load these layers since we don't use them.
@@ -79,6 +86,18 @@ T5EncoderWeight<T>::T5EncoderWeight(const size_t                head_num,
 template<typename T>
 void T5EncoderWeight<T>::initialize()
 {
+    if (prompt_learning_type_ == PromptLearningType::prefix_prompt) {
+        prompt_token_weight_size_ = 2 * num_layer_ * head_num_ * size_per_head_ / tensor_para_size_;
+    }
+    else if (prompt_learning_type_ == PromptLearningType::p_prompt_tuning) {
+        prompt_token_weight_size_ = d_model_;
+    }
+    malloc_load_prompt_weights_ = !prompt_learning_pair_.empty()
+                                  && (prompt_learning_type_ == PromptLearningType::p_prompt_tuning
+                                      || prompt_learning_type_ == PromptLearningType::prefix_prompt);
+    weights_ptr.reserve(weights_num_ + prompt_learning_pair_.size());
+    weights_size.reserve(weights_num_ + prompt_learning_pair_.size());
+
     FT_LOG_DEBUG("T5EncoderWeight " + std::string(__func__) + " start");
     weights_size[0] = d_model_;
     if (position_embedding_type == PositionEmbeddingType::absolute) {
@@ -89,6 +108,17 @@ void T5EncoderWeight<T>::initialize()
     }
     weights_size[2] = d_model_ * vocab_size_;
     weights_size[3] = d_model_;
+
+    if (malloc_load_prompt_weights_) {
+        for (auto const& prompt : prompt_learning_pair_) {
+            int    task_name_id   = prompt.second.first;
+            int    prompt_length  = prompt.second.second;
+            size_t task_weight_id = weights_num_ + (size_t)task_name_id;
+
+            // set weight size
+            weights_size[task_weight_id] = prompt_length * prompt_token_weight_size_;
+        }
+    }
     FT_LOG_DEBUG("T5EncoderWeight " + std::string(__func__) + " end");
 }
 
@@ -106,7 +136,18 @@ T5EncoderWeight<T>::~T5EncoderWeight()
         absolute_or_relative_position_embedding  = nullptr;
         embedding_table                          = nullptr;
         post_transformer_layernorm_weights.beta  = nullptr;
-        is_maintain_buffer                       = false;
+
+        if (malloc_load_prompt_weights_) {
+            for (auto const& prompt : prompt_learning_pair_) {
+                int    task_name_id   = prompt.second.first;
+                size_t task_weight_id = weights_num_ + (size_t)task_name_id;
+
+                deviceFree(weights_ptr[task_weight_id]);
+            }
+        }
+        prompt_learning_table.clear();
+
+        is_maintain_buffer = false;
     }
     for (int i = 0; i < num_layer_; i++) {
         delete t5_encoder_layer_weights[i];
@@ -130,7 +171,10 @@ T5EncoderWeight<T>::T5EncoderWeight(const T5EncoderWeight& other):
     t5_with_bias(other.t5_with_bias),
     use_gated_activation(other.use_gated_activation),
     position_embedding_type(other.position_embedding_type),
-    real_weights_num_(other.real_weights_num_)
+    prompt_learning_type_(other.prompt_learning_type_),
+    prompt_learning_pair_(other.prompt_learning_pair_),
+    real_weights_num_(other.real_weights_num_),
+    ia3_num_tasks_(other.ia3_num_tasks_)
 {
     FT_LOG_DEBUG("T5EncoderWeight " + std::string(__func__) + " start");
     initialize();
@@ -138,6 +182,18 @@ T5EncoderWeight<T>::T5EncoderWeight(const T5EncoderWeight& other):
     for (int i = 0; i < real_weights_num_; i++) {
         cudaD2Dcpy(weights_ptr[i], other.weights_ptr[i], weights_size[i]);
     }
+    // prompt learning table: malloc weights and set weight ptr
+    if (malloc_load_prompt_weights_) {
+        for (auto const& prompt : prompt_learning_pair_) {
+            std::string task_name    = prompt.first;
+            int         task_name_id = prompt.second.first;
+            size_t      prompt_id    = weights_num_ + (size_t)task_name_id;
+
+            // cuda device to device memcpy prompt table weights buffer memory
+            cudaD2Dcpy(weights_ptr[prompt_id], other.weights_ptr[prompt_id], weights_size[prompt_id]);
+        }
+    }
+
     setWeightPtr();
 
     t5_encoder_layer_weights.clear();
@@ -167,12 +223,27 @@ T5EncoderWeight<T>& T5EncoderWeight<T>::operator=(const T5EncoderWeight& other)
     t5_with_bias               = other.t5_with_bias;
     use_gated_activation       = other.use_gated_activation;
     position_embedding_type    = other.position_embedding_type;
+    prompt_learning_type_      = other.prompt_learning_type_;
+    prompt_learning_pair_      = other.prompt_learning_pair_;
     real_weights_num_          = other.real_weights_num_;
+    ia3_num_tasks_             = other.ia3_num_tasks_;
     initialize();
     mallocWeights();
     for (int i = 0; i < real_weights_num_; i++) {
         cudaD2Dcpy(weights_ptr[i], other.weights_ptr[i], weights_size[i]);
     }
+    // prompt learning table: malloc weights and set weight ptr
+    if (malloc_load_prompt_weights_) {
+        for (auto const& prompt : prompt_learning_pair_) {
+            std::string task_name    = prompt.first;
+            int         task_name_id = prompt.second.first;
+            size_t      prompt_id    = weights_num_ + (size_t)task_name_id;
+
+            // cuda device to device memcpy prompt table weights buffer memory
+            cudaD2Dcpy(weights_ptr[prompt_id], other.weights_ptr[prompt_id], weights_size[prompt_id]);
+        }
+    }
+
     setWeightPtr();
 
     t5_encoder_layer_weights.clear();
@@ -195,6 +266,19 @@ void T5EncoderWeight<T>::setWeightPtr()
     if (t5_with_bias) {
         post_transformer_layernorm_weights.beta = weights_ptr[3];
     }
+
+    prompt_learning_table.resize(prompt_learning_pair_.size());
+    // prompt learning tables: set weight ptr
+    if (malloc_load_prompt_weights_) {
+        for (auto const& prompt : prompt_learning_pair_) {
+            int    task_name_id   = prompt.second.first;
+            int    prompt_length  = prompt.second.second;
+            size_t task_weight_id = weights_num_ + (size_t)task_name_id;
+
+            // set weight ptr
+            prompt_learning_table[task_name_id] = {weights_ptr[task_weight_id], prompt_length};
+        }
+    }
     FT_LOG_DEBUG("T5EncoderWeight " + std::string(__func__) + " end");
 }
 
@@ -204,6 +288,16 @@ void T5EncoderWeight<T>::mallocWeights()
     FT_LOG_DEBUG("T5EncoderWeight " + std::string(__func__) + " start");
     for (int i = 0; i < real_weights_num_; i++) {
         deviceMalloc(&weights_ptr[i], weights_size[i]);
+    }
+    // prompt learning tables: malloc weights
+    if (malloc_load_prompt_weights_) {
+        for (auto const& prompt : prompt_learning_pair_) {
+            int    task_name_id   = prompt.second.first;
+            size_t task_weight_id = weights_num_ + (size_t)task_name_id;
+
+            // malloc weights
+            deviceMalloc(&weights_ptr[task_weight_id], weights_size[task_weight_id]);
+        }
     }
     is_maintain_buffer = true;
     FT_LOG_DEBUG("T5EncoderWeight " + std::string(__func__) + " end");
@@ -234,6 +328,28 @@ void T5EncoderWeight<T>::loadModel(std::string dir_path)
                              {(size_t)weights_size[3]},
                              dir_path + "/encoder.final_layer_norm.bias.bin",
                              model_file_type);
+    }
+
+    // prompt table: load weights from bin
+    if (malloc_load_prompt_weights_) {
+        for (auto const& prompt : prompt_learning_pair_) {
+            std::string task_name      = prompt.first;
+            int         task_name_id   = prompt.second.first;
+            int         prompt_length  = prompt.second.second;
+            size_t      task_weight_id = weights_num_ + (size_t)task_name_id;
+
+            std::string prompt_weight_path_name = (prompt_learning_type_ == PromptLearningType::p_prompt_tuning) ?
+                                                      (dir_path + "/model.prompt_table." + task_name + ".weight.bin") :
+                                                      (dir_path + "/model.prefix_prompt." + task_name + ".weight."
+                                                       + std::to_string(tensor_para_rank_) + ".bin");
+            FT_LOG_DEBUG("load prompt_weight_path_name: %s", prompt_weight_path_name.c_str());
+            if (prompt_length > 0) {
+                loadWeightFromBin<T>(weights_ptr[task_weight_id],
+                                     {prompt_length * prompt_token_weight_size_},
+                                     prompt_weight_path_name,
+                                     model_file_type);
+            }
+        }
     }
 
     for (int l = 0; l < num_layer_; l++) {

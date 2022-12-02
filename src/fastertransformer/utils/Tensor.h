@@ -51,7 +51,45 @@ typedef enum datatype_enum {
     TYPE_BYTES,
     TYPE_BF16,
     TYPE_STR,
+    TYPE_VOID,
 } DataType;
+
+template<typename T>
+DataType getTensorType()
+{
+    if (std::is_same<T, float>::value || std::is_same<T, const float>::value) {
+        return TYPE_FP32;
+    }
+    else if (std::is_same<T, half>::value || std::is_same<T, const half>::value) {
+        return TYPE_FP16;
+    }
+#ifdef ENABLE_BF16
+    else if (std::is_same<T, __nv_bfloat16>::value || std::is_same<T, const __nv_bfloat16>::value) {
+        return TYPE_BF16;
+    }
+#endif
+    else if (std::is_same<T, int>::value || std::is_same<T, const int>::value) {
+        return TYPE_INT32;
+    }
+    else if (std::is_same<T, int8_t>::value || std::is_same<T, const int8_t>::value) {
+        return TYPE_INT8;
+    }
+    else if (std::is_same<T, uint>::value || std::is_same<T, const uint>::value) {
+        return TYPE_UINT32;
+    }
+    else if (std::is_same<T, unsigned long long int>::value || std::is_same<T, const unsigned long long int>::value) {
+        return TYPE_UINT64;
+    }
+    else if (std::is_same<T, bool>::value || std::is_same<T, const bool>::value) {
+        return TYPE_BOOL;
+    }
+    else if (std::is_same<T, char>::value || std::is_same<T, const char>::value) {
+        return TYPE_BYTES;
+    }
+    else {
+        return TYPE_INVALID;
+    }
+}
 
 typedef enum memorytype_enum {
     MEMORY_CPU,
@@ -90,26 +128,46 @@ struct Tensor {
     template<typename T>
     inline T getVal(size_t index) const
     {
+        FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
         FT_CHECK(where == MEMORY_CPU);
         FT_CHECK(data != nullptr);
         FT_CHECK_WITH_INFO(index < size(), "index is larger than buffer size");
+
+        if (getTensorType<T>() != type) {
+            FT_LOG_DEBUG("getVal with type %s, but data type is: %s",
+                         getNumpyTypeDesc(getTensorType<T>()).c_str(),
+                         getNumpyTypeDesc(type).c_str());
+        }
         return ((T*)data)[index];
     }
 
     template<typename T>
     inline T getVal() const
     {
+        FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+        if (getTensorType<T>() != type) {
+            FT_LOG_DEBUG("getVal with type %s, but data type is: %s",
+                         getNumpyTypeDesc(getTensorType<T>()).c_str(),
+                         getNumpyTypeDesc(type).c_str());
+        }
         return getVal<T>(0);
     }
 
     template<typename T>
     inline T* getPtr() const
     {
+        FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+        if (getTensorType<T>() != type) {
+            FT_LOG_DEBUG("getPtr with type %s, but data type is: %s",
+                         getNumpyTypeDesc(getTensorType<T>()).c_str(),
+                         getNumpyTypeDesc(type).c_str());
+        }
         return (T*)data;
     }
 
     inline void* getPtrWithOffset(size_t offset) const
     {
+        FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
         if (data == nullptr) {
             return (void*)data;
         }
@@ -122,11 +180,18 @@ struct Tensor {
     template<typename T>
     inline T* getPtrWithOffset(size_t offset) const
     {
+        FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+        if (getTensorType<T>() != type) {
+            FT_LOG_DEBUG("getVal with type %s, but data type is: %s",
+                         getNumpyTypeDesc(getTensorType<T>()).c_str(),
+                         getNumpyTypeDesc(type).c_str());
+        }
         if (data == nullptr) {
             return (T*)data;
         }
         else {
-            FT_CHECK_WITH_INFO(offset < size(), "offset is larger than buffer size");
+            FT_CHECK_WITH_INFO(offset < size(),
+                               fmtstr("offset (%lu) is larger than buffer size (%lu)", offset, size()));
             return ((T*)data) + offset;
         }
     }
@@ -134,6 +199,11 @@ struct Tensor {
     template<typename T>
     T max() const
     {
+        if (getTensorType<T>() != type) {
+            FT_LOG_DEBUG("getVal with type %s, but data type is: %s",
+                         getNumpyTypeDesc(getTensorType<T>()).c_str(),
+                         getNumpyTypeDesc(type).c_str());
+        }
         FT_CHECK_WITH_INFO(shape.size() > 0 && data != nullptr, "Should be a non-empty tensor.");
         FT_CHECK_WITH_INFO(where == MEMORY_CPU || where == MEMORY_CPU_PINNED,
                            "max() supports MEMORY_CPU or MEMORY_CPU_PINNED tensor.");
@@ -152,6 +222,11 @@ struct Tensor {
     template<typename T>
     T min() const
     {
+        if (getTensorType<T>() != type) {
+            FT_LOG_DEBUG("getVal with type %s, but data type is: %s",
+                         getNumpyTypeDesc(getTensorType<T>()).c_str(),
+                         getNumpyTypeDesc(type).c_str());
+        }
         FT_CHECK_WITH_INFO(shape.size() > 0 && data != nullptr, "Should be a non-empty tensor.");
         FT_CHECK_WITH_INFO(where == MEMORY_CPU || where == MEMORY_CPU_PINNED,
                            "min() supports MEMORY_CPU or MEMORY_CPU_PINNED tensor.");
@@ -170,6 +245,11 @@ struct Tensor {
     template<typename T>
     T any(T val) const
     {
+        if (getTensorType<T>() != type) {
+            FT_LOG_DEBUG("getVal with type %s, but data type is: %s",
+                         getNumpyTypeDesc(getTensorType<T>()).c_str(),
+                         getNumpyTypeDesc(type).c_str());
+        }
         FT_CHECK_WITH_INFO(shape.size() > 0 && data != nullptr, "Should be a non-empty tensor.");
         FT_CHECK_WITH_INFO(where == MEMORY_CPU || where == MEMORY_CPU_PINNED,
                            "any() supports MEMORY_CPU or MEMORY_CPU_PINNED tensor.");
@@ -184,6 +264,11 @@ struct Tensor {
     template<typename T>
     T all(T val) const
     {
+        if (getTensorType<T>() != type) {
+            FT_LOG_DEBUG("getVal with type %s, but data type is: %s",
+                         getNumpyTypeDesc(getTensorType<T>()).c_str(),
+                         getNumpyTypeDesc(type).c_str());
+        }
         FT_CHECK_WITH_INFO(shape.size() > 0 && data != nullptr, "Should be a non-empty tensor.");
         FT_CHECK_WITH_INFO(where == MEMORY_CPU || where == MEMORY_CPU_PINNED,
                            "all() supports MEMORY_CPU or MEMORY_CPU_PINNED tensor.");
@@ -195,46 +280,19 @@ struct Tensor {
         return true;
     }
 
+    void updateShape(size_t idx, size_t val)
+    {
+        // TODO: find a better way to update the shape
+        std::vector<size_t>& shape_ref = const_cast<std::vector<size_t>&>(shape);
+        shape_ref[idx]                 = val;
+    }
+
     Tensor slice(std::vector<size_t> shape, size_t offset = 0) const;
 
 private:
     static void parseNpyIntro(FILE*& f_ptr, uint32_t& header_len, uint32_t& start_data);
     static int  parseNpyHeader(FILE*& f_ptr, uint32_t header_len, DataType& type, std::vector<size_t>& shape);
 };
-
-template<typename T>
-DataType getTensorType()
-{
-    if (std::is_same<T, float>::value) {
-        return TYPE_FP32;
-    }
-    else if (std::is_same<T, half>::value) {
-        return TYPE_FP16;
-    }
-#ifdef ENABLE_BF16
-    else if (std::is_same<T, __nv_bfloat16>::value) {
-        return TYPE_BF16;
-    }
-#endif
-    else if (std::is_same<T, int>::value) {
-        return TYPE_INT32;
-    }
-    else if (std::is_same<T, int8_t>::value) {
-        return TYPE_INT8;
-    }
-    else if (std::is_same<T, uint>::value) {
-        return TYPE_UINT32;
-    }
-    else if (std::is_same<T, unsigned long long int>::value) {
-        return TYPE_UINT64;
-    }
-    else if (std::is_same<T, bool>::value) {
-        return TYPE_BOOL;
-    }
-    else {
-        return TYPE_INVALID;
-    }
-}
 
 class TensorMap {
 private:
@@ -249,6 +307,7 @@ public:
     TensorMap() = default;
     TensorMap(const std::unordered_map<std::string, Tensor>& tensor_map);
     TensorMap(const std::vector<Tensor>& tensor_map);
+    TensorMap(std::initializer_list<std::pair<std::string, Tensor>> tensor_map);
     ~TensorMap();
 
     inline size_t size() const
@@ -258,6 +317,7 @@ public:
 
     inline bool isExist(const std::string& key) const
     {
+        FT_LOG_DEBUG("%s for key: %s", __PRETTY_FUNCTION__, key.c_str());
         return tensor_map_.find(key) != tensor_map_.end();
     }
 
@@ -266,8 +326,20 @@ public:
     inline void insert(const std::string& key, const Tensor& value)
     {
         FT_CHECK_WITH_INFO(!isExist(key), fmtstr("Duplicated key %s", key.c_str()));
-        FT_CHECK_WITH_INFO(isValid(value), "A none tensor or nullptr is not allowed");
+        FT_CHECK_WITH_INFO(isValid(value), fmtstr("A none tensor or nullptr is not allowed. key: %s", key.c_str()));
         tensor_map_.insert({key, value});
+    }
+
+    inline void insertIfValid(const std::string& key, const Tensor& value)
+    {
+        if (isValid(value)) {
+            insert({key, value});
+        }
+    }
+
+    inline void insert(std::pair<std::string, Tensor> p)
+    {
+        tensor_map_.insert(p);
     }
 
     // prevent converting int or size_t to string automatically
@@ -275,6 +347,16 @@ public:
     Tensor at(size_t tmp) = delete;
 
     inline Tensor& at(const std::string& key)
+    {
+        FT_LOG_DEBUG("%s for key %s", __PRETTY_FUNCTION__, key.c_str());
+        FT_CHECK_WITH_INFO(isExist(key),
+                           fmtstr("Cannot find a tensor of name %s in the tensor map (keys: %s)",
+                                  key.c_str(),
+                                  vec2str(keys()).c_str()));
+        return tensor_map_.at(key);
+    }
+
+    inline Tensor at(const std::string& key) const
     {
         FT_CHECK_WITH_INFO(isExist(key),
                            fmtstr("Cannot find a tensor of name %s in the tensor map (keys: %s)",
@@ -285,6 +367,15 @@ public:
 
     inline Tensor& at(const std::string& key, Tensor& default_tensor)
     {
+        FT_LOG_DEBUG("%s for key %s", __PRETTY_FUNCTION__, key.c_str());
+        if (isExist(key)) {
+            return tensor_map_.at(key);
+        }
+        return default_tensor;
+    }
+
+    inline Tensor at(const std::string& key, Tensor& default_tensor) const
+    {
         if (isExist(key)) {
             return tensor_map_.at(key);
         }
@@ -292,6 +383,15 @@ public:
     }
 
     inline Tensor& at(const std::string& key, Tensor&& default_tensor)
+    {
+        FT_LOG_DEBUG("%s for key %s", __PRETTY_FUNCTION__, key.c_str());
+        if (isExist(key)) {
+            return tensor_map_.at(key);
+        }
+        return default_tensor;
+    }
+
+    inline Tensor at(const std::string& key, Tensor&& default_tensor) const
     {
         if (isExist(key)) {
             return tensor_map_.at(key);
@@ -335,6 +435,44 @@ public:
             return tensor_map_.at(key).getVal<T>(index);
         }
         return default_value;
+    }
+
+    template<typename T>
+    inline T* getPtr(const std::string& key) const
+    {
+        FT_CHECK_WITH_INFO(isExist(key),
+                           fmtstr("Cannot find a tensor of name %s in the tensor map (keys: %s)",
+                                  key.c_str(),
+                                  vec2str(keys()).c_str()));
+        return tensor_map_.at(key).getPtr<T>();
+    }
+
+    template<typename T>
+    inline T* getPtr(const std::string& key, T* default_ptr) const
+    {
+        if (isExist(key)) {
+            return tensor_map_.at(key).getPtr<T>();
+        }
+        return default_ptr;
+    }
+
+    template<typename T>
+    inline T* getPtrWithOffset(const std::string& key, size_t index) const
+    {
+        FT_CHECK_WITH_INFO(isExist(key),
+                           fmtstr("Cannot find a tensor of name %s in the tensor map (keys: %s)",
+                                  key.c_str(),
+                                  vec2str(keys()).c_str()));
+        return tensor_map_.at(key).getPtrWithOffset<T>(index);
+    }
+
+    template<typename T>
+    inline T* getPtrWithOffset(const std::string& key, size_t index, T* default_ptr) const
+    {
+        if (isExist(key)) {
+            return tensor_map_.at(key).getPtrWithOffset<T>(index);
+        }
+        return default_ptr;
     }
 
     inline std::unordered_map<std::string, Tensor> getMap() const

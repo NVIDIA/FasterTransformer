@@ -38,9 +38,11 @@ namespace fastertransformer {
 // workspace for cublas gemm : 32MB
 #define CUBLAS_WORKSPACE_SIZE 33554432
 
-typedef struct half4 {
+typedef struct __align__(4)
+{
     half x, y, z, w;
-} half4;
+}
+half4;
 
 /* **************************** type definition ***************************** */
 
@@ -54,7 +56,8 @@ enum CublasDataType {
 enum FtCudaDataType {
     FP32 = 0,
     FP16 = 1,
-    BF16 = 2
+    BF16 = 2,
+    INT8 = 3
 };
 
 enum class OperationType {
@@ -157,289 +160,30 @@ inline void syncAndCheck(const char* const file, int const line)
     }
 
 template<typename T>
-void print_to_file(const T* result, const int size, const char* file)
-{
-    cudaDeviceSynchronize();
-    check_cuda_error(cudaGetLastError());
-    printf("[INFO] file: %s \n", file);
-    FILE* fd  = fopen(file, "w");
-    T*    tmp = reinterpret_cast<T*>(malloc(sizeof(T) * size));
-    check_cuda_error(cudaMemcpy(tmp, result, sizeof(T) * size, cudaMemcpyDeviceToHost));
-    for (int i = 0; i < size; ++i) {
-        float val = (float)(tmp[i]);
-        fprintf(fd, "%f\n", val);
-    }
-    free(tmp);
-    fclose(fd);
-    cudaDeviceSynchronize();
-    check_cuda_error(cudaGetLastError());
-}
-
-template<typename T>
 void print_to_file(const T*           result,
                    const int          size,
                    const char*        file,
-                   cudaStream_t       stream,
-                   std::ios::openmode open_mode = std::ios::out)
-{
-    cudaDeviceSynchronize();
-    check_cuda_error(cudaGetLastError());
-    printf("[INFO] file: %s with size %d.\n", file, size);
-    std::ofstream outFile(file, open_mode);
-    if (outFile) {
-        T* tmp = new T[size];
-        check_cuda_error(cudaMemcpyAsync(tmp, result, sizeof(T) * size, cudaMemcpyDeviceToHost, stream));
-        for (int i = 0; i < size; ++i) {
-            float val;
-            if (sizeof(T) == 2) {
-                val = (T)__half2float(tmp[i]);
-            }
-            else {
-                val = (T)tmp[i];
-            }
-            outFile << val << std::endl;
-        }
-        delete[] tmp;
-    }
-    else {
-        throw std::runtime_error(std::string("[FT][ERROR] Cannot open file: ") + file + "\n");
-    }
-    cudaDeviceSynchronize();
-    check_cuda_error(cudaGetLastError());
-}
+                   cudaStream_t       stream    = 0,
+                   std::ios::openmode open_mode = std::ios::out);
 
 template<typename T>
-void print_abs_mean(const T* buf, uint size, cudaStream_t stream, std::string name = "")
-{
-    if (buf == nullptr) {
-        printf("[WARNING] It is an nullptr, skip!");
-        return;
-    }
-    cudaDeviceSynchronize();
-    check_cuda_error(cudaGetLastError());
-    T* h_tmp = new T[size];
-    cudaMemcpyAsync(h_tmp, buf, sizeof(T) * size, cudaMemcpyDeviceToHost, stream);
-    cudaDeviceSynchronize();
-    check_cuda_error(cudaGetLastError());
-    double   sum        = 0.0f;
-    uint64_t zero_count = 0;
-    float    max_val    = -1e10;
-    bool     find_inf   = false;
-    for (uint i = 0; i < size; i++) {
-        if (std::isinf((float)(h_tmp[i]))) {
-            find_inf = true;
-            continue;
-        }
-        sum += abs((double)h_tmp[i]);
-        if ((float)h_tmp[i] == 0.0f) {
-            zero_count++;
-        }
-        max_val = max_val > abs(float(h_tmp[i])) ? max_val : abs(float(h_tmp[i]));
-    }
-    printf("[INFO][FT] %20s size: %u, abs mean: %f, abs sum: %f, abs max: %f, find inf: %s",
-           name.c_str(),
-           size,
-           sum / size,
-           sum,
-           max_val,
-           find_inf ? "true" : "false");
-    std::cout << std::endl;
-    delete[] h_tmp;
-    cudaDeviceSynchronize();
-    check_cuda_error(cudaGetLastError());
-}
+void print_abs_mean(const T* buf, uint size, cudaStream_t stream, std::string name = "");
 
 template<typename T>
-void print_to_screen(const T* result, const int size)
-{
-    if (result == nullptr) {
-        printf("[WARNING] It is an nullptr, skip! \n");
-        return;
-    }
-    T* tmp = reinterpret_cast<T*>(malloc(sizeof(T) * size));
-    check_cuda_error(cudaMemcpy(tmp, result, sizeof(T) * size, cudaMemcpyDeviceToHost));
-    for (int i = 0; i < size; ++i) {
-        printf("%d, %f\n", i, static_cast<float>(tmp[i]));
-    }
-    free(tmp);
-}
+void print_to_screen(const T* result, const int size);
 
 template<typename T>
-static inline void printMatrix(T* ptr, int m, int k, int stride, bool is_device_ptr)
-{
-    T* tmp;
-    if (is_device_ptr) {
-        // k < stride ; stride = col-dimension.
-        tmp = reinterpret_cast<T*>(malloc(m * stride * sizeof(T)));
-        check_cuda_error(cudaMemcpy(tmp, ptr, sizeof(T) * m * stride, cudaMemcpyDeviceToHost));
-        cudaDeviceSynchronize();
-    }
-    else {
-        tmp = ptr;
-    }
+void printMatrix(T* ptr, int m, int k, int stride, bool is_device_ptr);
 
-    for (int ii = -1; ii < m; ++ii) {
-        if (ii >= 0) {
-            printf("%02d ", ii);
-        }
-        else {
-            printf("   ");
-        }
-
-        for (int jj = 0; jj < k; jj += 1) {
-            if (ii >= 0) {
-                printf("%7.3f ", (float)tmp[ii * stride + jj]);
-            }
-            else {
-                printf("%7d ", jj);
-            }
-        }
-        printf("\n");
-    }
-    if (is_device_ptr) {
-        free(tmp);
-    }
-}
-
-static inline void printMatrix(unsigned long long* ptr, int m, int k, int stride, bool is_device_ptr)
-{
-    typedef unsigned long long T;
-    T*                         tmp;
-    if (is_device_ptr) {
-        // k < stride ; stride = col-dimension.
-        tmp = reinterpret_cast<T*>(malloc(m * stride * sizeof(T)));
-        check_cuda_error(cudaMemcpy(tmp, ptr, sizeof(T) * m * stride, cudaMemcpyDeviceToHost));
-        cudaDeviceSynchronize();
-    }
-    else {
-        tmp = ptr;
-    }
-
-    for (int ii = -1; ii < m; ++ii) {
-        if (ii >= 0) {
-            printf("%02d ", ii);
-        }
-        else {
-            printf("   ");
-        }
-
-        for (int jj = 0; jj < k; jj += 1) {
-            if (ii >= 0) {
-                printf("%4llu ", tmp[ii * stride + jj]);
-            }
-            else {
-                printf("%4d ", jj);
-            }
-        }
-        printf("\n");
-    }
-    if (is_device_ptr) {
-        free(tmp);
-    }
-}
-
-static inline void printMatrix(int* ptr, int m, int k, int stride, bool is_device_ptr)
-{
-    typedef int T;
-    T*          tmp;
-    if (is_device_ptr) {
-        // k < stride ; stride = col-dimension.
-        tmp = reinterpret_cast<T*>(malloc(m * stride * sizeof(T)));
-        check_cuda_error(cudaMemcpy(tmp, ptr, sizeof(T) * m * stride, cudaMemcpyDeviceToHost));
-        cudaDeviceSynchronize();
-    }
-    else {
-        tmp = ptr;
-    }
-
-    for (int ii = -1; ii < m; ++ii) {
-        if (ii >= 0) {
-            printf("%02d ", ii);
-        }
-        else {
-            printf("   ");
-        }
-
-        for (int jj = 0; jj < k; jj += 1) {
-            if (ii >= 0) {
-                printf("%4d ", tmp[ii * stride + jj]);
-            }
-            else {
-                printf("%4d ", jj);
-            }
-        }
-        printf("\n");
-    }
-    if (is_device_ptr) {
-        free(tmp);
-    }
-}
-
-static inline void printMatrix(size_t* ptr, int m, int k, int stride, bool is_device_ptr)
-{
-    typedef size_t T;
-    T*             tmp;
-    if (is_device_ptr) {
-        // k < stride ; stride = col-dimension.
-        tmp = reinterpret_cast<T*>(malloc(m * stride * sizeof(T)));
-        check_cuda_error(cudaMemcpy(tmp, ptr, sizeof(T) * m * stride, cudaMemcpyDeviceToHost));
-        cudaDeviceSynchronize();
-    }
-    else {
-        tmp = ptr;
-    }
-
-    for (int ii = -1; ii < m; ++ii) {
-        if (ii >= 0) {
-            printf("%02d ", ii);
-        }
-        else {
-            printf("   ");
-        }
-
-        for (int jj = 0; jj < k; jj += 1) {
-            if (ii >= 0) {
-                printf("%4ld ", tmp[ii * stride + jj]);
-            }
-            else {
-                printf("%4d ", jj);
-            }
-        }
-        printf("\n");
-    }
-    if (is_device_ptr) {
-        free(tmp);
-    }
-}
+void printMatrix(unsigned long long* ptr, int m, int k, int stride, bool is_device_ptr);
+void printMatrix(int* ptr, int m, int k, int stride, bool is_device_ptr);
+void printMatrix(size_t* ptr, int m, int k, int stride, bool is_device_ptr);
 
 template<typename T>
-void check_max_val(const T* result, const int size)
-{
-    T* tmp = new T[size];
-    cudaMemcpy(tmp, result, sizeof(T) * size, cudaMemcpyDeviceToHost);
-    float max_val = -100000;
-    for (int i = 0; i < size; i++) {
-        float val = static_cast<float>(tmp[i]);
-        if (val > max_val) {
-            max_val = val;
-        }
-    }
-    delete tmp;
-    printf("[INFO][CUDA] addr %p max val: %f \n", result, max_val);
-}
+void check_max_val(const T* result, const int size);
 
 template<typename T>
-void check_abs_mean_val(const T* result, const int size)
-{
-    T* tmp = new T[size];
-    cudaMemcpy(tmp, result, sizeof(T) * size, cudaMemcpyDeviceToHost);
-    float sum = 0.0f;
-    for (int i = 0; i < size; i++) {
-        sum += abs(static_cast<float>(tmp[i]));
-    }
-    delete tmp;
-    printf("[INFO][CUDA] addr %p abs mean val: %f \n", result, sum / size);
-}
+void check_abs_mean_val(const T* result, const int size);
 
 #define PRINT_FUNC_NAME_()                                                                                             \
     do {                                                                                                               \
@@ -507,13 +251,13 @@ static double diffTime(timeval start, timeval end)
 
 /* ***************************** common utils ****************************** */
 
-inline void print_mem_usage(std::string time="after allocation")
+inline void print_mem_usage(std::string time = "after allocation")
 {
     size_t free_bytes, total_bytes;
     check_cuda_error(cudaMemGetInfo(&free_bytes, &total_bytes));
     float free  = static_cast<float>(free_bytes) / 1024.0 / 1024.0 / 1024.0;
     float total = static_cast<float>(total_bytes) / 1024.0 / 1024.0 / 1024.0;
-    float used = total - free;
+    float used  = total - free;
     printf("%-20s: free: %5.2f GB, total: %5.2f GB, used: %5.2f GB\n", time.c_str(), free, total, used);
 }
 
@@ -521,9 +265,11 @@ inline int getSMVersion()
 {
     int device{-1};
     check_cuda_error(cudaGetDevice(&device));
-    cudaDeviceProp props;
-    check_cuda_error(cudaGetDeviceProperties(&props, device));
-    return props.major * 10 + props.minor;
+    int sm_major = 0;
+    int sm_minor = 0;
+    check_cuda_error(cudaDeviceGetAttribute(&sm_major, cudaDevAttrComputeCapabilityMajor, device));
+    check_cuda_error(cudaDeviceGetAttribute(&sm_minor, cudaDevAttrComputeCapabilityMinor, device));
+    return sm_major * 10 + sm_minor;
 }
 
 inline std::string getDeviceName()
@@ -540,36 +286,7 @@ inline int div_up(int a, int n)
     return (a + n - 1) / n;
 }
 
-inline cudaError_t getSetDevice(int i_device, int* o_device = NULL)
-{
-    int         current_dev_id = 0;
-    cudaError_t err            = cudaSuccess;
-
-    if (o_device != NULL) {
-        err = cudaGetDevice(&current_dev_id);
-        if (err != cudaSuccess) {
-            return err;
-        }
-        if (current_dev_id == i_device) {
-            *o_device = i_device;
-        }
-        else {
-            err = cudaSetDevice(i_device);
-            if (err != cudaSuccess) {
-                return err;
-            }
-            *o_device = current_dev_id;
-        }
-    }
-    else {
-        err = cudaSetDevice(i_device);
-        if (err != cudaSuccess) {
-            return err;
-        }
-    }
-
-    return cudaSuccess;
-}
+cudaError_t getSetDevice(int i_device, int* o_device = NULL);
 
 inline int getDevice()
 {
@@ -642,32 +359,47 @@ struct getTypeFromCudaDataType<BFLOAT16_DATATYPE> {
 };
 #endif
 
-inline FtCudaDataType getModelFileType(std::string ini_file, std::string section_name)
-{
-    FtCudaDataType model_file_type;
-    INIReader      reader = INIReader(ini_file);
-    if (reader.ParseError() < 0) {
-        FT_LOG_WARNING("Can't load %s. Use FP32 as default", ini_file.c_str());
-        model_file_type = FtCudaDataType::FP32;
-    }
-    else {
-        std::string weight_data_type_str = std::string(reader.Get(section_name, "weight_data_type"));
-        if (weight_data_type_str.find("fp32") != std::string::npos) {
-            model_file_type = FtCudaDataType::FP32;
-        }
-        else if (weight_data_type_str.find("fp16") != std::string::npos) {
-            model_file_type = FtCudaDataType::FP16;
-        }
-        else if (weight_data_type_str.find("bf16") != std::string::npos) {
-            model_file_type = FtCudaDataType::BF16;
-        }
-        else {
-            FT_LOG_WARNING("Invalid type %s. Use FP32 as default", weight_data_type_str.c_str());
-            model_file_type = FtCudaDataType::FP32;
-        }
-    }
-    return model_file_type;
-}
+FtCudaDataType getModelFileType(std::string ini_file, std::string section_name);
+
+// clang-format off
+template<typename T> struct packed_type;
+template <>          struct packed_type<float>         { using type = float; }; // we don't need to pack float by default
+template <>          struct packed_type<half>          { using type = half2; };
+
+#ifdef ENABLE_BF16
+template<>
+struct packed_type<__nv_bfloat16> {
+    using type = __nv_bfloat162;
+};
+#endif
+
+template<typename T> struct num_elems;
+template <>          struct num_elems<float>           { static constexpr int value = 1; };
+template <>          struct num_elems<float2>          { static constexpr int value = 2; };
+template <>          struct num_elems<float4>          { static constexpr int value = 4; };
+template <>          struct num_elems<half>            { static constexpr int value = 1; };
+template <>          struct num_elems<half2>           { static constexpr int value = 2; };
+#ifdef ENABLE_BF16
+template <>          struct num_elems<__nv_bfloat16>   { static constexpr int value = 1; };
+template <>          struct num_elems<__nv_bfloat162>  { static constexpr int value = 2; };
+#endif
+
+template<typename T, int num> struct packed_as;
+template<typename T>          struct packed_as<T, 1>              { using type = T; };
+template<>                    struct packed_as<half,  2>          { using type = half2; };
+template<>                    struct packed_as<float,  2>         { using type = float2; };
+template<>                    struct packed_as<int8_t, 2>         { using type = int16_t; };
+template<>                    struct packed_as<int32_t, 2>        { using type = int2; };
+#ifdef ENABLE_BF16
+template<>
+struct packed_as<__nv_bfloat16, 2> {
+    using type = __nv_bfloat162;
+};
+#endif
+
+inline __device__ float2 operator*(float2 a, float2 b) { return make_float2(a.x * b.x, a.y * b.y); }
+inline __device__ float2 operator*(float2 a, float  b) { return make_float2(a.x * b, a.y * b); }
+// clang-format on
 
 /* ************************** end of common utils ************************** */
 }  // namespace fastertransformer

@@ -47,10 +47,7 @@ protected:
     bool*  skip_decode_        = nullptr;
     bool   skip_any_           = false;
 
-    virtual void runSampling(std::vector<fastertransformer::Tensor>*       output_tensors,
-                             const std::vector<fastertransformer::Tensor>* input_tensors)  = 0;
-    virtual void runSampling(std::unordered_map<std::string, Tensor>*       output_tensors,
-                             const std::unordered_map<std::string, Tensor>* input_tensors) = 0;
+    virtual void runSampling(TensorMap* output_tensors, TensorMap* input_tensors) = 0;
 
     virtual void freeBuffer();
     virtual void allocateBuffer() = 0;
@@ -77,13 +74,12 @@ public:
 
     ~BaseSamplingLayer();
 
-    void setup(const size_t                                   batch_size,
-               const size_t                                   beam_width,
-               const std::unordered_map<std::string, Tensor>* runtime_args) override;
+    void setup(const size_t batch_size, const size_t beam_width, TensorMap* runtime_args) override;
     void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                  const std::vector<fastertransformer::Tensor>* input_tensors) override;
     void forward(std::unordered_map<std::string, Tensor>*       output_tensors,
                  const std::unordered_map<std::string, Tensor>* input_tensors) override;
+    void forward(TensorMap* output_tensors, TensorMap* input_tensors) override;
 };
 
 }  // namespace fastertransformer

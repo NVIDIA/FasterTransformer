@@ -31,9 +31,12 @@ GptOp::GptOp(const int64_t                 head_num,
              const double                  layernorm_eps,
              const std::string             layernorm_type,
              const std::string             activation_type,
+             const bool                    has_positional_encoding,
+             const bool                    has_pre_decoder_layernorm,
              const bool                    has_post_decoder_layernorm,
              const bool                    has_adapters,
              const int64_t                 adapter_inter_size,
+             const bool                    use_attention_linear_bias,
              const std::vector<th::Tensor> weights):
     st_(weights[0].scalar_type())
 {
@@ -44,9 +47,12 @@ GptOp::GptOp(const int64_t                 head_num,
     ft::gptVariantParams gpt_variant_params{(float)layernorm_eps,
                                             ft::getLayerNormType(layernorm_type),
                                             ft::getActivationType(activation_type),
+                                            has_positional_encoding,
+                                            has_pre_decoder_layernorm,
                                             has_post_decoder_layernorm,
                                             has_adapters,
-                                            (size_t)adapter_inter_size};
+                                            (size_t)adapter_inter_size,
+                                            use_attention_linear_bias};
 
     switch (st_) {
         case at::ScalarType::Float:
@@ -179,6 +185,9 @@ static auto fasterTransformerGptTHS =
                               std::string,
                               bool,
                               bool,
+                              bool,
+                              bool,
                               int64_t,
+                              bool,
                               std::vector<th::Tensor>>())
         .def("forward", &torch_ext::GptOp::forward);

@@ -15,6 +15,7 @@
  */
 
 #include "src/fastertransformer/models/t5/T5DecodingWeight.h"
+#include "src/fastertransformer/utils/IA3.h"
 #include "src/fastertransformer/utils/logger.h"
 
 namespace fastertransformer {
@@ -34,7 +35,8 @@ T5DecodingWeight<T>::T5DecodingWeight(const size_t                head_num,
                                       const size_t                pipeline_para_rank,
                                       const bool                  t5_with_bias_para,
                                       const bool                  use_gated_activation_para,
-                                      const PositionEmbeddingType pe_type):
+                                      const PositionEmbeddingType pe_type,
+                                      const size_t                ia3_num_tasks):
     head_num_(head_num),
     size_per_head_(size_per_head),
     d_model_(d_model),
@@ -50,7 +52,8 @@ T5DecodingWeight<T>::T5DecodingWeight(const size_t                head_num,
     t5_with_bias(t5_with_bias_para),
     use_gated_activation(use_gated_activation_para),
     position_embedding_type(pe_type),
-    real_weights_num_(t5_with_bias ? 6 : 4)
+    real_weights_num_(t5_with_bias ? 6 : 4),
+    ia3_num_tasks_(ia3_num_tasks)
 {
     FT_LOG_DEBUG("T5DecodingWeight " + std::string(__func__) + " start");
     FT_CHECK(num_layer_ % pipeline_para_size_ == 0);
@@ -70,7 +73,8 @@ T5DecodingWeight<T>::T5DecodingWeight(const size_t                head_num,
                                                                         tensor_para_size_,
                                                                         tensor_para_rank_,
                                                                         t5_with_bias,
-                                                                        use_gated_activation));
+                                                                        use_gated_activation,
+                                                                        ia3_num_tasks_));
         }
         else {
             decoder_layer_weights.push_back(new T5DecoderLayerWeight<T>());
@@ -135,7 +139,8 @@ T5DecodingWeight<T>::T5DecodingWeight(const T5DecodingWeight& other):
     t5_with_bias(other.t5_with_bias),
     use_gated_activation(other.use_gated_activation),
     position_embedding_type(other.position_embedding_type),
-    real_weights_num_(other.real_weights_num_)
+    real_weights_num_(other.real_weights_num_),
+    ia3_num_tasks_(other.ia3_num_tasks_)
 {
     FT_LOG_DEBUG("T5DecodingWeight " + std::string(__func__) + " start");
     initialize();
@@ -172,6 +177,7 @@ T5DecodingWeight<T>& T5DecodingWeight<T>::operator=(const T5DecodingWeight& othe
     use_gated_activation       = other.use_gated_activation;
     position_embedding_type    = other.position_embedding_type;
     real_weights_num_          = other.real_weights_num_;
+    ia3_num_tasks_             = other.ia3_num_tasks_;
 
     FT_LOG_DEBUG("T5DecodingWeight " + std::string(__func__) + " start");
     initialize();
@@ -235,10 +241,12 @@ void T5DecodingWeight<T>::loadModel(std::string dir_path)
     loadWeightFromBin<T>(
         weights_ptr[2], {(size_t)weights_size[2]}, dir_path + "/decoder.final_layer_norm.weight.bin", model_file_type);
     if (checkIfFileExist(dir_path + "/lm_head.weight.bin")) {
-        loadWeightFromBin<T>(weights_ptr[3], {(size_t)weights_size[3]}, dir_path + "/lm_head.weight.bin", model_file_type);
+        loadWeightFromBin<T>(
+            weights_ptr[3], {(size_t)weights_size[3]}, dir_path + "/lm_head.weight.bin", model_file_type);
     }
     else {
-        loadWeightFromBin<T>(weights_ptr[3], {(size_t)weights_size[3]}, dir_path + "/shared.weight_T.bin", model_file_type);
+        loadWeightFromBin<T>(
+            weights_ptr[3], {(size_t)weights_size[3]}, dir_path + "/shared.weight_T.bin", model_file_type);
     }
 
     if (t5_with_bias) {

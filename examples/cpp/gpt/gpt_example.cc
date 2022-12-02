@@ -266,6 +266,15 @@ void gpt_example(const INIReader reader)
 
     // TODO(bhsueh) Some parameters are move to runtime query.
     // Need to remove them in the future.
+
+    AttentionType attention_type = getAttentionType<T>(size_per_head,
+                                                       getSMVersion(),
+                                                       true,   // remove_padding
+                                                       0,      // gpt supports any-seq-length fmha
+                                                       true,   // is_fuse
+                                                       false,  // with_relative_position_bias
+                                                       true);  // causal_mask
+
     ParallelGpt<T> gpt = ParallelGpt<T>(0,  // max_batch_size, FT will adjust the buffer automatically.
                                         0,  // max_seq_len, FT will adjust the buffer automatically.
                                         0,  // max_input_len, FT will adjust the buffer automatically.
@@ -294,11 +303,11 @@ void gpt_example(const INIReader reader)
                                         &allocator,
                                         false,
                                         &prop,
+                                        attention_type,
                                         sparse,
                                         0,
                                         nullptr,
                                         0,
-                                        true,
                                         shared_contexts_ratio);
 
     int* d_output_ids;

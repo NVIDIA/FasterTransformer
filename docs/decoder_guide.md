@@ -156,13 +156,10 @@ For those unable to use the NGC container, to set up the required environment or
 
     You can choose the tensorflow version and python version you want. Here, we list some possible images:
 
-    - `nvcr.io/nvidia/tensorflow:20.12-tf1-py3` contains the TensorFlow 1.15 and python 3.8. 
-    - `nvcr.io/nvidia/pytorch:20.12-py3` contains the PyTorch 1.8.0 and python 3.8
-
-    To achieve best performance, we recommend to use the latest image. For example, running image `nvcr.io/nvidia/tensorflow:20.12-tf1-py3` by 
+    To achieve best performance, we recommend to use the latest image. For example, running image `nvcr.io/nvidia/tensorflow:22.09-tf1-py3` by 
 
     ```bash
-    nvidia-docker run -ti --rm nvcr.io/nvidia/tensorflow:20.12-tf1-py3 bash
+    nvidia-docker run -ti --shm-size 5g --rm nvcr.io/nvidia/tensorflow:22.09-tf1-py3 bash
     git clone https://github.com/NVIDIA/FasterTransformer.git
     mkdir -p FasterTransformer/build
     cd FasterTransformer/build
@@ -177,23 +174,23 @@ For those unable to use the NGC container, to set up the required environment or
 
     ```bash
     cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release ..
-    make
+    make -j12
     ```
 
 2. build with TensorFlow 
 
-    Uses need to set the path of TensorFlow. For example, if we use `nvcr.io/nvidia/tensorflow:20.12-tf1-py3`, then
+    Uses need to set the path of TensorFlow. For example, if we use `nvcr.io/nvidia/tensorflow:22.09-tf1-py3`, then
 
     ```bash
     cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_TF=ON -DTF_PATH=/usr/local/lib/python3.8/dist-packages/tensorflow_core/ ..
-    make 
+    make -j12 
     ```
 
 3. build with PyTorch
 
     ```bash
     cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON ..
-    make
+    make -j12
     ```
 
     This will build the TorchScript custom class. Please make sure that the `PyTorch >= 1.5.0`.

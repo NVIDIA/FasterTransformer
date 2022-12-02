@@ -79,7 +79,7 @@ public:
             CHECK_CUSPARSE(cusparseLtInit(&cusparseLtHandle_));
 #else
             std::cout << "[WARNING] Sparsity support is not enabled. Will use dense GEMM instead. "
-                         "To enabled sparisty, please provide `-DSUPPORT_SPARITY` flag for compliation."
+                         "To enabled sparisty, please provide `-DSUPPORT_SPARITY` flag for compilation."
                       << std::endl;
 #endif
         }
@@ -116,34 +116,51 @@ public:
                 get_ptr<T>(weights_[i + 11 * layer_num_]);
         }
 
-        size_t weight_offset = gpt_variant_params_.has_post_decoder_layernorm ? 0 : 2;
-        if (gpt_variant_params_.has_post_decoder_layernorm) {
-            gpt_weights_.post_decoder_layernorm.gamma = get_ptr<T>(weights_[12 * layer_num_ + 0]);
-            gpt_weights_.post_decoder_layernorm.beta  = get_ptr<T>(weights_[12 * layer_num_ + 1]);
+        size_t weight_offset = 0;
+        if (gpt_variant_params_.has_pre_decoder_layernorm) {
+            gpt_weights_.pre_decoder_layernorm.gamma = get_ptr<T>(weights_[12 * layer_num_ + 0 - weight_offset]);
+            gpt_weights_.pre_decoder_layernorm.beta  = get_ptr<T>(weights_[12 * layer_num_ + 1 - weight_offset]);
         }
-        gpt_weights_.position_encoding_table = get_ptr<T>(weights_[12 * layer_num_ + 2 - weight_offset]);
-        gpt_weights_.setMaxSeqLen(weights_[12 * layer_num_ + 2 - weight_offset].size(0));
-        gpt_weights_.pre_decoder_embedding_table   = get_ptr<T>(weights_[12 * layer_num_ + 3 - weight_offset]);
-        gpt_weights_.post_decoder_embedding.kernel = get_ptr<T>(weights_[12 * layer_num_ + 4 - weight_offset]);
+        else {
+            weight_offset += 2;
+        }
+        if (gpt_variant_params_.has_post_decoder_layernorm) {
+            gpt_weights_.post_decoder_layernorm.gamma = get_ptr<T>(weights_[12 * layer_num_ + 2 - weight_offset]);
+            gpt_weights_.post_decoder_layernorm.beta  = get_ptr<T>(weights_[12 * layer_num_ + 3 - weight_offset]);
+        }
+        else {
+            weight_offset += 2;
+        }
+        if (gpt_variant_params_.has_positional_encoding) {
+            gpt_weights_.position_encoding_table = get_ptr<T>(weights_[12 * layer_num_ + 4 - weight_offset]);
+            gpt_weights_.setMaxSeqLen(weights_[12 * layer_num_ + 4 - weight_offset].size(0));
+        }
+        else {
+            weight_offset += 1;
+        }
+        gpt_weights_.pre_decoder_embedding_table   = get_ptr<T>(weights_[12 * layer_num_ + 5 - weight_offset]);
+        gpt_weights_.post_decoder_embedding.kernel = get_ptr<T>(weights_[12 * layer_num_ + 6 - weight_offset]);
+
+        weight_offset = 7 - weight_offset;
 
         if (gpt_variant_params_.has_adapters) {
             for (int i = 0; i < (int)layer_num_; i++) {
                 gpt_weights_.decoder_layer_weights[i]->after_attention_adapter_weights.intermediate_weight.kernel =
-                    get_ptr<T>(weights_[12 * layer_num_ + 4 - weight_offset + i + 1]);
+                    get_ptr<T>(weights_[12 * layer_num_ + weight_offset + i]);
                 gpt_weights_.decoder_layer_weights[i]->after_attention_adapter_weights.intermediate_weight.bias =
-                    get_ptr<T>(weights_[13 * layer_num_ + 4 - weight_offset + i + 1]);
+                    get_ptr<T>(weights_[13 * layer_num_ + weight_offset + i]);
                 gpt_weights_.decoder_layer_weights[i]->after_attention_adapter_weights.output_weight.kernel =
-                    get_ptr<T>(weights_[14 * layer_num_ + 4 - weight_offset + i + 1]);
+                    get_ptr<T>(weights_[14 * layer_num_ + weight_offset + i]);
                 gpt_weights_.decoder_layer_weights[i]->after_attention_adapter_weights.output_weight.bias =
-                    get_ptr<T>(weights_[15 * layer_num_ + 4 - weight_offset + i + 1]);
+                    get_ptr<T>(weights_[15 * layer_num_ + weight_offset + i]);
                 gpt_weights_.decoder_layer_weights[i]->after_ffn_adapter_weights.intermediate_weight.kernel =
-                    get_ptr<T>(weights_[16 * layer_num_ + 4 - weight_offset + i + 1]);
+                    get_ptr<T>(weights_[16 * layer_num_ + weight_offset + i]);
                 gpt_weights_.decoder_layer_weights[i]->after_ffn_adapter_weights.intermediate_weight.bias =
-                    get_ptr<T>(weights_[17 * layer_num_ + 4 - weight_offset + i + 1]);
+                    get_ptr<T>(weights_[17 * layer_num_ + weight_offset + i]);
                 gpt_weights_.decoder_layer_weights[i]->after_ffn_adapter_weights.output_weight.kernel =
-                    get_ptr<T>(weights_[18 * layer_num_ + 4 - weight_offset + i + 1]);
+                    get_ptr<T>(weights_[18 * layer_num_ + weight_offset + i]);
                 gpt_weights_.decoder_layer_weights[i]->after_ffn_adapter_weights.output_weight.bias =
-                    get_ptr<T>(weights_[19 * layer_num_ + 4 - weight_offset + i + 1]);
+                    get_ptr<T>(weights_[19 * layer_num_ + weight_offset + i]);
             }
         }
 #ifdef SPARSITY_ENABLED
@@ -230,6 +247,15 @@ public:
         ft::NcclParam tensor_para;
         ft::NcclParam pipeline_para;
 
+        ft::AttentionType attention_type =
+            ft::getAttentionType<T>(size_per_head_,
+                                    ft::getSMVersion(),
+                                    true,
+                                    max_input_length,  // gpt supports any-seq-length fmha
+                                    true,              // is_fuse
+                                    false,             // with_relative_position_bias
+                                    true);             // causal_mask
+
         ft::ParallelGpt<T>    gpt = ft::ParallelGpt<T>(request_batch_size,
                                                     total_output_len,
                                                     max_input_length,
@@ -258,6 +284,7 @@ public:
                                                     &allocator,
                                                     false,
                                                     &prop_,
+                                                    attention_type,
                                                     sparse_,
                                                     0);
         std::vector<uint32_t> output_seq_len(request_batch_size, total_output_len);
@@ -383,9 +410,12 @@ public:
           const double             layernorm_eps,
           const std::string        layernorm_type,
           const std::string        activation_type,
+          const bool               has_positional_encoding,
+          const bool               has_pre_decoder_layernorm,
           const bool               has_post_decoder_layernorm,
           const bool               has_adapters,
           const int64_t            adapter_inter_size,
+          const bool               use_attention_linear_bias,
           const vector<th::Tensor> weights);
 
     ~GptOp();

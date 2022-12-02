@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,8 @@
  */
 
 #include "src/fastertransformer/kernels/quantization_int8_kernels.h"
+#include <cstdio>
+
 namespace fastertransformer {
 
 __global__ void quantized_kernel(char4* dst, const float4* src, const int size_div_4, const float* scale_ptr)

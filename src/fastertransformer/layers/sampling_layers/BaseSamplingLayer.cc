@@ -105,9 +105,7 @@ BaseSamplingLayer<T>::~BaseSamplingLayer()
 }
 
 template<typename T>
-void BaseSamplingLayer<T>::setup(const size_t                                   batch_size,
-                                 const size_t                                   beam_width,
-                                 const std::unordered_map<std::string, Tensor>* runtime_args)
+void BaseSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_width, TensorMap* runtime_args)
 {
     // Set up the sampling layer for given runtime arguments.
     //
@@ -118,14 +116,14 @@ void BaseSamplingLayer<T>::setup(const size_t                                   
     //     repetition_penalty [1] or [batch_size] on cpu, optional
 
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    Tensor runtime_top_k = runtime_args->count("runtime_top_k") ? runtime_args->at("runtime_top_k") : Tensor();
-    Tensor runtime_top_p = runtime_args->count("runtime_top_p") ? runtime_args->at("runtime_top_p") : Tensor();
+    Tensor runtime_top_k = runtime_args->isExist("runtime_top_k") ? runtime_args->at("runtime_top_k") : Tensor();
+    Tensor runtime_top_p = runtime_args->isExist("runtime_top_p") ? runtime_args->at("runtime_top_p") : Tensor();
     allocateBuffer(batch_size, runtime_top_k, runtime_top_p);
 
     // If runtime argument has single random seed, using this random seed to initialize the random table of all
     // sentences. If the argument has [batch_size] random seeds, initializing the random table by different random seeds
     // respectively. If no random seed, initialize the random table of all sentences by 0 directly.
-    if (runtime_args->count("random_seed")) {
+    if (runtime_args->isExist("random_seed")) {
         Tensor random_seeds = runtime_args->at("random_seed");
         FT_CHECK_WITH_INFO(random_seeds.shape.size() == 1
                                && (random_seeds.size() == 1 || random_seeds.size() == batch_size),
@@ -150,8 +148,9 @@ void BaseSamplingLayer<T>::setup(const size_t                                   
 
     // Setup penalties.
     const float default_temperature = 1.0f;
-    Tensor      temperature         = runtime_args->count("temperature") ? runtime_args->at("temperature") :
-                                                                           Tensor(MEMORY_CPU, TYPE_FP32, {1}, &default_temperature);
+    Tensor      temperature         = runtime_args->isExist("temperature") ?
+                                          runtime_args->at("temperature") :
+                                          Tensor(MEMORY_CPU, TYPE_FP32, {1}, &default_temperature);
     if (temperature.size() == 1) {
         float tp = temperature.getVal<float>();
         deviceFill(temperature_buf_, batch_size, tp, stream_);
@@ -163,7 +162,7 @@ void BaseSamplingLayer<T>::setup(const size_t                                   
     }
 
     const float default_repetition_penalty = 1.0f;
-    Tensor      repetition_penalty         = runtime_args->count("repetition_penalty") ?
+    Tensor      repetition_penalty         = runtime_args->isExist("repetition_penalty") ?
                                                  runtime_args->at("repetition_penalty") :
                                                  Tensor(MEMORY_CPU, TYPE_FP32, {1}, &default_repetition_penalty);
     if (repetition_penalty.size() == 1) {
@@ -217,26 +216,35 @@ template<typename T>
 void BaseSamplingLayer<T>::forward(std::unordered_map<std::string, Tensor>*       output_tensors,
                                    const std::unordered_map<std::string, Tensor>* input_tensors)
 {
+    FT_LOG_DEBUG("%s", __PRETTY_FUNCTION__);
+    TensorMap input_map(*input_tensors);
+    TensorMap output_map(*output_tensors);
+    forward(&output_map, &input_map);
+}
+
+template<typename T>
+void BaseSamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors)
+{
     // input_tensors:
     //      logits [local_batch_size, vocab_size_padded]
-    //      embedding_bias [vocab_size_padded]
+    //      embedding_bias [vocab_size_padded], optional
     //      step [1] on cpu
     //      max_input_length [1] on cpu
-    //      input_lengths [local_batch_size]
+    //      input_lengths [local_batch_size], optional
     //      ite [1] on cpu
 
     // output_tensors:
     //      output_ids [max_seq_len, batch_size]
-    //      finished [local_batch_size]
-    //      sequence_length [local_batch_size]
-    //      cum_log_probs [batch_size], must be float*
+    //      finished [local_batch_size], optional
+    //      sequence_length [local_batch_size], optional
+    //      cum_log_probs [batch_size], must be float*, optional
     //          The cumultative log probability of generated tokens.
-    //      output_log_probs [local_batch_size], must be float*
+    //      output_log_probs [local_batch_size], must be float*, optional
     //          The log probs at the current step.
 
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    FT_CHECK(input_tensors->size() >= 6);
-    FT_CHECK(output_tensors->size() >= 3);
+    FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
+    FT_CHECK(input_tensors->size() >= 4);
+    FT_CHECK(output_tensors->size() >= 1);
     const int batch_size       = output_tensors->at("output_ids").shape[1];
     const int local_batch_size = input_tensors->at("logits").shape[0];
     const int step             = input_tensors->at("step").getVal<int>();
@@ -260,7 +268,8 @@ void BaseSamplingLayer<T>::forward(std::unordered_map<std::string, Tensor>*     
         logits = runtime_logits_buf_;
     }
 
-    T* embedding_bias = input_tensors->at("embedding_bias").getPtr<T>();
+    const T* embedding_bias =
+        input_tensors->isExist("embedding_bias") ? input_tensors->at("embedding_bias").getPtr<T>() : nullptr;
     if (embedding_bias != nullptr || !ALL_OF(temperature_ + ite * local_batch_size, local_batch_size, float, 1.0f)) {
         invokeBatchApplyTemperaturePenalty(logits,
                                            embedding_bias,
@@ -280,7 +289,7 @@ void BaseSamplingLayer<T>::forward(std::unordered_map<std::string, Tensor>*     
             batch_size,
             local_batch_size,
             vocab_size_padded_,
-            input_tensors->at("input_lengths").getPtr<int>(),
+            input_tensors->at("input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {}, nullptr}).getPtr<int>(),
             input_tensors->at("max_input_length").getVal<int>(),
             step,
             stream_);
@@ -294,6 +303,7 @@ void BaseSamplingLayer<T>::forward(std::unordered_map<std::string, Tensor>*     
         freeBuffer();
     }
     sync_check_cuda_error();
+    FT_LOG_DEBUG("%s stop", __PRETTY_FUNCTION__);
 }
 
 template class BaseSamplingLayer<float>;

@@ -14,13 +14,14 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/kernels/bfloat16_fallback_kenrels.cuh"
 #include "src/fastertransformer/kernels/decoding_kernels.h"
+#include "src/fastertransformer/kernels/reduce_kernel_utils.cuh"
+#include "src/fastertransformer/utils/cuda_type_utils.cuh"
 #include "src/fastertransformer/utils/cuda_utils.h"
 
 namespace fastertransformer {
 
-static const float HALF_FLT_MAX = 65504.F;
+// static const float HALF_FLT_MAX = 65504.F;
 
 template<typename T>
 __global__ void decodingInitialize(bool*      finished,
@@ -95,6 +96,7 @@ template void invokeDecodingInitialize(bool*          finished,
                                        cudaStream_t   stream);
 #endif
 
+// PROMPT_SRC: 0 --> no prompts, 1 --> from loaded prompts, 2 --> from request prompts
 template<typename T>
 __global__ void embeddingLookupPosEncoding(T*         from_tensor,
                                            const T*   embedding_table,
@@ -102,23 +104,23 @@ __global__ void embeddingLookupPosEncoding(T*         from_tensor,
                                            const int* all_ids,
                                            const int* padding_count,
                                            const int* input_lengths,
-                                           const int  local_batch_size,
+                                           const int  local_token_num,
                                            const int  hidden_units,
                                            const int  step,
                                            const int  max_input_length,
-                                           const int  batch_size,
+                                           const int  token_num,
                                            const int  ite,
                                            const T    scale)
 {
     // 1. lookup from embedding table
     // 2. multiply scale
     // 3. add the position encoding
-    const int id_offset = step * batch_size + ite * local_batch_size;
+    const int id_offset = step * token_num + ite * local_token_num;
 
     const bool use_padding_count = padding_count != nullptr;
     const bool use_input_len     = input_lengths != nullptr;
 
-    for (int index = blockIdx.x * blockDim.x + threadIdx.x; index < local_batch_size * hidden_units;
+    for (int index = blockIdx.x * blockDim.x + threadIdx.x; index < local_token_num * hidden_units;
          index += blockDim.x * gridDim.x) {
         const int row_index   = index / hidden_units;
         const int col_index   = index % hidden_units;
@@ -139,83 +141,136 @@ __global__ void embeddingLookupPosEncoding(T*         from_tensor,
 }
 
 // No absolute position embedding
-template<typename T>
-__global__ void embeddingLookup(T*         from_tensor,
-                                const T*   embedding_table,
-                                const int* all_ids,
-                                const int  local_batch_size,
-                                const int  hidden_units,
-                                const int  step,
-                                const int  batch_size,
-                                const int  ite,
-                                const T    scale)
+// PROMPT_SRC: 0 --> no prompts, 1 --> from loaded prompts, 2 --> from request prompts
+template<typename T, int PROMPT_SRC>
+__global__ void embeddingLookup(T*                    from_tensor,
+                                const T*              embedding_table,
+                                const int*            all_ids,
+                                pPromptTuningParam<T> prompt_param,
+                                const int             local_token_num,
+                                const int             hidden_units,
+                                const int             step,
+                                const int             token_num,
+                                const int             ite,
+                                const int             seq_len,
+                                const T               scale)
 {
     // 1. lookup from embedding table
     // 2. multiply scale
-    const int id_offset = step * batch_size + ite * local_batch_size;
+    const int id_offset = step * token_num + ite * local_token_num;
 
-    for (int index = blockIdx.x * blockDim.x + threadIdx.x; index < local_batch_size * hidden_units;
+    for (int index = blockIdx.x * blockDim.x + threadIdx.x; index < local_token_num * hidden_units;
          index += blockDim.x * gridDim.x) {
-        const int row_index = index / hidden_units;
-        const int col_index = index % hidden_units;
-        T         val       = embedding_table[all_ids[id_offset + row_index] * hidden_units + col_index] * scale;
-        from_tensor[index]  = val;
+
+        const int word_index     = index / hidden_units;
+        const int word_index_row = word_index / seq_len;  // batch_id
+        const int col_index      = index % hidden_units;
+        const int input_id       = all_ids == nullptr ? word_index : all_ids[id_offset + word_index];
+        const int prompt_id      = input_id - prompt_param.p_prompt_tuning_id_start;
+        T         embedding      = (T)0.0f;
+        if (PROMPT_SRC > 0 && prompt_id >= 0) {
+            if (PROMPT_SRC == 1) {
+                // from loaded prompt embedding tables
+                embedding =
+                    prompt_param.p_prompt_tuning_batch_weights[word_index_row][prompt_id * hidden_units + col_index];
+            }
+            else {
+                // from request prompt embedding
+                embedding =
+                    prompt_param
+                        .request_prompt_embedding[word_index_row * prompt_param.request_prompt_max_length * hidden_units
+                                                  + prompt_id * hidden_units + col_index];
+            }
+        }
+        else {
+            embedding = embedding_table[input_id * hidden_units + col_index];
+        }
+        from_tensor[index] = embedding * scale;
     }
 }
 
+#define EMBEDDING_LOOKUP(PROMPT_SRC)                                                                                   \
+    embeddingLookup<T, PROMPT_SRC><<<grid, block, 0, stream>>>(from_tensor,                                            \
+                                                               embedding_table,                                        \
+                                                               all_ids,                                                \
+                                                               prompt_param,                                           \
+                                                               local_token_num,                                        \
+                                                               hidden_units,                                           \
+                                                               step,                                                   \
+                                                               token_num,                                              \
+                                                               ite,                                                    \
+                                                               seq_len,                                                \
+                                                               scale);
+
 /* Adapter function for invokeEmbeddingLookupPosEncoding{PadCount,InputLen} */
 template<typename T>
-void invokeEmbeddingLookupPosEncoding(T*           from_tensor,
-                                      const T*     embedding_table,
-                                      const T*     position_encoding,
-                                      const int*   all_ids,
-                                      const int*   padding_count,
-                                      const int*   input_lengths,
-                                      const int    local_batch_size,
-                                      const int    hidden_units,
-                                      const T      scale,
-                                      const int    step,
-                                      const int    max_input_length,
-                                      const int    batch_size,
-                                      const int    ite,
-                                      cudaStream_t stream)
+void invokeEmbeddingLookupPosEncoding(T*                    from_tensor,
+                                      const T*              embedding_table,
+                                      const T*              position_encoding,
+                                      const int*            all_ids,
+                                      const int*            padding_count,
+                                      const int*            input_lengths,
+                                      pPromptTuningParam<T> prompt_param,
+                                      const int             local_token_num,
+                                      const int             hidden_units,
+                                      const T               scale,
+                                      const int             step,
+                                      const int             max_input_length,
+                                      const int             token_num,
+                                      const int             ite,
+                                      const int             seq_len,
+                                      cudaStream_t          stream)
 {
-    dim3 grid(min(local_batch_size, 65536));
+    dim3 grid(min(local_token_num, 65536));
     dim3 block(min(hidden_units, 1024));
     if (position_encoding != nullptr) {
+        FT_CHECK_WITH_INFO(prompt_param.use_request_p_prompt_embedding == false
+                               && prompt_param.p_prompt_tuning_batch_weights == nullptr,
+                           fmtstr("embeddingLookupPosEncoding still not support prompt tuning"));
         embeddingLookupPosEncoding<T><<<grid, block, 0, stream>>>(from_tensor,
                                                                   embedding_table,
                                                                   position_encoding,
                                                                   all_ids,
                                                                   padding_count,
                                                                   input_lengths,
-                                                                  local_batch_size,
+                                                                  local_token_num,
                                                                   hidden_units,
                                                                   step,
                                                                   max_input_length,
-                                                                  batch_size,
+                                                                  token_num,
                                                                   ite,
                                                                   scale);
     }
     else {
-        embeddingLookup<T><<<grid, block, 0, stream>>>(
-            from_tensor, embedding_table, all_ids, local_batch_size, hidden_units, step, batch_size, ite, scale);
+        if (prompt_param.use_request_p_prompt_embedding) {
+            EMBEDDING_LOOKUP(2);
+        }
+        else if (prompt_param.p_prompt_tuning_batch_weights != nullptr) {
+            EMBEDDING_LOOKUP(1);
+        }
+        else {
+            EMBEDDING_LOOKUP(0);
+        }
     }
 }
 
+#undef EMBEDDING_LOOKUP
+
 template<typename T>
-void invokeEmbeddingLookupPosEncodingPadCount(T*           from_tensor,
-                                              const T*     embedding_table,
-                                              const T*     position_encoding,
-                                              const int*   all_ids,
-                                              const int*   pad_count,
-                                              const int    local_batch_size,
-                                              const int    hidden_units,
-                                              const T      scale,
-                                              const int    step,
-                                              const int    batch_size,
-                                              const int    ite,
-                                              cudaStream_t stream)
+void invokeEmbeddingLookupPosEncodingPadCount(T*                    from_tensor,
+                                              const T*              embedding_table,
+                                              const T*              position_encoding,
+                                              const int*            all_ids,
+                                              const int*            pad_count,
+                                              pPromptTuningParam<T> prompt_param,
+                                              const int             local_token_num,
+                                              const int             hidden_units,
+                                              const T               scale,
+                                              const int             step,
+                                              const int             token_num,
+                                              const int             ite,
+                                              const int             seq_len,
+                                              cudaStream_t          stream)
 {
     invokeEmbeddingLookupPosEncoding<T>(from_tensor,
                                         embedding_table,
@@ -223,29 +278,33 @@ void invokeEmbeddingLookupPosEncodingPadCount(T*           from_tensor,
                                         all_ids,
                                         pad_count,
                                         nullptr,
-                                        local_batch_size,
+                                        prompt_param,
+                                        local_token_num,
                                         hidden_units,
                                         scale,
                                         step,
                                         0,
-                                        batch_size,
+                                        token_num,
                                         ite,
+                                        seq_len,
                                         stream);
 }
 
 #define INSTANTIATE_LOOKUP_POS_ENCODING_PAD_COUNT(T)                                                                   \
-    template void invokeEmbeddingLookupPosEncodingPadCount(T*           from_tensor,                                   \
-                                                           const T*     embedding_table,                               \
-                                                           const T*     position_encoding,                             \
-                                                           const int*   all_ids,                                       \
-                                                           const int*   pad_count,                                     \
-                                                           const int    local_batch_size,                              \
-                                                           const int    hidden_units,                                  \
-                                                           const T      scale,                                         \
-                                                           const int    step,                                          \
-                                                           const int    batch_size,                                    \
-                                                           const int    ite,                                           \
-                                                           cudaStream_t stream)
+    template void invokeEmbeddingLookupPosEncodingPadCount(T*                    from_tensor,                          \
+                                                           const T*              embedding_table,                      \
+                                                           const T*              position_encoding,                    \
+                                                           const int*            all_ids,                              \
+                                                           const int*            pad_count,                            \
+                                                           pPromptTuningParam<T> prompt_param,                         \
+                                                           const int             local_token_num,                      \
+                                                           const int             hidden_units,                         \
+                                                           const T               scale,                                \
+                                                           const int             step,                                 \
+                                                           const int             token_num,                            \
+                                                           const int             ite,                                  \
+                                                           const int             seq_len,                              \
+                                                           cudaStream_t          stream)
 INSTANTIATE_LOOKUP_POS_ENCODING_PAD_COUNT(float);
 INSTANTIATE_LOOKUP_POS_ENCODING_PAD_COUNT(half);
 #ifdef ENABLE_BF16
@@ -342,10 +401,10 @@ __global__ void paddingEmbeddingKernel(T*        padded_embedding_kernel,
 {
     for (int id = threadIdx.x + blockIdx.x * blockDim.x; id < hidden_unit * vocab_size_padded;
          id += blockDim.x * gridDim.x) {
-        int row_id = id / vocab_size_padded;
-        int col_id = id % vocab_size_padded;
-        if (col_id < vocab_size) {
-            padded_embedding_kernel[id] = embedding_kernel[row_id * vocab_size + col_id];
+        int row_id = id / hidden_unit;
+        int col_id = id % hidden_unit;
+        if (row_id < vocab_size) {
+            padded_embedding_kernel[id] = embedding_kernel[row_id * hidden_unit + col_id];
         }
         else {
             padded_embedding_kernel[id] = (T)(0.0f);
@@ -430,12 +489,22 @@ __global__ void gatherTree(gatherTreeParam param)
         const int* step_ids   = param.step_ids;
 
         // TODO(bhsueh) optimize the reduce_max operation for large beam_width
-        int max_len             = -1;
+        int  max_len                      = -1;
+        bool update_response_input_length = param.response_input_lengths != nullptr;
         // int selected_beam_index = 0;
         for (int j = 0; j < param.beam_width; j++) {
-            int tmp_len = __ldg(param.max_sequence_lengths + batch * param.beam_width + j);
+            int tmp_len =
+                param.max_sequence_lengths[batch * param.beam_width + j] + param.max_sequence_length_final_step;
+            // also remove the length of the soft prompts, p_prompt_tuning
+            param.max_sequence_lengths[batch * param.beam_width + j] =
+                tmp_len - param.max_prefix_soft_prompt_length
+                - (param.max_input_length - param.max_input_without_prompt_length);
+            // update the response input length
+            if (update_response_input_length) {
+                param.response_input_lengths[batch * param.beam_width + j] = input_len - prompt_len;
+            }
             if (tmp_len > max_len) {
-                max_len             = tmp_len;
+                max_len = tmp_len;
                 // selected_beam_index = j;
             }
         }
@@ -475,7 +544,9 @@ __global__ void gatherTree(gatherTreeParam param)
 
         // set the padded part as end_token
         // input_len
-        for (int index = max_len - (max_input_length - input_len); index < param.max_time; ++index) {
+        for (int index = max_len - padding_offset_and_prompt_offset;
+             index < param.max_time - param.max_prefix_soft_prompt_length;
+             ++index) {
             param.beams[GET_IX(index, beam)] = param.end_tokens[batch];
         }
 
@@ -499,9 +570,12 @@ __global__ void gatherTree(gatherTreeParam param)
 #undef GET_IX
 
         // transpose on output_ids
+        // remove p_prompt tuning virtual tokens (end tokens)
+        int actual_output_length = param.max_time - param.max_prefix_soft_prompt_length
+                                   - (param.max_input_length - param.max_input_without_prompt_length);
         if (param.output_ids != nullptr) {
-            for (int j = 0; j < (param.max_time - param.max_prefix_soft_prompt_length); j++) {
-                param.output_ids[i * (param.max_time - param.max_prefix_soft_prompt_length) + j] =
+            for (int j = 0; j < actual_output_length; j++) {
+                param.output_ids[i * actual_output_length + j] =
                     param.beams[j * param.batch_size * param.beam_width + i];
             }
         }
@@ -620,5 +694,79 @@ void invokePlusScalar(T* buf, const T val, const int size, cudaStream_t stream)
 }
 
 template void invokePlusScalar(int* buf, const int val, const int size, cudaStream_t stream);
+
+__global__ void finalize(int*         output_ids,
+                         int*         sequence_lengths,
+                         const int*   topk_output_ids,
+                         const int*   topk_sequence_lengths,
+                         const float* scores,
+                         const int    beam_width,
+                         const int    max_seq_len)
+{
+    // output_ids: [bs, beam_width, max_seq_len]
+    // sequence_lengths: [bs, beam_width]
+    // topk_output_ids: [bs, beam_width, max_seq_len + 1]
+    // topk_sequence_lengths: [bs, beam_width]
+    // scores: [bs, beam_width]
+
+    // This kernel do a sorting for scores first, and then put the topk_output_ids
+    // into output_ids by the rank of scores.
+    // Note that we remove the start_token (the id at first position) from topk_output_ids
+
+    extern __shared__ char array[];
+    int*                   rank     = (int*)(array);
+    float*                 s_scores = (float*)(rank + beam_width);
+    __shared__ float       s_max_score;
+
+    if (threadIdx.x < beam_width) {
+        s_scores[threadIdx.x] = scores[blockIdx.x * beam_width + threadIdx.x];
+    }
+    __syncthreads();
+
+    for (int i = 0; i < beam_width; i++) {
+        float score     = threadIdx.x < beam_width ? s_scores[threadIdx.x] : -FLT_MAX;
+        float max_score = blockReduceMax<float>(score);
+
+        if (threadIdx.x == 0) {
+            for (int j = 0; j < beam_width; j++) {
+                if (s_scores[j] == max_score) {
+                    rank[i]     = j;
+                    s_scores[j] = -FLT_MAX;
+                    break;
+                }
+            }
+        }
+        __syncthreads();
+    }
+
+    if (threadIdx.x < beam_width) {
+        sequence_lengths[blockIdx.x * beam_width + threadIdx.x] =
+            topk_sequence_lengths[blockIdx.x * beam_width + rank[threadIdx.x]];
+    }
+    for (int beam_idx = 0; beam_idx < beam_width; beam_idx++) {
+        // start from step 1 to skip the start token
+        for (int i = threadIdx.x + 1; i < sequence_lengths[blockIdx.x * beam_width + beam_idx]; i += blockDim.x) {
+            output_ids[blockIdx.x * beam_width * max_seq_len + beam_idx * max_seq_len + (i - 1)] =
+                topk_output_ids[blockIdx.x * beam_width * (max_seq_len + 1) + rank[beam_idx] * (max_seq_len + 1) + i];
+        }
+    }
+}
+
+void invokeFinalize(int*         output_ids,
+                    int*         sequence_lengths,
+                    const int*   topk_output_ids,
+                    const int*   topk_sequence_lengths,
+                    const float* scores,
+                    const int    beam_width,
+                    const int    max_seq_len,
+                    const int    batch_size,
+                    cudaStream_t stream)
+{
+    dim3 block(beam_width);
+    block.x = (block.x + 31) / 32 * 32;
+    FT_CHECK(block.x < 1024);
+    finalize<<<batch_size, block, beam_width * sizeof(int) + beam_width * sizeof(float), stream>>>(
+        output_ids, sequence_lengths, topk_output_ids, topk_sequence_lengths, scores, beam_width, max_seq_len);
+}
 
 }  // namespace fastertransformer

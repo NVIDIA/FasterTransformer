@@ -143,7 +143,7 @@ _C.TEST = CN()
 # Whether to use center crop when testing
 _C.TEST.CROP = False
 # Whether to use SequentialSampler as validation sampler
-_C.TEST.SEQUENTIAL = False
+_C.TEST.SEQUENTIAL = True
 
 # -----------------------------------------------------------------------------
 # Misc

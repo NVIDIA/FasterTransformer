@@ -351,7 +351,7 @@ void generate_xlnet_gemm_config(int   batch_size,
         printf("fast_algo %d costs %.3f ms\n", fast_algo, exec_time);
 
         if ((i == 1 || i == 7 || i == 8 || i == 9) && data_type != FLOAT_DATATYPE) {
-            printf("***cublasLt Gemm Testing Beign***\n");
+            printf("***cublasLt Gemm Testing Begin***\n");
             // Let try a fixed number of combinations
             int                ALGO_COMBINATIONS = 5000;
             customMatmulPerf_t perfResults[ALGO_COMBINATIONS];

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@
 
 #pragma once
 
+#include "src/fastertransformer/kernels/cutlass_kernels/fpA_intB_gemm/fpA_intB_gemm.h"
 #include "src/fastertransformer/kernels/matrix_vector_multiplication.h"
 #include "src/fastertransformer/layers/attention_layers/BaseAttentionLayer.h"
 
@@ -38,7 +39,7 @@ private:
     const size_t rotary_embedding_dim_;
     const bool   neox_rotary_style_;
 
-    const int int8_mode_ = 0;
+    std::shared_ptr<CutlassFpAIntBGemmRunner<T, uint8_t>> weight_only_int8_fc_runner_;
 
     void allocateBuffer() override;
     void freeBuffer() override;
@@ -48,13 +49,20 @@ private:
     using BaseAttentionLayer<T>::is_free_buffer_after_forward_;
     using BaseAttentionLayer<T>::is_allocate_buffer_;
     using BaseAttentionLayer<T>::cublas_wrapper_;
-    using BaseAttentionLayer<T>::allocator_;
 
 protected:
-    T* qkv_buf_     = nullptr;
-    T* context_buf_ = nullptr;
+    T*     qkv_buf_              = nullptr;
+    T*     context_buf_          = nullptr;
+    char*  mixed_gemm_workspace_ = nullptr;
+    size_t mixed_gemm_ws_bytes_  = 0;
     using BaseAttentionLayer<T>::stream_;
     using BaseAttentionLayer<T>::sparse_;
+    using BaseAttentionLayer<T>::allocator_;
+
+    // int8_mode_ == 0 means we don't use any mechanism related to INT8.
+    // int8_mode_ == 1 for weight quantized only gemm for GPT
+    // int8_mode_ == 2 for SmoothQuant O3 (per tensor scales)
+    const int int8_mode_ = 0;
 
 public:
     DecoderSelfAttentionLayer(size_t           max_batch_size,
@@ -134,9 +142,8 @@ public:
 
     ~DecoderSelfAttentionLayer();
 
-    void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                 const std::vector<fastertransformer::Tensor>* input_tensors,
-                 const AttentionWeight<T>*                     attention_weights) override;
+    void
+    forward(TensorMap* output_tensors, TensorMap* input_tensors, const AttentionWeight<T>* attention_weights) override;
 };
 
 template<typename T>
@@ -164,7 +171,14 @@ void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
                                         const int    step,
                                         const float  q_scaling,
                                         const int    relative_attention_bias_stride,
+                                        const T*     linear_bias_slopes,
                                         const bool*  masked_tokens,
+                                        const int*   ia3_tasks,
+                                        const T*     ia3_key_weights,
+                                        const T*     ia3_value_weights,
+                                        const float* qkv_scale_out,
+                                        const float* attention_out_scale,
+                                        const int    int8_mode,
                                         cudaStream_t stream);
 
 }  // namespace fastertransformer

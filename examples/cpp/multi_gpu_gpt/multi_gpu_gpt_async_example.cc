@@ -166,7 +166,7 @@ protected:
      *
      * This function calls just before streaming inside `streamDecoding`.
      * Please override this function to do anything, if a user further needs
-     * inside an overriden function (`streamHook` or `stopCriteria`), e.g.
+     * inside an overridden function (`streamHook` or `stopCriteria`), e.g.
      * allocating buffers.
      */
     virtual void onStreamBegin(const int batch_size, const int input_len) {}
@@ -673,6 +673,14 @@ void multi_gpu_gpt_example(const INIReader reader)
 
     unsigned long long int random_seed = 0;
 
+    AttentionType attention_type = getAttentionType<T>(size_per_head,
+                                                       getSMVersion(),
+                                                       true,   // remove_padding
+                                                       0,      // gpt supports any-seq-length fmha
+                                                       true,   // is_fuse
+                                                       false,  // with_relative_position_bias
+                                                       true);  // causal_mask
+
     ParallelGpt<T> gpt = ParallelGpt<T>(0,  // max_batch_size, FT will adjust the buffer automatically.
                                         0,  // max_seq_len, FT will adjust the buffer automatically.
                                         0,  // max_input_len, FT will adjust the buffer automatically.
@@ -701,6 +709,7 @@ void multi_gpu_gpt_example(const INIReader reader)
                                         &allocator,
                                         false,
                                         &prop,
+                                        attention_type,
                                         false,
                                         int8_mode);
 

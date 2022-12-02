@@ -136,21 +136,14 @@ broadCastRequest(const std::vector<int>& v_start_ids,
                                 std::vector<size_t>{(size_t)request_batch_size},
                                 request_output_len_ptr}},
                 {"start_id",
-                 triton::Tensor{triton::MEMORY_CPU,
-                                triton::TYPE_INT32,
-                                {(size_t)request_batch_size},
-                                start_ids_ptr}},
+                 triton::Tensor{triton::MEMORY_CPU, triton::TYPE_INT32, {(size_t)request_batch_size}, start_ids_ptr}},
                 {"end_id",
-                 triton::Tensor{triton::MEMORY_CPU,
-                                triton::TYPE_INT32,
-                                {(size_t)request_batch_size},
-                                end_ids_ptr}}});
+                 triton::Tensor{triton::MEMORY_CPU, triton::TYPE_INT32, {(size_t)request_batch_size}, end_ids_ptr}}});
         if (!v_input_bad_words.empty()) {
-            input_tensors->insert({"bad_words_list",
-                                   triton::Tensor{triton::MEMORY_GPU,
-                                                  triton::TYPE_INT32,
-                                                  {2, v_input_bad_words.size() / 2},
-                                                  d_input_bad_words}});
+            input_tensors->insert(
+                {"bad_words_list",
+                 triton::Tensor{
+                     triton::MEMORY_GPU, triton::TYPE_INT32, {2, v_input_bad_words.size() / 2}, d_input_bad_words}});
         }
         request_list.push_back(input_tensors);
 
@@ -231,7 +224,7 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
     std::vector<int> v_start_ids;
     std::vector<int> v_start_lengths;
 
-    int max_input_len = 0;
+    size_t max_input_len = 0;
     ft::read_start_ids(request_batch_size,
                        &v_start_lengths,
                        &v_start_ids,

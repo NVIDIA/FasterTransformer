@@ -358,7 +358,7 @@ void generate_gpt_gemm_config(int   batch_size,
 
         // for fp16 and bf16, we compare cublasLt
         if (data_type != FLOAT_DATATYPE && i != 1 && i != 2 && i != 10) {
-            printf("***cublasLt Gemm Testing Beign***\n");
+            printf("***cublasLt Gemm Testing Begin***\n");
             // Let try a fixed number of combinations
             int                ALGO_COMBINATIONS = 5000;
             customMatmulPerf_t perfResults[ALGO_COMBINATIONS];

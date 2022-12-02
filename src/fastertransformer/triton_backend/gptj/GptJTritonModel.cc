@@ -270,6 +270,14 @@ GptJTritonModel<T>::createModelInstance(int                                     
     ft::NcclParam tensor_para   = nccl_params.first[comms_rank];
     ft::NcclParam pipeline_para = nccl_params.second[comms_rank];
 
+    ft::AttentionType attention_type = ft::getAttentionType<T>(size_per_head_,
+                                                               ft::getSMVersion(),
+                                                               true,   // remove_padding
+                                                               0,      // gpt supports any-seq-length fmha
+                                                               true,   // is_fuse
+                                                               false,  // with_relative_position_bias
+                                                               true);  // causal_mask
+
     auto gpt =
         std::make_unique<ft::GptJ<T>>(ft::GptJ<T>(0,  // max_batch_size, FT will adjust the buffer automatically.
                                                   0,  // max_seq_len, FT will adjust the buffer automatically.
@@ -299,6 +307,7 @@ GptJTritonModel<T>::createModelInstance(int                                     
                                                   allocator.get(),
                                                   false,
                                                   cuda_device_prop_ptr.get(),
+                                                  attention_type,
                                                   custom_all_reduce_comm,
                                                   enable_custom_all_reduce_));
 

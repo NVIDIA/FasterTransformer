@@ -14,6 +14,7 @@
 
 import argparse
 import configparser
+import random
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -21,6 +22,9 @@ if __name__ == "__main__":
                         help='batch size')
     parser.add_argument('-max_input_length', '--max_input_length', type=int, required=True, metavar='NUMBER',
                         help='max input length')
+    parser.add_argument('--destination', type=str, default="../examples/cpp/multi_gpu_gpt/start_ids.csv", metavar='STRING',
+                        help='Configuration save file. Default is "../examples/cpp/multi_gpu_gpt/start_ids.csv".')
+
     args = parser.parse_args()
     args_dict = vars(args)
 
@@ -28,13 +32,13 @@ if __name__ == "__main__":
     max_input_length = args_dict["max_input_length"]
     path = f"../examples/cpp/multi_gpu_gpt/start_ids.csv"
 
-    with open(path, 'w') as f:
+    with open(args_dict["destination"], 'w') as f:
         ids = ""
         for i in range(batch_size):
             for j in range(max_input_length):
                 if j == 0:
-                    ids = f"{ids}198"
+                    ids = f"{ids}{random.randint(1, 100)}"
                 else:
-                    ids = f"{ids}, 198"
+                    ids = f"{ids}, {random.randint(1, 100)}"
             ids = f"{ids}\n"
         f.write(ids)

@@ -81,13 +81,12 @@ public:
         shared_contexts_ratio_(shared_contexts_ratio)
     {
         ft::check_cuda_error(cublasLtCreate(&cublasltHandle_));
-        cublas_algo_map_      = new ft::cublasAlgoMap("gemm_config.in");
+        cublas_algo_map_      = new ft::cublasAlgoMap(GEMM_CONFIG);
         cublas_wrapper_mutex_ = new std::mutex();
 
         ftNcclInitialize(tensor_para_, pipeline_para_, tensor_para_size, pipeline_para_size);
 
         gpt_weights_.resizeLayer(layer_num_);
-
         for (int i = 0; i < (int)layer_num_; i++) {
             gpt_weights_.decoder_layer_weights[i]->pre_layernorm_weights.gamma =
                 get_ptr<T>(weights_[i + 0 * layer_num_]);
@@ -117,51 +116,120 @@ public:
             if (int8_mode_ != 0) {
                 gpt_weights_.decoder_layer_weights[i]->self_attention_weights.query_weight.int8_kernel =
                     get_ptr<int8_t>(int8_weights_[i + 0 * layer_num_]);
-                gpt_weights_.decoder_layer_weights[i]->self_attention_weights.query_weight.scale =
-                    get_ptr<float>(scale_[i + 0 * layer_num_]);
                 gpt_weights_.decoder_layer_weights[i]->self_attention_weights.attention_output_weight.int8_kernel =
                     get_ptr<int8_t>(int8_weights_[i + 1 * layer_num_]);
-                gpt_weights_.decoder_layer_weights[i]->self_attention_weights.attention_output_weight.scale =
-                    get_ptr<float>(scale_[i + 1 * layer_num_]);
                 gpt_weights_.decoder_layer_weights[i]->ffn_weights.intermediate_weight.int8_kernel =
                     get_ptr<int8_t>(int8_weights_[i + 2 * layer_num_]);
-                gpt_weights_.decoder_layer_weights[i]->ffn_weights.intermediate_weight.scale =
-                    get_ptr<float>(scale_[i + 2 * layer_num_]);
                 gpt_weights_.decoder_layer_weights[i]->ffn_weights.output_weight.int8_kernel =
                     get_ptr<int8_t>(int8_weights_[i + 3 * layer_num_]);
-                gpt_weights_.decoder_layer_weights[i]->ffn_weights.output_weight.scale =
-                    get_ptr<float>(scale_[i + 3 * layer_num_]);
+
+                if (int8_mode == 1) {
+                    gpt_weights_.decoder_layer_weights[i]->self_attention_weights.query_weight.weight_only_quant_scale =
+                        get_ptr<T>(scale_[i + 0 * layer_num_]);
+                    gpt_weights_.decoder_layer_weights[i]
+                        ->self_attention_weights.attention_output_weight.weight_only_quant_scale =
+                        get_ptr<T>(scale_[i + 1 * layer_num_]);
+                    gpt_weights_.decoder_layer_weights[i]->ffn_weights.intermediate_weight.weight_only_quant_scale =
+                        get_ptr<T>(scale_[i + 2 * layer_num_]);
+                    gpt_weights_.decoder_layer_weights[i]->ffn_weights.output_weight.weight_only_quant_scale =
+                        get_ptr<T>(scale_[i + 3 * layer_num_]);
+                }
+                else {
+                    gpt_weights_.decoder_layer_weights[i]->self_attention_weights.query_weight.scale =
+                        get_ptr<float>(scale_[i + 0 * layer_num_]);
+                    gpt_weights_.decoder_layer_weights[i]->self_attention_weights.attention_output_weight.scale =
+                        get_ptr<float>(scale_[i + 1 * layer_num_]);
+                    gpt_weights_.decoder_layer_weights[i]->ffn_weights.intermediate_weight.scale =
+                        get_ptr<float>(scale_[i + 2 * layer_num_]);
+                    gpt_weights_.decoder_layer_weights[i]->ffn_weights.output_weight.scale =
+                        get_ptr<float>(scale_[i + 3 * layer_num_]);
+                }
             }
         }
 
-        size_t weight_offset = gpt_variant_params_.has_post_decoder_layernorm ? 0 : 2;
-        if (gpt_variant_params_.has_post_decoder_layernorm) {
-            gpt_weights_.post_decoder_layernorm.gamma = get_ptr<T>(weights_[12 * layer_num_ + 0]);
-            gpt_weights_.post_decoder_layernorm.beta  = get_ptr<T>(weights_[12 * layer_num_ + 1]);
+        size_t weight_offset = 0;
+        if (gpt_variant_params_.has_pre_decoder_layernorm) {
+            gpt_weights_.pre_decoder_layernorm.gamma = get_ptr<T>(weights_[12 * layer_num_ + 0 - weight_offset]);
+            gpt_weights_.pre_decoder_layernorm.beta  = get_ptr<T>(weights_[12 * layer_num_ + 1 - weight_offset]);
         }
-        gpt_weights_.position_encoding_table = get_ptr<T>(weights_[12 * layer_num_ + 2 - weight_offset]);
-        gpt_weights_.setMaxSeqLen(weights_[12 * layer_num_ + 2 - weight_offset].size(0));
-        gpt_weights_.pre_decoder_embedding_table   = get_ptr<T>(weights_[12 * layer_num_ + 3 - weight_offset]);
-        gpt_weights_.post_decoder_embedding.kernel = get_ptr<T>(weights_[12 * layer_num_ + 4 - weight_offset]);
+        else {
+            weight_offset += 2;
+        }
+        if (gpt_variant_params_.has_post_decoder_layernorm) {
+            gpt_weights_.post_decoder_layernorm.gamma = get_ptr<T>(weights_[12 * layer_num_ + 2 - weight_offset]);
+            gpt_weights_.post_decoder_layernorm.beta  = get_ptr<T>(weights_[12 * layer_num_ + 3 - weight_offset]);
+        }
+        else {
+            weight_offset += 2;
+        }
+        if (gpt_variant_params_.has_positional_encoding) {
+            gpt_weights_.position_encoding_table = get_ptr<T>(weights_[12 * layer_num_ + 4 - weight_offset]);
+            gpt_weights_.setMaxSeqLen(weights_[12 * layer_num_ + 4 - weight_offset].size(0));
+        }
+        else {
+            weight_offset += 1;
+        }
+        gpt_weights_.pre_decoder_embedding_table   = get_ptr<T>(weights_[12 * layer_num_ + 5 - weight_offset]);
+        gpt_weights_.post_decoder_embedding.kernel = get_ptr<T>(weights_[12 * layer_num_ + 6 - weight_offset]);
+
+        weight_offset = 7 - weight_offset;
 
         if (gpt_variant_params_.has_adapters) {
             for (int i = 0; i < (int)layer_num_; i++) {
                 gpt_weights_.decoder_layer_weights[i]->after_attention_adapter_weights.intermediate_weight.kernel =
-                    get_ptr<T>(weights_[12 * layer_num_ + 4 - weight_offset + i + 1]);
+                    get_ptr<T>(weights_[12 * layer_num_ + weight_offset + i]);
                 gpt_weights_.decoder_layer_weights[i]->after_attention_adapter_weights.intermediate_weight.bias =
-                    get_ptr<T>(weights_[13 * layer_num_ + 4 - weight_offset + i + 1]);
+                    get_ptr<T>(weights_[13 * layer_num_ + weight_offset + i]);
                 gpt_weights_.decoder_layer_weights[i]->after_attention_adapter_weights.output_weight.kernel =
-                    get_ptr<T>(weights_[14 * layer_num_ + 4 - weight_offset + i + 1]);
+                    get_ptr<T>(weights_[14 * layer_num_ + weight_offset + i]);
                 gpt_weights_.decoder_layer_weights[i]->after_attention_adapter_weights.output_weight.bias =
-                    get_ptr<T>(weights_[15 * layer_num_ + 4 - weight_offset + i + 1]);
+                    get_ptr<T>(weights_[15 * layer_num_ + weight_offset + i]);
                 gpt_weights_.decoder_layer_weights[i]->after_ffn_adapter_weights.intermediate_weight.kernel =
-                    get_ptr<T>(weights_[16 * layer_num_ + 4 - weight_offset + i + 1]);
+                    get_ptr<T>(weights_[16 * layer_num_ + weight_offset + i]);
                 gpt_weights_.decoder_layer_weights[i]->after_ffn_adapter_weights.intermediate_weight.bias =
-                    get_ptr<T>(weights_[17 * layer_num_ + 4 - weight_offset + i + 1]);
+                    get_ptr<T>(weights_[17 * layer_num_ + weight_offset + i]);
                 gpt_weights_.decoder_layer_weights[i]->after_ffn_adapter_weights.output_weight.kernel =
-                    get_ptr<T>(weights_[18 * layer_num_ + 4 - weight_offset + i + 1]);
+                    get_ptr<T>(weights_[18 * layer_num_ + weight_offset + i]);
                 gpt_weights_.decoder_layer_weights[i]->after_ffn_adapter_weights.output_weight.bias =
-                    get_ptr<T>(weights_[19 * layer_num_ + 4 - weight_offset + i + 1]);
+                    get_ptr<T>(weights_[19 * layer_num_ + weight_offset + i]);
+
+                if (int8_mode_ != 0) {
+                    gpt_weights_.decoder_layer_weights[i]
+                        ->after_attention_adapter_weights.intermediate_weight.int8_kernel =
+                        get_ptr<int8_t>(int8_weights_[i + 4 * layer_num_]);
+                    gpt_weights_.decoder_layer_weights[i]->after_attention_adapter_weights.output_weight.int8_kernel =
+                        get_ptr<int8_t>(int8_weights_[i + 5 * layer_num_]);
+                    gpt_weights_.decoder_layer_weights[i]->after_ffn_adapter_weights.intermediate_weight.int8_kernel =
+                        get_ptr<int8_t>(int8_weights_[i + 6 * layer_num_]);
+                    gpt_weights_.decoder_layer_weights[i]->after_ffn_adapter_weights.output_weight.int8_kernel =
+                        get_ptr<int8_t>(int8_weights_[i + 7 * layer_num_]);
+
+                    if (int8_mode == 1) {
+                        gpt_weights_.decoder_layer_weights[i]
+                            ->after_attention_adapter_weights.intermediate_weight.weight_only_quant_scale =
+                            get_ptr<T>(scale_[i + 4 * layer_num_]);
+                        gpt_weights_.decoder_layer_weights[i]
+                            ->after_attention_adapter_weights.output_weight.weight_only_quant_scale =
+                            get_ptr<T>(scale_[i + 5 * layer_num_]);
+                        gpt_weights_.decoder_layer_weights[i]
+                            ->after_ffn_adapter_weights.intermediate_weight.weight_only_quant_scale =
+                            get_ptr<T>(scale_[i + 6 * layer_num_]);
+                        gpt_weights_.decoder_layer_weights[i]
+                            ->after_ffn_adapter_weights.output_weight.weight_only_quant_scale =
+                            get_ptr<T>(scale_[i + 7 * layer_num_]);
+                    }
+                    else {
+                        gpt_weights_.decoder_layer_weights[i]
+                            ->after_attention_adapter_weights.intermediate_weight.scale =
+                            get_ptr<float>(scale_[i + 4 * layer_num_]);
+                        gpt_weights_.decoder_layer_weights[i]->after_attention_adapter_weights.output_weight.scale =
+                            get_ptr<float>(scale_[i + 5 * layer_num_]);
+                        gpt_weights_.decoder_layer_weights[i]->after_ffn_adapter_weights.intermediate_weight.scale =
+                            get_ptr<float>(scale_[i + 6 * layer_num_]);
+                        gpt_weights_.decoder_layer_weights[i]->after_ffn_adapter_weights.output_weight.scale =
+                            get_ptr<float>(scale_[i + 7 * layer_num_]);
+                    }
+                }
             }
         }
 
@@ -220,6 +288,15 @@ public:
         const size_t max_input_length   = (size_t)input_ids.size(1);
         const int    total_output_len   = (int)(max_input_length + request_output_len);
 
+        ft::AttentionType attention_type =
+            ft::getAttentionType<T>(size_per_head_,
+                                    ft::getSMVersion(),
+                                    true,
+                                    max_input_length,  // gpt supports any-seq-length fmha
+                                    true,              // is_fuse
+                                    false,             // with_relative_position_bias
+                                    true);             // causal_mask
+
         ft::ParallelGpt<T>    gpt = ft::ParallelGpt<T>(request_batch_size,
                                                     total_output_len,
                                                     max_input_length,
@@ -248,11 +325,11 @@ public:
                                                     &allocator,
                                                     false,
                                                     &prop_,
+                                                    attention_type,
                                                     false,
                                                     int8_mode_,
                                                     nullptr,
                                                     0,
-                                                    true,
                                                     shared_contexts_ratio_);
         std::vector<uint32_t> output_seq_len(request_batch_size, total_output_len);
 
@@ -392,9 +469,12 @@ public:
                   const double             layernorm_eps,
                   const std::string        layernorm_type,
                   const std::string        activation_type,
+                  const bool               has_positional_encoding,
+                  const bool               has_pre_decoder_layernorm,
                   const bool               has_post_decoder_layernorm,
                   const bool               has_adapters,
                   const int64_t            adapter_inter_size,
+                  const bool               use_attention_linear_bias,
                   const vector<th::Tensor> weights,
                   const vector<th::Tensor> int8_weights,
                   const vector<th::Tensor> scale,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -54,6 +54,7 @@ struct ParallelGptWeight {
     std::vector<ParallelGptDecoderLayerWeight<T>*> decoder_layer_weights;
     const T*                                       position_encoding_table     = nullptr;
     const T*                                       pre_decoder_embedding_table = nullptr;
+    LayerNormWeight<T>                             pre_decoder_layernorm;
     LayerNormWeight<T>                             post_decoder_layernorm;
     DenseWeight<T>                                 post_decoder_embedding;
 
@@ -100,9 +101,18 @@ private:
     // each prompt token's weight size
     size_t prompt_token_weight_size_ = 0;
 
-    bool            is_maintain_buffer = false;
-    size_t          num_base_weights   = 5;
-    std::vector<T*> weights_ptr        = std::vector<T*>(num_base_weights);
+    bool is_maintain_buffer = false;
+
+    // The number of base weights of the GPT model: According to the variant params,
+    // positional encoding or pre decoder layernorm can be nullptr.
+    //  - 1 for the positional encoding. (optional)
+    //  - 1 for the pre word embedding tables.
+    //  - 2 for the pre decoder layernorm. (optional)
+    //  - 2 for the post decoder layernorm. (optional)
+    //  - 2 for the post word embedding tables.
+    size_t num_base_weights = 7;
+    // weight pointers of length num_base_weights.
+    std::vector<T*> weights_ptr = std::vector<T*>(num_base_weights);
 };
 
 }  // namespace fastertransformer

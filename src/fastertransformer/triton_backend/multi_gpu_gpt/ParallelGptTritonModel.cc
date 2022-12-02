@@ -51,6 +51,24 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createGptMod
         gpt_variant_params.activation_type            = ft::ActivationType::Relu;
         gpt_variant_params.has_post_decoder_layernorm = false;
     }
+    else if (model_variant == "bloom-pre") {
+        gpt_variant_params.layernorm_eps              = 1e-5f;
+        gpt_variant_params.layernorm_type             = ft::LayerNormType::pre_layernorm;
+        gpt_variant_params.activation_type            = ft::ActivationType::Gelu;
+        gpt_variant_params.has_positional_encoding    = false;
+        gpt_variant_params.has_pre_decoder_layernorm  = true;
+        gpt_variant_params.has_post_decoder_layernorm = true;
+        gpt_variant_params.use_attention_linear_bias  = true;
+    }
+    else if (model_variant == "bloom-post") {
+        gpt_variant_params.layernorm_eps              = 1e-5f;
+        gpt_variant_params.layernorm_type             = ft::LayerNormType::post_layernorm;
+        gpt_variant_params.activation_type            = ft::ActivationType::Gelu;
+        gpt_variant_params.has_positional_encoding    = false;
+        gpt_variant_params.has_pre_decoder_layernorm  = true;
+        gpt_variant_params.has_post_decoder_layernorm = true;
+        gpt_variant_params.use_attention_linear_bias  = true;
+    }
 
     gpt_variant_params.has_adapters = reader.GetBoolean(model_name, "has_adapters", false);
 
@@ -71,9 +89,13 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createGptMod
         prompt_learning_table_pair.insert({task_name, {task_name_id, prompt_length}});
     }
 
+    size_t max_seq_len = gpt_variant_params.has_positional_encoding ?
+                             reader.GetInteger("ft_instance_hyperparameter", "max_seq_len") :
+                             FT_SEQ_LEN_MAX;
+
     if (data_type == "fp16") {
         return std::make_shared<ParallelGptTritonModel<half>>(
-            reader.GetInteger("ft_instance_hyperparameter", "max_seq_len"),
+            max_seq_len,
             reader.GetInteger(model_name, "head_num"),
             reader.GetInteger(model_name, "size_per_head"),
             reader.GetInteger(model_name, "inter_size"),
@@ -95,7 +117,7 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createGptMod
 #ifdef ENABLE_BF16
     else if (data_type == "bf16") {
         return std::make_shared<ParallelGptTritonModel<__nv_bfloat16>>(
-            reader.GetInteger("ft_instance_hyperparameter", "max_seq_len"),
+            max_seq_len,
             reader.GetInteger(model_name, "head_num"),
             reader.GetInteger(model_name, "size_per_head"),
             reader.GetInteger(model_name, "inter_size"),
@@ -117,7 +139,7 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createGptMod
 #endif
     else if (data_type == "fp32") {
         return std::make_shared<ParallelGptTritonModel<float>>(
-            reader.GetInteger("ft_instance_hyperparameter", "max_seq_len"),
+            max_seq_len,
             reader.GetInteger(model_name, "head_num"),
             reader.GetInteger(model_name, "size_per_head"),
             reader.GetInteger(model_name, "inter_size"),
@@ -157,9 +179,7 @@ ParallelGptTritonModel<T>::ParallelGptTritonModel(size_t      tensor_para_size,
 {
     INIReader reader = INIReader(model_dir + "/config.ini");
     if (reader.ParseError() < 0) {
-        std::cout << "[ERROR] Can't load '" << model_dir << "/config.ini"
-                  << "'\n";
-        ft::FT_CHECK(false);
+        ft::FT_CHECK_WITH_INFO(false, ft::fmtstr("Can't load %s/config.ini", model_dir.c_str()));
     }
 
     /* GPT Configuration File Example
@@ -195,7 +215,6 @@ ParallelGptTritonModel<T>::ParallelGptTritonModel(size_t      tensor_para_size,
     */
 
     model_name_    = reader.Get("gpt", "model_name");
-    max_seq_len_   = reader.GetInteger("gpt", "max_pos_seq_len");
     head_num_      = reader.GetInteger("gpt", "head_num");
     size_per_head_ = reader.GetInteger("gpt", "size_per_head");
     inter_size_    = reader.GetInteger("gpt", "inter_size");
@@ -210,15 +229,25 @@ ParallelGptTritonModel<T>::ParallelGptTritonModel(size_t      tensor_para_size,
     gpt_variant_params_.layernorm_eps   = reader.GetFloat("gpt", "layernorm_eps", 1e-6f);
     gpt_variant_params_.layernorm_type  = ft::getLayerNormType(reader.Get("gpt", "layernorm_type", "pre_layernorm"));
     gpt_variant_params_.activation_type = ft::getActivationType(reader.Get("gpt", "activation_type", "Gelu"));
-    gpt_variant_params_.has_post_decoder_layernorm = reader.GetBoolean("gpt", "has_post_decoder_layernorm", "1");
+
+    gpt_variant_params_.has_positional_encoding    = reader.GetBoolean("gpt", "has_positional_encoding", true);
+    gpt_variant_params_.has_pre_decoder_layernorm  = reader.GetBoolean("gpt", "has_pre_decoder_layernorm", false);
+    gpt_variant_params_.has_post_decoder_layernorm = reader.GetBoolean("gpt", "has_post_decoder_layernorm", true);
+    gpt_variant_params_.use_attention_linear_bias  = reader.GetBoolean("gpt", "use_attention_linear_bias", false);
+
     /* Megatron GPT Adapter Examples
     has_adapters=True
     adapter_inter_size=1024
     */
     gpt_variant_params_.has_adapters       = reader.GetBoolean("gpt", "has_adapters", false);
     gpt_variant_params_.adapter_inter_size = reader.GetInteger("gpt", "adapter_inter_size", inter_size_);
-    start_id_                              = reader.GetInteger("gpt", "start_id");
-    end_id_                                = reader.GetInteger("gpt", "end_id");
+
+    start_id_ = reader.GetInteger("gpt", "start_id");
+    end_id_   = reader.GetInteger("gpt", "end_id");
+
+    max_seq_len_ = gpt_variant_params_.has_positional_encoding ?
+                       reader.GetInteger("gpt", "max_pos_seq_len") :
+                       reader.GetInteger("gpt", "max_pos_seq_len", FT_SEQ_LEN_MAX);
 
     num_tasks_                = reader.GetInteger("gpt", "num_tasks", 0);
     prompt_learning_start_id_ = reader.GetInteger("gpt", "prompt_learning_start_id", end_id_ + 1);
@@ -319,6 +348,14 @@ std::unique_ptr<AbstractTransformerModelInstance> ParallelGptTritonModel<T>::cre
     ft::NcclParam tensor_para   = nccl_params.first[comms_rank];
     ft::NcclParam pipeline_para = nccl_params.second[comms_rank];
 
+    ft::AttentionType attention_type = ft::getAttentionType<T>(size_per_head_,
+                                                               ft::getSMVersion(),
+                                                               true,
+                                                               0,                // gpt supports any-seq-length fmha
+                                                               int8_mode_ != 2,  // is_fuse
+                                                               false,            // with_relative_position_bias
+                                                               true);            // causal_mask
+
     auto gpt =
         std::make_unique<ft::ParallelGpt<T>>(0,  // max_batch_size, FT will adjust the buffer automatically.
                                              0,  // max_seq_len, FT will adjust the buffer automatically.
@@ -348,6 +385,7 @@ std::unique_ptr<AbstractTransformerModelInstance> ParallelGptTritonModel<T>::cre
                                              allocator.get(),
                                              false,
                                              cuda_device_prop_ptr.get(),
+                                             attention_type,
                                              false,
                                              int8_mode_,
                                              custom_all_reduce_comm,
@@ -369,7 +407,8 @@ void ParallelGptTritonModel<T>::createSharedWeights(int device_id, int rank)
     ft::check_cuda_error(cudaSetDevice(device_id));
     const int tensor_para_rank   = rank % tensor_para_size_;
     const int pipeline_para_rank = rank / tensor_para_size_;
-    shared_weights_[device_id]   = std::make_shared<ft::ParallelGptWeight<T>>(head_num_ * size_per_head_,
+
+    shared_weights_[device_id] = std::make_shared<ft::ParallelGptWeight<T>>(head_num_ * size_per_head_,
                                                                             inter_size_,
                                                                             vocab_size_,
                                                                             num_layer_,

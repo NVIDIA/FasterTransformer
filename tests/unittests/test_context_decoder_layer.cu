@@ -27,8 +27,10 @@ static const char* usage =
 
 template <typename T>
 bool test_context_sharing(const std::string& weight_dir, const std::string& data_dir);
+Tensor create_tensor(MemoryType memory_type, DataType data_type, std::vector<size_t> shape, bool init_zero);
 void allocate_tensors(std::vector<Tensor> &tensors);
 void free_tensors(std::vector<Tensor> &tensors);
+void free_tensors(TensorMap &tensors);
 template<typename T> bool all_close(Tensor &tensor_x, Tensor &tensor_y);
 Tensor tensor_to_cpu(Tensor &tensor);
 
@@ -102,6 +104,14 @@ bool test_context_sharing(const std::string& weight_dir, const std::string& data
     );
     gpt_weights.loadModel((weight_dir + std::string("/1-gpu")).c_str());
 
+    AttentionType attention_type = getAttentionType<T>(size_per_head,
+                                                       getSMVersion(),
+                                                       false, // remove_padding
+                                                       0, // gpt supports any-seq-length fmha
+                                                       true, // is_fuse
+                                                       false, // with_relative_position_bias
+                                                       true); // causal_mask
+
     ParallelGptContextDecoder<T> gpt_context_decoder(
             0,
             0,
@@ -118,22 +128,19 @@ bool test_context_sharing(const std::string& weight_dir, const std::string& data
             allocator,
             false, // is_free_buffer_after_forward
             true, // is_context_qk_buf_float
+            attention_type, // attention_type
             false, // sparse
+            0, // int8_mode
             nullptr, // custom_all_reduce_comm
-            false, // enable_custom_all_reduce
-            false  // remove_padding
+            false // enable_custom_all_reduce
     );
 
     /*************************** REFERENCE PART *********************************/
 
-    auto decoder_inputs_import = TensorMap::fromNpyFolder(data_dir);
+    auto decoder_inputs = TensorMap::fromNpyFolder(data_dir);
 
-    const size_t seq_num = decoder_inputs_import.at("context_decoder_input").shape[0];
-    const size_t seq_len = decoder_inputs_import.at("context_decoder_input").shape[1];
-
-    std::vector<Tensor> decoder_inputs {decoder_inputs_import.at("context_decoder_input"),
-                                        decoder_inputs_import.at("input_attention_mask"),
-                                        decoder_inputs_import.at("tiled_input_lengths")};
+    const size_t seq_num = decoder_inputs.at("decoder_input").shape[0];
+    const size_t seq_len = decoder_inputs.at("decoder_input").shape[1];
 
     const std::vector<size_t> self_k_cache_shape = {num_layer / 1,
                                                     seq_num,
@@ -146,18 +153,13 @@ bool test_context_sharing(const std::string& weight_dir, const std::string& data
                                                     head_num,
                                                     max_seq_len,
                                                     size_per_head};
-    std::vector<Tensor> decoder_outputs {
-        Tensor{MEMORY_GPU,
-                data_type,
-                {seq_num, (size_t)seq_len, hidden_units},
-                nullptr},
-        Tensor{MEMORY_GPU, data_type, self_k_cache_shape, nullptr},
-        Tensor{MEMORY_GPU, data_type, self_v_cache_shape, nullptr},
-        Tensor{MEMORY_GPU, data_type, {seq_num, hidden_units}, nullptr}};
 
-    allocate_tensors(decoder_outputs);
-    cudaMemset((void *) decoder_outputs[1].data, 0, decoder_outputs[1].sizeBytes());
-    cudaMemset((void *) decoder_outputs[2].data, 0, decoder_outputs[2].sizeBytes());
+    TensorMap decoder_outputs ({
+        {"decoder_output", create_tensor(MEMORY_GPU, data_type, {seq_num, (size_t)seq_len, hidden_units}, false)},
+        {"key_cache", create_tensor(MEMORY_GPU, data_type, self_k_cache_shape, true)},
+        {"value_cache", create_tensor(MEMORY_GPU, data_type, self_v_cache_shape, true)},
+        {"last_token_hidden_units", create_tensor(MEMORY_GPU, data_type, {seq_num, hidden_units}, false)}
+    });
 
     gpt_context_decoder.forward(
             &decoder_outputs,
@@ -167,21 +169,14 @@ bool test_context_sharing(const std::string& weight_dir, const std::string& data
 
     /********************************* TEST PART *********************************/
 
-    decoder_inputs.push_back(decoder_inputs_import.at("compact_idx"));
-    decoder_inputs.push_back(decoder_inputs_import.at("batch_to_compact_idx"));
-
-    std::vector<Tensor> decoder_outputs_test {
-        {MEMORY_GPU,
+    TensorMap decoder_outputs_test ({
+        {"decoder_output", create_tensor(MEMORY_GPU,
                 data_type,
-                {seq_num, (size_t)seq_len, hidden_units},
-                nullptr},
-        {MEMORY_GPU, data_type, self_k_cache_shape, nullptr},
-        {MEMORY_GPU, data_type, self_v_cache_shape, nullptr},
-        {MEMORY_GPU, data_type, {seq_num, hidden_units}, nullptr}};
-
-    allocate_tensors(decoder_outputs_test);
-    cudaMemset((void *) decoder_outputs_test[1].data, 0, decoder_outputs_test[1].sizeBytes());
-    cudaMemset((void *) decoder_outputs_test[2].data, 0, decoder_outputs_test[2].sizeBytes());
+                {seq_num, (size_t)seq_len, hidden_units}, false)},
+        {"key_cache", create_tensor(MEMORY_GPU, data_type, self_k_cache_shape, true)},
+        {"value_cache", create_tensor(MEMORY_GPU, data_type, self_v_cache_shape, true)},
+        {"last_token_hidden_units", create_tensor(MEMORY_GPU, data_type, {seq_num, hidden_units}, false)}
+    });
 
     gpt_context_decoder.forward(
             &decoder_outputs_test,
@@ -189,10 +184,11 @@ bool test_context_sharing(const std::string& weight_dir, const std::string& data
             &gpt_weights.decoder_layer_weights
     );
 
-    all_close<T>(decoder_outputs[0], decoder_outputs_test[0]); printf(".");
-    all_close<T>(decoder_outputs[3], decoder_outputs_test[3]); printf(".");
-    all_close<T>(decoder_outputs[1], decoder_outputs_test[1]); printf(".");
-    all_close<T>(decoder_outputs[2], decoder_outputs_test[2]); printf(".");
+    std::vector<std::string> keys {"decoder_output", "last_token_hidden_units", "key_cache", "value_cache"};
+    for (auto key : keys) {
+        all_close<T>(decoder_outputs.at(key), decoder_outputs_test.at(key));
+        printf(".");
+    }
     puts("");
 
     free_tensors(decoder_outputs);
@@ -225,6 +221,27 @@ void allocate_tensors(std::vector<Tensor> &tensors)
     }
 }
 
+Tensor create_tensor(MemoryType memory_type, DataType data_type, std::vector<size_t> shape, bool init_zero)
+{
+    auto size = std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<size_t>());
+    auto size_bytes = size * Tensor::getTypeSize(data_type);
+
+    void* data = nullptr;
+    if (memory_type == MEMORY_GPU) {
+        cudaMalloc(&data, size_bytes);
+        if (init_zero) {
+            cudaMemset(data, 0, size_bytes);
+        }
+    }
+    else {
+        data = malloc(size_bytes);
+        if (init_zero) {
+            memset(data, 0, size_bytes);
+        }
+    }
+    return Tensor(memory_type, data_type, shape, data);
+}
+
 void free_tensors(std::vector<Tensor> &tensors)
 {
     for (auto &tensor : tensors) {
@@ -238,6 +255,19 @@ void free_tensors(std::vector<Tensor> &tensors)
     }
 }
 
+void free_tensors(TensorMap &tensors)
+{
+    for (auto &key : tensors.keys()) {
+        Tensor tensor = tensors.at(key);
+        if (tensor.where == MEMORY_GPU) {
+            cudaFree((void *)tensor.data);
+        }
+        else {
+            free((void *)tensor.data);
+        }
+        tensor.data = nullptr;
+    }
+}
 template<typename T>
 bool all_close(Tensor &tensor_x, Tensor &tensor_y)
 {

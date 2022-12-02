@@ -29,7 +29,7 @@ wget https://storage.googleapis.com/vit_models/imagenet21k+imagenet2012/{MODEL_N
 - Run the container.
 
     You can choose pytorch version you want. Here, we list some possible images:  
-    - `nvcr.io/nvidia/pytorch:21.07-py3` contains the PyTorch 1.8.0 and python 3.8
+    - `nvcr.io/nvidia/pytorch:22.09-py3` contains the PyTorch 1.13.0 and python 3.8
 
 - Install additional dependencies (not included by container)
     ```bash

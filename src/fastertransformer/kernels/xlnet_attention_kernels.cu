@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -13,8 +13,9 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-#include "src/fastertransformer/kernels/bfloat16_fallback_kenrels.cuh"
+
 #include "src/fastertransformer/kernels/xlnet_attention_kernels.h"
+#include "src/fastertransformer/utils/cuda_type_utils.cuh"
 namespace fastertransformer {
 template<typename T>
 int numPerThread()
@@ -298,7 +299,7 @@ void __global__ transpose201(
     int row    = offset / head_num;
     int col    = offset % head_num;
     for (i = 0; i < head_num; i++) {
-        sdata[row * (head_num + 1) + col] = type2float(src[offset]);
+        sdata[row * (head_num + 1) + col] = cuda_cast<float>(src[offset]);
         offset += seq_len;
         row = offset / head_num;
         col = offset % head_num;
@@ -310,7 +311,7 @@ void __global__ transpose201(
     offset = 0;
     dst    = dst + index;
     for (i = 0; i < head_num; i++) {
-        dst[offset] = float2type<T>(sdata[d1 * (head_num + 1) + i]);
+        dst[offset] = cuda_cast<T>(sdata[d1 * (head_num + 1) + i]);
         offset += o_off1;
     }
 }
@@ -496,12 +497,12 @@ void __global__ calAttnScore_valueBuf_small(T*          attn_score,
 
     // Data prepare section
     if (seq2 < seq_len) {
-        tmp1 = type22float2<T2>(((T2*)ac)[index]);
-        tmp2 = type22float2<T2>(((T2*)bd)[index]);
+        tmp1 = cuda_cast<float2>(((T2*)ac)[index]);
+        tmp2 = cuda_cast<float2>(((T2*)bd)[index]);
         tmp1.x += tmp2.x;
         tmp1.y += tmp2.y;
         // tmp1=__hadd2(tmp1,tmp2);
-        tmp2 = type22float2<T2>(((T2*)ef)[index]);
+        tmp2 = cuda_cast<float2>(((T2*)ef)[index]);
         tmp1.x += tmp2.x;
         tmp1.y += tmp2.y;
 
@@ -510,7 +511,7 @@ void __global__ calAttnScore_valueBuf_small(T*          attn_score,
         tmp1.y = tmp1.y * p;
 
         out_index = (batch * off1 + seq1 * seq_len + seq2) >> 1;
-        tmp2      = type22float2<T2>(((T2*)attn_mask)[out_index]);
+        tmp2      = cuda_cast<float2>(((T2*)attn_mask)[out_index]);
 
         tmp1.x = tmp1.x + -1e4 * tmp2.x;
         tmp1.y = tmp1.y + -1e4 * tmp2.y;
@@ -543,7 +544,7 @@ void __global__ calAttnScore_valueBuf_small(T*          attn_score,
     if (seq2 < seq_len) {
         tmp1.x                   = tmp1.x / tmp;
         tmp1.y                   = tmp1.y / tmp;
-        ((T2*)attn_score)[index] = float22type2<T2>(tmp1);
+        ((T2*)attn_score)[index] = cuda_cast<T2>(tmp1);
     }
 
     // value_buf section
@@ -595,12 +596,12 @@ void __global__ calAttnScore_valueBuf_large(T*          attn_score,
     __shared__ float s_sum;
     // Data prepare section
     if (seq2 < seq_len) {
-        tmp1 = type22float2<T2>(((T2*)ac)[index]);
-        tmp2 = type22float2<T2>(((T2*)bd)[index]);
+        tmp1 = cuda_cast<float2>(((T2*)ac)[index]);
+        tmp2 = cuda_cast<float2>(((T2*)bd)[index]);
         tmp1.x += tmp2.x;
         tmp1.y += tmp2.y;
         // tmp1=__hadd2(tmp1,tmp2);
-        tmp2 = type22float2<T2>(((T2*)ef)[index]);
+        tmp2 = cuda_cast<float2>(((T2*)ef)[index]);
         tmp1.x += tmp2.x;
         tmp1.y += tmp2.y;
 
@@ -609,7 +610,7 @@ void __global__ calAttnScore_valueBuf_large(T*          attn_score,
         tmp1.y = tmp1.y * p;
 
         out_index = (batch * off1 + seq1 * seq_len + seq2) >> 1;
-        tmp2      = type22float2<T2>(((T2*)attn_mask)[out_index]);
+        tmp2      = cuda_cast<float2>(((T2*)attn_mask)[out_index]);
 
         tmp1.x = tmp1.x + -1e4 * tmp2.x;
         tmp1.y = tmp1.y + -1e4 * tmp2.y;
@@ -676,7 +677,7 @@ void __global__ calAttnScore_valueBuf_large(T*          attn_score,
     if (seq2 < seq_len) {
         tmp1.x                   = tmp1.x / s_sum;
         tmp1.y                   = tmp1.y / s_sum;
-        ((T2*)attn_score)[index] = float22type2<T2>(tmp1);
+        ((T2*)attn_score)[index] = cuda_cast<T2>(tmp1);
     }
     // value_buf section
     offset = seq2;
@@ -754,7 +755,7 @@ addBias_layerNorm(T* out, const T* input, const T* bias, const T* gamma, const T
 
     float local_out = 0.0f;
     int   id        = (blockIdx.x * n + tid * 2) >> 1;
-    local_out_fp2   = type22float2(hadd2(input_ptr[id], ldg(&bias_ptr[id])));
+    local_out_fp2   = cuda_cast<float2>(hadd2(input_ptr[id], ldg(&bias_ptr[id])));
 
     local_out += local_out_fp2.x;
     local_out += local_out_fp2.y;
@@ -772,11 +773,11 @@ addBias_layerNorm(T* out, const T* input, const T* bias, const T* gamma, const T
         s_variance = rsqrtf(variance / n + epsilon);
     __syncthreads();
 
-    float2 gamma_val = type22float2(ldg(&gamma_ptr[tid]));
-    float2 beta_val  = type22float2(ldg(&beta_ptr[tid]));
+    float2 gamma_val = cuda_cast<float2>(ldg(&gamma_ptr[tid]));
+    float2 beta_val  = cuda_cast<float2>(ldg(&beta_ptr[tid]));
     local_out_fp2.x  = (local_out_fp2.x - s_mean) * s_variance * gamma_val.x + beta_val.x;
     local_out_fp2.y  = (local_out_fp2.y - s_mean) * s_variance * gamma_val.y + beta_val.y;
-    out_ptr[id]      = float22type2<T2>(local_out_fp2);
+    out_ptr[id]      = cuda_cast<T2>(local_out_fp2);
 }
 
 template<>

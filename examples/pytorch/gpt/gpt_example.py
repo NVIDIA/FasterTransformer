@@ -75,7 +75,7 @@ def main():
                         help='repetition penalty')
     parser.add_argument('--max_seq_len', type=int, default=1024,
                         help='max sequence length for position embedding table.')
-    parser.add_argument('--data_type', type=str, choices=['fp32', 'fp16', 'bf16'], default='fp32')
+    parser.add_argument('--inference_data_type', '--data_type', type=str, choices=['fp32', 'fp16', 'bf16'], default='fp32')
     parser.add_argument('--time', action='store_true',
                         help='whether or not to measure time elapsed.')
     parser.add_argument('--sample_input_file', type=str, default=None,
@@ -145,7 +145,6 @@ def main():
     print("[INFO] batch size: {}".format(batch_size))
 
     start_lengths = [len(ids) for ids in start_ids]
-    input_len = max(start_lengths)
 
     start_ids = pad_sequence(start_ids, batch_first=True, padding_value=end_id)
     start_lengths = torch.IntTensor(start_lengths)
@@ -158,14 +157,10 @@ def main():
     # Prepare model.
     gpt = GPT(head_num, size_per_head, vocab_size, start_id, end_id, layer_num,
               max_seq_len, tensor_para_size, pipeline_para_size, lib_path=args.lib_path,
+              inference_data_type=args.inference_data_type,
               weights_data_type=args.weights_data_type)
     if not gpt.load(ckpt_path=args.ckpt_path):
         print("[WARNING] Checkpoint file not found. Model loading is skipped.")
-    if args.data_type == 'fp16':
-        gpt.half()
-    elif args.data_type == 'bf16':
-        gpt.bfloat16()
-
     if args.sparse:
         gpt.sparse()
 

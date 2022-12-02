@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2021-2022, NVIDIA CORPORATION. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -88,6 +88,7 @@ private:
     float                                              mlp_ratio_;
     bool                                               qkv_bias_;
     float                                              qk_scale_;
+    int                                                version_;
     int*                                               depths_;
     int*                                               num_heads_;
 
@@ -108,6 +109,7 @@ public:
                           const float            mlp_ratio,
                           const bool             qkv_bias,
                           const float            qk_scale,
+                          const int              version,
                           const std::vector<T*>& w);
 
     SwinTransformerPlugin(const std::string&                    name,
@@ -125,6 +127,7 @@ public:
                           const float                           mlp_ratio,
                           const bool                            qkv_bias,
                           const float                           qk_scale,
+                          const int                             version,
                           const std::vector<nvinfer1::Weights>& w);
 
     SwinTransformerPlugin(const std::string& name, const void* data, size_t length);

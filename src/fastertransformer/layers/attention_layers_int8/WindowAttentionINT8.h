@@ -18,6 +18,7 @@
 
 #include "3rdparty/trt_fused_multihead_attention/qkvToContext.h"
 #include "src/fastertransformer/kernels/layout_transformer_int8_kernels.h"
+#include "src/fastertransformer/kernels/normalize_kernels.h"
 #include "src/fastertransformer/kernels/reverse_roll_kernels.h"
 #include "src/fastertransformer/kernels/softmax_int8_kernels.h"
 #include "src/fastertransformer/kernels/transform_mask_kernels.h"
@@ -39,24 +40,16 @@ namespace fastertransformer {
 template<typename T>
 class WindowAttentionINT8: public BaseAttentionLayer<T> {
 private:
-    int    max_batch_          = 1;
-    int    dim_                = 96;
-    int    num_head_           = 2;
-    int    window_size_        = 7;
-    int    head_dim_           = 48;
-    int    input_resolution_   = 56;
-    int    window_len_         = 49;
-    int    patches_resolution_ = 56;
-    int    embed_dim_          = 96;
-    int    window_num_         = 64;
-    int    size_per_head_;
-    bool   qkv_bias_     = true;
-    float  qk_scale_     = 1.0f;
-    size_t max_buf_size_ = 0;
-    bool   use_trt_      = false;
+    int   max_batch_   = 1;
+    int   window_size_ = 7;
+    bool  qkv_bias_    = true;
+    float qk_scale_    = 1.0f;
+    bool  use_trt_     = false;
+    int   version_     = 1;
 
     void allocateBuffer() override;
     void freeBuffer() override;
+    void allocateBuffer(int batch, int window_num, int window_len, int embed_dim, int num_head);
 
     int                        dispatcher_int8_num_head_ = -1;
     std::unique_ptr<MHARunner> dispatcher_int8_;
@@ -70,29 +63,23 @@ private:
     int8_t *buf_ = nullptr, *Q_buf_ = nullptr, *K_buf_ = nullptr, *V_buf_ = nullptr;
     int8_t *q_buf_ = nullptr, *k_buf_ = nullptr, *v_buf_ = nullptr, *qk_buf_ = nullptr, *dst_buf_ = nullptr;
 
-    half *trt_attention_mask_ = nullptr, *trt_relative_position_bias_ = nullptr;
-
     static int trt_getS(const int actual_seqlen);
-
-    static size_t roundByteSize(const size_t size, const int factor);
 
 public:
     WindowAttentionINT8(int              max_batch,
                         int              window_size,
-                        int              patches_resolution,
-                        int              embed_dim,
                         cudaStream_t     stream,
                         cublasMMWrapper* cublas_wrapper,
                         IAllocator*      allocator,
                         bool             is_free_buffer_after_forward = false,
                         bool             qkv_bias                     = true,
-                        float            qk_scale                     = 1.0f);
+                        float            qk_scale                     = 1.0f,
+                        int              version                      = 1);
 
     ~WindowAttentionINT8();
 
-    void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                 const std::vector<fastertransformer::Tensor>* input_tensors,
-                 const AttentionWeight<T>*                     attention_weights);
+    void
+    forward(TensorMap* output_tensors, TensorMap* input_tensors, const AttentionWeight<T>* attention_weights) override;
 
 };  // class WindowAttentionINT8
 }  // namespace fastertransformer

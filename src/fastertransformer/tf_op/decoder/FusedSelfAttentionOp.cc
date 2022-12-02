@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -167,8 +167,15 @@ public:
                                                                   seq_len_,             // step
                                                                   1.0f,                 // q_scaling
                                                                   0,  // relative_attention_bias_stride
-                                                                  (const bool*)nullptr,  //  masked_tokens
-                                                                  stream                 // stream
+                                                                  (const DataType_*)nullptr,  // linear_bias_slopes
+                                                                  (const bool*)nullptr,       //  masked_tokens
+                                                                  (const int*)nullptr,        //  ia3 tasks
+                                                                  (const DataType_*)nullptr,  //  ia3 key weights
+                                                                  (const DataType_*)nullptr,  //  ia3 value weights
+                                                                  (const float*)nullptr,      // int8 scale in
+                                                                  (const float*)nullptr,      // int8 scale out
+                                                                  0,                          // int8 mode
+                                                                  stream                      // stream
             );
         }
         catch (std::runtime_error& error) {

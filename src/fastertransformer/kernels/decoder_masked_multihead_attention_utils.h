@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include "src/fastertransformer/kernels/bfloat16_fallback_kenrels.cuh"
 #include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
+#include "src/fastertransformer/utils/cuda_type_utils.cuh"
 #include <stdint.h>
 
 using namespace fastertransformer;
@@ -57,6 +57,93 @@ struct bf16_8_t {
     __nv_bfloat162 w;
 };
 #endif
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template<typename T>
+struct num_elems;
+template<>
+struct num_elems<float> {
+    static constexpr int value = 1;
+};
+template<>
+struct num_elems<float2> {
+    static constexpr int value = 2;
+};
+template<>
+struct num_elems<float4> {
+    static constexpr int value = 4;
+};
+template<>
+struct num_elems<Float4_> {
+    static constexpr int value = 4;
+};
+template<>
+struct num_elems<Float8_> {
+    static constexpr int value = 8;
+};
+
+template<>
+struct num_elems<uint32_t> {
+    static constexpr int value = 2;
+};
+template<>
+struct num_elems<uint2> {
+    static constexpr int value = 4;
+};
+template<>
+struct num_elems<uint4> {
+    static constexpr int value = 8;
+};
+
+#ifdef ENABLE_BF16
+template<>
+struct num_elems<__nv_bfloat162> {
+    static constexpr int value = 2;
+};
+template<>
+struct num_elems<bf16_4_t> {
+    static constexpr int value = 4;
+};
+template<>
+struct num_elems<bf16_8_t> {
+    static constexpr int value = 8;
+};
+#endif
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template<typename T, int N>
+struct packed_type;
+template<typename T>
+struct packed_type<T, 1> {
+    using type = T;
+};
+template<>
+struct packed_type<int8_t, 2> {
+    using type = int16_t;
+};
+template<>
+struct packed_type<int8_t, 4> {
+    using type = int32_t;
+};
+template<>
+struct packed_type<int8_t, 8> {
+    using type = int64_t;
+};
+
+template<>
+struct packed_type<float, 2> {
+    using type = float2;
+};
+template<>
+struct packed_type<float, 4> {
+    using type = float4;
+};
+template<>
+struct packed_type<float, 8> {
+    using type = Float8_;
+};
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -641,7 +728,10 @@ inline __device__ Float8_ fma(__nv_bfloat16 a, bf16_8_t b, Float8_ fc)
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 template<typename Acc, typename A, typename B>
-inline __device__ Acc mul(A a, B b);
+inline __device__ Acc mul(A a, B b)
+{
+    return a * b;
+}
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
@@ -696,6 +786,19 @@ inline __device__ float4 mul(float a, float4 b)
     c.y = a * b.y;
     c.z = a * b.z;
     c.w = a * b.w;
+    return c;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template<>
+inline __device__ Float8_ mul(float a, Float8_ b)
+{
+    Float8_ c;
+    c.x = make_float2(a * b.x.x, a * b.x.y);
+    c.y = make_float2(a * b.y.x, a * b.y.y);
+    c.z = make_float2(a * b.z.x, a * b.z.y);
+    c.w = make_float2(a * b.w.x, a * b.w.y);
     return c;
 }
 
@@ -785,6 +888,14 @@ inline __device__ float mul(uint16_t a, uint16_t b)
     float fa = half_to_float(a);
     float fb = half_to_float(b);
     return fa * fb;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template<>
+inline __device__ float mul(uint16_t a, float b)
+{
+    return half_to_float(a) * b;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -942,6 +1053,14 @@ inline __device__ float mul(__nv_bfloat16 a, __nv_bfloat16 b)
     float fa = (float)a;
     float fb = (float)b;
     return fa * fb;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+template<>
+inline __device__ float mul(__nv_bfloat16 a, float b)
+{
+    return __bfloat162float(a) * b;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////

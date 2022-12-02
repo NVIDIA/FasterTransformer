@@ -17,7 +17,7 @@ cmake_minimum_required(VERSION 3.8)
 add_library(BaseBeamSearchLayer STATIC BaseBeamSearchLayer.cu)
 set_property(TARGET BaseBeamSearchLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET BaseBeamSearchLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(BaseBeamSearchLayer PUBLIC -lcudart beam_search_penalty_kernels)
+target_link_libraries(BaseBeamSearchLayer PUBLIC -lcudart beam_search_penalty_kernels cuda_utils)
 
 add_library(OnlineBeamSearchLayer STATIC OnlineBeamSearchLayer.cu)
 set_property(TARGET OnlineBeamSearchLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)

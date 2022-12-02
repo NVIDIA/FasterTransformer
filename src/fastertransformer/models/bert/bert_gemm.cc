@@ -22,9 +22,16 @@ namespace ft = fastertransformer;
 
 int main(int argc, char* argv[])
 {
-    if (argc != 7 && argc != 8) {
-        FT_LOG_ERROR("bert_gemm batch_size seq_len head_number size_per_head data_type int8_mode tensor_para_size");
-        FT_LOG_ERROR("e.g. ./bin/bert_gemm 1 32 12 64 0 0 1 ");
+    if (argc < 7 || argc > 9) {
+        FT_LOG_ERROR("./bin/bert_gemm batch_size \\ \n"
+                     "                seq_len \\ \n"
+                     "                head_number \\ \n"
+                     "                size_per_head \\ \n"
+                     "                data_type \\ \n"
+                     "                int8_mode \\ \n"
+                     "                tensor_para_size \\\n"
+                     "                is_append (append new config into exist gemm_config.ini or not)");
+        FT_LOG_ERROR("e.g. ./bin/bert_gemm 1 32 12 64 0 0 1 1");
         return 0;
     }
 
@@ -35,9 +42,12 @@ int main(int argc, char* argv[])
     const ft::CublasDataType data_type     = static_cast<ft::CublasDataType>(atoi(argv[5]));  // 0 FP32, 1 FP16, 2 BF 16
     const int                int8_mode     = atoi(argv[6]);
     const int                tensor_para_size = argc < 8 ? 1 : atoi(argv[7]);
+    const bool               is_append        = argc < 9 ? false : (bool)(atoi(argv[8]));
 
     const int inter_size = 4 * head_num * size_per_head;
-    ft::FT_CHECK_WITH_INFO(head_num % tensor_para_size == 0, fmtstr("[ERROR] head_num (%d) %% tensor_para_size (%d) != 0", head_num, tensor_para_size));
+    ft::FT_CHECK_WITH_INFO(
+        head_num % tensor_para_size == 0,
+        ft::fmtstr("[ERROR] head_num (%d) %% tensor_para_size (%d) != 0", head_num, tensor_para_size));
     FT_LOG_INFO("arguments:");
     FT_LOG_INFO("  batch_size: %d", batch_size);
     FT_LOG_INFO("  head_num: %d", head_num);
@@ -45,6 +55,7 @@ int main(int argc, char* argv[])
     FT_LOG_INFO("  data_type: %d", data_type);
     FT_LOG_INFO("  int8_mode: %d", int8_mode);
     FT_LOG_INFO("  tensor_para_size: %d", tensor_para_size);
+    FT_LOG_INFO("  is_append: %d", (int)is_append);
     std::cout << std::endl;
 
     void*  gemm_test_buf;
@@ -54,9 +65,9 @@ int main(int argc, char* argv[])
     ft::check_cuda_error(cudaMemGetInfo(&free, &total));
     if (free < buf_size_in_byte + 10 * 1024 * 1024) {
         FT_LOG_ERROR(" There is no enough device memory for gemm test!\n"
-               " %ld Bytes is needed, but only %ld Bytes is free.",
-               buf_size_in_byte,
-               free);
+                     " %ld Bytes is needed, but only %ld Bytes is free.",
+                     buf_size_in_byte,
+                     free);
         gemm_test_buf = NULL;
         return -1;
     }
@@ -65,22 +76,24 @@ int main(int argc, char* argv[])
     }
 
     if (int8_mode != 0) {
-        ft::generate_encoder_igemm_config(batch_size, seq_len, head_num, size_per_head, gemm_test_buf, false);
+        ft::generate_encoder_igemm_config(batch_size, seq_len, head_num, size_per_head, gemm_test_buf, is_append);
     }
     else if (data_type == ft::FLOAT_DATATYPE) {
-        ft::generate_encoder_gemm_config<float>(batch_size, seq_len, head_num, size_per_head, gemm_test_buf, false);
+        ft::generate_encoder_gemm_config<float>(
+            batch_size, seq_len, head_num, size_per_head, gemm_test_buf, is_append, tensor_para_size);
     }
     else if (data_type == ft::HALF_DATATYPE) {
-        ft::generate_encoder_gemm_config<half>(batch_size, seq_len, head_num, size_per_head, gemm_test_buf, false);
+        ft::generate_encoder_gemm_config<half>(
+            batch_size, seq_len, head_num, size_per_head, gemm_test_buf, is_append, tensor_para_size);
     }
 #ifdef ENABLE_BF16
     else if (data_type == ft::BFLOAT16_DATATYPE) {
         ft::generate_encoder_gemm_config<__nv_bfloat16>(
-            batch_size, seq_len, head_num, size_per_head, gemm_test_buf, false);
+            batch_size, seq_len, head_num, size_per_head, gemm_test_buf, is_append, tensor_para_size);
     }
 #endif
     else {
-        printf("[ERROR] data type only supports fp32(0), fp16(1), bf16(2). \n");
+        FT_LOG_ERROR("data type only supports fp32(0), fp16(1), bf16(2). \n");
         return -1;
     }
 

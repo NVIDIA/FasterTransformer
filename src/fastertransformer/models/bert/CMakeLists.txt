@@ -19,7 +19,7 @@ set_property(TARGET Bert PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET Bert PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(Bert PUBLIC -lcudart bert_preprocess_kernels cublasMMWrapper 
                       UnfusedAttentionLayer FusedAttentionLayer TensorParallelGeluFfnLayer TensorParallelReluFfnLayer
-                      layernorm_kernels add_residual_kernels nccl_utils custom_ar_comm tensor)
+                      layernorm_kernels add_residual_kernels nccl_utils custom_ar_comm tensor cuda_utils logger)
 
 add_executable(bert_gemm bert_gemm.cc)
-target_link_libraries(bert_gemm PUBLIC -lcublas -lcublasLt -lcudart encoder_gemm_func encoder_igemm_func memory_utils tensor)
+target_link_libraries(bert_gemm PUBLIC -lcublas -lcublasLt -lcudart encoder_gemm_func encoder_igemm_func memory_utils tensor cuda_utils logger)

@@ -83,7 +83,7 @@ void invokeApplyTemperaturePenalty(T*           logits,
 {
     dim3    block(min(vocab_size_padd, 1024));
     dim3    grid(min(batch_size * vocab_size_padd / block.x, 65536));
-    const T temperature_inverse = (T)(1.f / (float)temperature);
+    const T temperature_inverse = (T)(1.f / (temperature + 1e-6f));
     if (std::is_same<T, half>::value && vocab_size % 2 == 0 && vocab_size_padd % 2 == 0) {
         applyTemperaturePenalty<<<grid, block, 0, stream>>>(reinterpret_cast<half2*>(logits),
                                                             reinterpret_cast<const half2*>(bias),
@@ -127,7 +127,7 @@ __global__ void batchApplyTemperaturePenalty(T*           logits,
     const T                 MAX_T_VAL = (IS_FP16) ? 65504.F : FLT_MAX;
     extern __shared__ float inv_temperatures[];
     if (threadIdx.x < batch_size) {
-        inv_temperatures[threadIdx.x] = 1 / temperatures[threadIdx.x];
+        inv_temperatures[threadIdx.x] = 1.0f / (temperatures[threadIdx.x] + 1e-6f);
     }
     __syncthreads();
 
@@ -157,7 +157,7 @@ __global__ void batchApplyTemperaturePenalty_h2(half2*       logits,
     assert(vocab_size_padded % 2 == 0);
     extern __shared__ half2 h2_inv_temperatures[];
     if (threadIdx.x < batch_size) {
-        h2_inv_temperatures[threadIdx.x] = __float2half2_rn(1 / temperatures[threadIdx.x]);
+        h2_inv_temperatures[threadIdx.x] = __float2half2_rn(1.f / (temperatures[threadIdx.x] + 1e-6f));
     }
     __syncthreads();
 

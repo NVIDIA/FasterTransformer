@@ -55,6 +55,7 @@ void Bert<T>::initialize()
                                                        0,
                                                        head_num_,
                                                        size_per_head_,
+                                                       0,  // expert_num
                                                        inter_size_,
                                                        tensor_para_,
                                                        stream_,
@@ -73,6 +74,7 @@ void Bert<T>::initialize()
                                                        0,
                                                        head_num_,
                                                        size_per_head_,
+                                                       0,  // expert_num
                                                        inter_size_,
                                                        tensor_para_,
                                                        stream_,
@@ -81,6 +83,7 @@ void Bert<T>::initialize()
                                                        true,
                                                        is_free_buffer_after_forward_,
                                                        sparse_,
+                                                       0,
                                                        use_gated_activation,
                                                        custom_all_reduce_comm_,
                                                        enable_custom_all_reduce_);
@@ -471,7 +474,6 @@ void Bert<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, const
                                     stream_);
                 }
             }
-
             if (layernorm_type_ == LayerNormType::pre_layernorm) {
                 invokeGeneralLayerNorm(normed_from_tensor_,
                                        from_tensor,
@@ -480,28 +482,34 @@ void Bert<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, const
                                        layernorm_eps_,
                                        h_token_num,
                                        hidden_units_,
+                                       (float*)nullptr,
+                                       0,
                                        stream_);
                 sync_check_cuda_error();
             }
             // Attention
             {
-                std::vector<Tensor> attn_input_tensors{
-                    Tensor{MEMORY_GPU,
-                           data_type,
-                           std::vector<size_t>{h_token_num, hidden_units_},
-                           layernorm_type_ == LayerNormType::pre_layernorm ? normed_from_tensor_ : from_tensor},
-                    Tensor{MEMORY_GPU,
-                           data_type,
-                           std::vector<size_t>{local_batch_size, 1, request_seq_len, request_seq_len},
-                           attention_mask_},
-                    *padding_offset_tensor_ptr};
-                std::vector<Tensor> attn_output_tensors{
-                    Tensor{MEMORY_GPU, data_type, std::vector<size_t>{h_token_num, hidden_units_}, attn_out_buf_}};
+                TensorMap attn_input_tensors{
+                    {"input_query",
+                     Tensor{MEMORY_GPU,
+                            data_type,
+                            std::vector<size_t>{h_token_num, hidden_units_},
+                            layernorm_type_ == LayerNormType::pre_layernorm ? normed_from_tensor_ : from_tensor}},
+                    {"attention_mask",
+                     Tensor{MEMORY_GPU,
+                            data_type,
+                            std::vector<size_t>{local_batch_size, 1, request_seq_len, request_seq_len},
+                            attention_mask_}}};
+                attn_input_tensors.insertIfValid("padding_offset", *padding_offset_tensor_ptr);
+                TensorMap attn_output_tensors(
+                    {{"hidden_features",
+                      Tensor{MEMORY_GPU, data_type, std::vector<size_t>{h_token_num, hidden_units_}, attn_out_buf_}}});
 
                 bool use_custom_all_reduce_kernel = false;
                 if (enable_custom_all_reduce_ && custom_all_reduce_comm_ != nullptr) {
+                    std::vector<Tensor> hidden_features{attn_output_tensors.at("hidden_features")};
                     use_custom_all_reduce_kernel =
-                        custom_all_reduce_comm_->swapInternalBuffer(&attn_output_tensors, h_token_num * hidden_units_);
+                        custom_all_reduce_comm_->swapInternalBuffer(&hidden_features, h_token_num * hidden_units_);
                 }
 
                 if (attention_type == AttentionType::FUSED_MHA || attention_type == AttentionType::FUSED_PADDED_MHA) {
@@ -544,6 +552,7 @@ void Bert<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, const
                 invokeGeneralAddBiasResidualPreLayerNorm(
                     attn_out_buf_,
                     normed_attn_out_buf_,
+                    attn_out_buf_,
                     from_tensor,
                     bert_weights->bert_layer_weights[l].ffn_layernorm_weights.gamma,
                     bert_weights->bert_layer_weights[l].ffn_layernorm_weights.beta,
@@ -551,19 +560,25 @@ void Bert<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, const
                     layernorm_eps_,
                     h_token_num,
                     hidden_units_,
+                    (float*)nullptr,
+                    (float*)nullptr,
+                    (float*)nullptr,
+                    0,
                     stream_);
             }
             sync_check_cuda_error();
 
             // FFN
             {
-                std::vector<Tensor> ffn_input_tensors{
-                    Tensor{MEMORY_GPU,
-                           data_type,
-                           std::vector<size_t>{h_token_num, hidden_units_},
-                           layernorm_type_ == LayerNormType::pre_layernorm ? normed_attn_out_buf_ : attn_out_buf_}};
-                std::vector<Tensor> ffn_output_tensors{
-                    Tensor{MEMORY_GPU, data_type, std::vector<size_t>{h_token_num, hidden_units_}, out_tensor}};
+                TensorMap ffn_input_tensors(
+                    {{"ffn_input",
+                      Tensor{MEMORY_GPU,
+                             data_type,
+                             std::vector<size_t>{h_token_num, hidden_units_},
+                             layernorm_type_ == LayerNormType::pre_layernorm ? normed_attn_out_buf_ : attn_out_buf_}}});
+                TensorMap ffn_output_tensors(
+                    {{"ffn_output",
+                      Tensor{MEMORY_GPU, data_type, std::vector<size_t>{h_token_num, hidden_units_}, out_tensor}}});
                 ffn_layer_->forward(
                     &ffn_output_tensors, &ffn_input_tensors, &bert_weights->bert_layer_weights[l].ffn_weights);
             }
@@ -609,6 +624,8 @@ void Bert<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, const
                                        layernorm_eps_,
                                        h_token_num,
                                        hidden_units_,
+                                       (float*)nullptr,
+                                       0,
                                        stream_);
                 sync_check_cuda_error();
             }

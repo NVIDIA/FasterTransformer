@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
  */
 
 #include "src/fastertransformer/layers/FfnLayer.h"
+#include "src/fastertransformer/kernels/transpose_int8_kernels.h"
 
 namespace fastertransformer {
 
@@ -23,33 +24,159 @@ void FfnLayer<T>::forward(std::vector<fastertransformer::Tensor>*       output_t
                           const std::vector<fastertransformer::Tensor>* input_tensors,
                           const FfnWeight<T>*                           ffn_weights)
 {
+    TensorMap input_tensor({{"ffn_input", input_tensors->at(0)}});
+    TensorMap output_tensor({{"ffn_output", output_tensors->at(0)}});
+    forward(&output_tensor, &input_tensor, ffn_weights);
+}
+
+template<typename T>
+void FfnLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, const FfnWeight<T>* ffn_weights)
+{
     // input tensors:
     //      ffn_input [token_num, hidden_dimension],
+    //      ia3_tasks [batch_size] (optional)
+    //      moe_k     [1], uint64 (optional)
 
     // output tensors:
-    //      ffn_output [token_num, hidden_dimension],
+    //      ffn_output [token_num, hidden_dimension] or [moe_k * token_num, hidden_dimension] if use_moe
+    //      expert_scales [token_num, moe_k] (optional)
+    //      expanded_source_row_to_expanded_dest_row [token_num, moe_k] (optional)
+    //      expert_for_source_row [token_num, moe_k] (optional)
 
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    FT_CHECK(input_tensors->size() == 1);
-    FT_CHECK(output_tensors->size() == 1);
-    // FT_CHECK(isValidTokenNum(input_tensors->at(0).shape[0]));
-    allocateBuffer(input_tensors->at(0).shape[0]);
+    FT_CHECK(input_tensors->size() >= 1 && input_tensors->size() <= 3);
+    FT_CHECK(output_tensors->size() >= 1 || output_tensors->size() <= 4);
+    bool   use_moe = false;
+    size_t moe_k   = 0;
+    if (input_tensors->isExist("moe_k")) {
+        use_moe = true;
+        moe_k   = input_tensors->at("moe_k").getVal<size_t>();
+    }
+    allocateBuffer(input_tensors->at("ffn_input").shape[0], moe_k, use_moe);
 
-    const int m             = input_tensors->at(0).shape[0];
-    T*        output_tensor = (T*)output_tensors->at(0).data;
-    const T*  input_tensor  = (const T*)input_tensors->at(0).data;
+    const int m             = input_tensors->at("ffn_input").shape[0];
+    T*        output_tensor = output_tensors->at("ffn_output").getPtr<T>();
+    const T*  input_tensor  = input_tensors->at("ffn_input").getPtr<const T>();
+
+    // for moe output
+    T*   expert_scales    = nullptr;
+    int* permuted_rows    = nullptr;
+    int* permuted_experts = nullptr;
+
+    // moe outputs should exist or not together
+    FT_CHECK((use_moe && output_tensors->isExist("expert_scales")
+              && output_tensors->isExist("expanded_source_row_to_expanded_dest_row")
+              && output_tensors->isExist("expert_for_source_row"))
+             || (!use_moe && !output_tensors->isExist("expert_scales")
+                 && !output_tensors->isExist("expanded_source_row_to_expanded_dest_row")
+                 && !output_tensors->isExist("expert_for_source_row")));
+
+    if (use_moe) {
+        expert_scales    = output_tensors->at("expert_scales").getPtr<T>();
+        permuted_rows    = output_tensors->at("expanded_source_row_to_expanded_dest_row").getPtr<int>();
+        permuted_experts = output_tensors->at("expert_for_source_row").getPtr<int>();
+    }
 
     // TODO: INT8 and Sparsity are currently not implemented (geglu or reglu)
     const bool use_gated_activation = use_gated_activation_ && ffn_weights->intermediate_weight2.kernel != nullptr;
 
-#ifdef SPARSITY_ENABLED
-    int m_tmp = input_tensors->at(0).shape[0];
+    // moe can't be used with use_gated_activation currently
+    FT_CHECK(!(use_gated_activation && use_moe));
+    auto activation_type = getActivationType();
+
+    const int* ia3_tasks = input_tensors->getPtr<const int>("ia3_tasks", nullptr);
+
+    if (use_moe) {
+        FT_CHECK(ia3_tasks == nullptr);
+        cublas_wrapper_->Gemm(CUBLAS_OP_N,
+                              CUBLAS_OP_N,
+                              expert_num_,
+                              m,
+                              hidden_units_,
+                              ffn_weights->gating_weight.kernel,
+                              expert_num_,
+                              input_tensor,
+                              hidden_units_,
+                              moe_gates_buf_,
+                              expert_num_);
+
+        if (int8_mode_ == 0) {
+            moe_fc_runner_->run_moe_fc(input_tensor,
+                                       moe_gates_buf_,
+                                       ffn_weights->intermediate_weight.kernel,
+                                       ffn_weights->intermediate_weight.weight_only_quant_scale,
+                                       ffn_weights->intermediate_weight.bias,
+                                       activation_type,
+                                       ffn_weights->output_weight.kernel,
+                                       ffn_weights->output_weight.weight_only_quant_scale,
+                                       m,
+                                       hidden_units_,
+                                       inter_size_,
+                                       expert_num_,
+                                       moe_k,
+                                       moe_fc_workspace_,
+                                       output_tensor,
+                                       expert_scales,
+                                       permuted_rows,
+                                       permuted_experts,
+                                       stream_);
+        }
+        else if (int8_mode_ == 1) {
+            FT_CHECK_WITH_INFO(moe_int8_weight_only_fc_runner_.get() != NULL,
+                               "weight only runner was not initialized.");
+
+            FT_CHECK(ffn_weights->intermediate_weight.int8_kernel != NULL
+                     && ffn_weights->intermediate_weight.weight_only_quant_scale != NULL);
+
+            FT_CHECK(ffn_weights->output_weight.int8_kernel != NULL
+                     && ffn_weights->output_weight.weight_only_quant_scale != NULL);
+
+            moe_int8_weight_only_fc_runner_->run_moe_fc(
+                input_tensor,
+                moe_gates_buf_,
+                reinterpret_cast<const uint8_t*>(ffn_weights->intermediate_weight.int8_kernel),
+                ffn_weights->intermediate_weight.weight_only_quant_scale,
+                ffn_weights->intermediate_weight.bias,
+                activation_type,
+                reinterpret_cast<const uint8_t*>(ffn_weights->output_weight.int8_kernel),
+                ffn_weights->output_weight.weight_only_quant_scale,
+                m,
+                hidden_units_,
+                inter_size_,
+                expert_num_,
+                moe_k,
+                moe_fc_workspace_,
+                output_tensor,
+                expert_scales,
+                permuted_rows,
+                permuted_experts,
+                stream_);
+        }
+        else {
+            FT_CHECK_WITH_INFO(false, "Invalid int8 mode for MoE");
+        }
+
+        sync_check_cuda_error();
+        if (is_free_buffer_after_forward_ == true) {
+            freeBuffer();
+        }
+        sync_check_cuda_error();
+        return;
+    }
+
+    int m_tmp = input_tensors->at("ffn_input").shape[0];
     if (m_tmp % 8 != 0) {
         m_tmp = (m_tmp / 8 + 1) * 8;
     }
     const int m_padded = m_tmp;
-    if (sparse_ && cublas_wrapper_->isUseSparse(1, inter_size_, m, hidden_units_)) {
+#ifdef SPARSITY_ENABLED
+    bool use_sparse_gemm = sparse_ && cublas_wrapper_->isUseSparse(1, inter_size_, m, hidden_units_);
+#else
+    constexpr bool use_sparse_gemm = false;
+#endif
+    if (use_sparse_gemm) {
         FT_CHECK(!use_gated_activation);
+#ifdef SPARSITY_ENABLED
         cublas_wrapper_->SpGemm(CUBLAS_OP_N,
                                 CUBLAS_OP_N,
                                 inter_size_,
@@ -58,26 +185,76 @@ void FfnLayer<T>::forward(std::vector<fastertransformer::Tensor>*       output_t
                                 ffn_weights->intermediate_weight.sp_kernel,
                                 input_tensor,
                                 inter_buf_);
+#endif
     }
     else {
-#endif
-        if (int8_mode_ == 1 && m <= 2) {
-            FT_CHECK(!use_gated_activation);
+        if (int8_mode_ == 1) {
+            FT_CHECK_WITH_INFO(weight_only_int8_fc_runner_.get() != NULL, "weight only runner was not initialized.");
             FT_CHECK(ffn_weights->intermediate_weight.int8_kernel != NULL
-                     && ffn_weights->intermediate_weight.scale != NULL);
-            int8WeightPerChannelLdkMultiplicationLauncher(ffn_weights->intermediate_weight.int8_kernel,
-                                                          input_tensor,
-                                                          ffn_weights->intermediate_weight.scale,
-                                                          inter_buf_,
-                                                          m,
-                                                          inter_size_,
-                                                          hidden_units_,
-                                                          stream_);
+                     && ffn_weights->intermediate_weight.weight_only_quant_scale != NULL);
+
+            if (ia3_tasks == nullptr && !use_gated_activation) {
+                // launch fused GEMM + activation
+                weight_only_int8_fc_runner_->gemm_bias_act(
+                    input_tensor,
+                    reinterpret_cast<const uint8_t*>(ffn_weights->intermediate_weight.int8_kernel),
+                    ffn_weights->intermediate_weight.weight_only_quant_scale,
+                    ffn_weights->intermediate_weight.bias,
+                    inter_buf_,
+                    m,
+                    inter_size_,
+                    hidden_units_,
+                    activation_type,
+                    mixed_gemm_workspace_,
+                    mixed_gemm_ws_bytes_,
+                    stream_);
+            }
+            else {
+                // Otherwise, let FT handle activation
+                weight_only_int8_fc_runner_->gemm(
+                    input_tensor,
+                    reinterpret_cast<const uint8_t*>(ffn_weights->intermediate_weight.int8_kernel),
+                    ffn_weights->intermediate_weight.weight_only_quant_scale,
+                    inter_buf_,
+                    m,
+                    inter_size_,
+                    hidden_units_,
+                    mixed_gemm_workspace_,
+                    mixed_gemm_ws_bytes_,
+                    stream_);
+
+                if (use_gated_activation) {
+                    FT_CHECK(ffn_weights->intermediate_weight2.int8_kernel != NULL
+                             && ffn_weights->intermediate_weight2.weight_only_quant_scale != NULL);
+
+                    weight_only_int8_fc_runner_->gemm(
+                        input_tensor,
+                        reinterpret_cast<const uint8_t*>(ffn_weights->intermediate_weight2.int8_kernel),
+                        ffn_weights->intermediate_weight2.weight_only_quant_scale,
+                        inter_buf_2_,
+                        m,
+                        inter_size_,
+                        hidden_units_,
+                        mixed_gemm_workspace_,
+                        mixed_gemm_ws_bytes_,
+                        stream_);
+                }
+            }
+        }
+        else if (int8_mode_ == 2) {
+            FT_CHECK(!use_gated_activation);
+            cublas_wrapper_->Int8Gemm(inter_size_,
+                                      m,
+                                      hidden_units_,
+                                      ffn_weights->intermediate_weight.int8_kernel,
+                                      hidden_units_,
+                                      input_tensors->getPtr<int8_t>("ffn_input"),
+                                      hidden_units_,
+                                      reinterpret_cast<int8_t*>(inter_buf_),
+                                      inter_size_,
+                                      ffn_weights->intermediate_weight.scale_inter);
         }
         else {
-            if (int8_mode_ == 1) {
-                printf("[WARNING][FfnLayer<T>::forward] int8 gpt doesn't support m > 2, run fp gpt instead.\n");
-            }
             cublas_wrapper_->Gemm(CUBLAS_OP_N,
                                   CUBLAS_OP_N,
                                   inter_size_,
@@ -103,20 +280,28 @@ void FfnLayer<T>::forward(std::vector<fastertransformer::Tensor>*       output_t
                                       inter_size_);
             }
         }
-#ifdef SPARSITY_ENABLED
     }
-#endif
 
-    if (use_gated_activation) {
-        invokeAddBiasGatedActivation(m, ffn_weights->intermediate_weight.bias, ffn_weights->intermediate_weight2.bias);
+    if (int8_mode_ != 1 || ia3_tasks != nullptr || use_gated_activation) {
+        // if int8_mode == 1 && ia3_tasks == nullptr && we don't use gated activations, we use cutlass
+        // to fuse GEMM + bias + activation, so we skip the activation function here. In all
+        // other cases, we must apply the activation function separately.
+        genericActivation(m,
+                          ffn_weights->intermediate_weight.bias,
+                          use_gated_activation ? ffn_weights->intermediate_weight2.bias : nullptr,
+                          input_tensors->at("ia3_tasks", {MEMORY_GPU, TYPE_INT32, {}, nullptr}).getPtr<const int>(),
+                          ffn_weights->ia3_weight.kernel,
+                          int8_mode_ == 2 ? ffn_weights->intermediate_weight.scale_out : (float*)nullptr,
+                          int8_mode_ == 2 ? ffn_weights->output_weight.scale : (float*)nullptr);
     }
-    else {
-        invokeAddBiasActivation(m, ffn_weights->intermediate_weight.bias);
-    }
+
     sync_check_cuda_error();
 
 #ifdef SPARSITY_ENABLED
-    if (sparse_ && cublas_wrapper_->isUseSparse(1, hidden_units_, m, inter_size_)) {
+    use_sparse_gemm = sparse_ && cublas_wrapper_->isUseSparse(1, hidden_units_, m, inter_size_);
+#endif
+    if (use_sparse_gemm) {
+#ifdef SPARSITY_ENABLED
         cublas_wrapper_->SpGemm(CUBLAS_OP_N,
                                 CUBLAS_OP_N,
                                 hidden_units_,
@@ -125,19 +310,34 @@ void FfnLayer<T>::forward(std::vector<fastertransformer::Tensor>*       output_t
                                 ffn_weights->output_weight.sp_kernel,
                                 inter_buf_,
                                 output_tensor);
+#endif
     }
     else {
-#endif
-        if (int8_mode_ == 1 && m <= 2) {
-            FT_CHECK(ffn_weights->output_weight.int8_kernel != NULL && ffn_weights->output_weight.scale != NULL);
-            int8WeightPerChannelLdkMultiplicationLauncher(ffn_weights->output_weight.int8_kernel,
-                                                          inter_buf_,
-                                                          ffn_weights->output_weight.scale,
-                                                          output_tensor,
-                                                          m,
-                                                          hidden_units_,
-                                                          inter_size_,
-                                                          stream_);
+        if (int8_mode_ == 1) {
+            FT_CHECK_WITH_INFO(weight_only_int8_fc_runner_.get() != NULL, "weight only runner was not initialized.");
+            FT_CHECK(ffn_weights->output_weight.int8_kernel != NULL
+                     && ffn_weights->output_weight.weight_only_quant_scale != NULL);
+            weight_only_int8_fc_runner_->gemm(inter_buf_,
+                                              reinterpret_cast<const uint8_t*>(ffn_weights->output_weight.int8_kernel),
+                                              ffn_weights->output_weight.weight_only_quant_scale,
+                                              output_tensor,
+                                              m,
+                                              hidden_units_,
+                                              inter_size_,
+                                              mixed_gemm_workspace_,
+                                              mixed_gemm_ws_bytes_,
+                                              stream_);
+        }
+        else if (int8_mode_ == 2) {
+            cublas_wrapper_->Int8Gemm(hidden_units_,
+                                      m,
+                                      inter_size_,
+                                      ffn_weights->output_weight.int8_kernel,
+                                      inter_size_,
+                                      reinterpret_cast<int8_t*>(inter_buf_),
+                                      inter_size_,
+                                      output_tensors->getPtr<int32_t>("ffn_output"),
+                                      hidden_units_);
         }
         else {
             cublas_wrapper_->Gemm(CUBLAS_OP_N,
@@ -152,9 +352,7 @@ void FfnLayer<T>::forward(std::vector<fastertransformer::Tensor>*       output_t
                                   output_tensor,
                                   hidden_units_);
         }
-#ifdef SPARSITY_ENABLED
     }
-#endif
     sync_check_cuda_error();
     if (is_free_buffer_after_forward_ == true) {
         freeBuffer();
@@ -167,6 +365,7 @@ FfnLayer<T>::FfnLayer(size_t           max_batch_size,
                       size_t           max_seq_len,
                       size_t           head_num,
                       size_t           size_per_head,
+                      size_t           expert_num,
                       size_t           inter_size,
                       cudaStream_t     stream,
                       cublasMMWrapper* cublas_wrapper,
@@ -179,6 +378,7 @@ FfnLayer<T>::FfnLayer(size_t           max_batch_size,
     max_token_num_(max_batch_size * max_seq_len),
     head_num_(head_num),
     size_per_head_(size_per_head),
+    expert_num_(expert_num),
     hidden_units_(head_num * size_per_head),
     max_inter_size_(inter_size),
     inter_size_(inter_size),
@@ -186,6 +386,14 @@ FfnLayer<T>::FfnLayer(size_t           max_batch_size,
     use_gated_activation_(use_gated_activation)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    if (int8_mode_ == 0) {
+        moe_fc_runner_ = std::make_shared<CutlassMoeFCRunner<T, T>>();
+    }
+    else if (int8_mode_ == 1) {
+        FT_CHECK_WITH_INFO(!(std::is_same<T, float>::value), "Weight only quant not supported for fp32.");
+        moe_int8_weight_only_fc_runner_ = std::make_shared<CutlassMoeFCRunner<T, uint8_t>>();
+        weight_only_int8_fc_runner_     = std::make_shared<CutlassFpAIntBGemmRunner<T, uint8_t>>();
+    }
 }
 
 template<typename T>
@@ -199,11 +407,15 @@ FfnLayer<T>::FfnLayer(FfnLayer<T> const& ffn_layer):
     max_token_num_(ffn_layer.max_token_num_),
     head_num_(ffn_layer.head_num_),
     size_per_head_(ffn_layer.size_per_head_),
+    expert_num_(ffn_layer.expert_num_),
     hidden_units_(ffn_layer.hidden_units_),
     max_inter_size_(ffn_layer.max_inter_size_),
     inter_size_(ffn_layer.inter_size_),
     int8_mode_(ffn_layer.int8_mode_),
-    use_gated_activation_(ffn_layer.use_gated_activation_)
+    use_gated_activation_(ffn_layer.use_gated_activation_),
+    moe_fc_runner_(ffn_layer.moe_fc_runner_),
+    moe_int8_weight_only_fc_runner_(ffn_layer.moe_int8_weight_only_fc_runner_),
+    weight_only_int8_fc_runner_(ffn_layer.weight_only_int8_fc_runner_)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
 }
@@ -220,23 +432,64 @@ template<typename T>
 void FfnLayer<T>::allocateBuffer()
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    const auto type_size = int8_mode_ == 2 ? sizeof(int8_t) : sizeof(T);
     if (is_allocate_buffer_ == false) {
-        inter_buf_ = (T*)allocator_->reMalloc(inter_buf_, sizeof(T) * max_token_num_ * max_inter_size_, false);
+        inter_buf_ = (T*)allocator_->reMalloc(inter_buf_, type_size * max_token_num_ * max_inter_size_, false);
         if (use_gated_activation_) {
             inter_buf_2_ = (T*)allocator_->reMalloc(inter_buf_2_, sizeof(T) * max_token_num_ * max_inter_size_, false);
         }
+
+        if (int8_mode_ == 1) {
+            FT_CHECK_WITH_INFO(weight_only_int8_fc_runner_.get() != NULL, "weight only runner was not initialized.");
+            // We use max_size for n and k since we reuse buffers for both FCs and want to allocate the max
+            // possible memory that would be required by any of the individual gemms.
+            const int max_size    = std::max(hidden_units_, max_inter_size_);
+            mixed_gemm_ws_bytes_  = weight_only_int8_fc_runner_->getWorkspaceSize(max_token_num_, max_size, max_size);
+            mixed_gemm_workspace_ = (char*)allocator_->reMalloc(mixed_gemm_workspace_, mixed_gemm_ws_bytes_, false);
+        }
+
         is_allocate_buffer_ = true;
     }
 }
 
 template<typename T>
-void FfnLayer<T>::allocateBuffer(size_t token_num)
+void FfnLayer<T>::allocateBuffer(size_t token_num, int moe_k, bool use_moe)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    inter_buf_ = (T*)allocator_->reMalloc(inter_buf_, sizeof(T) * token_num * max_inter_size_, false);
-    if (use_gated_activation_) {
-        inter_buf_2_ = (T*)allocator_->reMalloc(inter_buf_2_, sizeof(T) * token_num * max_inter_size_, false);
+    if (use_moe) {
+        moe_gates_buf_ =
+            (T*)allocator_->reMalloc(moe_gates_buf_, sizeof(T) * pad_to_multiple_of_16(token_num * expert_num_), false);
+        size_t ws_size_moe = 0;
+        if (int8_mode_ == 0) {
+            FT_CHECK_WITH_INFO(moe_fc_runner_.get() != NULL, "moe runner was not initialized.");
+            ws_size_moe = moe_fc_runner_->getWorkspaceSize(token_num, hidden_units_, inter_size_, expert_num_, moe_k);
+        }
+        else if (int8_mode_ == 1) {
+            FT_CHECK_WITH_INFO(moe_int8_weight_only_fc_runner_.get() != NULL,
+                               "weight only moe runner was not initialized.");
+            ws_size_moe = moe_int8_weight_only_fc_runner_->getWorkspaceSize(
+                token_num, hidden_units_, inter_size_, expert_num_, moe_k);
+        }
+
+        moe_fc_workspace_ = (char*)allocator_->reMalloc(moe_fc_workspace_, sizeof(char) * ws_size_moe, false);
     }
+    else {
+        const auto type_size = int8_mode_ == 2 ? sizeof(int8_t) : sizeof(T);
+        inter_buf_           = (T*)allocator_->reMalloc(inter_buf_, type_size * token_num * max_inter_size_, false);
+        if (use_gated_activation_) {
+            inter_buf_2_ = (T*)allocator_->reMalloc(inter_buf_2_, sizeof(T) * token_num * max_inter_size_, false);
+        }
+
+        if (int8_mode_ == 1) {
+            FT_CHECK_WITH_INFO(weight_only_int8_fc_runner_.get() != NULL, "weight only runner was not initialized.");
+            // We use max_size for n and k since we reuse buffers for both FCs and want to allocate the max
+            // possible memory that would be required by any of the individual gemms.
+            const int max_size    = std::max(hidden_units_, inter_size_);
+            mixed_gemm_ws_bytes_  = weight_only_int8_fc_runner_->getWorkspaceSize(token_num, max_size, max_size);
+            mixed_gemm_workspace_ = (char*)allocator_->reMalloc(mixed_gemm_workspace_, mixed_gemm_ws_bytes_, false);
+        }
+    }
+
     is_allocate_buffer_ = true;
 }
 
@@ -249,6 +502,16 @@ void FfnLayer<T>::freeBuffer()
         if (use_gated_activation_) {
             allocator_->free((void**)(&inter_buf_2_));
         }
+        if (expert_num_ != 0) {
+            allocator_->free((void**)(&moe_gates_buf_));
+            allocator_->free((void**)(&moe_fc_workspace_));
+        }
+
+        if (mixed_gemm_workspace_) {
+            allocator_->free((void**)(&mixed_gemm_workspace_));
+            mixed_gemm_ws_bytes_ = 0;
+        }
+
         is_allocate_buffer_ = false;
     }
 }
@@ -262,6 +525,83 @@ bool FfnLayer<T>::isValidTokenNum(size_t token_num)
     return true;
 }
 
+template<typename T>
+void FfnLayer<T>::genericActivation(int          m,
+                                    const T*     bias1,
+                                    const T*     bias2,
+                                    const int*   ia3_tasks,
+                                    const T*     ia3_weights,
+                                    const float* activation_in,
+                                    const float* activation_out)
+{
+    switch (getActivationType()) {
+        case ActivationType::Gelu:
+        case ActivationType::GeGLU:
+            if (inter_buf_2_ == nullptr && int8_mode_ <= 1) {
+                invokeAddBiasGeluV2(inter_buf_, bias1, ia3_tasks, ia3_weights, m, inter_size_, stream_);
+            }
+            else {
+                invokeGenericActivation<GeluActivation>(inter_buf_,
+                                                        bias1,
+                                                        inter_buf_2_,
+                                                        bias2,
+                                                        ia3_tasks,
+                                                        ia3_weights,
+                                                        m,
+                                                        inter_size_,
+                                                        int8_mode_,
+                                                        activation_in,
+                                                        activation_out,
+                                                        stream_);
+            }
+            break;
+        case ActivationType::Relu:
+        case ActivationType::ReGLU:
+            invokeGenericActivation<ReluActivation>(inter_buf_,
+                                                    bias1,
+                                                    inter_buf_2_,
+                                                    bias2,
+                                                    ia3_tasks,
+                                                    ia3_weights,
+                                                    m,
+                                                    inter_size_,
+                                                    int8_mode_,
+                                                    activation_in,
+                                                    activation_out,
+                                                    stream_);
+            break;
+        case ActivationType::Silu:
+        case ActivationType::SiGLU:
+            invokeGenericActivation<SiluActivation>(inter_buf_,
+                                                    bias1,
+                                                    inter_buf_2_,
+                                                    bias2,
+                                                    ia3_tasks,
+                                                    ia3_weights,
+                                                    m,
+                                                    inter_size_,
+                                                    int8_mode_,
+                                                    activation_in,
+                                                    activation_out,
+                                                    stream_);
+            break;
+        case ActivationType::Identity:
+            invokeGenericActivation<IdentityActivation>(inter_buf_,
+                                                        bias1,
+                                                        inter_buf_2_,
+                                                        bias2,
+                                                        ia3_tasks,
+                                                        ia3_weights,
+                                                        m,
+                                                        inter_size_,
+                                                        int8_mode_,
+                                                        activation_in,
+                                                        activation_out,
+                                                        stream_);
+            break;
+    }
+}
+
 template class FfnLayer<float>;
 template class FfnLayer<half>;
 #ifdef ENABLE_BF16
@@ -273,6 +613,7 @@ GeluFfnLayer<T>::GeluFfnLayer(size_t           max_batch_size,
                               size_t           max_seq_len,
                               size_t           head_num,
                               size_t           size_per_head,
+                              size_t           expert_num,
                               size_t           inter_size,
                               cudaStream_t     stream,
                               cublasMMWrapper* cublas_wrapper,
@@ -285,6 +626,7 @@ GeluFfnLayer<T>::GeluFfnLayer(size_t           max_batch_size,
                 max_seq_len,
                 head_num,
                 size_per_head,
+                expert_num,
                 inter_size,
                 stream,
                 cublas_wrapper,
@@ -301,18 +643,6 @@ GeluFfnLayer<T>::GeluFfnLayer(GeluFfnLayer<T> const& gelu_ffn_layer): FfnLayer<T
 {
 }
 
-template<typename T>
-void GeluFfnLayer<T>::invokeAddBiasActivation(const int m, const T* bias)
-{
-    invokeAddBiasGeluV2<T>(inter_buf_, bias, m, inter_size_, stream_);
-}
-
-template<typename T>
-void GeluFfnLayer<T>::invokeAddBiasGatedActivation(const int m, const T* bias1, const T* bias2)
-{
-    invokeAddBiasGatedGelu<T>(inter_buf_, inter_buf_2_, bias1, bias2, m, inter_size_, stream_);
-}
-
 template class GeluFfnLayer<float>;
 template class GeluFfnLayer<half>;
 #ifdef ENABLE_BF16
@@ -324,24 +654,27 @@ ReluFfnLayer<T>::ReluFfnLayer(size_t           max_batch_size,
                               size_t           max_seq_len,
                               size_t           head_num,
                               size_t           size_per_head,
+                              size_t           expert_num,
                               size_t           inter_size,
                               cudaStream_t     stream,
                               cublasMMWrapper* cublas_wrapper,
                               IAllocator*      allocator,
                               bool             is_free_buffer_after_forward,
                               bool             sparse,
+                              int              int8_mode,
                               bool             use_gated_activation):
     FfnLayer<T>(max_batch_size,
                 max_seq_len,
                 head_num,
                 size_per_head,
+                expert_num,
                 inter_size,
                 stream,
                 cublas_wrapper,
                 allocator,
                 is_free_buffer_after_forward,
                 sparse,
-                0,
+                int8_mode,
                 use_gated_activation)
 {
 }
@@ -349,18 +682,6 @@ ReluFfnLayer<T>::ReluFfnLayer(size_t           max_batch_size,
 template<typename T>
 ReluFfnLayer<T>::ReluFfnLayer(ReluFfnLayer<T> const& relu_ffn_layer): FfnLayer<T>(relu_ffn_layer)
 {
-}
-
-template<typename T>
-void ReluFfnLayer<T>::invokeAddBiasActivation(const int m, const T* bias)
-{
-    invokeAddBiasRelu<T>(inter_buf_, bias, m, inter_size_, stream_);
-}
-
-template<typename T>
-void ReluFfnLayer<T>::invokeAddBiasGatedActivation(const int m, const T* bias1, const T* bias2)
-{
-    invokeAddBiasGatedRelu<T>(inter_buf_, inter_buf_2_, bias1, bias2, m, inter_size_, stream_);
 }
 
 template class ReluFfnLayer<float>;
@@ -374,6 +695,7 @@ SiluFfnLayer<T>::SiluFfnLayer(size_t           max_batch_size,
                               size_t           max_seq_len,
                               size_t           head_num,
                               size_t           size_per_head,
+                              size_t           expert_num,
                               size_t           inter_size,
                               cudaStream_t     stream,
                               cublasMMWrapper* cublas_wrapper,
@@ -385,6 +707,7 @@ SiluFfnLayer<T>::SiluFfnLayer(size_t           max_batch_size,
                 max_seq_len,
                 head_num,
                 size_per_head,
+                expert_num,
                 inter_size,
                 stream,
                 cublas_wrapper,
@@ -399,18 +722,6 @@ SiluFfnLayer<T>::SiluFfnLayer(size_t           max_batch_size,
 template<typename T>
 SiluFfnLayer<T>::SiluFfnLayer(SiluFfnLayer<T> const& gelu_ffn_layer): FfnLayer<T>(gelu_ffn_layer)
 {
-}
-
-template<typename T>
-void SiluFfnLayer<T>::invokeAddBiasActivation(const int m, const T* bias)
-{
-    invokeAddBiasSilu<T>(inter_buf_, bias, m, inter_size_, stream_);
-}
-
-template<typename T>
-void SiluFfnLayer<T>::invokeAddBiasGatedActivation(const int m, const T* bias1, const T* bias2)
-{
-    invokeAddBiasGatedSilu<T>(inter_buf_, inter_buf_2_, bias1, bias2, m, inter_size_, stream_);
 }
 
 template class SiluFfnLayer<float>;

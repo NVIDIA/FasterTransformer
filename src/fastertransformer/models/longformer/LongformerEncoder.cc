@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -71,6 +71,7 @@ LongformerEncoder<T>::LongformerEncoder(size_t           layers_num,
                                               max_seq_len,
                                               head_num,
                                               size_per_head,
+                                              0,  // expert_num
                                               intermediate_size_,
                                               stream_,
                                               cublas_wrapper_,
@@ -150,7 +151,7 @@ void LongformerEncoder<T>::forward(std::vector<Tensor>* output_tensors, std::vec
     const size_t batch_size = input_tensors->at(0).shape[0];
     const size_t seq_len    = input_tensors->at(0).shape[1];
 
-    invokeInitLongformerIdx((T*)input_tensors->at(2).data,
+    invokeInitLongformerIdx(input_tensors->at(2).getPtr<T>(),
                             seq_idx_,
                             global_idx_,
                             global_token_nums_,
@@ -158,14 +159,14 @@ void LongformerEncoder<T>::forward(std::vector<Tensor>* output_tensors, std::vec
                             batch_size,
                             cub_storage_,
                             stream_);
-    invokeLocalAttnMaskShift((T*)input_tensors->at(1).data, local_attn_mask_shifted_, batch_size, seq_len, stream_);
+    invokeLocalAttnMaskShift(input_tensors->at(1).getPtr<T>(), local_attn_mask_shifted_, batch_size, seq_len, stream_);
     sync_check_cuda_error();
 
     for (size_t i = 0; i < layers_num_; i++) {
-        forwardLayer(i == 0 ? (T*)input_tensors->at(0).data : (T*)output_tensors->at(0).data,
-                     (T*)output_tensors->at(0).data,
+        forwardLayer(i == 0 ? input_tensors->at(0).getPtr<T>() : output_tensors->at(0).getPtr<T>(),
+                     output_tensors->at(0).getPtr<T>(),
                      local_attn_mask_shifted_,
-                     (T*)input_tensors->at(2).data,
+                     input_tensors->at(2).getPtr<T>(),
                      global_idx_,
                      global_token_nums_,
                      &(weights_[i]),
@@ -345,10 +346,10 @@ void LongformerEncoder<T>::forwardLayer(T*                              input,
     sync_check_cuda_error();
 
     // intermediate gemm + bias + gelu + output gemm
-    std::vector<Tensor> attn_out_tensors = {
-        Tensor{MEMORY_GPU, data_type, std::vector<size_t>{batch_size * seq_len, hidden_units_}, attn_output_buffer_}};
-    std::vector<Tensor> output_tensors = {
-        Tensor{MEMORY_GPU, data_type, std::vector<size_t>{batch_size * seq_len, hidden_units_}, output}};
+    TensorMap attn_out_tensors(
+        {{"ffn_input", Tensor{MEMORY_GPU, data_type, {batch_size * seq_len, hidden_units_}, attn_output_buffer_}}});
+    TensorMap output_tensors(
+        {{"ffn_output", Tensor{MEMORY_GPU, data_type, {batch_size * seq_len, hidden_units_}, output}}});
 
     inter_gelu_out_ffn_->forward(&output_tensors, &attn_out_tensors, &(weight->ffn_weights));
     sync_check_cuda_error();

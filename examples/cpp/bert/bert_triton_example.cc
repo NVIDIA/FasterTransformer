@@ -174,10 +174,10 @@ int bert_triton_example(int argc, char* argv[])
     int tensor_para_size   = model->getTensorParaSize();
     int pipeline_para_size = model->getPipelineParaSize();
     ft::FT_CHECK_WITH_INFO(world_size == (tensor_para_size * pipeline_para_size),
-                           fmtstr("World Size(%d) != Tensor Parallel Size (%d) * Pipeline Parallel Size (%d) !",
-                                  world_size,
-                                  tensor_para_size,
-                                  pipeline_para_size));
+                           ft::fmtstr("World Size(%d) != Tensor Parallel Size (%d) * Pipeline Parallel Size (%d) !",
+                                      world_size,
+                                      tensor_para_size,
+                                      pipeline_para_size));
 
     // step 2: Initialize the NCCL
     std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params = model->createNcclParams(node_id);

@@ -42,6 +42,7 @@ void GptJ<T>::initialize()
                                                      allocator_,
                                                      is_free_buffer_after_forward_,
                                                      is_context_qk_buf_float_,
+                                                     attention_type_,
                                                      custom_all_reduce_comm_,
                                                      enable_custom_all_reduce_);
 
@@ -238,6 +239,7 @@ GptJ<T>::GptJ(size_t                              max_batch_size,
               IAllocator*                         allocator,
               bool                                is_free_buffer_after_forward,
               cudaDeviceProp*                     cuda_device_prop,
+              AttentionType                       attention_type,
               std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
               int                                 enable_custom_all_reduce):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, cuda_device_prop),
@@ -252,7 +254,8 @@ GptJ<T>::GptJ(size_t                              max_batch_size,
     prompt_learning_start_id_(prompt_learning_start_id),
     prompt_learning_type_(prompt_learning_type),
     hidden_units_(head_num * size_per_head),
-    local_head_num_(head_num / 1)
+    local_head_num_(head_num / 1),
+    attention_type_(attention_type)
 {
     tensor_para_.world_size_   = 1;
     tensor_para_.rank_         = 0;
@@ -296,6 +299,7 @@ GptJ<T>::GptJ(size_t                              max_batch_size,
               IAllocator*                         allocator,
               bool                                is_free_buffer_after_forward,
               cudaDeviceProp*                     cuda_device_prop,
+              AttentionType                       attention_type,
               std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
               int                                 enable_custom_all_reduce):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, cuda_device_prop),
@@ -313,6 +317,7 @@ GptJ<T>::GptJ(size_t                              max_batch_size,
     tensor_para_(tensor_para),
     pipeline_para_(pipeline_para),
     local_head_num_(head_num / tensor_para.world_size_),
+    attention_type_(attention_type),
     custom_all_reduce_comm_(custom_all_reduce_comm),
     enable_custom_all_reduce_(enable_custom_all_reduce)
 {
@@ -342,6 +347,7 @@ GptJ<T>::GptJ(GptJ<T> const& gpt):
     pipeline_para_(gpt.pipeline_para_),
     local_head_num_(gpt.local_head_num_),
     vocab_size_padded_(gpt.vocab_size_padded_),
+    attention_type_(gpt.attention_type_),
     custom_all_reduce_comm_(gpt.custom_all_reduce_comm_),
     enable_custom_all_reduce_(gpt.enable_custom_all_reduce_)
 {
@@ -404,6 +410,12 @@ void GptJ<T>::forward(std::unordered_map<std::string, Tensor>*       output_tens
     //      request_prompt_embedding [batch_size, max_prompt_length, hidden_units], float, optional
     //      requst_prompt_type [batch_size], int, optional
     //      memory_len [1] on cpu, uint32, optional
+    //      top_p_decay [batch_size] on gpu, float, optional
+    //      top_p_min [batch_size] on gpu, float, optional
+    //      top_p_reset_ids [batch_size] on gpu, uint32, optional
+    //      top_p_decay [batch_size] on gpu, float, optional
+    //      top_p_min [batch_size] on gpu, float, optional
+    //      top_p_reset_ids [batch_size] on gpu, uint32, optional
 
     // output_tensors:
     //      output_ids [batch_size, beam_width, max_output_seq_len]
@@ -456,7 +468,7 @@ void GptJ<T>::forward(std::unordered_map<std::string, Tensor>*       output_tens
     // TODO (perkzz): move unnecessary paddings
     const int* prompt_learning_task_name_ids =
         input_tensors->count("prompt_learning_task_name_ids") ?
-            (const int*)(input_tensors->at("prompt_learning_task_name_ids").data) :
+            input_tensors->at("prompt_learning_task_name_ids").getPtr<const int>() :
             nullptr;
     has_prefix_prompt_ =
         (prompt_learning_task_name_ids != nullptr) && (prompt_learning_type_ == PromptLearningType::prefix_prompt);
@@ -546,9 +558,12 @@ void GptJ<T>::forward(std::unordered_map<std::string, Tensor>*       output_tens
     const DataType       data_type      = getTensorType<T>();
     const cudaDataType_t gemm_data_type = getCudaDataType<T>();
 
-    dynamic_decode_layer_->setup(batch_size, beam_width, input_tensors);
-    handleOptArg(input_tensors, "start_id", start_ids_buf_, start_id_, batch_size);
-    handleOptArg(input_tensors, "end_id", end_ids_buf_, end_id_, batch_size);
+    {
+        TensorMap input_map(*input_tensors);
+        dynamic_decode_layer_->setup(batch_size, beam_width, &input_map);
+        handleOptArg(&input_map, "start_id", start_ids_buf_, start_id_, batch_size);
+        handleOptArg(&input_map, "end_id", end_ids_buf_, end_id_, batch_size);
+    }
 
     const std::vector<size_t> self_k_cache_shape = {num_layer_ / pipeline_para_.world_size_,
                                                     batch_size * beam_width,
@@ -591,8 +606,8 @@ void GptJ<T>::forward(std::unordered_map<std::string, Tensor>*       output_tens
     if (has_prefix_prompt_ || has_prefix_soft_prompt_ || max_input_length > 1) {
         invokeTileGptInputs(tiled_input_ids_buf_,
                             tiled_input_lengths_buf_,
-                            (int*)input_tensors->at("input_ids").data,
-                            (const int*)(input_tensors->at("input_lengths").data),
+                            input_tensors->at("input_ids").getPtr<int>(),
+                            input_tensors->at("input_lengths").getPtr<const int>(),
                             batch_size,
                             beam_width,
                             max_input_length,
@@ -733,8 +748,8 @@ void GptJ<T>::forward(std::unordered_map<std::string, Tensor>*       output_tens
         sync_check_cuda_error();
         invokeTileGptInputs(tiled_input_ids_buf_,
                             tiled_input_lengths_buf_,
-                            (int*)input_tensors->at("input_ids").data,
-                            (const int*)(input_tensors->at("input_lengths").data),
+                            input_tensors->at("input_ids").getPtr<int>(),
+                            input_tensors->at("input_lengths").getPtr<const int>(),
                             batch_size,
                             beam_width,
                             max_input_length,
@@ -767,7 +782,7 @@ void GptJ<T>::forward(std::unordered_map<std::string, Tensor>*       output_tens
     }
 
     invokeMaskPaddingTokens(masked_tokens_,
-                            (const int*)(input_tensors->at("input_lengths").data),  // not_tiled
+                            input_tensors->at("input_lengths").getPtr<const int>(),  // not_tiled
                             tiled_prompt_lengths_buf_,
                             max_cache_seq_len,
                             max_input_length + max_prefix_prompt_length,
@@ -777,6 +792,7 @@ void GptJ<T>::forward(std::unordered_map<std::string, Tensor>*       output_tens
                             stream_);
 
     for (int step = max_input_length; step < (int)max_output_seq_len; step++) {
+        FT_LOG_DEBUG("%s step: %d", __PRETTY_FUNCTION__, step);
         const int src_indir_idx = (step - max_input_length) % 2;
         const int tgt_indir_idx = 1 - src_indir_idx;
 
@@ -862,6 +878,8 @@ void GptJ<T>::forward(std::unordered_map<std::string, Tensor>*       output_tens
                                        layernorm_eps_,
                                        local_batch_size * beam_width,
                                        hidden_units_,
+                                       (float*)nullptr,
+                                       0,
                                        stream_);
                 sync_check_cuda_error();
 
@@ -926,26 +944,31 @@ void GptJ<T>::forward(std::unordered_map<std::string, Tensor>*       output_tens
                                           stream_);
                 }
 
-                invokeAddBias(logits_buf_ + vocab_size_units_offset,
-                              padded_embedding_bias_ptr_,
-                              local_batch_size * beam_width,
-                              vocab_size_padded_,
-                              stream_);
+                invokeGenericActivation<IdentityActivation, float, T>(logits_buf_ + vocab_size_units_offset,
+                                                                      padded_embedding_bias_ptr_,
+                                                                      nullptr,
+                                                                      nullptr,
+                                                                      nullptr,
+                                                                      nullptr,
+                                                                      local_batch_size * beam_width,
+                                                                      vocab_size_padded_,
+                                                                      0,
+                                                                      nullptr,
+                                                                      nullptr,
+                                                                      stream_);
 
                 int                                     tmp_local_batch_size       = local_batch_size;
                 bool                                    is_initialize_random_table = step == max_input_length;
                 std::unordered_map<std::string, Tensor> dynamic_decode_input_tensors{
                     {"logits",
                      Tensor{MEMORY_GPU, TYPE_FP32, {batch_size, beam_width, vocab_size_padded_}, logits_buf_}},
-                    {"embedding_bias", Tensor{MEMORY_GPU, data_type, {vocab_size_padded_}, nullptr}},
+                    // {"embedding_bias", Tensor{MEMORY_GPU, data_type, {vocab_size_padded_}, nullptr}},
                     {"step", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &step}},
                     {"max_input_length", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &max_input_length}},
                     {"input_lengths",
                      Tensor{MEMORY_GPU, TYPE_INT32, {batch_size, beam_width}, tiled_input_lengths_buf_}},
                     {"sequence_limit_length", Tensor{MEMORY_GPU, TYPE_UINT32, {batch_size}, seq_limit_len_}},
                     {"ite", Tensor{MEMORY_CPU, TYPE_UINT32, {1}, &ite}},
-                    {"src_key_cache", Tensor{MEMORY_GPU, data_type, self_k_cache_shape, key_cache_}},
-                    {"src_value_cache", Tensor{MEMORY_GPU, data_type, self_v_cache_shape, value_cache_}},
                     {"src_cache_indirection",
                      Tensor{MEMORY_GPU,
                             TYPE_INT32,
@@ -1035,7 +1058,7 @@ void GptJ<T>::forward(std::unordered_map<std::string, Tensor>*       output_tens
             break;
         }
         if (token_generated_cb_ && step + 1 < (int)max_output_seq_len) {
-            setOutputTensors(output_tensors, input_tensors, max_output_seq_len);
+            setOutputTensors(output_tensors, input_tensors, max_input_length, max_output_seq_len);
             sendTensorsToFirstPipelineNode(output_tensors, input_tensors);
 
             if (pipeline_para_.rank_ == 0 && tensor_para_.rank_ == 0) {
@@ -1048,7 +1071,7 @@ void GptJ<T>::forward(std::unordered_map<std::string, Tensor>*       output_tens
              * if has prefix prompts, += (max_prefix_prompt_length - prompt_length)
              */
             invokeUpdatePaddingCount(tiled_total_padding_count_,
-                                     (const int*)(input_tensors->at("input_lengths").data),  // not_tiled
+                                     input_tensors->at("input_lengths").getPtr<const int>(),  // not_tiled
                                      has_prefix_prompt_ ? tiled_prompt_lengths_buf_ : (const int*)nullptr,
                                      max_input_length,
                                      has_prefix_prompt_ ? max_prefix_prompt_length : 0,
@@ -1057,7 +1080,7 @@ void GptJ<T>::forward(std::unordered_map<std::string, Tensor>*       output_tens
                                      stream_);
         }
     }
-    setOutputTensors(output_tensors, input_tensors, max_output_seq_len);
+    setOutputTensors(output_tensors, input_tensors, max_input_length, max_output_seq_len);
     sendTensorsToFirstPipelineNode(output_tensors, input_tensors);
 }
 
@@ -1065,6 +1088,7 @@ template<typename T>
 void GptJ<T>::sendTensorsToFirstPipelineNode(std::unordered_map<std::string, Tensor>*       output_tensors,
                                              const std::unordered_map<std::string, Tensor>* input_tensors)
 {
+    FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
     if (pipeline_para_.world_size_ == 1) {
         // throw errors when detected
         ftNcclStreamSynchronize(tensor_para_, pipeline_para_, stream_);
@@ -1098,8 +1122,10 @@ void GptJ<T>::sendTensorsToFirstPipelineNode(std::unordered_map<std::string, Ten
 template<typename T>
 void GptJ<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*       output_tensors,
                                const std::unordered_map<std::string, Tensor>* input_tensors,
+                               const size_t                                   max_input_length,
                                const size_t                                   max_output_seq_len)
 {
+    FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
     if (pipeline_para_.rank_ != pipeline_para_.world_size_ - 1) {
         return;
     }
@@ -1107,7 +1133,6 @@ void GptJ<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*       ou
     const size_t batch_size       = output_tensors->at("output_ids").shape[0];
     const size_t beam_width       = output_tensors->at("output_ids").shape[1];
     int*         sequence_lengths = output_tensors->at("sequence_length").getPtr<int>();
-    const int    max_input_length = input_tensors->at("input_ids").shape[1];
     const size_t max_prefix_soft_prompt_length =
         has_prefix_soft_prompt_ ? input_tensors->at("request_prompt_embedding").shape[1] : 0;
 
@@ -1128,7 +1153,7 @@ void GptJ<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*       ou
                              stream_);
 
             // transpose and take output_parent_ids as inter buffer
-            invokeTransposeAxis01((int*)output_tensors->at("output_ids").data,
+            invokeTransposeAxis01(output_tensors->at("output_ids").getPtr<int>(),
                                   transposed_output_ids_buf_,
                                   max_output_seq_len - 1,
                                   batch_size * beam_width,
@@ -1137,7 +1162,7 @@ void GptJ<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*       ou
         }
         else {
             // For sampling, only copy the results to output_tensor
-            invokeTransposeAxis01((int*)output_tensors->at("output_ids").data,
+            invokeTransposeAxis01(output_tensors->at("output_ids").getPtr<int>(),
                                   output_ids_buf_ + batch_size * beam_width,
                                   max_output_seq_len - 1,
                                   batch_size * beam_width,
@@ -1146,26 +1171,26 @@ void GptJ<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*       ou
         }
     }
     else {
-        // add sequence_length 1 here because the sequence_length of time step t is t - 1
-        invokePlusScalar(sequence_lengths, 1, batch_size * beam_width, stream_);
-
         // For sampling, it is equivalent to all parent ids are 0.
         gatherTreeParam param;
         param.beams                = transposed_output_ids_buf_;
         param.max_sequence_lengths = sequence_lengths;
-        param.max_time             = max_output_seq_len;
-        param.batch_size           = batch_size;
-        param.beam_width           = beam_width;
-        param.step_ids             = output_ids_buf_;
-        param.parent_ids           = beam_width == 1 ? nullptr : parent_ids_buf_;
-        param.end_tokens           = end_ids_buf_;
-        param.max_input_length     = max_input_length;
+        // add sequence_length 1 here because the sequence_length of time step t is t - 1
+        param.max_sequence_length_final_step = 1;
+        param.max_time                       = max_output_seq_len;
+        param.batch_size                     = batch_size;
+        param.beam_width                     = beam_width;
+        param.step_ids                       = output_ids_buf_;
+        param.parent_ids                     = beam_width == 1 ? nullptr : parent_ids_buf_;
+        param.end_tokens                     = end_ids_buf_;
+        param.max_input_length               = max_input_length;
         param.prefix_soft_prompt_lengths =
             has_prefix_soft_prompt_ ? input_tensors->at("request_prompt_lengths").getPtr<int>() : nullptr;
-        param.input_lengths                 = tiled_input_lengths_buf_;
-        param.max_prefix_soft_prompt_length = max_prefix_soft_prompt_length;
-        param.stream                        = stream_;
-        param.output_ids                    = (int*)output_tensors->at("output_ids").data;
+        param.input_lengths                   = tiled_input_lengths_buf_;
+        param.max_prefix_soft_prompt_length   = max_prefix_soft_prompt_length;
+        param.max_input_without_prompt_length = max_input_length;
+        param.stream                          = stream_;
+        param.output_ids                      = output_tensors->at("output_ids").getPtr<int>();
         invokeGatherTree(param);
         sync_check_cuda_error();
     }

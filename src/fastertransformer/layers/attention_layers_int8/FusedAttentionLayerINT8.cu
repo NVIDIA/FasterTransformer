@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -341,36 +341,32 @@ void invokeTrtAddQkvBiasInt8IORow(int8_t*            output,
 }
 
 template<typename T>
-void FusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>*       output_tensors,
-                                         const std::vector<fastertransformer::Tensor>* input_tensors,
-                                         const AttentionWeight<T>*                     attention_weights)
+void FusedAttentionLayerINT8<T>::forward(TensorMap*                output_tensors,
+                                         TensorMap*                input_tensors,
+                                         const AttentionWeight<T>* attention_weights)
 {
-    // input_tensors: [input (token_num, hidden_dimension),
-    //                 attention_mask (batch, 1, seqlen, seqlen),
-    //                 padding_offset (token_num)]
-    // output_tensors: [output (token_num, hidden_dimension)]
-    // If padding_offset.data is nullptr, then not remove padding
+    // input_tensors:
+    //      input_query [token_num, hidden_dimension],
+    //      attention_mask [batch, 1, seqlen, seqlen],
+    //      padding_offset [token_num]
+    // output_tensors:
+    //      hidden_features (token_num, hidden_dimension)
 
     const ScaleList*     scale_list     = ((const AttentionINT8Weight<T>*)attention_weights)->scale_list_ptr;
     cublasINT8MMWrapper* cublas_wrapper = (cublasINT8MMWrapper*)cublas_wrapper_;
 
-    // input_tensors: [input_query (token_num, hidden_dimension),
-    //                 attention_mask (batch, 1, seqlen, seqlen),
-    //                 padding_offset (batch + 1 or batch * 2 + 1))]
-    // If padding_offset.data is nullptr, then not remove padding
-
-    FT_CHECK(isValidBatchSize(input_tensors->at(1).shape[0]));
-    FT_CHECK(isValidSeqLen(input_tensors->at(1).shape[2]));
+    FT_CHECK(isValidBatchSize(input_tensors->at("attention_mask").shape[0]));
+    FT_CHECK(isValidSeqLen(input_tensors->at("attention_mask").shape[2]));
     allocateBuffer();
 
-    int32_t*      attention_out  = (int32_t*)output_tensors->at(0).data;
-    const int8_t* from_tensor    = (const int8_t*)input_tensors->at(0).data;
-    const T*      attention_mask = (const T*)input_tensors->at(1).data;
-    const int*    padding_offset = (const int*)input_tensors->at(2).data;
+    int32_t*      attention_out  = output_tensors->getPtr<int32_t>("hidden_features");
+    const int8_t* from_tensor    = input_tensors->getPtr<int8_t>("input_query");
+    const T*      attention_mask = input_tensors->getPtr<T>("attention_mask");
+    const int*    padding_offset = input_tensors->getPtr<int>("padding_offset");
 
-    const int request_batch_size = input_tensors->at(1).shape[0];
-    const int request_seq_len    = input_tensors->at(1).shape[2];
-    const int m                  = input_tensors->at(0).shape[0];
+    const int request_batch_size = input_tensors->at("attention_mask").shape[0];
+    const int request_seq_len    = input_tensors->at("attention_mask").shape[2];
+    const int m                  = input_tensors->at("input_query").shape[0];
     const int k                  = hidden_units_;
     const int n                  = hidden_units_;
 #ifdef SPARSITY_ENABLED
@@ -552,15 +548,15 @@ void FusedAttentionLayerINT8<T>::forward(std::vector<fastertransformer::Tensor>*
     }
 
     int S = dispatcher_int8_->getSFromMaxSeqLen(request_seq_len);
-    FT_CHECK(dispatcher_int8_->isValid(S));
-    const int B = input_tensors->at(2).shape[0] - 1;
+    FT_CHECK(dispatcher_int8_->isValid(S, false));
+    const int B = input_tensors->at("padding_offset").shape[0] - 1;
     // setScaleList should be executed before setup
     dispatcher_int8_->setScaleList(scale_list->h_scale_list_[scale_list->p4_offset_] / 127.0f,
                                    scale_list->h_scale_list_[scale_list->p4_offset_ + 1] / 127.0f,
                                    scale_list->h_scale_list_[scale_list->p4_offset_ + 2] / 127.0f);
     dispatcher_int8_->setup(S, B);
     PUSH_RANGE("fused mha");
-    dispatcher_int8_->run(qkv_buf_, nullptr, (int*)input_tensors->at(2).data, attn_workspace_, qkv_buf_2_, stream_);
+    dispatcher_int8_->run(qkv_buf_, nullptr, padding_offset, attn_workspace_, qkv_buf_2_, stream_);
     POP_RANGE;
     sync_check_cuda_error();
 
@@ -635,7 +631,8 @@ FusedAttentionLayerINT8<T>::FusedAttentionLayerINT8(size_t           max_batch_s
     int8_mode_(int8_mode),
     sparse_(sparse)
 {
-    if ((sm_ == kSM_86 || sm_ == kSM_80 || sm_ == kSM_75 || sm_ == kSM_72) && size_per_head_ == 64) {
+    if ((sm_ == kSM_86 || sm_ == kSM_80 || sm_ == kSM_75 || sm_ == kSM_72)
+        && (size_per_head_ == 64 || size_per_head_ == 32)) {
         dispatcher_int8_.reset(new FusedMHARunnerInt8v2(head_num_, size_per_head_, sm_, q_scaling_));
     }
     else {
@@ -660,7 +657,8 @@ FusedAttentionLayerINT8<T>::FusedAttentionLayerINT8(FusedAttentionLayerINT8<T> c
     int8_mode_(attention_layer.int8_mode_),
     sparse_(attention_layer.sparse_)
 {
-    if ((sm_ == kSM_86 || sm_ == kSM_80 || sm_ == kSM_75 || sm_ == kSM_72) && size_per_head_ == 64) {
+    if ((sm_ == kSM_86 || sm_ == kSM_80 || sm_ == kSM_75 || sm_ == kSM_72)
+        && (size_per_head_ == 64 || size_per_head_ == 32)) {
         dispatcher_int8_.reset(new FusedMHARunnerInt8v2(head_num_, size_per_head_, sm_, q_scaling_));
     }
     else {
@@ -725,7 +723,10 @@ bool FusedAttentionLayerINT8<T>::isValidSeqLen(size_t seq_len)
     if (max_seq_len_ == 0) {
         max_seq_len_ = seq_len;
     }
-    return seq_len <= max_seq_len_ && seq_len <= 384;
+    if (sm_ < 75 || (sm_ == 75 && size_per_head_ == 64))
+        return seq_len <= max_seq_len_ && seq_len <= 384;
+    else
+        return seq_len <= max_seq_len_ && seq_len <= 512;
 }
 
 template class FusedAttentionLayerINT8<float>;

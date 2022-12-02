@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,9 +22,11 @@ namespace fastertransformer {
 
 template<typename T>
 struct FfnWeight {
+    DenseWeight<T> gating_weight;
     DenseWeight<T> intermediate_weight;
     DenseWeight<T> intermediate_weight2;  // for gated activation
     DenseWeight<T> output_weight;
+    DenseWeight<T> ia3_weight;
 };
 
 }  // namespace fastertransformer

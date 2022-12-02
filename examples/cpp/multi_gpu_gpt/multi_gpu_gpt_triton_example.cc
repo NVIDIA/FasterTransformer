@@ -43,6 +43,7 @@ broadcastRequest(const std::vector<int>&      v_start_ids,
                  const unsigned long long int random_seed,
                  const bool                   is_return_log_probs,
                  const bool                   is_return_context_cum_log_probs,
+                 const bool                   is_return_context_embeddings,
                  std::vector<void*>*          pointer_record)
 {
     // broadcast the request to all nodes, and copy "gpu_count" copies on different gpu
@@ -170,6 +171,13 @@ broadcastRequest(const std::vector<int>&      v_start_ids,
             {"is_return_context_cum_log_probs",
              triton::Tensor{
                  triton::MEMORY_CPU, triton::TYPE_BOOL, std::vector<size_t>{1}, is_return_context_cum_log_probs_ptr}});
+        bool* is_return_context_embeddings_ptr = new bool(is_return_context_embeddings);
+        pointer_record->push_back(is_return_context_embeddings_ptr);
+        request_list[device_id]->insert(
+            {"is_return_context_embeddings",
+             triton::Tensor{
+                 triton::MEMORY_CPU, triton::TYPE_BOOL, std::vector<size_t>{1}, is_return_context_embeddings_ptr}});
+
         pointer_record->push_back(d_input_ids);
         pointer_record->push_back(d_input_lengths);
         pointer_record->push_back(request_output_len_ptr);
@@ -201,6 +209,7 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
     const bool                   is_return_log_probs = reader.GetBoolean("request", "return_log_probs", false);
     // Whether to include input contexts in computing the cumulative log probabilities.
     const bool is_return_context_cum_log_probs = reader.GetBoolean("request", "context_log_probs", false);
+    const bool is_return_context_embeddings    = reader.GetBoolean("request", "context_embeddings", false);
     if (!is_return_log_probs && !is_return_context_cum_log_probs) {
         FT_LOG_WARNING("context_log_probs will be ignored since return_log_probs is disabled.");
     }
@@ -209,7 +218,7 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
     std::vector<int> v_start_ids;
     std::vector<int> v_start_lengths;
 
-    int max_input_len = 0;
+    size_t max_input_len = 0;
     ft::read_start_ids(request_batch_size,
                        &v_start_lengths,
                        &v_start_ids,
@@ -233,6 +242,7 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
                                          random_seed,
                                          is_return_log_probs,
                                          is_return_context_cum_log_probs,
+                                         is_return_context_embeddings,
                                          pointer_record);
     return request_list;
 }
@@ -287,7 +297,10 @@ int main(int argc, char* argv[])
     int                                       tensor_para_size   = model->getTensorParaSize();
     int                                       pipeline_para_size = model->getPipelineParaSize();
     ft::FT_CHECK_WITH_INFO(world_size == (tensor_para_size * pipeline_para_size),
-                           "World Size != Tensor Parallel Size * Pipeline Parallel Size !");
+                           ft::fmtstr("World Size (%d) != Tensor Parallel Size (%d) * Pipeline Parallel Size (%d).",
+                                      world_size,
+                                      tensor_para_size,
+                                      pipeline_para_size));
 
     std::cout << model->toString();
 

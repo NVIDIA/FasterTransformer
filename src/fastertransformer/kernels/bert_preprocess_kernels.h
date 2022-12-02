@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,13 +22,26 @@
 
 namespace fastertransformer {
 
-void invokeGetPaddingOffset(size_t*      h_token_num,
-                            size_t*      d_token_num,
-                            int*         tmp_mask_offset,
-                            const int*   sequence_length,
-                            const int    batch_size,
-                            const int    max_seq_len,
-                            cudaStream_t stream);
+void invokeGetPaddingOffsetAndCuSeqLens(size_t*      h_token_num,
+                                        size_t*      d_token_num,
+                                        int*         tmp_mask_offset,
+                                        int*         cu_seqlens,
+                                        const int*   sequence_length,
+                                        const int    batch_size,
+                                        const int    max_seq_len,
+                                        cudaStream_t stream);
+
+inline void invokeGetPaddingOffset(size_t*      h_token_num,
+                                   size_t*      d_token_num,
+                                   int*         tmp_mask_offset,
+                                   const int*   sequence_length,
+                                   const int    batch_size,
+                                   const int    max_seq_len,
+                                   cudaStream_t stream)
+{
+    invokeGetPaddingOffsetAndCuSeqLens(
+        h_token_num, d_token_num, tmp_mask_offset, nullptr, sequence_length, batch_size, max_seq_len, stream);
+}
 
 template<typename T>
 void invokeBuildEncoderAttentionMask(

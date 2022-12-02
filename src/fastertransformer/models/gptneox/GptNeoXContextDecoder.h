@@ -54,6 +54,8 @@ private:
     std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm_;
     int                                 enable_custom_all_reduce_;
 
+    AttentionType attention_type_;
+
     bool is_qk_buf_float_;
 
     BaseAttentionLayer<T>* self_attention_layer_;
@@ -71,10 +73,13 @@ private:
     void initialize();
 
 protected:
-    T* decoder_normed_input_ = nullptr;
-    T* self_attn_output_     = nullptr;
-    T* ffn_output_           = nullptr;
-    T* decoder_layer_output_ = nullptr;
+    T*      decoder_normed_input_ = nullptr;
+    T*      self_attn_output_     = nullptr;
+    T*      ffn_output_           = nullptr;
+    T*      decoder_layer_output_ = nullptr;
+    size_t* token_num_            = nullptr;
+    int*    padding_offset_       = nullptr;
+    int*    cu_seqlens_           = nullptr;
 
 public:
     GptNeoXContextDecoder(size_t                              head_num,
@@ -92,6 +97,7 @@ public:
                           IAllocator*                         allocator,
                           bool                                is_free_buffer_after_forward,
                           bool                                is_qk_buf_float,
+                          AttentionType                       attention_type            = AttentionType::FUSED_MHA,
                           std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm    = nullptr,
                           int                                 enable_custom_all_reduce_ = 0);
 

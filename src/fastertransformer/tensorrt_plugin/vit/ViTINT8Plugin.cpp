@@ -66,7 +66,8 @@ VisionTransformerINT8Plugin<T>::VisionTransformerINT8Plugin(const std::string&  
     settings_.q_scaling      = q_scaling;
     settings_.int8_mode      = int8_mode;
     settings_.seq_len        = (img_size / patch_size) * (img_size / patch_size) + (with_cls_token ? 1 : 0);
-    settings_.attention_type = getAttentionType<T>(embed_dim / num_heads, settings_.sm, true, settings_.seq_len);
+    settings_.attention_type =
+        getAttentionTypeINT8<T>(embed_dim / num_heads, settings_.sm, true, settings_.seq_len, int8_mode);
 
     Init(w);
 }

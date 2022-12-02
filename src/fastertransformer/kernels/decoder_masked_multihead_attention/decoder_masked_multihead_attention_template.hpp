@@ -13,10 +13,12 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+#pragma once
 
 #include "src/fastertransformer/kernels/decoder_masked_multihead_attention.h"
 #include "src/fastertransformer/kernels/decoder_masked_multihead_attention_utils.h"
 #include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
+#include "src/fastertransformer/utils/cuda_type_utils.cuh"
 #include <assert.h>
 #include <float.h>
 #include <type_traits>
@@ -566,6 +568,13 @@ inline __device__ void convert_from_float(uint2& dst, Float4_ src)
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+inline __device__ void convert_from_float(uint2& dst, float4 src)
+{
+    convert_from_float(dst, Float4_{make_float2(src.x, src.y), make_float2(src.z, src.w)});
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 inline __device__ void convert_from_float(uint4& dst, Float8_ src)
 {
     dst.x = float2_to_half2(src.x);
@@ -586,6 +595,13 @@ inline __device__ void convert_from_float(bf16_4_t& dst, Float4_ src)
     dst.x = __floats2bfloat162_rn(src.x.x, src.x.y);
     dst.y = __floats2bfloat162_rn(src.y.x, src.y.y);
 #endif
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+inline __device__ void convert_from_float(bf16_4_t& dst, float4 src)
+{
+    convert_from_float(dst, Float4_{make_float2(src.x, src.y), make_float2(src.z, src.w)});
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -705,6 +721,100 @@ inline __device__ Float8_ cast_to_float(uint4 u)
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
+inline __device__ float float_from_int8(int8_t u)
+{
+    return u;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+inline __device__ float2 float_from_int8(int16_t u)
+{
+    union {
+        int16_t int16;
+        int8_t  int8[2];
+    };
+    int16 = u;
+    return make_float2(int8[0], int8[1]);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+inline __device__ float4 float_from_int8(int32_t u)
+{
+    union {
+        int32_t int32;
+        int8_t  int8[4];
+    };
+    int32 = u;
+    return make_float4(int8[0], int8[1], int8[2], int8[3]);
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+// clang-format off
+inline __device__ Float8_ float_from_int8(int64_t u)
+{
+    union {
+        int64_t int64;
+        int16_t int16[4];
+    };
+    int64 = u;
+    return Float8_ {float_from_int8(int16[0]),
+                    float_from_int8(int16[1]),
+                    float_from_int8(int16[2]),
+                    float_from_int8(int16[3])};
+}
+// clang-format on
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+inline __device__ int8_t cast_to_int8(float val)
+{
+    union {
+        int8_t  int8[2];
+        int16_t int16;
+    };
+    asm volatile("cvt.rni.sat.s8.f32 %0, %1;" : "=h"(int16) : "f"(val));
+    return int8[0];
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+inline __device__ int32_t cast_to_int8(float4 val)
+{
+    union {
+        int8_t  int8[4];
+        int32_t int32;
+    };
+    int8[0] = cast_to_int8(val.x);
+    int8[1] = cast_to_int8(val.y);
+    int8[2] = cast_to_int8(val.z);
+    int8[3] = cast_to_int8(val.w);
+    return int32;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+inline __device__ int64_t cast_to_int8(Float8_ val)
+{
+    union {
+        int8_t  int8[8];
+        int64_t int64;
+    };
+    int8[0] = cast_to_int8(val.x.x);
+    int8[1] = cast_to_int8(val.x.y);
+    int8[2] = cast_to_int8(val.y.x);
+    int8[3] = cast_to_int8(val.y.y);
+    int8[4] = cast_to_int8(val.z.x);
+    int8[5] = cast_to_int8(val.z.y);
+    int8[6] = cast_to_int8(val.w.x);
+    int8[7] = cast_to_int8(val.w.y);
+    return int64;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
 template<typename T>
 inline __device__ __host__ T div_up(T m, T n)
 {
@@ -728,7 +838,7 @@ inline size_t smem_size_in_bytes(const Multihead_attention_params<T, DO_CROSS_AT
     if (sizeof(T) != 4) {
         // TDOD
         logits_sz = (DO_CROSS_ATTENTION) ? div_up(params.memory_max_len + 1, 4) * 4 * sizeof(T) :
-            div_up(max_timesteps + 1, 4) * 4 * sizeof(T);
+                                           div_up(max_timesteps + 1, 4) * 4 * sizeof(T);
     }
 #endif
 
@@ -858,7 +968,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
     // The thread in the block.
     const int tidx = threadIdx.x;
 
-    const bool handle_k = !DO_CROSS_ATTENTION || (DO_CROSS_ATTENTION && params.timestep == 0);
+    const bool handle_kv = !DO_CROSS_ATTENTION || (DO_CROSS_ATTENTION && params.timestep == 0);
 
     // While doing the product Q*K^T for the different keys we track the max.
     float qk_max = -FLT_MAX;
@@ -885,12 +995,26 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
     // The offset in the bias buffer.
     int qk_bias_offset = hi * Dh + tidx * QK_VEC_SIZE;
 
+    const bool do_ia3      = handle_kv && params.ia3_tasks != nullptr;
+    const int  ia3_task_id = do_ia3 ? params.ia3_tasks[bbi] : 0;
+
     // Trigger the loads from the Q and K buffers.
     Qk_vec q;
     zero(q);
-    q = !is_masked && (Dh == Dh_MAX || tidx * QK_VEC_SIZE < Dh) ?
-            *reinterpret_cast<const Qk_vec*>(&params.q[qk_offset]) :
-            q;
+    if (!is_masked && (Dh == Dh_MAX || tidx * QK_VEC_SIZE < Dh)) {
+        if (params.int8_mode == 2) {
+            using Packed_Int8_t  = typename packed_type<int8_t, num_elems<Qk_vec>::value>::type;
+            using Packed_Float_t = typename packed_type<float, num_elems<Qk_vec>::value>::type;
+            const auto q_scaling = params.qkv_scale_out[0];
+            const auto q_quant =
+                *reinterpret_cast<const Packed_Int8_t*>(&reinterpret_cast<const int8_t*>(params.q)[qk_offset]);
+
+            convert_from_float(q, mul<Packed_Float_t, float>(q_scaling, float_from_int8(q_quant)));
+        }
+        else {
+            q = *reinterpret_cast<const Qk_vec*>(&params.q[qk_offset]);
+        }
+    }
 
     Qk_vec k;
     zero(k);
@@ -909,9 +1033,20 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
                 k;
     }
     else {
-        k = !is_masked && (Dh == Dh_MAX || tidx * QK_VEC_SIZE < Dh) ?
-                *reinterpret_cast<const Qk_vec*>(&params.k[qk_offset]) :
-                k;
+        if (!is_masked && (Dh == Dh_MAX || tidx * QK_VEC_SIZE < Dh)) {
+            if (params.int8_mode == 2) {
+                using Packed_Int8_t  = typename packed_type<int8_t, num_elems<Qk_vec>::value>::type;
+                using Packed_Float_t = typename packed_type<float, num_elems<Qk_vec>::value>::type;
+                const auto k_scaling = params.qkv_scale_out[1];
+                const auto k_quant =
+                    *reinterpret_cast<const Packed_Int8_t*>(&reinterpret_cast<const int8_t*>(params.k)[qk_offset]);
+
+                convert_from_float(k, mul<Packed_Float_t, float>(k_scaling, float_from_int8(k_quant)));
+            }
+            else {
+                k = *reinterpret_cast<const Qk_vec*>(&params.k[qk_offset]);
+            }
+        }
     }
 
     // Trigger the loads from the Q and K bias buffers.
@@ -923,7 +1058,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
 
     Qk_vec k_bias;
     zero(k_bias);
-    if (handle_k) {
+    if (handle_kv) {
         k_bias = !is_masked && (Dh == Dh_MAX || tidx * QK_VEC_SIZE < Dh) && params.k_bias != nullptr ?
                      *reinterpret_cast<const Qk_vec*>(&params.k_bias[qk_bias_offset]) :
                      k_bias;
@@ -931,13 +1066,20 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
 
     // Computes the Q/K values with bias.
     q = add(q, q_bias);
-    if (handle_k) {
+    if (handle_kv) {
         k = add(k, k_bias);
     }
+    if (do_ia3 && !is_masked) {
+        k = mul<Qk_vec, Qk_vec, Qk_vec>(
+            k,
+            *reinterpret_cast<const Qk_vec*>(
+                &params.ia3_key_weights[(ia3_task_id * params.num_heads + hi) * Dh + tidx * QK_VEC_SIZE]));
+    }
+
     // Padded len
     const int padd_len = (params.total_padding_tokens == nullptr) ? 0 : params.total_padding_tokens[bi];
     if (params.rotary_embedding_dim > 0 && !params.neox_rotary_style) {
-        if (handle_k) {
+        if (handle_kv) {
             apply_rotary_embedding(q, k, tidx, params.rotary_embedding_dim, params.timestep - padd_len);
         }
         else {
@@ -960,7 +1102,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
         if (do_rotary) {
             *reinterpret_cast<Qk_vec*>(q_smem + half_idx * smem_pitch + intra_half_idx) = q;
 
-            if (handle_k) {
+            if (handle_kv) {
                 *reinterpret_cast<Qk_vec*>(k_smem + half_idx * smem_pitch + intra_half_idx) = k;
             }
         }
@@ -972,7 +1114,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
         if (do_rotary) {
             mmha::vec_from_smem_transpose(q, q_smem, transpose_idx, smem_pitch);
 
-            if (handle_k) {
+            if (handle_kv) {
                 mmha::vec_from_smem_transpose(k, k_smem, transpose_idx, smem_pitch);
 
                 mmha::apply_rotary_embedding(
@@ -991,7 +1133,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
 
         if (do_rotary) {
             q = *reinterpret_cast<Qk_vec*>(q_smem + half_idx * smem_pitch + intra_half_idx);
-            if (handle_k) {
+            if (handle_kv) {
                 k = *reinterpret_cast<Qk_vec*>(k_smem + half_idx * smem_pitch + intra_half_idx);
             }
         }
@@ -1026,7 +1168,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
                      // params.timestep*QK_ELTS_IN_16B +
                      tlength_circ * QK_ELTS_IN_16B + ci;
 
-        if (handle_k) {
+        if (handle_kv) {
             // Trigger the stores to global memory.
             if (Dh == Dh_MAX || co < Dh / QK_ELTS_IN_16B) {
                 *reinterpret_cast<Qk_vec*>(&params.k_cache[offset]) = k;
@@ -1064,6 +1206,8 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
                                                     + (tlength - padd_len) * params.relative_attention_bias_stride
                                                     + (tlength - padd_len)]);
         }
+        // We don't need to apply the linear position bias here since qi - ki = 0 yields the position bias 0.
+
         qk_max                        = qk;
         qk_smem[tlength - first_step] = qk;
         // qk_smem[params.timestep] = qk;
@@ -1154,6 +1298,15 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
                 // add bias and update k_cache
                 if (DO_CROSS_ATTENTION && params.timestep == 0) {
                     k[ii] = add(k[ii], k_bias_vec[ii]);
+
+                    if (do_ia3) {
+                        k[ii] = mul<K_vec, K_vec, K_vec>(
+                            k[ii],
+                            *reinterpret_cast<const K_vec*>(
+                                &params.ia3_key_weights[(ia3_task_id * params.num_heads + hi) * Dh + ki
+                                                        + ii * THREADS_PER_KEY * K_VEC_SIZE]));
+                    }
+
                     if (Dh == Dh_MAX || jj * QK_ELTS_IN_16B < Dh * params.memory_max_len) {
                         *reinterpret_cast<K_vec*>(&k_cache[jj * QK_ELTS_IN_16B]) = k[ii];
                     }
@@ -1175,6 +1328,18 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
                          params.relative_attention_bias[hi * params.relative_attention_bias_stride
                                                             * params.relative_attention_bias_stride
                                                         + tlength * params.relative_attention_bias_stride + ti]);
+            }
+            if (params.linear_bias_slopes != nullptr) {
+                // Apply the linear position bias: (ki - qi) * slope[hi].
+                // The padding token locates between the input context and the generated tokens.
+                // We need to remove the number of padding tokens in the distance computation.
+                //   ti   : 0 1 2 3 4 5 6 7 8 9(tlength)
+                //   token: i i i i p p p o o o where i=input, p=pad, o=output.
+                // e.g. ti = 2, dist = (9 - 3) - 2 = 4.
+                int   max_context_length = params.max_prefix_prompt_length + params.max_input_length;
+                float dist               = (ti < max_context_length ? ti + padd_len : ti) - tlength;
+
+                qk += mul<float, T, float>(params.linear_bias_slopes[hi], dist);
             }
             qk_max                   = is_mask ? qk_max : fmaxf(qk_max, qk);
             qk_smem[ti - first_step] = qk;
@@ -1266,7 +1431,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
     zero(v_bias);
     // if( vo == params.timestep % V_PER_ITER ) {
     if (Dh == Dh_MAX || vi < Dh) {
-        if (handle_k) {
+        if (handle_kv) {
             if (vo == tlength % V_PER_ITER) {
                 // Trigger the loads from the V bias buffer.
                 if (params.v_bias != nullptr) {
@@ -1305,7 +1470,13 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
             // Load the values from the cache.
             V_vec v = *reinterpret_cast<const V_vec*>(&v_cache_batch[beam_offset + ti_circ * Dh]);
             if (DO_CROSS_ATTENTION && params.timestep == 0) {
-                v                                            = add(v, *reinterpret_cast<V_vec*>(&bias_smem[vi]));
+                v = add(v, *reinterpret_cast<V_vec*>(&bias_smem[vi]));
+                if (do_ia3) {
+                    v = mul<V_vec, V_vec, V_vec>(
+                        v,
+                        *reinterpret_cast<const V_vec*>(
+                            &params.ia3_value_weights[(ia3_task_id * params.num_heads + hi) * Dh + vi]));
+                }
                 *reinterpret_cast<V_vec*>(&v_cache[ti * Dh]) = v;
             }
             // Load the logits from shared memory.
@@ -1331,14 +1502,33 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
         }
         else {
             // Trigger the loads from the V buffer.
-            v = *reinterpret_cast<const V_vec*>(&params.v[qkv_base_offset + vi]);
+            const auto v_offset = qkv_base_offset + vi;
+            if (params.int8_mode == 2) {
+                using Packed_Int8_t  = typename packed_type<int8_t, num_elems<V_vec>::value>::type;
+                using Packed_Float_t = typename packed_type<float, num_elems<V_vec>::value>::type;
+                const auto v_scaling = params.qkv_scale_out[2];
+                const auto v_quant =
+                    *reinterpret_cast<const Packed_Int8_t*>(&reinterpret_cast<const int8_t*>(params.v)[v_offset]);
+
+                convert_from_float(v, mul<Packed_Float_t, float>(v_scaling, float_from_int8(v_quant)));
+            }
+            else {
+                v = *reinterpret_cast<const V_vec*>(&params.v[v_offset]);
+            }
             // Trigger the loads from the V bias buffer.
             // V_vec v_bias = *reinterpret_cast<const V_vec*>(&params.v_bias[hi*Dh + vi]);
         }
 
         // Compute the V values with bias.
-        if (handle_k) {
+        if (handle_kv) {
             v = add(v, v_bias);
+
+            if (do_ia3) {
+                v = mul<V_vec, V_vec, V_vec>(
+                    v,
+                    *reinterpret_cast<const V_vec*>(
+                        &params.ia3_value_weights[(ia3_task_id * params.num_heads + hi) * Dh + vi]));
+            }
 
             // Store the values with bias back to global memory in the cache for V.
             //*reinterpret_cast<V_vec*>(&v_cache[params.timestep*Dh]) = v;
@@ -1387,8 +1577,17 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
     // Output the final values.
     if (vo == 0 && (Dh == Dh_MAX || vi < Dh)) {
 #ifdef MMHA_USE_FP32_ACUM_FOR_OUT
-        convert_from_float(*reinterpret_cast<V_vec*>(&params.out[bhi * Dh + vi]), out);
+        if (params.int8_mode == 2) {
+            using Packed_Int8_t = typename packed_type<int8_t, num_elems<V_vec_acum>::value>::type;
+            out                 = mul<V_vec_acum, float>(*params.attention_out_scale, out);
+            *reinterpret_cast<Packed_Int8_t*>(&(reinterpret_cast<int8_t*>(params.out)[bhi * Dh + vi])) =
+                cast_to_int8(out);
+        }
+        else {
+            convert_from_float(*reinterpret_cast<V_vec*>(&params.out[bhi * Dh + vi]), out);
+        }
 #else
+        // TODO: support int8_mode?
         *reinterpret_cast<V_vec*>(&params.out[bhi * Dh + vi]) = out;
 #endif
     }

@@ -12,23 +12,22 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from __future__ import print_function
 import argparse
-import json
-import numpy as np
-import os
-import sys
-import torch
-import torch.distributed as dist
 import configparser
-from datetime import datetime
-from datasets import load_dataset, load_metric
-from transformers import GPT2Tokenizer, GPT2LMHeadModel
-from tqdm import tqdm
+import json
+import os
 
-dir_path = os.path.dirname(os.path.realpath(__file__))
-sys.path.append(dir_path + "/../../..")
-from examples.pytorch.gpt.utils.parallel_gpt import ParallelGPT
+import numpy as np
+import torch
+from datasets import load_dataset, load_metric
+from tqdm import tqdm
+from transformers import GPT2Tokenizer, GPT2LMHeadModel
+
+from utils import comm
+from utils import gpt_decoder
+from utils import profiler
+from utils.parallel_gpt import ParallelGPT
+
 
 def main():
     parser = argparse.ArgumentParser()
@@ -50,24 +49,31 @@ def main():
     parser.add_argument('--pipeline_para_size', type=int, default=1,
                         help='pipeline parallel size')
     parser.add_argument(
-        '--weights_data_type',
-        type=str,
-        default="fp32",
-        choices=["fp32", "fp16"],
-        help='Data type of FT checkpoint weights',
-    )
-    parser.add_argument('--rougeLsum_threshold', type=float,
-                        help='Threshold of FT rougeLsum score')
-
-
+        '--weights_data_type', type=str, default='fp32', choices=['fp32', 'fp16'],
+        help='Data type of FT checkpoint weights')
+    parser.add_argument(
+        '--int8_mode', type=int, default=0, choices=[0, 1],
+        help='The level of quantization to perform.'
+             ' 0: No quantization. All computation in data_type'
+             ' 1: Quantize weights to int8, all compute occurs in fp16/bf16. Not supported when data_type is fp32')
+    parser.add_argument(
+        '--use_gpt_decoder_ops', action='store_true',
+        help='Use separate decoder FT operators instead of end-to-end model op.')
+    parser.add_argument(
+        '--use_fp32_to_compute_logit', action='store_true',
+        help='Use FP32 data type for computing logit values when using gpt decoder ops. '
+             'FT end-to-end GPT op always uses FP32 data type when computing logit.')
+    parser.add_argument(
+        '--rougeLsum_threshold', type=float, default=None,
+        help='Threshold of FT rougeLsum score')
+    parser.add_argument(
+        '--verbose', action='store_true', help='Print all summary result.')
 
     args = parser.parse_args()
+    np.random.seed(0) # rouge score use sampling to compute the score
 
-    try:
-        dist.init_process_group(backend='mpi')
-    except:
-        print("[INFO] WARNING: Have initialized the process group")
-    rank = dist.get_rank()
+    comm.initialize_model_parallel(args.tensor_para_size, args.pipeline_para_size)
+    rank = comm.get_rank()
 
     summarize = args.summarize
     test_hf = args.test_hf
@@ -116,6 +122,7 @@ def main():
 
     print(f"top_k: {top_k}")
     print(f"top_p: {top_p}")
+    print(f"int8_mode: {args.int8_mode}")
     print(f"random_seed: {random_seed}")
     print(f"temperature: {temperature}")
     print(f"max_seq_len: {max_seq_len}")
@@ -128,14 +135,39 @@ def main():
     print(f"ckpt_path: {ckpt_path}")
     print(f"hf_config: {hf_config}")
 
-    random_seed_tensor = random_seed * torch.ones([max_batch_size], dtype=torch.int64)
+    infer_decode_args = dict(
+        beam_width=1,
+        top_k=top_k * torch.ones(max_batch_size, dtype=torch.int32),
+        top_p=top_p * torch.ones(max_batch_size, dtype=torch.float32),
+        temperature=temperature * torch.ones(max_batch_size, dtype=torch.float32),
+        repetition_penalty=repetition_penalty * torch.ones(max_batch_size, dtype=torch.float32),
+        random_seed=random_seed * torch.ones(max_batch_size, dtype=torch.int64)
+    )
 
-    gpt = ParallelGPT(head_num, size_per_head, vocab_size, start_id, end_id, layer_num,
-                      max_seq_len, tensor_para_size, pipeline_para_size, lib_path=lib_path, int8_mode=0,
-                      weights_data_type=args.weights_data_type)
-
-    if not gpt.load(ckpt_path=ckpt_path):
-        print("[WARNING] Checkpoint file not found. Model loading is skipped.")
+    if not args.use_gpt_decoder_ops:
+        gpt = ParallelGPT(head_num, size_per_head, vocab_size, start_id, end_id, layer_num,
+                          max_seq_len, tensor_para_size, pipeline_para_size, lib_path=lib_path,
+                          inference_data_type=args.data_type, int8_mode=args.int8_mode,
+                          weights_data_type=args.weights_data_type)
+        if not gpt.load(ckpt_path=ckpt_path):
+            print("[WARNING] Checkpoint file not found. Model loading is skipped.")
+    else:
+        gpt = gpt_decoder.Gpt(
+            num_heads=head_num,
+            size_per_head=size_per_head,
+            num_layers=layer_num,
+            vocab_size=vocab_size,
+            start_id=start_id,
+            end_id=end_id,
+            tensor_para_size=tensor_para_size,
+            pipeline_para_size=pipeline_para_size,
+            lib_path=lib_path,
+            max_seq_len=max_seq_len,
+            int8_mode = args.int8_mode,
+            inference_data_type=args.data_type,
+            weights_data_type=args.weights_data_type,
+            use_fp32_to_compute_logit=args.use_fp32_to_compute_logit)
+        gpt.load(ckpt_path, args.data_type)
 
     if (test_hf and summarize) or not summarize:
         model = GPT2LMHeadModel.from_pretrained(hf_model_location)
@@ -145,12 +177,7 @@ def main():
         elif args.data_type == 'bf16':
             model.bfloat16()
 
-    if args.data_type == 'fp16':
-        gpt.half()
-    elif args.data_type == 'bf16':
-        gpt.bfloat16()
-
-    def summarize_ft(datapoint):
+    def summarize_ft_e2e(datapoint):
         if summarize:
             line = datapoint['article'] + ' TL;DR: '
         else:
@@ -168,21 +195,47 @@ def main():
         with torch.no_grad():
             output, ft_output_len = gpt(line_encoded, torch.IntTensor([len(line_encoded[0])]),
                                         output_len,
-                                        1,
-                                        top_k * torch.ones(size=[max_batch_size], dtype=torch.int32),
-                                        top_p * torch.ones(size=[max_batch_size], dtype=torch.float32),
-                                        0.0 * torch.ones(size=[max_batch_size], dtype=torch.float32),
-                                        temperature * torch.ones(size=[max_batch_size], dtype=torch.float32),
-                                        1.0 * torch.ones(size=[max_batch_size], dtype=torch.float32),
-                                        repetition_penalty * torch.ones(size=[max_batch_size], dtype=torch.float32),
-                                        random_seed_tensor,
-                                        True)
+                                        return_output_length=True,
+                                        **infer_decode_args)
 
         tokens = output[0][0][len(line_encoded[0]):ft_output_len[0]].cpu().numpy()
 
         output_lines = tokenizer.decode(output[0][0][len(line_encoded[0]):ft_output_len[0]])
         output_lines = ".".join(output_lines.split('.')[:4]) + "."
         return output_lines, tokens
+
+    def summarize_ft_sep(datapoint):
+        if summarize:
+            line = datapoint['article'] + ' TL;DR: '
+        else:
+            line = datapoint['article']
+        line = line.strip()
+        line = line.replace(" n't", "n't")
+
+        line_encoded = tokenizer.encode(line, return_tensors='pt')
+        if summarize:
+            line_encoded = line_encoded[:, -923:]
+        else:
+            line_encoded = line_encoded[:, -768:]
+        line_encoded = line_encoded.type(torch.int32).to(gpt.device)
+        input_lengths = torch.tensor([len(line_encoded[0])], dtype=torch.int32, device=gpt.device)
+
+        with torch.no_grad():
+            output_dict = gpt.generate(input_token_ids=line_encoded,
+                                       input_lengths=input_lengths,
+                                       gen_length=output_len,
+                                       eos_token_id=tokenizer.eos_token_id,
+                                       return_output_length=True,
+                                       **infer_decode_args)
+
+        output_token_ids = output_dict['output_token_ids']
+        output_lengths = output_dict['output_lengths']
+        tokens = output_token_ids[0, 0, input_lengths[0]:output_lengths[0]]
+        output_lines = tokenizer.decode(tokens)
+        output_lines = ".".join(output_lines.split('.')[:4]) + "."
+        return output_lines, tokens.cpu().numpy()
+
+    summarize_ft = summarize_ft_e2e if not args.use_gpt_decoder_ops else summarize_ft_sep
 
     def summarize_hf(datapoint):
         if summarize:
@@ -197,13 +250,12 @@ def main():
             line_encoded = line_encoded[:, -923:]
         else:
             line_encoded = line_encoded[:, -768:]
-        # line_encoded = line_encoded.to(device_hf)
         line_encoded = line_encoded.cuda()
 
         with torch.no_grad():
             output = model.generate(line_encoded,
                                     max_length=len(line_encoded[0]) + output_len,
-                                    k=top_k,
+                                    top_k=top_k,
                                     temperature=temperature,
                                     eos_token_id=tokenizer.eos_token_id,
                                     pad_token_id=tokenizer.pad_token_id)
@@ -238,21 +290,18 @@ def main():
     else:
         tokens = []
 
-    ft_time = 0.0
-    hf_time = 0.0
     for data_point_idx in tqdm(range(1, 11490, int(11490 / args.max_ite))):
         try:
             datapoint = dataset_cnn['test'][data_point_idx]
 
-            start_time = datetime.now()
+            profiler.start('ft')
             summary_ft, tokens_ft = summarize_ft(datapoint)
-            stop_time = datetime.now()
-            ft_time += (stop_time - start_time).total_seconds()
+            profiler.stop('ft')
+
             if (test_hf and summarize) or not summarize:
-                start_time = datetime.now()
+                profiler.start('hf')
                 summary_hf, tokens_hf = summarize_hf(datapoint)
-                stop_time = datetime.now()
-                hf_time += (stop_time - start_time).total_seconds()
+                profiler.stop('hf')
 
             if rank == 0:
                 if summarize:
@@ -260,7 +309,13 @@ def main():
                     if test_hf:
                         metric_hf.add_batch(predictions=[summary_hf], references=[datapoint['highlights']])
                 else:
+                    assert test_hf
                     tokens.append((tokens_ft, tokens_hf))
+                if args.verbose:
+                    print('-' * 100)
+                    print('FT Summary:', summary_ft)
+                    if test_hf:
+                        print('HF Summary:', summary_hf)
         except:
             print('Error with datapoint : ', data_point_idx)
 
@@ -290,18 +345,21 @@ def main():
             if test_hf:
                 computed_metrics_hf = metric_hf.compute()
 
-                print(f'Hugging Face (total latency: {hf_time} sec)')
+                print(f'Hugging Face (total latency: {profiler.elapsed_time_in_sec("hf")} sec)')
                 for key in computed_metrics_hf.keys():
                     print(f'{key} : {computed_metrics_hf[key].mid[2]*100}')
 
-            print(f'Faster Transformers (total latency: {ft_time} sec)')
+            print(f'Faster Transformers (total latency: {profiler.elapsed_time_in_sec("ft")} sec)')
             for key in computed_metrics_ft.keys():
                 print(f'{key} : {computed_metrics_ft[key].mid[2]*100}')
-            if args.rougeLsum_threshold != None:
+            if args.rougeLsum_threshold is not None:
                 assert computed_metrics_ft["rougeLsum"].mid[2]*100 >= args.rougeLsum_threshold, "[INFO] TEST FAIL !"
                 print(f"[INFO] TEST PASS !")
         else:
             em_metrics = compute_exact_match(tokens)
+
+    if args.verbose:
+        profiler.summary()
 
 
 if __name__ == '__main__':

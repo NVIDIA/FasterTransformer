@@ -25,10 +25,7 @@ namespace fastertransformer {
 template<typename T>
 class TopKSamplingLayer: public BaseSamplingLayer<T> {
 private:
-    void runSampling(std::vector<fastertransformer::Tensor>*       output_tensors,
-                     const std::vector<fastertransformer::Tensor>* input_tensors) override;
-    void runSampling(std::unordered_map<std::string, Tensor>*       output_tensors,
-                     const std::unordered_map<std::string, Tensor>* input_tensors) override;
+    void runSampling(TensorMap* output_tensors, TensorMap* input_tensors) override;
 
     void freeBuffer() override;
     void allocateBuffer() override;
@@ -71,9 +68,7 @@ public:
     TopKSamplingLayer(TopKSamplingLayer<T> const& top_k_sampling_layer);
     ~TopKSamplingLayer();
 
-    void setup(const size_t                                   batch_size,
-               const size_t                                   beam_width,
-               const std::unordered_map<std::string, Tensor>* runtime_args) override;
+    void setup(const size_t batch_size, const size_t beam_width, TensorMap* runtime_args) override;
 };
 
 }  // namespace fastertransformer

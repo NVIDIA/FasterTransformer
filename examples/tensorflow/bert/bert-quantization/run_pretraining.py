@@ -524,7 +524,7 @@ def main(_):
   if FLAGS.horovod:
     config.gpu_options.visible_device_list = str(hvd.local_rank())
     if hvd.rank() == 0:
-      tf.compat.v1.logging.info("***** Configuaration *****")
+      tf.compat.v1.logging.info("***** Configuration *****")
       for key in FLAGS.__flags.keys():
           tf.compat.v1.logging.info('  {}: {}'.format(key, getattr(FLAGS, key)))
       tf.compat.v1.logging.info("**************************")

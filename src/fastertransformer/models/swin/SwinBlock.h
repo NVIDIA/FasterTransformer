@@ -18,6 +18,7 @@
 
 #include "src/fastertransformer/kernels/activation_kernels.h"
 #include "src/fastertransformer/kernels/add_residual_kernels.h"
+#include "src/fastertransformer/kernels/image_shift_partition_kernels.h"
 #include "src/fastertransformer/kernels/layernorm_kernels.h"
 #include "src/fastertransformer/layers/attention_layers/WindowAttention.h"
 
@@ -26,15 +27,13 @@ namespace fastertransformer {
 template<typename T>
 class SwinTransformerBlock: public BaseLayer {
 private:
-    int   max_batch_   = 1;
-    int   window_size_ = 7;
-    int   window_len_  = 49;
-    int   window_num_  = 64;
-    int   embed_dim_   = 96;
-    float mlp_ratio_   = 4.0f;
-    bool  qkv_bias_    = true;
-    float qk_scale_    = 1.0f;
-    float layernorm_eps_;
+    const int   max_batch_   = 1;
+    const int   window_size_ = 7;
+    const float mlp_ratio_   = 4.0f;
+    const bool  qkv_bias_    = true;
+    const float qk_scale_    = 1.0f;
+    const float layernorm_eps_;
+    const int   version_ = 1;
 
     T* buf_ = nullptr;
 
@@ -44,25 +43,11 @@ private:
     WindowAttention<T>* atten_ = nullptr;
 
 public:
-    static size_t getBufSize(const int batch,
-                             const int input_resolution,
-                             const int mlp_dim,
-                             const int window_num,
-                             const int window_len,
-                             const int dim)
-    {
-        // normed_shifted_partition_input || mlp_buf_
-        size_t buf_size = batch * input_resolution * input_resolution * mlp_dim * sizeof(T) +
-                          // attention_output_
-                          batch * window_num * window_len * dim * sizeof(T) +
-                          // skip_buf_
-                          batch * input_resolution * input_resolution * dim * sizeof(T);
-        return (buf_size + 31) / 32 * 32;
-    }
-
     void allocateBuffer();
 
     void freeBuffer();
+
+    void allocateBuffer(int batch, int input_resolution, int dim);
 
     SwinTransformerBlock(int              max_batch,
                          int              window_size,
@@ -73,13 +58,13 @@ public:
                          IAllocator*      allocator,
                          bool             is_free_buffer_after_forward,
                          bool             qkv_bias,
-                         float            qk_scale = 1.0f);
+                         float            qk_scale = 1.0f,
+                         int              version  = 1);
 
     ~SwinTransformerBlock();
 
-    void forward(std::vector<Tensor>*           output_tensors,
-                 const std::vector<Tensor>*     input_tensors,
-                 SwinTransformerBlockWeight<T>& swin_block_weights);
+    void
+    forward(TensorMap* output_tensors, TensorMap* input_tensors, SwinTransformerBlockWeight<T>& swin_block_weights);
 
 };  // class SwinTransformerBlock
 }  // namespace fastertransformer

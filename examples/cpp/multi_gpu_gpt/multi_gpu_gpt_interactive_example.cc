@@ -98,7 +98,6 @@ void multi_gpu_gpt_interactive_example(const INIReader reader, std::string in_cs
 {
     const std::string model_name         = reader.Get("ft_instance_hyperparameter", "model_name");
     const size_t      max_batch_size     = (size_t)reader.GetInteger("ft_instance_hyperparameter", "max_batch_size");
-    const size_t      max_seq_len        = (size_t)reader.GetInteger("ft_instance_hyperparameter", "max_seq_len");
     const size_t      beam_width         = (size_t)reader.GetInteger("ft_instance_hyperparameter", "beam_width");
     const uint        top_k              = (uint)reader.GetInteger("ft_instance_hyperparameter", "top_k");
     const float       top_p              = reader.GetFloat("ft_instance_hyperparameter", "top_p");
@@ -115,13 +114,12 @@ void multi_gpu_gpt_interactive_example(const INIReader reader, std::string in_cs
     const int tensor_para_size   = reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size");
     const int pipeline_para_size = reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size");
 
-    const size_t      head_num       = (size_t)reader.GetInteger(model_name, "head_num");
-    const size_t      size_per_head  = (size_t)reader.GetInteger(model_name, "size_per_head");
-    const size_t      vocab_size     = (size_t)reader.GetInteger(model_name, "vocab_size");
-    const size_t      decoder_layers = (size_t)reader.GetInteger(model_name, "decoder_layers");
-    const size_t      hidden_units   = head_num * size_per_head;
-    const size_t      inter_size     = 4 * hidden_units;
-    const std::string model_variant  = std::string(reader.Get(model_name, "model_variant", "gpt"));
+    const size_t head_num       = (size_t)reader.GetInteger(model_name, "head_num");
+    const size_t size_per_head  = (size_t)reader.GetInteger(model_name, "size_per_head");
+    const size_t vocab_size     = (size_t)reader.GetInteger(model_name, "vocab_size");
+    const size_t decoder_layers = (size_t)reader.GetInteger(model_name, "decoder_layers");
+    const size_t hidden_units   = head_num * size_per_head;
+    const size_t inter_size     = 4 * hidden_units;
 
     const size_t request_batch_size = reader.GetInteger("request", "request_batch_size");
     // The length of tokens we hope this model to generate
@@ -139,6 +137,44 @@ void multi_gpu_gpt_interactive_example(const INIReader reader, std::string in_cs
 
     FT_CHECK(head_num % tensor_para_size == 0);
     FT_CHECK(decoder_layers % pipeline_para_size == 0);
+
+    // GPT Variants parameters: e.g. OPT or BLOOM.
+    const std::string model_variant = std::string(reader.Get(model_name, "model_variant", "gpt"));
+
+    gptVariantParams gpt_variant_params = {};  // default is gpt
+    if (model_variant == "opt-pre") {
+        gpt_variant_params.layernorm_eps              = 1e-5f;
+        gpt_variant_params.layernorm_type             = LayerNormType::pre_layernorm;
+        gpt_variant_params.activation_type            = ActivationType::Relu;
+        gpt_variant_params.has_post_decoder_layernorm = true;
+    }
+    else if (model_variant == "opt-post") {
+        gpt_variant_params.layernorm_eps              = 1e-5f;
+        gpt_variant_params.layernorm_type             = LayerNormType::post_layernorm;
+        gpt_variant_params.activation_type            = ActivationType::Relu;
+        gpt_variant_params.has_post_decoder_layernorm = false;
+    }
+    else if (model_variant == "bloom-pre") {
+        gpt_variant_params.layernorm_eps              = 1e-5f;
+        gpt_variant_params.layernorm_type             = LayerNormType::pre_layernorm;
+        gpt_variant_params.activation_type            = ActivationType::Gelu;
+        gpt_variant_params.has_positional_encoding    = false;
+        gpt_variant_params.has_pre_decoder_layernorm  = true;
+        gpt_variant_params.has_post_decoder_layernorm = true;
+        gpt_variant_params.use_attention_linear_bias  = true;
+    }
+    else if (model_variant == "bloom-post") {
+        gpt_variant_params.layernorm_eps              = 1e-5f;
+        gpt_variant_params.layernorm_type             = LayerNormType::post_layernorm;
+        gpt_variant_params.activation_type            = ActivationType::Gelu;
+        gpt_variant_params.has_positional_encoding    = false;
+        gpt_variant_params.has_pre_decoder_layernorm  = true;
+        gpt_variant_params.has_post_decoder_layernorm = true;
+        gpt_variant_params.use_attention_linear_bias  = true;
+    }
+    gpt_variant_params.has_adapters       = reader.GetBoolean(model_name, "has_adapters", false);
+    gpt_variant_params.adapter_inter_size = reader.GetInteger(model_name, "adapter_inter_size", inter_size);
+    gpt_variant_params.layernorm_eps = reader.GetFloat(model_name, "layernorm_eps", gpt_variant_params.layernorm_eps);
 
     // Prepare the parallelism parameters
     int rank       = mpi::getCommWorldRank();
@@ -180,7 +216,7 @@ void multi_gpu_gpt_interactive_example(const INIReader reader, std::string in_cs
     ftNcclInitialize(tensor_para, pipeline_para, tensor_para_size, pipeline_para_size);
 
     // Read ids of request from file.
-    int              max_input_len = -1;
+    size_t           max_input_len = -1;
     std::vector<int> v_start_lengths;
     std::vector<int> v_start_ids;
     read_start_ids(request_batch_size, &v_start_lengths, &v_start_ids, max_input_len, end_id, 1, in_csv);
@@ -201,10 +237,17 @@ void multi_gpu_gpt_interactive_example(const INIReader reader, std::string in_cs
         cudaH2Dcpy(d_input_lengths, v_start_lengths.data(), request_batch_size);
     }
 
-    const uint32_t session_len      = (uint32_t)max_seq_len;
-    const int      first_output_len = max_input_len + request_output_len;
+    const int first_output_len = max_input_len + request_output_len;
+    // When a model doesn't have a learnt positional encoding, there is no limit on the sequence length.
+    // Set by the max sequence length by a reasonably large value unless the config provides the value.
+    const size_t   max_seq_len = gpt_variant_params.has_positional_encoding ?
+                                     (size_t)reader.GetInteger("ft_instance_hyperparameter", "max_seq_len") :
+                                     (size_t)reader.GetInteger("ft_instance_hyperparameter",
+                                                             "max_seq_len",
+                                                             max_input_len + 5 * request_output_len);
+    const uint32_t session_len = (uint32_t)max_seq_len;
 
-    int              max_input_len_final = -1;
+    size_t           max_input_len_final = -1;
     std::vector<int> v_lengths_final;
     std::vector<int> v_ids_final;
     read_start_ids(request_batch_size, &v_lengths_final, &v_ids_final, max_input_len_final, end_id, 1, in_csv_final);
@@ -298,21 +341,6 @@ void multi_gpu_gpt_interactive_example(const INIReader reader, std::string in_cs
     // Each sequence can have different prompt learning task ids
     std::vector<int> p_prompt_tuning_task_name_ids(request_batch_size, 0);
 
-    // NOTE: gpt variants parameters --> meta opt as an example here
-    gptVariantParams gpt_variant_params = {};  // default is gpt
-    if (model_variant == "opt-pre") {
-        gpt_variant_params.layernorm_eps              = 1e-5f;
-        gpt_variant_params.layernorm_type             = LayerNormType::pre_layernorm;
-        gpt_variant_params.activation_type            = ActivationType::Relu;
-        gpt_variant_params.has_post_decoder_layernorm = true;
-    }
-    else if (model_variant == "opt-post") {
-        gpt_variant_params.layernorm_eps              = 1e-5f;
-        gpt_variant_params.layernorm_type             = LayerNormType::post_layernorm;
-        gpt_variant_params.activation_type            = ActivationType::Relu;
-        gpt_variant_params.has_post_decoder_layernorm = false;
-    }
-
     ParallelGptWeight<T> gpt_weights(hidden_units,
                                      inter_size,
                                      vocab_size,
@@ -342,6 +370,14 @@ void multi_gpu_gpt_interactive_example(const INIReader reader, std::string in_cs
         mpi::bcast(&random_seed, 1, mpi::MPI_TYPE_UNSIGNED_LONG_LONG, 0, mpi::COMM_WORLD);
     }
 
+    AttentionType attention_type = getAttentionType<T>(size_per_head,
+                                                       getSMVersion(),
+                                                       remove_padding,  // remove_padding
+                                                       0,               // gpt supports any-seq-length fmha
+                                                       true,            // is_fuse
+                                                       false,           // with_relative_position_bias
+                                                       true);           // causal_mask
+
     ParallelGpt<T> gpt = ParallelGpt<T>(0,  // max_batch_size, FT will adjust the buffer automatically.
                                         0,  // max_seq_len, FT will adjust the buffer automatically.
                                         0,  // max_input_len, FT will adjust the buffer automatically.
@@ -370,11 +406,11 @@ void multi_gpu_gpt_interactive_example(const INIReader reader, std::string in_cs
                                         &allocator,
                                         false,
                                         &prop,
+                                        attention_type,
                                         sparse,
                                         int8_mode,
                                         nullptr,
-                                        0,
-                                        remove_padding);
+                                        0);
     /* shared_contexts_ratio); */
 
     int* d_output_ids;

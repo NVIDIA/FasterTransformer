@@ -95,7 +95,7 @@ __global__ void log_probs_kernel(float*       log_probs,
         if (tidx == 0) {
             int idx = batch_first ? step + bidx * (max_input_length - 1) : step * batch_size + bidx;
             // log_probs[step, ...] is the log probability of a token at step t + 1.
-            int token_idx = batch_first ? step + 1 + bidx * max_input_length : (step + 1) * batch_size + bidx;
+            int token_idx  = batch_first ? step + 1 + bidx * max_input_length : (step + 1) * batch_size + bidx;
             log_probs[idx] = static_cast<float>(logits[ids[token_idx]]) - s_max_logit - __logf(sum_exp + 1e-9f);
         }
     }
@@ -124,7 +124,7 @@ __global__ void accumulate_log_probs(float*       cum_log_probs,
         int length = lengths[bidx];
         // reposition logits to data for the current batch.
         log_probs += batch_first ? bidx * (max_input_length - 1) : bidx;
-        int stride = batch_first ? 1 : batch_size;  // stride along with seq dim.
+        int   stride      = batch_first ? 1 : batch_size;  // stride along with seq dim.
         float local_accum = 0.0f;
         for (int step = tidx; step < length - 1; step += blockDim.x) {
             local_accum += static_cast<float>(log_probs[step * stride]);
@@ -166,9 +166,9 @@ void invokeLogProbFromLogits(float*       cum_log_probs,
     assert(vocab_size <= vocab_size_padded);
 
     float* log_probs = reinterpret_cast<float*>(workspace);
-    int gx = batch_first ? batch_size : max_input_length - 1;
-    int gy = batch_first ? max_input_length - 1 : batch_size;
-    dim3 grid(gx, gy);
+    int    gx        = batch_first ? batch_size : max_input_length - 1;
+    int    gy        = batch_first ? max_input_length - 1 : batch_size;
+    dim3   grid(gx, gy);
     log_probs_kernel<T><<<grid, block_size, 0, stream>>>(log_probs,
                                                          logits,
                                                          input_ids,

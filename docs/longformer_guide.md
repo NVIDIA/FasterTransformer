@@ -70,22 +70,23 @@ For those unable to use the NGC container, to set up the required environment or
    ```bash
    docker run \
     -it \
+    --shm-size 5g \
     --rm \
     --ipc=host \
     --gpus=all \
     -v {YOUR_FASTER_TRANSFORMER_PROJECT_DIR_ON_HOST}:/workspace/FasterTransformer \
     --workdir /workspace/FasterTransformer \
-    nvcr.io/nvidia/pytorch:21.02-py3 bash
+    nvcr.io/nvidia/pytorch:22.09-py3 bash
    ```
 
-   Here, we use `nvcr.io/nvidia/pytorch:21.02-py3`, you can also switch it to another CUDA-enabled Pytorch NGC containers, but need to comply with the previous requirements.
+   Here, we use `nvcr.io/nvidia/pytorch:22.09-py3`, you can also switch it to another CUDA-enabled Pytorch NGC containers, but need to comply with the previous requirements.
 
 2. Install the HuggingFace Transformer code by `pip install transformers==4.9.2`
 3. Build the FasterTransformer with pytorch:
    ```bash
    mkdir build && cd build
    cmake -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON ..
-   make -j
+   make -j12
    ```
 4. Download the HuggingFace LongformerQA model by
    ```bash

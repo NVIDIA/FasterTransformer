@@ -46,9 +46,12 @@ private:
     const size_t         d_model_;
     const size_t         num_layer_;
     const size_t         hidden_units_;
+    const size_t         expert_num_;
+    const size_t         moe_k_;
     const ActivationType activation_type_;
     const float          layernorm_eps_;
     float                q_scaling_;
+    std::vector<int64_t> moe_layer_index_;
 
     BaseAttentionLayer<T>* self_attention_layer_;
     BaseAttentionLayer<T>* cross_attention_layer_;
@@ -80,6 +83,11 @@ protected:
     T* normed_cross_attn_output_ = nullptr;
     T* decoder_layer_output_     = nullptr;
 
+    T*   expert_scales_                            = nullptr;
+    int* expanded_source_row_to_expanded_dest_row_ = nullptr;
+    int* expert_for_source_row_                    = nullptr;
+    T*   fc2_result_                               = nullptr;
+
 public:
     T5Decoder(size_t                              max_batch_size,
               size_t                              head_num,
@@ -87,7 +95,10 @@ public:
               size_t                              inter_size,
               size_t                              d_model,
               size_t                              num_layer,
+              size_t                              expert_num,
+              size_t                              moe_k,
               float                               layernorm_eps_,
+              std::vector<int64_t>                moe_layer_index,
               cudaStream_t                        stream,
               cublasMMWrapper*                    cublas_wrapper,
               IAllocator*                         allocator,

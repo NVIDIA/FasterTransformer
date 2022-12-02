@@ -82,6 +82,8 @@ struct Multihead_attention_params_base {
     // The per-head latent space reserved for rotary embeddings.
     int  rotary_embedding_dim = 0;
     bool neox_rotary_style    = false;
+    // The maximum length of input sentences.
+    int max_input_length = 0;
     // The current timestep. TODO(bhsueh) Check that do we only this param in cross attention?
     int timestep = 0;
     // The current timestep of each sentences (support different timestep for different sentences)
@@ -98,6 +100,16 @@ struct Multihead_attention_params_base {
 
     const T* relative_attention_bias        = nullptr;
     int      relative_attention_bias_stride = 0;
+    // The slope per head of linear position bias to attention score (H).
+    const T* linear_bias_slopes = nullptr;
+
+    const T*   ia3_key_weights   = nullptr;
+    const T*   ia3_value_weights = nullptr;
+    const int* ia3_tasks         = nullptr;
+
+    const float* qkv_scale_out       = nullptr;
+    const float* attention_out_scale = nullptr;
+    int          int8_mode           = 0;
 };
 
 template<typename T, bool CROSS_ATTENTION>

@@ -21,19 +21,21 @@ namespace fastertransformer {
 template<typename T>
 void SwinTransformerINT8Block<T>::allocateBuffer()
 {
+    assert(false && "SwinTransformerINT8Block<T>::allocateBuffer() is not implemented\n");
+}
+
+template<typename T>
+void SwinTransformerINT8Block<T>::allocateBuffer(int batch, int input_resolution, int dim)
+{
     if (is_allocate_buffer_ == false) {
-        attention_output_ = (int8_t*)allocator_->reMalloc(attention_output_,
-                                                          max_batch_ * patches_resolution_ * patches_resolution_
-                                                              * embed_dim_ * sizeof(int8_t),
-                                                          false);
-        skip_buf_         = (int8_t*)allocator_->reMalloc(
-            skip_buf_, max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_ * sizeof(int8_t), false);
-        mlp_buf_    = (int8_t*)allocator_->reMalloc(mlp_buf_,
-                                                 max_batch_ * patches_resolution_ * patches_resolution_
-                                                     * int(embed_dim_ * mlp_ratio_) * sizeof(int8_t),
-                                                 false);
+        attention_output_ = (int8_t*)allocator_->reMalloc(
+            attention_output_, batch * input_resolution * input_resolution * dim * sizeof(int8_t), false);
+        skip_buf_ = (int8_t*)allocator_->reMalloc(
+            skip_buf_, batch * input_resolution * input_resolution * dim * sizeof(int8_t), false);
+        mlp_buf_ = (int8_t*)allocator_->reMalloc(
+            mlp_buf_, batch * input_resolution * input_resolution * int(dim * mlp_ratio_) * sizeof(int8_t), false);
         mlp_output_ = (int8_t*)allocator_->reMalloc(
-            mlp_output_, max_batch_ * patches_resolution_ * patches_resolution_ * embed_dim_ * sizeof(int32_t), false);
+            mlp_output_, batch * input_resolution * input_resolution * dim * sizeof(int32_t), false);
 
         normed_shifted_input_ = mlp_buf_;
         is_allocate_buffer_   = true;
@@ -56,8 +58,6 @@ template<typename T>
 SwinTransformerINT8Block<T>::SwinTransformerINT8Block(int              int8_mode,
                                                       int              max_batch,
                                                       int              window_size,
-                                                      int              patches_resolution,
-                                                      int              embed_dim,
                                                       float            mlp_ratio,
                                                       float            layernorm_eps,
                                                       bool             qkv_bias,
@@ -65,29 +65,24 @@ SwinTransformerINT8Block<T>::SwinTransformerINT8Block(int              int8_mode
                                                       cublasMMWrapper* cublas_wrapper,
                                                       IAllocator*      allocator,
                                                       bool             is_free_buffer_after_forward,
-                                                      float            qk_scale):
+                                                      float            qk_scale,
+                                                      int              version):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     int8_mode(int8_mode),
-    max_batch_(max_batch),
     window_size_(window_size),
-    patches_resolution_(patches_resolution),
-    embed_dim_(embed_dim),
     mlp_ratio_(mlp_ratio),
     layernorm_eps_(layernorm_eps),
-    qkv_bias_(qkv_bias),
-    qk_scale_(qk_scale)
+    version_(version)
 {
-    window_len_ = window_size_ * window_size_;
-    atten_      = new WindowAttentionINT8<T>(max_batch_,
-                                        window_size_,
-                                        patches_resolution,
-                                        embed_dim,
+    atten_ = new WindowAttentionINT8<T>(max_batch,
+                                        window_size,
                                         stream,
                                         cublas_wrapper,
                                         allocator,
                                         is_free_buffer_after_forward,
-                                        qkv_bias_,
-                                        qk_scale_);
+                                        qkv_bias,
+                                        qk_scale,
+                                        version);
 }
 
 template<typename T>
@@ -100,80 +95,134 @@ SwinTransformerINT8Block<T>::~SwinTransformerINT8Block()
 }
 
 template<typename T>
-void SwinTransformerINT8Block<T>::forward(std::vector<Tensor>*               output_tensors,
-                                          const std::vector<Tensor>*         input_tensors,
+void SwinTransformerINT8Block<T>::forward(TensorMap*                         output_tensors,
+                                          TensorMap*                         input_tensors,
                                           SwinTransformerINT8BlockWeight<T>& swin_block_weights)
 {
     // input_tensors:
     //      input [batch, input_resolution, input_resolution, dim]
     //      attention_mask [window_num, window_len, window_len]
-    //      input_paramters [3] {number_of_head, shift_size, sm}
+    //      trt_attention_mask  [window_num, trt_window_len, trt_window_len]
+    //      additional_params [5] {number_of_head, shift_size, sm, basic_layer_id, block_id}
     // output_tensors:
     //      output [batch, input_resolution, input_resolution, dim]
 
-    cublasINT8MMWrapper* cublas_wrapper   = (cublasINT8MMWrapper*)cublas_wrapper_;
-    T*                   from_tensor      = (T*)input_tensors->at(0).data;
-    T*                   out_tensor       = (T*)(output_tensors->at(0).data);
-    const int            batch            = input_tensors->at(0).shape[0];
-    const int            input_resolution = input_tensors->at(0).shape[1];
-    const int            dim              = input_tensors->at(0).shape[3];
-    const int*           input_parameters = (const int*)input_tensors->at(2).data;
-    const int            num_head         = input_parameters[0];
-    int                  shift_size       = input_parameters[1];
-    const int            sm               = input_parameters[2];
+    cublasINT8MMWrapper* cublas_wrapper     = (cublasINT8MMWrapper*)cublas_wrapper_;
+    T*                   out_tensor         = output_tensors->getPtr<T>("hidden_features");
+    T*                   from_tensor        = input_tensors->getPtr<T>("input_query");
+    const int            batch              = input_tensors->at("input_query").shape[0];
+    const int            input_resolution   = input_tensors->at("input_query").shape[1];
+    const int            dim                = input_tensors->at("input_query").shape[3];
+    T*                   attention_mask     = input_tensors->getPtr<T>("attention_mask", nullptr);
+    T*                   trt_attention_mask = input_tensors->getPtr<T>("trt_attention_mask", nullptr);
+    const int*           additional_params  = input_tensors->getPtr<const int>("additional_params");
+    const int            num_head           = additional_params[0];
+    int                  shift_size         = additional_params[1];
+    const int            sm                 = additional_params[2];
+    const int            basic_layer_id     = additional_params[3];
+    const int            block_id           = additional_params[4];
 
-    shift_size        = (input_resolution <= window_size_) ? 0 : shift_size;
-    size_t window_num = (input_resolution / window_size_) * (input_resolution / window_size_);
-    int    mlp_dim    = int(mlp_ratio_ * dim);
-    allocateBuffer();
+    int window_size_in_use = (input_resolution <= window_size_) ? input_resolution : window_size_;
+    int window_len_in_use  = window_size_in_use * window_size_in_use;
+    shift_size             = (input_resolution <= window_size_) ? 0 : shift_size;
+    int window_num         = (input_resolution / window_size_in_use) * (input_resolution / window_size_in_use);
+    int mlp_dim            = int(mlp_ratio_ * dim);
+    allocateBuffer(batch, input_resolution, dim);
 
-    const size_t m = batch * input_resolution * input_resolution;
-    const size_t n = dim;
-
-    // end of checking buf size
     const ScaleList* scalePtr = &(swin_block_weights.scalelist);
+    if (version_ == 2) {
+        invokeShiftPartitionCol32(normed_shifted_input_,
+                                  from_tensor,
+                                  batch,
+                                  input_resolution,
+                                  input_resolution,
+                                  dim,
+                                  &(scalePtr->d_scale_list_[0 + 3]),
+                                  shift_size,
+                                  window_size_in_use,
+                                  stream_);
+    }
+    else if (version_ == 1) {
+        invokeLayernormShiftPartitionCol32(normed_shifted_input_,
+                                           (const half*)from_tensor,
+                                           (const half*)swin_block_weights.attn_layernorm_weights.gamma,
+                                           (const half*)swin_block_weights.attn_layernorm_weights.beta,
+                                           batch,
+                                           input_resolution,
+                                           input_resolution,
+                                           dim,
+                                           scalePtr->h_scale_list_[0 + 3],
+                                           shift_size,
+                                           window_size_in_use,
+                                           stream_);
+    }
 
-    invokeLayernormShiftPartitionCol32(normed_shifted_input_,
-                                       from_tensor,
-                                       swin_block_weights.attn_layernorm_weights.gamma,
-                                       swin_block_weights.attn_layernorm_weights.beta,
-                                       batch,
-                                       input_resolution,
-                                       input_resolution,
-                                       dim,
-                                       &(scalePtr->d_scale_list_[0 + 3]),
-                                       shift_size,
-                                       window_size_,
-                                       stream_);
-    sync_check_cuda_error();
-
-    int                 additional_parameters[6] = {batch, dim, input_resolution, num_head, shift_size, sm};
-    std::vector<Tensor> attn_output_tensors{
-        Tensor{MEMORY_GPU, TYPE_INT8, std: vector<size_t>{m, n}, attention_output_}};
-    std::vector<Tensor> int8_input_tensors{
-        Tensor{MEMORY_GPU, TYPE_INT8, std::vector<size_t>{m, n}, normed_shifted_input_},
-        input_tensors->at(1),
-        Tensor{MEMORY_GPU,
-               TYPE_FP16,
-               std::vector<size_t>{(size_t)num_head, (size_t)window_len_, (size_t)window_len_},
-               swin_block_weights.attention_relative_pos_bias},
-        Tensor{MEMORY_CPU, TYPE_INT8, std::vector<size_t>{6}, additional_parameters}};
+    const size_t m                        = batch * input_resolution * input_resolution;
+    const size_t n                        = dim;
+    DataType     data_type                = getTensorType<T>();
+    int          additional_parameters[9] = {
+                 batch, dim, input_resolution, num_head, shift_size, sm, window_size_in_use, basic_layer_id, block_id};
+    TensorMap attn_output_tensors{
+        {"hidden_features", Tensor{MEMORY_GPU, TYPE_INT8, std::vector<size_t>{m, n}, attention_output_}}};
+    TensorMap attn_input_tensors{
+        {"input_query", Tensor{MEMORY_GPU, TYPE_INT8, std::vector<size_t>{m, n}, normed_shifted_input_}},
+        {"attention_mask",
+         Tensor{MEMORY_GPU,
+                data_type,
+                std::vector<size_t>{(size_t)window_num, (size_t)window_len_in_use, (size_t)window_len_in_use},
+                attention_mask}},
+        {"trt_attention_mask",
+         Tensor{MEMORY_GPU,
+                data_type,
+                std::vector<size_t>{(size_t)window_num, (size_t)window_len_in_use, (size_t)window_len_in_use},
+                trt_attention_mask}},
+        {"attention_relative_position_bias",
+         Tensor{MEMORY_GPU,
+                data_type,
+                std::vector<size_t>{(size_t)num_head, (size_t)window_len_in_use, (size_t)window_len_in_use},
+                swin_block_weights.attention_relative_pos_bias}},
+        {"trt_relative_position_bias",
+         Tensor{MEMORY_GPU,
+                data_type,
+                std::vector<size_t>{(size_t)num_head, (size_t)window_len_in_use, (size_t)window_len_in_use},
+                swin_block_weights.trt_relative_position_bias}},
+        {"attn_logit_scale",
+         Tensor{
+             MEMORY_GPU, data_type, std::vector<size_t>{(size_t)num_head}, swin_block_weights.attention_logit_scale}},
+        {"additional_params", Tensor{MEMORY_CPU, TYPE_INT8, std::vector<size_t>{9}, additional_parameters}}};
 
     swin_block_weights.attention_weights.scale_list_ptr = &(swin_block_weights.scalelist);
-    atten_->forward(&attn_output_tensors, &int8_input_tensors, &swin_block_weights.attention_weights);
+    atten_->forward(&attn_output_tensors, &attn_input_tensors, &swin_block_weights.attention_weights);
     sync_check_cuda_error();
-    invokeAddBiasResidualLayerNormCol32_noRes((int8_t*)attention_output_,
-                                              (int8_t*)attention_output_,
-                                              from_tensor,
-                                              swin_block_weights.attention_weights.attention_output_weight.bias,
-                                              swin_block_weights.ffn_layernorm_weights.gamma,
-                                              swin_block_weights.ffn_layernorm_weights.beta,
-                                              m,
-                                              dim,
-                                              stream_,
-                                              &(scalePtr->d_scale_list_[12 + 1]),
-                                              &(scalePtr->d_scale_list_[36 + 3]));
-    // }
+
+    if (version_ == 2) {
+        invokeAddBiasLayernormAddResCol32((int8_t*)attention_output_,
+                                          (int8_t*)attention_output_,
+                                          from_tensor,
+                                          swin_block_weights.attention_weights.attention_output_weight.bias,
+                                          swin_block_weights.attn_layernorm_weights.gamma,
+                                          swin_block_weights.attn_layernorm_weights.beta,
+                                          layernorm_eps_,
+                                          m,
+                                          dim,
+                                          stream_,
+                                          &(scalePtr->d_scale_list_[12 + 1]),
+                                          &(scalePtr->d_scale_list_[36 + 3]));
+    }
+    else if (version_ == 1) {
+        invokeAddBiasResidualPreLayerNormCol32(
+            (int8_t*)attention_output_,
+            (int8_t*)attention_output_,
+            (__half*)from_tensor,
+            (const __half*)swin_block_weights.attention_weights.attention_output_weight.bias,
+            (const __half*)swin_block_weights.ffn_layernorm_weights.gamma,
+            (const __half*)swin_block_weights.ffn_layernorm_weights.beta,
+            m,
+            dim,
+            stream_,
+            (scalePtr->h_scale_list_[12 + 1]),
+            (scalePtr->h_scale_list_[36 + 3]));
+    }
 
     cublas_wrapper->Gemm((int8_t*)mlp_buf_,
                          1,
@@ -195,7 +244,32 @@ void SwinTransformerINT8Block<T>::forward(std::vector<Tensor>*               out
                               &(scalePtr->d_scale_list_[40 + 1]),
                               &(scalePtr->d_scale_list_[44 + 3]));
 
-    if (int8_mode == 1) {
+    if (version_ == 2) {
+        cublas_wrapper->Gemm((int8_t*)mlp_output_,
+                             1,
+                             m,
+                             dim,
+                             mlp_dim,
+                             0,
+                             0,
+                             0,
+                             scalePtr->h_scale_list_[scalePtr->p3_offset_ + 3],
+                             (int8_t*)mlp_buf_,
+                             (int8_t*)swin_block_weights.ffn_weights.output_weight.kernel);
+
+        invokeAddBiasLayernormAddResCol32((int8_t*)out_tensor,
+                                          (int8_t*)mlp_output_,
+                                          from_tensor,
+                                          swin_block_weights.ffn_weights.output_weight.bias,
+                                          swin_block_weights.ffn_layernorm_weights.gamma,
+                                          swin_block_weights.ffn_layernorm_weights.beta,
+                                          layernorm_eps_,
+                                          m,
+                                          dim,
+                                          stream_,
+                                          &(scalePtr->d_scale_list_[48 + 1]));
+    }
+    else if (int8_mode == 1) {
         cublas_wrapper->Gemm((int8_t*)mlp_output_,
                              1,
                              m,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -34,7 +34,8 @@ SwinTransformerINT8Class::SwinTransformerINT8Class(std::vector<th::Tensor> w,
                                                    int64_t                 layer_num,
                                                    double                  mlp_ratio,
                                                    bool                    qkv_bias,
-                                                   double                  qk_scale):
+                                                   double                  qk_scale,
+                                                   int64_t                 version):
     st_(w[0].scalar_type()), depths_(depths), num_heads_(num_heads), weights_(w)
 {
 
@@ -69,6 +70,7 @@ SwinTransformerINT8Class::SwinTransformerINT8Class(std::vector<th::Tensor> w,
                                                                         mlp_ratio,
                                                                         qkv_bias,
                                                                         qk_scale,
+                                                                        version,
                                                                         weights_);
             break;
         case at::ScalarType::Half:
@@ -87,12 +89,13 @@ SwinTransformerINT8Class::SwinTransformerINT8Class(std::vector<th::Tensor> w,
                                                                        mlp_ratio,
                                                                        qkv_bias,
                                                                        qk_scale,
+                                                                       version,
                                                                        weights_);
             break;
         default:
             throw std::runtime_error("Wrong Tensor type.");
     }
-    info_int_      = torch::empty({11}, torch::dtype(torch::kInt64));
+    info_int_      = torch::empty({12}, torch::dtype(torch::kInt64));
     info_int_[0]   = max_batch;
     info_int_[1]   = img_size;
     info_int_[2]   = patch_size;
@@ -104,6 +107,7 @@ SwinTransformerINT8Class::SwinTransformerINT8Class(std::vector<th::Tensor> w,
     info_int_[8]   = layer_num;
     info_int_[9]   = (int64_t)qkv_bias;
     info_int_[10]  = int8_mode;
+    info_int_[11]  = (int64_t)version;
     info_float_    = torch::empty({2}, torch::dtype(torch::kFloat64));
     info_float_[0] = mlp_ratio;
     info_float_[1] = qk_scale;
@@ -157,7 +161,8 @@ static auto swinTransformerINT8THS =
                               int64_t,
                               double,
                               bool,
-                              double>())
+                              double,
+                              int64_t>())
         .def("forward", &torch_ext::SwinTransformerINT8Class::forward)
         .def_pickle(
             [](const c10::intrusive_ptr<torch_ext::SwinTransformerINT8Class>& self) -> std::vector<th::Tensor> {
@@ -181,6 +186,7 @@ static auto swinTransformerINT8THS =
                 int64_t                                 layer_num   = state[idx][i++].item().to<int>();
                 bool                                    qkv_bias    = state[idx][i++].item().to<bool>();
                 int64_t                                 int8_mode   = state[idx][i++].item().to<int>();
+                int64_t                                 version     = state[idx][i++].item().to<int>();
                 idx                                                 = state.size() - 1;
                 double mlp_ratio                                    = state[idx][0].item().to<double>();
                 double qk_scale                                     = state[idx][1].item().to<double>();
@@ -199,5 +205,6 @@ static auto swinTransformerINT8THS =
                                                                                 layer_num,
                                                                                 mlp_ratio,
                                                                                 qkv_bias,
-                                                                                qk_scale);
+                                                                                qk_scale,
+                                                                                version);
             });

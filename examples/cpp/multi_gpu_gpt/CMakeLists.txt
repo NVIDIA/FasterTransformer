@@ -13,7 +13,8 @@
 # limitations under the License.
 
 add_library(gpt_example_utils STATIC gpt_example_utils.cc)
-target_link_libraries(gpt_example_utils PUBLIC -lcudart)
+target_link_libraries(gpt_example_utils PUBLIC -lcublas -lcublasLt -lcudart
+                      ParallelGpt nvtx_utils mpi_utils nccl_utils)
 
 add_executable(multi_gpu_gpt_example multi_gpu_gpt_example.cc)
 target_link_libraries(multi_gpu_gpt_example PUBLIC -lcublas -lcublasLt -lcudart

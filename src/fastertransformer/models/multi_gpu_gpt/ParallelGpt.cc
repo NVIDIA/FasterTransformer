@@ -19,6 +19,7 @@
 #include "src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.h"
 #include "src/fastertransformer/kernels/bert_preprocess_kernels.h"
 #include "src/fastertransformer/kernels/decoding_kernels.h"
+#include "src/fastertransformer/kernels/gen_relative_pos_bias.h"
 #include "src/fastertransformer/kernels/gpt_kernels.h"
 #include "src/fastertransformer/kernels/logprob_kernels.h"
 #include "src/fastertransformer/layers/beam_search_layers/BaseBeamSearchLayer.h"
@@ -44,10 +45,11 @@ void ParallelGpt<T>::initialize()
                                                             allocator_,
                                                             is_free_buffer_after_forward_,
                                                             is_context_qk_buf_float_,
+                                                            attention_type_,
                                                             sparse_,
+                                                            int8_mode_,
                                                             custom_all_reduce_comm_,
-                                                            enable_custom_all_reduce_,
-                                                            remove_padding_);
+                                                            enable_custom_all_reduce_);
 
     gpt_decoder_ = new ParallelGptDecoder<T>(0,
                                              head_num_,
@@ -105,6 +107,8 @@ void ParallelGpt<T>::allocateBuffer(size_t batch_size,
     input_attention_mask_ = (T*)(allocator_->reMalloc(
         input_attention_mask_, sizeof(T) * batchxbeam * max_input_len * max_input_len, false));
     decoder_input_buf_ = (T*)(allocator_->reMalloc(decoder_input_buf_, sizeof(T) * batchxbeam * hidden_units_, false));
+    decoder_normed_input_buf_ =
+        (T*)(allocator_->reMalloc(decoder_normed_input_buf_, sizeof(T) * batchxbeam * hidden_units_, false));
     decoder_output_buf_ =
         (T*)(allocator_->reMalloc(decoder_output_buf_, sizeof(T) * batchxbeam * hidden_units_, false));
     normed_decoder_output_buf_ =
@@ -151,6 +155,17 @@ void ParallelGpt<T>::allocateBuffer(size_t batch_size,
         context_decoder_output_buf_, sizeof(T) * batchxbeam * max_input_len * hidden_units_, false));
     output_log_probs_buf_ =
         (float*)(allocator_->reMalloc(output_log_probs_buf_, sizeof(float) * batchxbeam * max_session_len, false));
+
+    if (gpt_variant_params_.has_pre_decoder_layernorm) {
+        context_decoder_normed_input_buf_ = (T*)allocator_->reMalloc(
+            context_decoder_normed_input_buf_, sizeof(T) * batchxbeam * max_input_len * hidden_units_, false);
+        decoder_normed_input_buf_ =
+            (T*)allocator_->reMalloc(decoder_normed_input_buf_, sizeof(T) * batchxbeam * hidden_units_, false);
+    }
+
+    if (gpt_variant_params_.use_attention_linear_bias) {
+        linear_bias_slopes_ = (T*)(allocator_->reMalloc(linear_bias_slopes_, sizeof(T) * head_num_, false));
+    }
 
     if (is_return_context_cum_log_probs) {
         lp_normed_decoder_output_buf_ = (T*)allocator_->reMalloc(
@@ -222,6 +237,14 @@ void ParallelGpt<T>::freeBuffer()
         allocator_->free((void**)(&context_decoder_output_buf_));
         allocator_->free((void**)(&output_log_probs_buf_));
 
+        if (gpt_variant_params_.has_pre_decoder_layernorm) {
+            allocator_->free((void**)(&context_decoder_normed_input_buf_));
+            allocator_->free((void**)(&decoder_normed_input_buf_));
+        }
+        if (gpt_variant_params_.use_attention_linear_bias) {
+            allocator_->free((void**)(&linear_bias_slopes_));
+        }
+
         allocator_->free((void**)(&lp_normed_decoder_output_buf_));
         allocator_->free((void**)(&lp_logits_buf_));
         allocator_->free((void**)(&lp_nccl_logits_buf_));
@@ -268,11 +291,11 @@ ParallelGpt<T>::ParallelGpt(size_t                              max_batch_size,
                             IAllocator*                         allocator,
                             bool                                is_free_buffer_after_forward,
                             cudaDeviceProp*                     cuda_device_prop,
+                            AttentionType                       attention_type,
                             bool                                sparse,
                             int                                 int8_mode,
                             std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
                             int                                 enable_custom_all_reduce,
-                            bool                                remove_padding,
                             float                               shared_contexts_ratio):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, cuda_device_prop, sparse),
     head_num_(head_num),
@@ -297,10 +320,10 @@ ParallelGpt<T>::ParallelGpt(size_t                              max_batch_size,
     tensor_para_(tensor_para),
     pipeline_para_(pipeline_para),
     local_head_num_(head_num / tensor_para.world_size_),
+    attention_type_(attention_type),
     int8_mode_(int8_mode),
     custom_all_reduce_comm_(custom_all_reduce_comm),
     enable_custom_all_reduce_(enable_custom_all_reduce),
-    remove_padding_(remove_padding),
     shared_contexts_ratio_(shared_contexts_ratio)
 {
     int local_vacab_size = ceil(vocab_size_ / 1.f / tensor_para_.world_size_);
@@ -337,10 +360,10 @@ ParallelGpt<T>::ParallelGpt(ParallelGpt<T> const& gpt):
     pipeline_para_(gpt.pipeline_para_),
     local_head_num_(gpt.local_head_num_),
     vocab_size_padded_(gpt.vocab_size_padded_),
+    attention_type_(gpt.attention_type_),
     int8_mode_(gpt.int8_mode_),
     custom_all_reduce_comm_(gpt.custom_all_reduce_comm_),
     enable_custom_all_reduce_(gpt.enable_custom_all_reduce_),
-    remove_padding_(gpt.remove_padding_),
     shared_contexts_ratio_(gpt.shared_contexts_ratio_)
 {
     initialize();
@@ -385,6 +408,8 @@ void ParallelGpt<T>::computeContextCumLogProbs(float*                      cum_l
                                layernorm_eps_,
                                n_hidden_states,
                                hidden_units_,
+                               (float*)nullptr,
+                               0,
                                stream_);
         sync_check_cuda_error();
         if (tensor_para_.world_size_ == 1) {
@@ -530,6 +555,7 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
     // input_tensors:
     //      input_ids [batch_size, max_input_length]
     //      input_lengths [batch_size]
+    //      input_lengths_h [batch_size] on cpu, optional
     //      prompt_learning_task_name_ids [batch_size] on cpu
     //      output_seq_len [batch_size] on cpu
     //      stop_words_list [batch_size, 2, stop_words_length], optional
@@ -544,20 +570,27 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
     //      repetition_penalty [1] or [batch_size] on cpu, optional, float.
     //      random_seed [1] or [batch_size] on cpu, optional, unsigned long long int.
     //      request_prompt_lengths [batch_size], optional
+    //      request_prompt_lengths_h [batch_size], cpu, optional
     //      request_prompt_embedding [batch_size, max_prompt_length, hidden_units], float, optional
     //      request_prompt_type [batch_size], int, optional
     //      is_return_context_cum_log_probs [1] on cpu, bool, optional
     //      session_len [1] on cpu, uint32, optional
     //      memory_len [1] on cpu, uint32, optional
     //      continue_gen [1] on cpu, bool, optional
+    //      is_return_context_embeddings [1] on cpu, bool, optional
+    //      top_p_decay [batch_size] on gpu, float, optional
+    //      top_p_min [batch_size] on gpu, float, optional
+    //      top_p_reset_ids [batch_size] on gpu, uint32, optional
 
     // output_tensors:
     //      output_ids [batch_size, beam_width, max_output_seq_len]
     //      sequence_length [batch_size, beam_width]
+    //      response_input_lengths [batch_size, beam_width], optional
     //      output_log_probs [batch_size, beam_width, request_output_seq_len], must be float*.
     //          optional. It leads to additional computing cost. If we don't need this result, don't put it.
     //      cum_log_probs [batch_size, beam_width], must be float*. optional.
     //          The cumulative log probability of generated sequences. It may lead to additional computing cost.
+    //      context_embeddings [batch_size, hidden_units], must be float*, optional
 
     // Step is from max_input_length ~ max_output_seq_len,
     // When step = k,  we put output ids and caches at step k, and the sequence_length would be k - 1 before
@@ -565,6 +598,7 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
     // When there is no input_ids, put the start token at step 0 of output_ids_buf_. After forward, only copy
     // the step 1 ~ max_output_seq_len of output_ids_buf_ to output_tensors->at(0).data
 
+    FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
     FT_CHECK_WITH_INFO(input_tensors->size() >= 3, "input_tensors->size() >= 3");
     FT_CHECK_WITH_INFO(output_tensors->size() >= 2, "output_tensors->size() >= 2");
     FT_CHECK(input_tensors->at("input_ids").shape.size() == 2);
@@ -584,12 +618,15 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
                        "The shape of cum_log_probs should match with batch_size x beam_width if provided.");
     int max_input_length = input_tensors->at("input_ids").shape[1];
 
-    bool continue_gen = input_tensors->find("continue_gen") != input_tensors->end() ?
-                            input_tensors->at("continue_gen").getVal<bool>() :
-                            false;
-    // triton backend will send START flag
-    if (input_tensors->find("START") != input_tensors->end()) {
-        continue_gen = !((bool)input_tensors->at("START").getVal<int32_t>());
+    bool       continue_gen = input_tensors->find("continue_gen") != input_tensors->end() ?
+                                  input_tensors->at("continue_gen").getVal<bool>() :
+                                  false;
+    const bool is_return_context_embeddings =
+        input_tensors->find("is_return_context_embeddings") != input_tensors->end()
+        && input_tensors->at("is_return_context_embeddings").getVal<bool>();
+    if (is_return_context_embeddings) {
+        FT_CHECK_WITH_INFO(output_tensors->find("context_embeddings") != output_tensors->end(),
+                           "When requesting context embeddings, a context embeddings output tensors must be provided");
     }
 
     const int initial_step    = continue_gen ? step_ : 0;
@@ -597,9 +634,10 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
 
     // NOTE: the input already contains the p/prompt-tunning tokens ids for p/prompt tuning task
     // prompt_learning_task_name_ids are used by both p/prompt-tunning and prefix_prompt task
-    const int* prompt_learning_task_name_ids = input_tensors->count("prompt_learning_task_name_ids") ?
-                                                   (const int*)input_tensors->at("prompt_learning_task_name_ids").data :
-                                                   nullptr;
+    const int* prompt_learning_task_name_ids =
+        input_tensors->count("prompt_learning_task_name_ids") ?
+            input_tensors->at("prompt_learning_task_name_ids").getPtr<const int>() :
+            nullptr;
 
     FT_CHECK_WITH_INFO(
         !(prompt_learning_task_name_ids != nullptr
@@ -631,6 +669,23 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
     bool use_request_p_prompt_embedding = request_prompt_type == PromptLearningType::p_prompt_tuning;
     int  max_request_p_prompt_length =
         use_request_p_prompt_embedding ? input_tensors->at("request_prompt_embedding").shape[1] : 0;
+    // p_prompt tuning: input and prompt are concatnenated (not separate),
+    const uint32_t* input_lengths_h = input_tensors->count("input_lengths_h") ?
+                                          input_tensors->at("input_lengths_h").getPtr<const uint32_t>() :
+                                          nullptr;
+
+    size_t max_input_without_prompt_length = max_context_len;
+    if (use_request_p_prompt_embedding && input_lengths_h != nullptr
+        && input_tensors->count("request_prompt_lengths_h")) {
+
+        const uint32_t* request_prompt_lengths_h =
+            input_tensors->at("request_prompt_lengths_h").getPtr<const uint32_t>();
+        max_input_without_prompt_length = input_lengths_h[0] - request_prompt_lengths_h[0];
+        for (int bs_id = 1; bs_id < batch_size; ++bs_id) {
+            max_input_without_prompt_length = std::max(size_t(input_lengths_h[bs_id] - request_prompt_lengths_h[bs_id]),
+                                                       max_input_without_prompt_length);
+        }
+    }
 
     has_prefix_prompt_ =
         (prompt_learning_task_name_ids != nullptr && prompt_learning_type_ == PromptLearningType::prefix_prompt);
@@ -641,6 +696,8 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
     has_prefix_soft_prompt_            = request_prompt_type == PromptLearningType::soft_prompt;
 
     // NOTE: soft prompt
+    FT_CHECK_WITH_INFO(!(has_prefix_soft_prompt_ && continue_gen),
+                       "Interactive Generations cannot work with prefix_soft_prompt !");
     const size_t max_prefix_soft_prompt_length =
         has_prefix_soft_prompt_ ? input_tensors->at("request_prompt_embedding").shape[1] : 0;
     const size_t limit_len_offset = max_prefix_soft_prompt_length + (max_input_length == 0 ? 1 : 0);
@@ -688,7 +745,7 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
                        session_len);
     }
 
-    if (session_len_ > gpt_weights->getMaxSeqLen()) {
+    if (gpt_variant_params_.has_positional_encoding && session_len_ > gpt_weights->getMaxSeqLen()) {
         FT_LOG_ERROR("The session_len_ (%d) of request is longer than max_seq_len (%d) of embedding table."
                      " This is a invalid input. Setting the session_len_ to %d.",
                      session_len_,
@@ -730,15 +787,22 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
     const std::vector<size_t> self_v_cache_shape = {
         num_layer_ / pipeline_para_.world_size_, batch_size * beam_width, local_head_num_, memory_len, size_per_head_};
 
-    dynamic_decode_layer_->setup(batch_size, beam_width, input_tensors);
-    handleOptArg(input_tensors, "start_id", start_ids_buf_, start_id_, batch_size);
-    handleOptArg(input_tensors, "end_id", end_ids_buf_, end_id_, batch_size);
+    {
+        TensorMap input_map(*input_tensors);
+        dynamic_decode_layer_->setup(batch_size, beam_width, &input_map);
+        handleOptArg(&input_map, "start_id", start_ids_buf_, start_id_, batch_size);
+        handleOptArg(&input_map, "end_id", end_ids_buf_, end_id_, batch_size);
+    }
+
+    if (gpt_variant_params_.use_attention_linear_bias) {
+        invokeBuildAlibiSlopes(linear_bias_slopes_, head_num_, stream_);
+    }
 
     if (continue_gen) {
         invokeTileGptInputs(tiled_input_ids_buf_,
                             tiled_input_lengths_buf_,
-                            (int*)input_tensors->at("input_ids").data,
-                            (const int*)(input_tensors->at("input_lengths").data),
+                            input_tensors->at("input_ids").getPtr<int>(),
+                            input_tensors->at("input_lengths").getPtr<const int>(),
                             batch_size,
                             beam_width,
                             max_input_length,
@@ -819,6 +883,16 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
                                  + "\n return with invalid output tensors");
                     return;
                 }
+                if (input_lengths_h != nullptr) {
+                    if (bs_id == 0) {
+                        max_input_without_prompt_length = input_lengths_h[bs_id] - p_prompt_tuning_pair.second;
+                    }
+                    else {
+                        max_input_without_prompt_length =
+                            std::max(size_t(input_lengths_h[bs_id] - p_prompt_tuning_pair.second),
+                                     max_input_without_prompt_length);
+                    }
+                }
                 for (int bw_id = 0; bw_id < beam_width; ++bw_id) {
                     // only weight ptrs needed here
                     p_prompt_tuning_batch_ptrs.push_back(p_prompt_tuning_pair.first);
@@ -839,10 +913,10 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
             invokeTileGptPromptInputs(tiled_input_ids_buf_,
                                       tiled_input_lengths_buf_,
                                       use_request_p_prompt_embedding ? tiled_prompt_lengths_buf_ : nullptr,
-                                      (int*)input_tensors->at("input_ids").data,
-                                      (const int*)(input_tensors->at("input_lengths").data),
+                                      input_tensors->at("input_ids").getPtr<int>(),
+                                      input_tensors->at("input_lengths").getPtr<const int>(),
                                       use_request_p_prompt_embedding ?
-                                          (const int*)(input_tensors->at("request_prompt_lengths").data) :
+                                          input_tensors->at("request_prompt_lengths").getPtr<const int>() :
                                           nullptr,
                                       batch_size,
                                       beam_width,
@@ -870,7 +944,9 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
 
                 invokeInputIdsEmbeddingLookupPosEncodingSoftPrompt(param);
                 sync_check_cuda_error();
+
                 max_input_length += max_prefix_soft_prompt_length;  // view soft_prompt as input
+                max_context_len += max_prefix_soft_prompt_length;
             }
             else {
                 // NOTE: add prompt embeddings here (for p/prompt tuning)
@@ -896,6 +972,18 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
                 sync_check_cuda_error();
             }
 
+            if (gpt_variant_params_.has_pre_decoder_layernorm) {
+                invokeGeneralLayerNorm(context_decoder_normed_input_buf_,
+                                       context_decoder_input_buf_,
+                                       gpt_weights->pre_decoder_layernorm.gamma,
+                                       gpt_weights->pre_decoder_layernorm.beta,
+                                       layernorm_eps_,
+                                       batch_size * beam_width * max_input_length,
+                                       hidden_units_,
+                                       (float*)nullptr,
+                                       0,
+                                       stream_);
+            }
             invokeBuildDecoderAttentionMask(input_attention_mask_,
                                             tiled_input_lengths_buf_,
                                             nullptr,
@@ -905,33 +993,57 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
                                             stream_);
             sync_check_cuda_error();
 
-            std::vector<Tensor> decoder_input_tensors{
-                Tensor{MEMORY_GPU,
-                       data_type,
-                       {batch_size * beam_width, (size_t)max_input_length, hidden_units_},
-                       context_decoder_input_buf_},
-                Tensor{MEMORY_GPU,
-                       data_type,
-                       {batch_size * beam_width, 1, (size_t)max_input_length, (size_t)max_input_length},
-                       input_attention_mask_},
-                Tensor{MEMORY_GPU, TYPE_INT32, {batch_size * beam_width}, tiled_input_lengths_buf_}};
+            TensorMap decoder_input_tensors(
+                {{"decoder_input",
+                  Tensor(MEMORY_GPU,
+                         data_type,
+                         {batch_size * beam_width, (size_t)max_input_length, hidden_units_},
+                         gpt_variant_params_.has_pre_decoder_layernorm ? context_decoder_normed_input_buf_ :
+                                                                         context_decoder_input_buf_)},
+                 {"attention_mask",
+                  Tensor(MEMORY_GPU,
+                         data_type,
+                         {batch_size * beam_width, 1, (size_t)max_input_length, (size_t)max_input_length},
+                         input_attention_mask_)},
+                 {"input_lengths",
+                  Tensor(MEMORY_GPU, TYPE_INT32, {batch_size * beam_width}, tiled_input_lengths_buf_)}});
 
             if (use_shared_contexts) {
-                decoder_input_tensors.push_back({MEMORY_GPU, TYPE_INT32, {(size_t)compact_size}, compact_idx_});
-                decoder_input_tensors.push_back({MEMORY_GPU, TYPE_INT32, {batch_size}, batch_to_compact_idx_});
+                decoder_input_tensors.insert("compact_idx",
+                                             Tensor(MEMORY_GPU, TYPE_INT32, {(size_t)compact_size}, compact_idx_));
+                decoder_input_tensors.insert("batch_to_compact_idx",
+                                             Tensor(MEMORY_GPU, TYPE_INT32, {batch_size}, batch_to_compact_idx_));
+            }
+            if (gpt_variant_params_.use_attention_linear_bias) {
+                decoder_input_tensors.insert("linear_bias_slopes",
+                                             Tensor(MEMORY_GPU,
+                                                    data_type,
+                                                    {local_head_num_},
+                                                    linear_bias_slopes_ + local_head_num_ * tensor_para_.rank_));
             }
 
-            std::vector<Tensor> decoder_output_tensors{
-                Tensor{MEMORY_GPU,
-                       data_type,
-                       {batch_size * beam_width, (size_t)max_input_length, hidden_units_},
-                       context_decoder_output_buf_},
-                Tensor{MEMORY_GPU, data_type, self_k_cache_shape, key_cache_},
-                Tensor{MEMORY_GPU, data_type, self_v_cache_shape, value_cache_},
-                Tensor{MEMORY_GPU, data_type, {batch_size * beam_width, hidden_units_}, decoder_output_buf_}};
+            TensorMap decoder_output_tensors(
+                {{"decoder_output",
+                  Tensor(MEMORY_GPU,
+                         data_type,
+                         {batch_size * beam_width, (size_t)max_input_length, hidden_units_},
+                         context_decoder_output_buf_)},
+                 {"key_cache", Tensor(MEMORY_GPU, data_type, self_k_cache_shape, key_cache_)},
+                 {"value_cache", Tensor(MEMORY_GPU, data_type, self_v_cache_shape, value_cache_)},
+                 {"last_token_hidden_units",
+                  Tensor(MEMORY_GPU, data_type, {batch_size * beam_width, hidden_units_}, decoder_output_buf_)}});
 
             gpt_context_decoder_->forward(
                 &decoder_output_tensors, &decoder_input_tensors, &gpt_weights->decoder_layer_weights);
+
+            if (is_return_context_embeddings) {
+                invokeSumLengthDimension(output_tensors->at("context_embeddings").getPtr<float>(),
+                                         context_decoder_output_buf_,
+                                         batch_size * beam_width,
+                                         max_input_length,
+                                         hidden_units_,
+                                         stream_);
+            }
 
             invokeDecodingInitialize(finished_buf_,
                                      sequence_lengths_,
@@ -987,8 +1099,8 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
             sync_check_cuda_error();
             invokeTileGptInputs(tiled_input_ids_buf_,
                                 tiled_input_lengths_buf_,
-                                (int*)input_tensors->at("input_ids").data,
-                                (const int*)(input_tensors->at("input_lengths").data),
+                                input_tensors->at("input_ids").getPtr<int>(),
+                                input_tensors->at("input_lengths").getPtr<int>(),
                                 batch_size,
                                 beam_width,
                                 max_input_length,
@@ -1000,7 +1112,7 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
     }
 
     invokeMaskPaddingTokens(masked_tokens_,
-                            (const int*)(input_tensors->at("input_lengths").data),
+                            input_tensors->at("input_lengths").getPtr<int>(),
                             memory_len,
                             max_input_length,
                             initial_step,
@@ -1010,6 +1122,10 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
 
     // If continue, we restart from initial_step because last token hasn't been processed in decoder
     const int step_start = continue_gen ? initial_step : max_input_length;
+
+    const size_t local_batch_size = getLocalBatchSize(batch_size, 1, pipeline_para_.world_size_);
+    FT_CHECK(batch_size % local_batch_size == 0);
+
     for (step_ = step_start; step_ < (int)gen_len; step_++) {
         // Loop body produces Nth token by embedding && encoding token (N-1)
         // if necessary.
@@ -1017,8 +1133,6 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
         const int  src_indir_idx    = (step_ - step_start) % 2;
         const int  tgt_indir_idx    = 1 - src_indir_idx;
 
-        const size_t local_batch_size = getLocalBatchSize(batch_size, 1, pipeline_para_.world_size_);
-        FT_CHECK(batch_size % local_batch_size == 0);
         const size_t iteration_num = batch_size / local_batch_size;
         *generation_should_stop_   = !fill_caches_only;
 
@@ -1042,38 +1156,72 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
                                                              0,
                                                              stream_);
                     sync_check_cuda_error();
+
+                    if (gpt_variant_params_.has_pre_decoder_layernorm) {
+                        invokeGeneralLayerNorm(decoder_normed_input_buf_ + hidden_units_offset,
+                                               decoder_input_buf_ + hidden_units_offset,
+                                               gpt_weights->pre_decoder_layernorm.gamma,
+                                               gpt_weights->pre_decoder_layernorm.beta,
+                                               layernorm_eps_,
+                                               batch_size * beam_width,
+                                               hidden_units_,
+                                               (float*)nullptr,
+                                               0,
+                                               stream_);
+                    }
+                    sync_check_cuda_error();
                 }
 
-                std::vector<Tensor> decoder_input_tensors{
-                    Tensor{MEMORY_GPU,
-                           data_type,
-                           {local_batch_size * beam_width, hidden_units_},
-                           decoder_input_buf_ + hidden_units_offset},
-                    Tensor{MEMORY_GPU, TYPE_BOOL, {local_batch_size * beam_width}, finished_buf_ + id_offset},
-                    Tensor{MEMORY_GPU, TYPE_INT32, {local_batch_size * beam_width}, sequence_lengths_ + id_offset},
-                    Tensor{MEMORY_GPU,
-                           TYPE_INT32,
-                           {local_batch_size * beam_width},
-                           tiled_total_padding_count_ + id_offset},
-                    Tensor{MEMORY_CPU, TYPE_INT32, {1}, &max_context_len},
-                    Tensor{MEMORY_CPU, TYPE_INT32, {1}, &step_},
-                    Tensor{MEMORY_CPU, TYPE_INT32, {1}, &ite},
-                    Tensor{MEMORY_GPU,
-                           TYPE_INT32,
-                           {local_batch_size, beam_width, memory_len},
-                           beam_width > 1 ? cache_indirections_[src_indir_idx] + id_offset * memory_len : nullptr},
-                    Tensor{MEMORY_GPU,
-                           TYPE_BOOL,
-                           {local_batch_size * beam_width, memory_len},
-                           masked_tokens_ + id_offset * memory_len}};
+                std::unordered_map<std::string, Tensor> decoder_input_tensors(
+                    {{"decoder_input",
+                      Tensor(MEMORY_GPU,
+                             data_type,
+                             {local_batch_size * beam_width, hidden_units_},
+                             gpt_variant_params_.has_pre_decoder_layernorm ?
+                                 decoder_normed_input_buf_ + hidden_units_offset :
+                                 decoder_input_buf_ + hidden_units_offset)},
+                     {"finished",
+                      Tensor(MEMORY_GPU, TYPE_BOOL, {local_batch_size * beam_width}, finished_buf_ + id_offset)},
+                     {"input_lengths",
+                      Tensor(MEMORY_GPU, TYPE_INT32, {local_batch_size * beam_width}, sequence_lengths_ + id_offset)},
+                     {"total_padding_tokens",
+                      Tensor(MEMORY_GPU,
+                             TYPE_INT32,
+                             {local_batch_size * beam_width},
+                             tiled_total_padding_count_ + id_offset)},
+                     {"max_input_length", Tensor(MEMORY_CPU, TYPE_INT32, {1}, &max_context_len)},
+                     {"step", Tensor(MEMORY_CPU, TYPE_INT32, {1}, &step_)},
+                     {"ite", Tensor(MEMORY_CPU, TYPE_INT32, {1}, &ite)},
+                     {"masked_tokens",
+                      Tensor(MEMORY_GPU,
+                             TYPE_BOOL,
+                             {local_batch_size * beam_width, memory_len},
+                             masked_tokens_ + id_offset * memory_len)}});
+                if (beam_width > 1) {
+                    decoder_input_tensors.insert({"cache_indirection",
+                                                  Tensor(MEMORY_GPU,
+                                                         TYPE_INT32,
+                                                         {local_batch_size, beam_width, memory_len},
+                                                         cache_indirections_[src_indir_idx] + id_offset * memory_len)});
+                }
 
-                std::vector<Tensor> decoder_output_tensors{
-                    Tensor{MEMORY_GPU,
-                           data_type,
-                           {local_batch_size * beam_width, hidden_units_},
-                           decoder_output_buf_ + hidden_units_offset},
-                    Tensor{MEMORY_GPU, data_type, self_k_cache_shape, key_cache_},
-                    Tensor{MEMORY_GPU, data_type, self_v_cache_shape, value_cache_}};
+                if (gpt_variant_params_.use_attention_linear_bias) {
+                    decoder_input_tensors.insert({"linear_bias_slopes",
+                                                  Tensor(MEMORY_GPU,
+                                                         data_type,
+                                                         {local_head_num_},
+                                                         linear_bias_slopes_ + local_head_num_ * tensor_para_.rank_)});
+                }
+
+                std::unordered_map<std::string, Tensor> decoder_output_tensors(
+                    {{"decoder_output",
+                      Tensor(MEMORY_GPU,
+                             data_type,
+                             {local_batch_size * beam_width, hidden_units_},
+                             decoder_output_buf_ + hidden_units_offset)},
+                     {"key_cache", Tensor(MEMORY_GPU, data_type, self_k_cache_shape, key_cache_)},
+                     {"value_cache", Tensor(MEMORY_GPU, data_type, self_v_cache_shape, value_cache_)}});
+
                 gpt_decoder_->forward(
                     &decoder_output_tensors, &decoder_input_tensors, &gpt_weights->decoder_layer_weights);
             }
@@ -1090,6 +1238,8 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
                                            layernorm_eps_,
                                            local_batch_size * beam_width,
                                            hidden_units_,
+                                           (float*)nullptr,
+                                           0,
                                            stream_);
                 }
                 sync_check_cuda_error();
@@ -1155,12 +1305,12 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
                                           stream_);
                 }
 
-                int                                     tmp_local_batch_size       = local_batch_size;
-                bool                                    is_initialize_random_table = step_ == max_context_len;
+                int  tmp_local_batch_size       = local_batch_size;
+                bool is_initialize_random_table = step_ == max_context_len;
+
                 std::unordered_map<std::string, Tensor> dynamic_decode_input_tensors{
                     {"logits",
                      Tensor{MEMORY_GPU, TYPE_FP32, {batch_size, beam_width, vocab_size_padded_}, logits_buf_}},
-                    {"embedding_bias", Tensor{MEMORY_GPU, data_type, {vocab_size_padded_}, nullptr}},
                     {"step", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &step_}},
                     {"max_input_length", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &max_context_len}},
                     {"sequence_limit_length", Tensor{MEMORY_GPU, TYPE_UINT32, {batch_size}, seq_limit_len_}},
@@ -1168,8 +1318,6 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
                     {"input_lengths",
                      Tensor{MEMORY_GPU, TYPE_INT32, {batch_size, beam_width}, tiled_input_lengths_buf_}},
                     {"ite", Tensor{MEMORY_CPU, TYPE_UINT32, {1}, &ite}},
-                    {"src_key_cache", Tensor{MEMORY_GPU, data_type, self_k_cache_shape, key_cache_}},
-                    {"src_value_cache", Tensor{MEMORY_GPU, data_type, self_v_cache_shape, value_cache_}},
                     {"src_cache_indirection",
                      Tensor{MEMORY_GPU,
                             TYPE_INT32,
@@ -1259,7 +1407,8 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
         }
 
         if (token_generated_cb_ && step_ + 1 < (int)gen_len) {
-            setOutputTensors(output_tensors, input_tensors, gen_len, session_len, max_context_len);
+            setOutputTensors(
+                output_tensors, input_tensors, gen_len, session_len, max_context_len, max_input_without_prompt_length);
             sendTensorsToFirstPipelineNode(output_tensors, input_tensors);
 
             if (pipeline_para_.rank_ == 0 && tensor_para_.rank_ == 0) {
@@ -1271,14 +1420,15 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
             /* We have just finished processing input: update the padding count:
              * total_padding_count += (max_input_length - input_lengths) */
             invokeUpdatePaddingCount(tiled_total_padding_count_,
-                                     (const int*)(input_tensors->at("input_lengths").data),
+                                     input_tensors->at("input_lengths").getPtr<int>(),
                                      max_input_length,
                                      batch_size,
                                      beam_width,
                                      stream_);
         }
     }
-    setOutputTensors(output_tensors, input_tensors, gen_len, session_len, max_context_len);
+    setOutputTensors(
+        output_tensors, input_tensors, gen_len, session_len, max_context_len, max_input_without_prompt_length);
     sendTensorsToFirstPipelineNode(output_tensors, input_tensors);
 }
 
@@ -1321,17 +1471,16 @@ void ParallelGpt<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*  
                                       const std::unordered_map<std::string, Tensor>* input_tensors,
                                       const size_t                                   gen_len,
                                       const size_t                                   session_len,
-                                      const size_t                                   max_context_len)
+                                      const size_t                                   max_context_len,
+                                      const size_t                                   max_input_without_prompt_length)
 {
     if (pipeline_para_.rank_ != pipeline_para_.world_size_ - 1) {
         return;
     }
 
-    const size_t batch_size              = output_tensors->at("output_ids").shape[0];
-    const size_t beam_width              = output_tensors->at("output_ids").shape[1];
-    int*         sequence_lengths        = output_tensors->at("sequence_length").getPtr<int>();
-    const int    max_input_length        = input_tensors->at("input_ids").shape[1];
-    const bool   has_prefix_soft_prompt_ = input_tensors->count("prefix_soft_prompt_embedding");
+    const size_t batch_size       = output_tensors->at("output_ids").shape[0];
+    const size_t beam_width       = output_tensors->at("output_ids").shape[1];
+    int*         sequence_lengths = output_tensors->at("sequence_length").getPtr<int>();
     const size_t max_prefix_soft_prompt_length =
         has_prefix_soft_prompt_ ? input_tensors->at("request_prompt_embedding").shape[1] : 0;
 
@@ -1352,7 +1501,7 @@ void ParallelGpt<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*  
                              stream_);
 
             // transpose and take output_parent_ids as inter buffer
-            invokeTransposeAxis01((int*)output_tensors->at("output_ids").data,
+            invokeTransposeAxis01(output_tensors->at("output_ids").getPtr<int>(),
                                   transposed_output_ids_buf_,
                                   gen_len - 1,
                                   batch_size * beam_width,
@@ -1361,7 +1510,7 @@ void ParallelGpt<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*  
         }
         else {
             // For sampling, only copy the results to output_tensor
-            invokeTransposeAxis01((int*)output_tensors->at("output_ids").data,
+            invokeTransposeAxis01(output_tensors->at("output_ids").getPtr<int>(),
                                   output_ids_buf_ + batch_size * beam_width,
                                   gen_len - 1,
                                   batch_size * beam_width,
@@ -1370,34 +1519,46 @@ void ParallelGpt<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*  
         }
     }
     else {
-        // add sequence_length 1 here because the sequence_length of time step t is t - 1
-        invokePlusScalar(sequence_lengths, 1, batch_size * beam_width, stream_);
-
         // For sampling, it is equivalent to all parent ids are 0.
         gatherTreeParam param;
-        param.beams                = transposed_output_ids_buf_;
+        param.beams = transposed_output_ids_buf_;
+        // Remove prompt length if possible
         param.max_sequence_lengths = sequence_lengths;
-        param.max_time             = gen_len;
-        param.batch_size           = batch_size;
-        param.beam_width           = beam_width;
-        param.step_ids             = output_ids_buf_;
-        param.parent_ids           = beam_width == 1 ? nullptr : parent_ids_buf_;
-        param.end_tokens           = end_ids_buf_;
-        param.max_input_length     = max_context_len;
+        // add sequence_length 1 here because the sequence_length of time step t is t - 1
+        param.max_sequence_length_final_step = 1;
+        // response input lengths (used to slice the ids during postprocessing)
+        param.response_input_lengths = output_tensors->count("response_input_lengths") ?
+                                           output_tensors->at("response_input_lengths").getPtr<int>() :
+                                           nullptr;
+        param.max_time               = gen_len;
+        param.batch_size             = batch_size;
+        param.beam_width             = beam_width;
+        param.step_ids               = output_ids_buf_;
+        param.parent_ids             = beam_width == 1 ? nullptr : parent_ids_buf_;
+        param.end_tokens             = end_ids_buf_;
+        param.max_input_length       = max_context_len;
         param.prefix_soft_prompt_lengths =
             has_prefix_soft_prompt_ ? input_tensors->at("request_prompt_lengths").getPtr<int>() : nullptr;
-        param.input_lengths                  = tiled_input_lengths_buf_;
-        param.p_prompt_tuning_prompt_lengths = has_p_prompt_tuning_ ? tiled_prompt_lengths_buf_ : nullptr;
-        param.max_prefix_soft_prompt_length  = max_prefix_soft_prompt_length;
-        param.stream                         = stream_;
-        param.output_ids                     = (int*)output_tensors->at("output_ids").data;
+        param.input_lengths                   = tiled_input_lengths_buf_;
+        param.p_prompt_tuning_prompt_lengths  = has_p_prompt_tuning_ ? tiled_prompt_lengths_buf_ : nullptr;
+        param.max_input_without_prompt_length = max_input_without_prompt_length;
+        param.max_prefix_soft_prompt_length   = max_prefix_soft_prompt_length;
+        param.stream                          = stream_;
+        param.output_ids                      = output_tensors->at("output_ids").getPtr<int>();
+        // NOTE: need to remove all prompt virtual tokens
         invokeGatherTree(param);
         sync_check_cuda_error();
     }
+
+    // remove p_prompt virtual tokens and update output tensors shape
+    if (has_p_prompt_tuning_) {  // remove p_prompt virtual tokens and update output tensors shape
+        output_tensors->at("output_ids").updateShape(2, gen_len - (max_context_len - max_input_without_prompt_length));
+    }
+
     if ((output_tensors->count("output_log_probs") > 0 && output_tensors->at("output_log_probs").data != nullptr)) {
         invokeTransposeAxis01(output_tensors->at("output_log_probs").getPtr<float>(),
                               output_log_probs_buf_,
-                              input_tensors->at("output_seq_len").max<uint32_t>() - max_input_length,
+                              input_tensors->at("output_seq_len").max<uint32_t>() - max_context_len,
                               batch_size * beam_width,
                               1,
                               stream_);
@@ -1408,6 +1569,11 @@ void ParallelGpt<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*  
         FT_CHECK_WITH_INFO(cum_log_probs.size() == batch_size * beam_width,
                            "The shape of cum_log_probs does not match with batch_size x beam_width.");
         cudaAutoCpy(cum_log_probs.getPtr<float>(), cum_log_probs_, cum_log_probs.size(), stream_);
+    }
+
+    if (output_tensors->count("is_finished")) {
+        cudaD2Dcpy(
+            output_tensors->at("is_finished").getPtr<bool>(), finished_buf_, output_tensors->at("is_finished").size());
     }
 }
 
@@ -1436,9 +1602,21 @@ size_t ParallelGpt<T>::getTensorParallelSize()
 }
 
 template<typename T>
+size_t ParallelGpt<T>::getHiddenUnits()
+{
+    return hidden_units_;
+}
+
+template<typename T>
 bool* ParallelGpt<T>::getFinishBuffer()
 {
     return finished_buf_;
+}
+
+template<typename T>
+size_t ParallelGpt<T>::getStep()
+{
+    return step_;
 }
 
 template class ParallelGpt<float>;

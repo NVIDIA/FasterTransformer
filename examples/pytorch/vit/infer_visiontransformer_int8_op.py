@@ -135,6 +135,7 @@ def validate(args, data_config, config, model):
     max_batch = args.batch_size
     img_size = args.img_size
     int8_mode = args.int8_mode
+    with_cls_token = config.classifier == 'token'
     in_chans = 3
     model.half()
     
@@ -155,7 +156,8 @@ def validate(args, data_config, config, model):
                                                         num_heads,
                                                         inter_size,
                                                         layer_num,
-                                                        int8_mode
+                                                        int8_mode,
+                                                        with_cls_token
                                                         )
     except:
         # legacy ths for 20.03 image
@@ -168,7 +170,8 @@ def validate(args, data_config, config, model):
                                                         num_heads,
                                                         inter_size,
                                                         layer_num,
-                                                        int8_mode
+                                                        int8_mode,
+                                                        with_cls_token
                                                         )
 
     end = time.time()

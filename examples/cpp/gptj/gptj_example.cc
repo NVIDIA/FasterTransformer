@@ -180,7 +180,7 @@ void gptj_example(const INIReader reader)
     cudaH2Dcpy(d_stop_words, tiled_stop_words.data(), tiled_stop_words.size());
 
     // Read ids of request from file.
-    int              max_input_len = -1;
+    size_t           max_input_len = -1;
     std::vector<int> v_start_lengths;
     std::vector<int> v_start_ids;
     read_start_ids(request_batch_size,
@@ -295,6 +295,14 @@ void gptj_example(const INIReader reader)
         mpi::bcast(&random_seed, 1, mpi::MPI_TYPE_UNSIGNED_LONG_LONG, 0, mpi::COMM_WORLD);
     }
 
+    AttentionType attention_type = getAttentionType<T>(size_per_head,
+                                                       getSMVersion(),
+                                                       true,   // remove_padding
+                                                       0,      // gpt supports any-seq-length fmha
+                                                       true,   // is_fuse
+                                                       false,  // with_relative_position_bias
+                                                       true);  // causal_mask
+
     GptJ<T> gpt = GptJ<T>(0,  // max_batch_size, FT will adjust the buffer automatically.
                           0,  // max_seq_len, FT will adjust the buffer automatically.
                           0,  // max_input_len, FT will adjust the buffer automatically.
@@ -322,7 +330,8 @@ void gptj_example(const INIReader reader)
                           &cublas_wrapper,
                           &allocator,
                           false,
-                          &prop);
+                          &prop,
+                          attention_type);
 
     int* d_output_ids;
     int* d_sequence_lengths;
@@ -344,10 +353,12 @@ void gptj_example(const INIReader reader)
         {"start_id", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{request_batch_size}, start_ids.data()}},
         {"end_id", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{request_batch_size}, end_ids.data()}}};
     if (!bad_words.empty()) {
-        input_tensors.insert({"bad_words_list", Tensor{MEMORY_GPU, TYPE_INT32, {2, bad_words.size() / 2}, d_bad_words}});
+        input_tensors.insert(
+            {"bad_words_list", Tensor{MEMORY_GPU, TYPE_INT32, {2, bad_words.size() / 2}, d_bad_words}});
     }
     if (stop_words_len != 0) {
-        input_tensors.insert({"stop_words_list", Tensor{MEMORY_GPU, TYPE_INT32, {request_batch_size, 2, stop_words_len}, d_stop_words}});
+        input_tensors.insert(
+            {"stop_words_list", Tensor{MEMORY_GPU, TYPE_INT32, {request_batch_size, 2, stop_words_len}, d_stop_words}});
     }
     if (top_k == 0 && top_p == 0.0f) {
         FT_CHECK(beam_width > 1);

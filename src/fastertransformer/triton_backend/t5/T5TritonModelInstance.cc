@@ -45,21 +45,41 @@ T5TritonModelInstance<T>::T5TritonModelInstance(std::unique_ptr<ft::T5Encoder<T>
 }
 
 template<typename T>
-std::unordered_map<std::string, ft::Tensor>
+ft::TensorMap
 T5TritonModelInstance<T>::convert_inputs(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors)
 {
     move_tensor_H2D(input_tensors->at("input_ids"), d_input_ids_, &allocator_);
     move_tensor_H2D(input_tensors->at("sequence_length"), d_input_lengths_, &allocator_);
 
-    std::unordered_map<std::string, ft::Tensor> ft_input_tensors{
-        {"input_ids", as_GPU_tensor(input_tensors->at("input_ids"), d_input_ids_)},
-        {"sequence_length", as_GPU_tensor(input_tensors->at("sequence_length"), d_input_lengths_)}};
+    ft::TensorMap ft_input_tensors(
+        {{"input_ids", as_GPU_tensor(input_tensors->at("input_ids"), d_input_ids_)},
+         {"sequence_length", as_GPU_tensor(input_tensors->at("sequence_length"), d_input_lengths_)}});
+
+    if (input_tensors->count("prompt_learning_task_name_ids")) {
+        ft_input_tensors.insert({"prompt_learning_task_name_ids",
+                                 input_tensors->at("prompt_learning_task_name_ids").convertTritonTensorToFt()});
+    }
+    if (input_tensors->count("request_prompt_lengths")) {
+        move_tensor_H2D(input_tensors->at("request_prompt_lengths"), d_request_prompt_lengths_, &allocator_);
+        ft_input_tensors.insert(
+            {"request_prompt_lengths",
+             as_GPU_tensor(input_tensors->at("request_prompt_lengths"), d_request_prompt_lengths_)});
+    }
+    if (input_tensors->count("request_prompt_embedding")) {
+        move_tensor_H2D(input_tensors->at("request_prompt_embedding"), d_request_prompt_embedding_, &allocator_);
+        ft_input_tensors.insert(
+            {"request_prompt_embedding",
+             as_GPU_tensor(input_tensors->at("request_prompt_embedding"), d_request_prompt_embedding_)});
+    }
+    if (input_tensors->count("ia3_tasks")) {
+        ft_input_tensors.insert({"ia3_tasks", as_GPU_tensor(input_tensors->at("ia3_tasks"), d_input_ia3_tasks_)});
+    }
     return ft_input_tensors;
 }
 
 template<typename T>
 std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>
-T5TritonModelInstance<T>::convert_outputs(const std::unordered_map<std::string, ft::Tensor>& output_tensors)
+T5TritonModelInstance<T>::convert_outputs(ft::TensorMap& output_tensors)
 {
     std::unordered_map<std::string, triton::Tensor>* outputs_mapping =
         new std::unordered_map<std::string, triton::Tensor>();
@@ -80,25 +100,50 @@ T5TritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::string
     const size_t max_output_len     = *((uint*)input_tensors->at("max_output_len").data);
     const size_t beam_width =
         input_tensors->count("beam_width") ? (size_t)(*(uint*)input_tensors->at("beam_width").data) : 1;
+    const bool has_ia3_tasks = input_tensors->count("ia3_tasks");
 
     allocateBuffer(request_batch_size, beam_width, max_output_len, mem_max_seq_len);
 
-    std::unordered_map<std::string, ft::Tensor> encoder_input_tensors = convert_inputs(input_tensors);
+    if (has_ia3_tasks) {
+        move_tensor_H2D(input_tensors->at("ia3_tasks"), d_input_ia3_tasks_, &allocator_);
+    }
 
-    std::unordered_map<std::string, ft::Tensor> encoder_output_tensors{
-        {"output_hidden_state",
-         ft::Tensor{ft::MEMORY_GPU,
-                    ft::getTensorType<T>(),
-                    std::vector<size_t>{request_batch_size, mem_max_seq_len, t5_encoder_->getDModel()},
-                    d_encoder_outputs_}}};
+    ft::TensorMap encoder_input_tensors(convert_inputs(input_tensors));
 
-    std::unordered_map<std::string, ft::Tensor> decoding_input_tensors{
-        {"encoder_output", encoder_output_tensors.at("output_hidden_state")},
-        {"encoder_sequence_length", encoder_input_tensors.at("sequence_length")}};
+    ft::TensorMap encoder_output_tensors(
+        {{"output_hidden_state",
+          ft::Tensor{ft::MEMORY_GPU,
+                     ft::getTensorType<T>(),
+                     std::vector<size_t>{request_batch_size, mem_max_seq_len, t5_encoder_->getDModel()},
+                     d_encoder_outputs_}}});
 
+    ft::TensorMap decoding_input_tensors({{"encoder_output", encoder_output_tensors.at("output_hidden_state")},
+                                          {"encoder_sequence_length", encoder_input_tensors.at("sequence_length")}});
+
+    if (input_tensors->find("top_p_decay") != input_tensors->end()) {
+        move_tensor_H2D(input_tensors->at("top_p_decay"), d_top_p_decay_, &allocator_);
+        decoding_input_tensors.insert({"top_p_decay", as_GPU_tensor(input_tensors->at("top_p_decay"), d_top_p_decay_)});
+    }
+    if (input_tensors->find("top_p_min") != input_tensors->end()) {
+        move_tensor_H2D(input_tensors->at("top_p_min"), d_top_p_min_, &allocator_);
+        decoding_input_tensors.insert({"top_p_min", as_GPU_tensor(input_tensors->at("top_p_min"), d_top_p_min_)});
+    }
+    if (input_tensors->find("top_p_reset_ids") != input_tensors->end()) {
+        move_tensor_H2D(input_tensors->at("top_p_reset_ids"), d_top_p_reset_ids_, &allocator_);
+        decoding_input_tensors.insert(
+            {"top_p_reset_ids", as_GPU_tensor(input_tensors->at("top_p_reset_ids"), d_top_p_reset_ids_)});
+    }
+
+    std::set<std::string> keys_on_gpu = {"input_ids",
+                                         "sequence_length",
+                                         "bad_words_list",
+                                         "stop_words_list",
+                                         "ia3_tasks",
+                                         "top_p_decay",
+                                         "top_p_min",
+                                         "top_p_reset_ids"};
     for (auto& t : *input_tensors) {
-        if (t.first.compare("input_ids") != 0 && t.first.compare("sequence_length") != 0
-            && t.first.compare("bad_words_list") != 0 && t.first.compare("stop_words_list") != 0) {
+        if (keys_on_gpu.count(t.first) == 0) {
             decoding_input_tensors.insert({t.first, t.second.convertTritonTensorToFt()});
         }
     }
@@ -115,17 +160,17 @@ T5TritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::string
             {"stop_words_list", as_GPU_tensor(input_tensors->at("stop_words_list"), d_input_stop_words_)});
     }
 
-    std::unordered_map<std::string, ft::Tensor> decoding_output_tensors{
-        {"output_ids",
-         ft::Tensor{ft::MEMORY_GPU,
-                    ft::TYPE_INT32,
-                    std::vector<size_t>{request_batch_size, beam_width, max_output_len},
-                    d_output_ids_}},
-        {"sequence_length",
-         ft::Tensor{ft::MEMORY_GPU,
-                    ft::TYPE_INT32,
-                    std::vector<size_t>{request_batch_size, beam_width},
-                    d_sequence_lengths_}}};
+    ft::TensorMap decoding_output_tensors(
+        {{"output_ids",
+          ft::Tensor{ft::MEMORY_GPU,
+                     ft::TYPE_INT32,
+                     std::vector<size_t>{request_batch_size, beam_width, max_output_len},
+                     d_output_ids_}},
+         {"sequence_length",
+          ft::Tensor{ft::MEMORY_GPU,
+                     ft::TYPE_INT32,
+                     std::vector<size_t>{request_batch_size, beam_width},
+                     d_sequence_lengths_}}});
     if (input_tensors->count("is_return_log_probs") > 0
         && input_tensors->at("is_return_log_probs").convertTritonTensorToFt().getVal<bool>()) {
         decoding_output_tensors.insert({"output_log_probs",
@@ -138,6 +183,17 @@ T5TritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::string
                                                    ft::TYPE_FP32,
                                                    std::vector<size_t>{request_batch_size, beam_width},
                                                    d_cum_log_probs_}});
+    }
+
+    if (has_ia3_tasks) {
+        const auto num_ia3_tasks = t5_encoder_weight_->getNumIA3Tasks();
+        ft::FT_CHECK_WITH_INFO(num_ia3_tasks > 0, "Cannot request ia3_tasks, model has no IA3 adapters");
+        const bool is_within_range = ft::invokeCheckRange<int>(
+            d_input_ia3_tasks_, request_batch_size, 0, num_ia3_tasks - 1, d_within_range_, t5_encoder_->getStream());
+        ft::FT_CHECK_WITH_INFO(is_within_range,
+                               ft::fmtstr("Requested IA3 tasks aren't in the range [0, %d).", num_ia3_tasks));
+
+        decoding_input_tensors.insert({"ia3_tasks", as_GPU_tensor(input_tensors->at("ia3_tasks"), d_input_ia3_tasks_)});
     }
 
     t5_encoder_->forward(&encoder_output_tensors, &encoder_input_tensors, t5_encoder_weight_.get());
@@ -168,6 +224,7 @@ void T5TritonModelInstance<T>::allocateBuffer(const size_t request_batch_size,
         d_output_log_probs_, sizeof(float) * request_batch_size * beam_width * max_output_len, false));
     d_cum_log_probs_    = (float*)(allocator_->reMalloc(
         d_cum_log_probs_, sizeof(float) * request_batch_size * beam_width * max_output_len, false));
+    d_within_range_     = (bool*)(allocator_->reMalloc(d_within_range_, sizeof(bool)));
 }
 
 template<typename T>
@@ -178,6 +235,7 @@ void T5TritonModelInstance<T>::freeBuffer()
     allocator_->free((void**)(&d_sequence_lengths_));
     allocator_->free((void**)(&d_output_log_probs_));
     allocator_->free((void**)(&d_cum_log_probs_));
+    allocator_->free((void**)(&d_within_range_));
 }
 
 template struct T5TritonModelInstance<float>;

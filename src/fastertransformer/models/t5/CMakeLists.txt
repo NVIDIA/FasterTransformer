@@ -19,21 +19,22 @@ set_property(TARGET T5Decoder PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET T5Decoder PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(T5Decoder PUBLIC -lcudart cublasMMWrapper TensorParallelDecoderSelfAttentionLayer
                     TensorParallelDecoderCrossAttentionLayer TensorParallelReluFfnLayer TensorParallelSiluFfnLayer
-                    layernorm_kernels add_residual_kernels nccl_utils memory_utils tensor)
+                    layernorm_kernels add_residual_kernels nccl_utils memory_utils tensor cuda_utils logger)
 
 add_library(T5Decoding STATIC T5Decoding.cc T5DecodingWeight.cc)
 set_property(TARGET T5Decoding PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET T5Decoding PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(T5Decoding PUBLIC -lcudart cublasMMWrapper T5Decoder bert_preprocess_kernels
                                         decoding_kernels DynamicDecodeLayer BaseBeamSearchLayer 
-                                        beam_search_topk_kernels gpt_kernels tensor)
+                                        beam_search_topk_kernels gpt_kernels tensor cuda_utils logger)
 
 add_library(T5Encoder STATIC T5Encoder.cc T5EncoderWeight.cc T5EncoderLayerWeight.cc)
 set_property(TARGET T5Encoder PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET T5Encoder PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(T5Encoder PUBLIC -lcudart bert_preprocess_kernels cublasMMWrapper 
                         TensorParallelUnfusedAttentionLayer FusedAttentionLayer TensorParallelReluFfnLayer
-                        TensorParallelGeluFfnLayer TensorParallelSiluFfnLayer layernorm_kernels add_residual_kernels nccl_utils tensor)
+                        TensorParallelGeluFfnLayer TensorParallelSiluFfnLayer layernorm_kernels add_residual_kernels
+                        nccl_utils tensor cuda_utils logger)
 
 add_executable(t5_gemm t5_gemm.cc)
-target_link_libraries(t5_gemm PUBLIC -lcudart t5_gemm_func memory_utils)
+target_link_libraries(t5_gemm PUBLIC -lcudart t5_gemm_func memory_utils cuda_utils logger)

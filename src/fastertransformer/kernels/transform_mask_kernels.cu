@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,16 +16,17 @@
 
 #include "reduce_kernel_utils.cuh"
 #include "transform_mask_kernels.h"
+#include <cstdio>
 
 namespace fastertransformer {
 
 /*******************  invokeTransformMask  ***********************/
 
-// transform mask [B, S, S](half) into [B, S2*S2/64, 64](half), S2 is the actural  seqlen used in fmha row-major
+// transform mask [B, S, S](half) into [B, S2*S2/64, 64](half), S2 is the actual seqlen used in fmha row-major
 // in one MMA (16*16 elements calculated by a warp), each thread calculates 8 elements
 // the offsets of elements calculated by each thread are : for n, +0 +1 +8 +9; for m, +0 +8 (M_XMMAS*N_XMMAS times)
 // in transformed_mask, the masks of one warp are stored in 4 continuous rows ([4, 64]), with two elements of one thread
-// stored in 2 continuous halfs. one cta calculates warps_m*warps_n mma == 16*warps_m*16*warps_n elements grid(B,
+// stored in 2 continuous halves. one cta calculates warps_m*warps_n mma == 16*warps_m*16*warps_n elements grid(B,
 // S2*S2/64) block(32)
 __global__ void transform_mask_kernel(half2*         tranformed_mask,
                                       const half2*   mask,
@@ -72,11 +73,11 @@ __global__ void transform_mask_kernel(half2*         tranformed_mask,
     tranformed_mask_b[(r << 5) + threadIdx.x] = tmp;
 }
 
-// transform mask [B, S, S](half) into [B, S2*S2/64, 64](half), S2 is the actural  seqlen used in fmha row-major
+// transform mask [B, S, S](half) into [B, S2*S2/64, 64](half), S2 is the actual seqlen used in fmha row-major
 // in one MMA (16*16 elements calculated by a warp), each thread calculates 8 elements
 // the offsets of elements calculated by each thread are : for n, +0 +1 +8 +9; for m, +0 +8 (M_XMMAS*N_XMMAS times)
 // in transformed_mask, the masks of one warp are stored in 4 continuous rows ([4, 64]), with two elements of one thread
-// stored in 2 continuous halfs. one cta calculates warps_m*warps_n mma == 16*warps_m*16*warps_n elements grid(B,
+// stored in 2 continuous halves. one cta calculates warps_m*warps_n mma == 16*warps_m*16*warps_n elements grid(B,
 // S2*S2/64) block(32)
 __global__ void transform_mask_kernel(half*          tranformed_mask,
                                       const half*    mask,

@@ -40,12 +40,8 @@ __global__ void setup_topk_runtime_args(int    batch_size,
         uint  k = top_ks_size > 1 ? top_ks[i] : top_k;
         float p = top_ps_size > 1 ? top_ps[i] : top_p;
         if (k == 0 && p == 0.0f) {
-            // Invalid runtime topk/topp combination. Use a greedy decoding as default.
-            printf("[WARNING] Invalid runtime topk/topp combination for token %d (topk: %d, topp: %f). "
-                   "Use a greedy decoding as default.\n",
-                   i,
-                   k,
-                   p);
+            // FT's topp implementation does not support topp = 0.0f, but it equivalent to greedy search.
+            // So, we set the topk = 1 as an alternative solution.
             k = 1;
         }
         if (k > 0 && p == 0.0f) {
@@ -135,9 +131,7 @@ void TopKSamplingLayer<T>::freeBuffer()
 }
 
 template<typename T>
-void TopKSamplingLayer<T>::setup(const size_t                                   batch_size,
-                                 const size_t                                   beam_width,
-                                 const std::unordered_map<std::string, Tensor>* runtime_args)
+void TopKSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_width, TensorMap* runtime_args)
 {
     // Setup runtime topk and topp arguments.
     //
@@ -150,10 +144,10 @@ void TopKSamplingLayer<T>::setup(const size_t                                   
     BaseSamplingLayer<T>::setup(batch_size, beam_width, runtime_args);
 
     uint         tmp_top_k     = 0;
-    const Tensor runtime_top_k = runtime_args->count("runtime_top_k") ?
+    const Tensor runtime_top_k = runtime_args->isExist("runtime_top_k") ?
                                      runtime_args->at("runtime_top_k") :
                                      Tensor(MEMORY_CPU, TYPE_UINT32, {1}, &tmp_top_k);
-    const Tensor runtime_top_p = runtime_args->count("runtime_top_p") ? runtime_args->at("runtime_top_p") : Tensor();
+    const Tensor runtime_top_p = runtime_args->isExist("runtime_top_p") ? runtime_args->at("runtime_top_p") : Tensor();
     const size_t runtime_top_k_size = runtime_top_k.size();
     const size_t runtime_top_p_size = runtime_top_p.size();
 
@@ -192,100 +186,62 @@ void TopKSamplingLayer<T>::setup(const size_t                                   
 }
 
 template<typename T>
-void TopKSamplingLayer<T>::runSampling(std::vector<fastertransformer::Tensor>*       output_tensors,
-                                       const std::vector<fastertransformer::Tensor>* input_tensors)
+void TopKSamplingLayer<T>::runSampling(TensorMap* output_tensors, TensorMap* input_tensors)
 {
     // input_tensors:
     //      logits [local_batch_size, vocab_size_padded]
-    //      embedding_bias [vocab_size_padded]
+    //      embedding_bias [vocab_size_padded], optional
     //      step [1] on cpu
     //      max_input_length [1] on cpu
-    //      input_lengths [local_batch_size]
-    //      ite [1] on cpu
-    //      random_seed [1] on cpu, optional
-
-    // output_tensors:
-    //      output_ids [max_seq_len, batch_size]
-    //      finished [local_batch_size]
-    //      sequence_length [local_batch_size]
-    //      cum_log_probs [batch_size], must be float*
-    //          The cumultative log probability of generated tokens.
-    //      output_log_probs [local_batch_size], must be float*
-    //          The log probs at the current step.
-    FT_CHECK(false);  // TODO deprecated, need to remove
-    std::unordered_map<std::string, Tensor> input_tensors_map{{"logits", input_tensors->at(0)},
-                                                              {"embedding_bias", input_tensors->at(1)},
-                                                              {"step", input_tensors->at(2)},
-                                                              {"max_input_length", input_tensors->at(3)},
-                                                              {"input_lengths", input_tensors->at(4)},
-                                                              {"ite", input_tensors->at(5)}};
-    if (input_tensors->size() == 7) {
-        input_tensors_map.insert({"random_seed", input_tensors->at(6)});
-    }
-    std::unordered_map<std::string, Tensor> output_tensors_map{{"output_ids", output_tensors->at(0)},
-                                                               {"finished", output_tensors->at(1)},
-                                                               {"sequence_length", output_tensors->at(2)},
-                                                               {"cum_log_probs", output_tensors->at(3)},
-                                                               {"output_log_probs", output_tensors->at(4)}};
-    runSampling(&output_tensors_map, &input_tensors_map);
-}
-
-template<typename T>
-void TopKSamplingLayer<T>::runSampling(std::unordered_map<std::string, Tensor>*       output_tensors,
-                                       const std::unordered_map<std::string, Tensor>* input_tensors)
-{
-    // input_tensors:
-    //      logits [local_batch_size, vocab_size_padded]
-    //      embedding_bias [vocab_size_padded]
-    //      step [1] on cpu
-    //      max_input_length [1] on cpu
-    //      input_lengths [local_batch_size]
+    //      input_lengths [local_batch_size], optional
     //      ite [1] on cpu
 
     // output_tensors:
     //      output_ids [max_seq_len, batch_size]
-    //      finished [local_batch_size]
-    //      sequence_length [local_batch_size]
+    //      finished [local_batch_size], optional
+    //      sequence_length [local_batch_size], optional
     //      cum_log_probs [batch_size], must be float*, optional
     //          The cumultative log probability of generated tokens.
     //      output_log_probs [local_batch_size], must be float*, optional
     //          The log probs at the current step.
 
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    FT_CHECK(input_tensors->size() >= 6);
-    FT_CHECK(output_tensors->size() >= 3);
+    FT_CHECK(input_tensors->size() >= 4);
+    FT_CHECK(output_tensors->size() >= 1);
 
     const int batch_size       = output_tensors->at("output_ids").shape[1];
     const int local_batch_size = input_tensors->at("logits").shape[0];
-    const int ite              = *((int*)input_tensors->at("ite").data);
-    const int step             = *((int*)input_tensors->at("step").data);
+    const int ite              = input_tensors->at("ite").getVal<int>();
+    const int step             = input_tensors->at("step").getVal<int>();
 
     // in case of skip any, the logit value is already copied and processed.
     T* logits = !skip_any_ ? input_tensors->at("logits").getPtr<T>() : runtime_logits_buf_;
 
     invokeAddBiasEndMask(logits,
                          (T*)(nullptr),
-                         (const int*)input_tensors->at("end_id").data,
-                         (bool*)output_tensors->at("finished").data,
+                         input_tensors->at("end_id").getPtr<const int>(),
+                         output_tensors->at("finished", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<bool>(),
                          local_batch_size,
+                         vocab_size_,
                          vocab_size_padded_,
                          stream_);
     sync_check_cuda_error();
 
     float* cum_log_probs =
-        output_tensors->count("cum_log_probs") ? output_tensors->at("cum_log_probs").getPtr<float>() : nullptr;
+        output_tensors->isExist("cum_log_probs") ? output_tensors->at("cum_log_probs").getPtr<float>() : nullptr;
     float* output_log_probs =
-        output_tensors->count("output_log_probs") ? output_tensors->at("output_log_probs").getPtr<float>() : nullptr;
+        output_tensors->isExist("output_log_probs") ? output_tensors->at("output_log_probs").getPtr<float>() : nullptr;
 
     if (cum_log_probs != nullptr || output_log_probs != nullptr) {
-        invokeAddBiasSoftMax(logits,
-                             (T*)(nullptr),
-                             input_tensors->at("end_id").getPtr<int>(),
-                             output_tensors->at("finished").getPtr<bool>(),
-                             local_batch_size,
-                             vocab_size_padded_,
-                             vocab_size_,
-                             stream_);
+        invokeAddBiasSoftMax(
+            logits,
+            (T*)(nullptr),
+            input_tensors->at("end_id").getPtr<int>(),
+            output_tensors->at("finished", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<bool>(),
+            local_batch_size,
+            vocab_size_padded_,
+            vocab_size_,
+            stream_);
         sync_check_cuda_error();
     }
 
@@ -294,8 +250,8 @@ void TopKSamplingLayer<T>::runSampling(std::unordered_map<std::string, Tensor>* 
         sampling_workspace_size_,
         logits,
         output_tensors->at("output_ids").getPtrWithOffset<int>(step * batch_size + ite * local_batch_size),
-        output_tensors->at("sequence_length").getPtr<int>(),
-        output_tensors->at("finished").getPtr<bool>(),
+        output_tensors->at("sequence_length", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<int>(),
+        output_tensors->at("finished", Tensor{MEMORY_GPU, TYPE_INVALID, {}, nullptr}).getPtr<bool>(),
         cum_log_probs,
         output_log_probs,
         curandstate_buf_ + ite * local_batch_size,

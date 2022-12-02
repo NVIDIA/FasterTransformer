@@ -104,6 +104,20 @@ std::unordered_map<std::string, ft::Tensor> GptJTritonModelInstance<T>::convert_
              as_GPU_tensor(input_tensors->at("request_prompt_embedding"), d_request_prompt_embedding_)});
     }
 
+    if (input_tensors->find("top_p_decay") != input_tensors->end()) {
+        move_tensor_H2D(input_tensors->at("top_p_decay"), d_top_p_decay_, &allocator_);
+        ft_input_tensors.insert({"top_p_decay", as_GPU_tensor(input_tensors->at("top_p_decay"), d_top_p_decay_)});
+    }
+    if (input_tensors->find("top_p_min") != input_tensors->end()) {
+        move_tensor_H2D(input_tensors->at("top_p_min"), d_top_p_min_, &allocator_);
+        ft_input_tensors.insert({"top_p_min", as_GPU_tensor(input_tensors->at("top_p_min"), d_top_p_min_)});
+    }
+    if (input_tensors->find("top_p_reset_ids") != input_tensors->end()) {
+        move_tensor_H2D(input_tensors->at("top_p_reset_ids"), d_top_p_reset_ids_, &allocator_);
+        ft_input_tensors.insert(
+            {"top_p_reset_ids", as_GPU_tensor(input_tensors->at("top_p_reset_ids"), d_top_p_reset_ids_)});
+    }
+
     for (auto t = input_tensors->begin(); t != input_tensors->end(); ++t) {
         if (t->first.find("input_ids") == std::string::npos && t->first.find("input_lengths") == std::string::npos
             && t->first.find("output_seq_len") == std::string::npos

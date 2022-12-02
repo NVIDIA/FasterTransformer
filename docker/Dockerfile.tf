@@ -18,12 +18,12 @@
 # FasterTransformer.
 # -------------------------------------------------- #
 
-ARG DOCKER_VERSION=22.07
+ARG DOCKER_VERSION=22.09
 ARG BASE_IMAGE=nvcr.io/nvidia/tensorflow:${DOCKER_VERSION}-tf1-py3
 FROM ${BASE_IMAGE}
 
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends bc && \
+    apt-get install -y --no-install-recommends bc git-lfs&& \
     apt-get clean && \
     rm -rf /var/lib/apt/lists/*
 
@@ -33,6 +33,7 @@ ADD . /workspace/FasterTransformer
 
 RUN git submodule update --init --recursive
 
+ENV NCCL_LAUNCH_MODE=GROUP
 ARG SM=80
 ARG FORCE_BACKEND_REBUILD=0
 RUN mkdir /var/run/sshd -p && \
