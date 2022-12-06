@@ -7,7 +7,7 @@
 	url = https://github.com/google-research/bert.git
 [submodule "examples/pytorch/swin/Swin-Transformer-Quantization/SwinTransformer"]
 	path = examples/pytorch/swin/Swin-Transformer-Quantization/SwinTransformer
-	url = https://github.com/microsoft/Swin-Transformer
+	url = https://github.com/microsoft/Swin-Transformer.git
 [submodule "examples/pytorch/vit/ViT-quantization/ViT-pytorch"]
 	path = examples/pytorch/vit/ViT-quantization/ViT-pytorch
 	url = https://github.com/jeonsworld/ViT-pytorch
