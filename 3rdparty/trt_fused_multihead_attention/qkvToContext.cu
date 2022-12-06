@@ -94,7 +94,9 @@ public:
                 warps_n = 8;
             }
             else {
-                assert(false && "Unsupporte seqlen");
+                // S >= 512, flash attention
+                warps_m = 4;
+                warps_n = 1;
             }
         }
         else {
@@ -111,7 +113,9 @@ public:
                 warps_n = 8;
             }
             else {
-                assert(false && "Unsupporte seqlen");
+                // S >= 512, flash attention
+                warps_m = 4;
+                warps_n = 1;
             }
         }
         // The number of threads per CTA.
