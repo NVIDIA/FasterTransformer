@@ -5391,7 +5391,7 @@ public:
     virtual uint64_t hashID(const KernelMeta& kernelMeta) const
     {
         assert(kernelMeta.mD == 64 || kernelMeta.mD == 32 || kernelMeta.mD == 40 || kernelMeta.mD == 80 || kernelMeta.mD == 128
-               || kernelMeta.mD == 160 || kernelMeta.mD == 256);
+               || kernelMeta.mD == 144 || kernelMeta.mD == 160 || kernelMeta.mD == 256);
         return hashID(kernelMeta.mS,
                       kernelMeta.mD,
                       kernelMeta.mInterleaved,
