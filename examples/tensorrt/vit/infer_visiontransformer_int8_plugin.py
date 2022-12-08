@@ -35,13 +35,14 @@ from plugin_loader_int8 import ViTINT8PluginLoader
 
 test_time = 100
 warmup_time = 10
+num_classes = 10
 
 def setup_torch(args):
     # Prepare model
     config = CONFIGS[args.model_type]
     print(config)
 
-    model = VisionTransformerINT8(config, args.img_size, zero_head=False, num_classes=1000)
+    model = VisionTransformerINT8(config, args.img_size, zero_head=False, num_classes=num_classes)
     model.load_state_dict(torch.load(args.pretrained_dir))
 
     quant_utils.configure_model(model, args, calib=False)
@@ -51,7 +52,7 @@ def setup_torch(args):
 def setup_trt(args, config, model):
     p_loader = ViTINT8PluginLoader(args.plugin_path)
     p_loader.load_model_config(config, args)
-    engine = p_loader.build_network(model.state_dict())
+    engine = p_loader.build_network(model.state_dict(), config, num_classes)
     p_loader.serialize_engine(engine)
     return engine, p_loader
 
@@ -140,9 +141,9 @@ def run_trt_plugin(plugin_loader:ViTINT8PluginLoader, images, engine):
 
 @torch.no_grad()
 def run_torch(model, images, mark):
-    torch_output = model.transformer(images)
+    torch_output = model(images)
     
-    torch_output = torch_output[0].cpu().numpy()
+    torch_output = torch_output.cpu().numpy()
     return torch_output
 
 @torch.no_grad()

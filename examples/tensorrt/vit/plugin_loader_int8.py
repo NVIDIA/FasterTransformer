@@ -113,7 +113,7 @@ class ViTINT8PluginLoader:
         return trt.PluginFieldCollection([max_batch, img_size, patch_size, in_chans, embed_dim, num_heads, inter_size, layer_num, int8_mode, with_cls_token] + part_fc)
 
 
-    def build_network(self, weights):
+    def build_network(self, weights, config, num_classes):
         explicit_batch_flag = 1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH)
         # weights = load_weights(weights_path)
 
@@ -130,7 +130,8 @@ class ViTINT8PluginLoader:
             min_shape = (1, self.in_chans_, self.img_size_, self.img_size_)
             ##TODO: There is a bug in TRT when opt batch is large
             max_shape = (self.max_batch_, self.in_chans_, self.img_size_, self.img_size_)
-            profile.set_shape("input_img", min=min_shape, opt=min_shape, max=max_shape)
+            # For better performance
+            profile.set_shape("input_img", min=max_shape, opt=max_shape, max=max_shape)
             builder_config.add_optimization_profile(profile)
 
             #import pdb;pdb.set_trace()
@@ -141,8 +142,23 @@ class ViTINT8PluginLoader:
             fn = self.plg_creator.create_plugin("vision_transformer", pfc)
             inputs = [input_tensor]
             vit = network.add_plugin_v2(inputs, fn) 
+            # Add final fc layer to trt engine
+            s1 = network.add_slice(vit.get_output(0), (0, 0, 0), (self.max_batch_,1 , config.hidden_size), (1, 1, 1))
+            reduce1 = network.add_reduce(s1.get_output(0), trt.ReduceOperation.SUM, 2, False)
 
-            output_tensor = vit.get_output(0)
+            fc1_w = weights["head.weight"].cpu().numpy()
+            fc1_b = weights["head.bias"].cpu().numpy()
+            fc1_w_const = network.add_constant(trt.Dims([num_classes, config.hidden_size]), fc1_w)
+            fc1_b_const = network.add_constant(trt.Dims([1, num_classes]), fc1_b)
+
+            fc1 = network.add_matrix_multiply(input0=reduce1.get_output(0), op0=trt.MatrixOperation.NONE, \
+                                                input1=fc1_w_const.get_output(0), op1=trt.MatrixOperation.TRANSPOSE)
+            fc1.name = "fc1"
+
+            fc1_bias = network.add_elementwise(fc1.get_output(0), fc1_b_const.get_output(0), trt.ElementWiseOperation.SUM)
+            fc1_bias.name = "fc1_bias"
+
+            output_tensor = fc1_bias.get_output(0)
             output_tensor.name = "visiont_transformer_output"
 
             vit.precision = trt.float16 
