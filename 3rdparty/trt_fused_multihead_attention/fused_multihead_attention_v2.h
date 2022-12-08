@@ -5473,7 +5473,7 @@ public:
             };
             for (unsigned int i = 0u; i < sizeof(unrollList) / sizeof(unrollList[0]); ++i) {
                 if (mSM == unrollList[i].mSM && mDataType == unrollList[i].mDataType && params.s == unrollList[i].mS
-                    && params.b <= unrollList[i].mMaxBatch) {
+                    && params.d == unrollList[i].mD && params.b <= unrollList[i].mMaxBatch) {
                     forceUnroll = true;
                     break;
                 }
