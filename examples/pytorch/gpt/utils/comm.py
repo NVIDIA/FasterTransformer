@@ -16,6 +16,10 @@ import torch
 import torch.distributed as dist
 
 
+def broadcast(tensor, src):
+    return dist.broadcast(tensor, src)
+
+
 def get_world_size():
     return dist.get_world_size() if dist.is_initialized() else 1
 

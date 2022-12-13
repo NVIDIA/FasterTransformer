@@ -17,6 +17,7 @@ import argparse
 import os
 import sys
 import timeit
+import random
 
 import torch
 from torch.nn.utils.rnn import pad_sequence
@@ -191,7 +192,8 @@ def main():
         gpt.load(args.ckpt_path, args.inference_data_type)
 
     if args.enable_random_seed:
-        random_seed_tensor = torch.randint(0, 10000, size=[max_batch_size], dtype=torch.int64)
+        random_seed_tensor = torch.ones([max_batch_size], dtype=torch.int64) * random.randint(0, 10000)
+        comm.broadcast(random_seed_tensor, 0)
     else:
         random_seed_tensor = torch.zeros([max_batch_size], dtype=torch.int64)
 
