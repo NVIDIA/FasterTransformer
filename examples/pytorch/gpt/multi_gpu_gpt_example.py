@@ -141,11 +141,14 @@ def main():
     print('=================================================\n')
 
     enc = encoder.get_encoder(args.vocab_file, args.merges_file)
-    torch.manual_seed(0)
 
     comm.initialize_model_parallel(args.tensor_para_size, args.pipeline_para_size)
     rank = comm.get_rank()
     device = comm.get_device()
+
+    random_seed = torch.tensor(random.randint(0, 10000))
+    comm.broadcast(random_seed, 0)
+    torch.manual_seed(random_seed)
 
     # Inputs
     contexts = []
@@ -192,8 +195,7 @@ def main():
         gpt.load(args.ckpt_path, args.inference_data_type)
 
     if args.enable_random_seed:
-        random_seed_tensor = torch.ones([max_batch_size], dtype=torch.int64) * random.randint(0, 10000)
-        comm.broadcast(random_seed_tensor, 0)
+        random_seed_tensor = torch.randint(0, 10000, size=[max_batch_size], dtype=torch.int64)
     else:
         random_seed_tensor = torch.zeros([max_batch_size], dtype=torch.int64)
 
