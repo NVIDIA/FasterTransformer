@@ -5,6 +5,7 @@
 - [GPT-J](#gpt-j)
   - [Table Of Contents](#table-of-contents)
   - [Introduction](#introduction)
+    - [Note](#note)
     - [Supported features](#supported-features)
   - [Setup](#setup)
     - [Requirements](#requirements)
@@ -94,6 +95,10 @@ Optimization in GPT-j are similar to optimization in GPT, describing in the [gpt
 |  cum_log_probs   |             [batch_size, beam_width]             |   GPU    |   float   |          **Optional**. Cumulative log probability of generated sentences          |
 
 The `beam_width` value is set by the output shape directly. When the `beam_width` of `output_ids` is larger than 1, FT will use beam search to generate tokens; otherwise, FT will use topk or topp sampling. When the inputs of beam search and sampling is invalid, like beam width 1, top k 0, top p 0.0, FT will run greedy search automatically.
+
+### Note
+
+- `is_context_qk_buf_float_` (whether use float accumulation for GPT-Neox context QK GEMM or not) is set to `false` by default. If you meet accuracy issues releated to GPT-NeoX Context attention blocks, please try to enable it in the `GptNeoX.h`.
 
 ### Supported features
 

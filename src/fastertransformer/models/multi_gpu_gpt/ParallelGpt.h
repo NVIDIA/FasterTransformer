@@ -62,10 +62,10 @@ private:
     std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm_;
     int                                 enable_custom_all_reduce_;
 
-    const bool    is_context_qk_buf_float_ = true;
-    size_t        vocab_size_padded_;
-    const int     int8_mode_      = 0;
-    AttentionType attention_type_ = AttentionType::UNFUSED_MHA;
+    const bool      is_context_qk_buf_float_ = false;
+    size_t          vocab_size_padded_;
+    const int       int8_mode_      = 0;
+    AttentionType   attention_type_ = AttentionType::UNFUSED_MHA;
 
     // Prompt Learning Parameters
     PromptLearningType prompt_learning_type_;

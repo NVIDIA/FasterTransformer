@@ -9,6 +9,7 @@
   - [Model architecture](#model-architecture)
     - [Workflow](#workflow)
     - [Optimization](#optimization)
+    - [Note](#note)
   - [Setup](#setup)
     - [Requirements](#requirements)
     - [Build the FasterTransformer](#build-the-fastertransformer)
@@ -202,6 +203,10 @@ The `beam_width` value is set by the output shape directly. When the `beam_width
 2.	Memory optimization: Different to traditional models like BERT, GPT-3 has 175 billion parameters, taking 350 GBs even if we store the model by half precision. Therefore, we must reduce the memory usage for other parts. In FasterTransformer, we will reuse the memory buffer of different decoder layers. Since the number of layers in GPT-3 is 96, we only need 1/96 memory.
 3.	Model parallelism: In GPT model, FasterTransormer provides both tensor parallelism and pipeline parallelism. For tensor parallelism, FasterTransformer follows the idea of [Megatron]( https://arxiv.org/pdf/1909.08053.pdf). For both self-attention block and feed forward network block, we split the weights of first matrix multiplication by row and split the weights of the second matrix multiplication by column. By optimization, we can reduce the reduction operation to 2 times for each transformer block. The workflow is demonstrated in Fig 3. For pipeline parallelism, FasterTransformer splits the whole batch of request into multiple micro batches and hide the bubble of communication. FasterTransformer will adjust the micro batch size automatically for different cases. Users can adjust the model parallelism by modifying the `gpt_config.ini` file. We recommend to use tensor parallel intra node, and use pipeline parallel inter node because tensor parallel requires more NCCL communication.
 4.	Multiple frameworks: Except the source codes on c, FasterTransformer also provide the TensorFlow op, PyTorch op and Triton backend. Currently, TensorFlow op only supports the single GPU, while PyTorch op and Triton backend support multi-GPU and multi-node. To prevent the additional work of splitting model for model parallelism, FasterTransformer also provides a tool to split and convert the model of Megatron to binary files, then FasterTransformer can load the model in binary directly.
+
+### Note
+
+- `is_context_qk_buf_float_` (whether use float accumulation for GPT-Neox context QK GEMM or not) is set to `false` by default. If you meet accuracy issues releated to GPT-NeoX Context attention blocks, please try to enable it in the `GptNeoX.h`.
 
 ## Setup
 

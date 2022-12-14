@@ -5,6 +5,7 @@
 - [GPT-NeoX](#gpt-neox)
   - [Table Of Contents](#table-of-contents)
   - [Introduction](#introduction)
+    - [Note](#note)
     - [Supported features](#supported-features)
   - [Setup](#setup)
     - [Requirements](#requirements)
@@ -21,6 +22,10 @@ For the time being, only the 20B parameter version has been tested.
 More details are listed in [gptj_guide.md](gptj_guide.md#introduction).
 
 Optimization in gpt-neox are similar to optimization in GPT, describing in the [gpt_guide.md](gpt_guide.md#optimization).
+
+### Note
+
+- `is_context_qk_buf_float_` (whether use float accumulation for GPT-Neox context QK GEMM or not) is set to `false` by default. If you meet accuracy issues releated to GPT-NeoX Context attention blocks, please try to enable it in the `GptNeoX.h`.
 
 ### Supported features
 

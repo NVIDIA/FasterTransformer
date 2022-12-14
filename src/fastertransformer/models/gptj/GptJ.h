@@ -55,7 +55,7 @@ private:
     AttentionType attention_type_;
 
     size_t     vocab_size_padded_;
-    const bool is_context_qk_buf_float_ = true;
+    const bool is_context_qk_buf_float_ = false;
 
     // Prompt Learning Parameters
     PromptLearningType prompt_learning_type_;

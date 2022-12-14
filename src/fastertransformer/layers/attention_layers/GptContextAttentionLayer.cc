@@ -57,9 +57,6 @@ void GptContextAttentionLayer<T>::forward(TensorMap*                output_tenso
     int*       cu_seqlens              = input_tensors->getPtr<int>("cu_seqlens", nullptr);
     T*         linear_bias_slopes      = input_tensors->getPtr<T>("linear_bias_slopes", nullptr);
 
-    allocateBuffer(request_batch_size, request_seq_len + max_prompt_length);
-    sync_check_cuda_error();
-
     T* attention_out   = output_tensors->at("hidden_features").getPtr<T>();
     T* attention_input = input_tensors->at("input_query").getPtr<T>();
     T* attention_mask  = input_tensors->at("attention_mask").getPtr<T>();
@@ -67,6 +64,9 @@ void GptContextAttentionLayer<T>::forward(TensorMap*                output_tenso
     const AttentionType attention_type = input_tensors->getVal<AttentionType>("attention_type");
     FT_CHECK_WITH_INFO(attention_type != AttentionType::FUSED_PADDED_MHA,
                        "Gpt Context FUSED_PADDED_MHA is not supported !");
+
+    allocateBuffer(request_batch_size, request_seq_len + max_prompt_length, attention_type != AttentionType::FUSED_MHA);
+    sync_check_cuda_error();
 
     const bool is_final = input_tensors->at("is_final_layer").getVal<bool>();
 
@@ -251,8 +251,6 @@ void GptContextAttentionLayer<T>::forward(TensorMap*                output_tenso
                                                     attention_seq_len_2 * attention_seq_len_1,
                                                     request_batch_size * local_head_num_);
 
-                T scalar = 1 / sqrtf(size_per_head_ * 1.0f);
-
                 MaskedSoftmaxParam<T, T> param;
                 param.attention_score    = qk_buf_;         // (batch_size, head_num, q_length, k_length)
                 param.qk                 = qk_buf_;         // (batch_size, head_num, q_length, k_length)
@@ -402,7 +400,7 @@ GptContextAttentionLayer<T>::GptContextAttentionLayer(size_t           max_batch
     local_hidden_units_(local_head_num_ * size_per_head),
     rotary_embedding_dim_(0),
     neox_rotary_style_(false),
-    is_qk_buf_float_(is_qk_buf_float),
+    is_qk_buf_float_(is_qk_buf_float || int8_mode == 2),
     weight_only_int8_fc_runner_(int8_mode == 1 ? std::make_shared<CutlassFpAIntBGemmRunner<T, uint8_t>>() : nullptr),
     int8_mode_(int8_mode)
 {
@@ -431,7 +429,7 @@ GptContextAttentionLayer<T>::GptContextAttentionLayer(size_t           max_batch
     local_hidden_units_(local_head_num_ * size_per_head),
     rotary_embedding_dim_(0),
     neox_rotary_style_(false),
-    is_qk_buf_float_(is_qk_buf_float),
+    is_qk_buf_float_(is_qk_buf_float || int8_mode == 2),
     weight_only_int8_fc_runner_(int8_mode == 1 ? std::make_shared<CutlassFpAIntBGemmRunner<T, uint8_t>>() : nullptr),
     int8_mode_(int8_mode)
 {
@@ -508,7 +506,7 @@ void GptContextAttentionLayer<T>::allocateBuffer()
 }
 
 template<typename T>
-void GptContextAttentionLayer<T>::allocateBuffer(size_t batch_size, size_t seq_len)
+void GptContextAttentionLayer<T>::allocateBuffer(size_t batch_size, size_t seq_len, bool allocate_qk_buf)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     const auto type_size = int8_mode_ == 2 ? sizeof(int8_t) : sizeof(T);
@@ -517,13 +515,25 @@ void GptContextAttentionLayer<T>::allocateBuffer(size_t batch_size, size_t seq_l
     k_buf_2_ = q_buf_2_ + batch_size * seq_len * local_hidden_units_;
     v_buf_2_ = k_buf_2_ + batch_size * seq_len * local_hidden_units_;
 
+    // save memory usage when using fmha
+    if (allocate_qk_buf) {
+        qk_buf_    = (T*)allocator_->reMalloc(qk_buf_, sizeof(T) * batch_size * local_head_num_ * seq_len * seq_len, true);
+    }
+    else {
+        allocator_->free((void**)(&qk_buf_));
+    }
     qk_buf_    = (T*)allocator_->reMalloc(qk_buf_, sizeof(T) * batch_size * local_head_num_ * seq_len * seq_len, true);
     qkv_buf_2_ = (T*)allocator_->reMalloc(qkv_buf_2_, sizeof(T) * batch_size * seq_len * local_hidden_units_, true);
     qkv_buf_3_ = (T*)allocator_->reMalloc(qkv_buf_3_, type_size * batch_size * seq_len * local_hidden_units_, true);
 
     if (is_qk_buf_float_ == true) {
-        qk_buf_float_ = (float*)allocator_->reMalloc(
-            qk_buf_float_, sizeof(float) * batch_size * local_head_num_ * seq_len * seq_len, true);
+        if (allocate_qk_buf) {
+            qk_buf_float_ = (float*)allocator_->reMalloc(
+                qk_buf_float_, sizeof(float) * batch_size * local_head_num_ * seq_len * seq_len, true);
+        }
+        else {
+            allocator_->free((void**)(&qk_buf_float_));
+        }
     }
 
     if (int8_mode_ == 1) {
