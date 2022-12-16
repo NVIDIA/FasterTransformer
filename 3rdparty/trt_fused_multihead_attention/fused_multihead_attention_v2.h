@@ -5294,9 +5294,6 @@ public:
                 int          mD;
                 int          mMaxBatch;
             } unrollList[] = {
-                {kSM_75, fastertransformer::DATA_TYPE_FP16, 64, 32, 1},
-                {kSM_75, fastertransformer::DATA_TYPE_FP16, 64, 40, 1},
-                {kSM_75, fastertransformer::DATA_TYPE_FP16, 64, 64, 1},
                 {kSM_75, fastertransformer::DATA_TYPE_FP16, 128, 32, 1},
                 {kSM_75, fastertransformer::DATA_TYPE_FP16, 128, 40, 1},
                 {kSM_75, fastertransformer::DATA_TYPE_FP16, 128, 64, 1},
@@ -5307,9 +5304,6 @@ public:
                 {kSM_75, fastertransformer::DATA_TYPE_INT8, 256, 64, 1},
                 {kSM_75, fastertransformer::DATA_TYPE_INT8, 384, 64, 1},
 #if CUDA_VERSION >= 11000
-                {kSM_80, fastertransformer::DATA_TYPE_FP16, 64, 32, 4},
-                {kSM_80, fastertransformer::DATA_TYPE_FP16, 64, 40, 4},
-                {kSM_80, fastertransformer::DATA_TYPE_FP16, 64, 64, 4},
                 {kSM_80, fastertransformer::DATA_TYPE_FP16, 128, 32, 4},
                 {kSM_80, fastertransformer::DATA_TYPE_FP16, 128, 40, 4},
                 {kSM_80, fastertransformer::DATA_TYPE_FP16, 128, 64, 4},
@@ -5320,9 +5314,6 @@ public:
                 {kSM_80, fastertransformer::DATA_TYPE_INT8, 256, 64, 8},
                 {kSM_80, fastertransformer::DATA_TYPE_INT8, 384, 64, 8},
 
-                {kSM_86, fastertransformer::DATA_TYPE_FP16, 64, 32, 4},
-                {kSM_86, fastertransformer::DATA_TYPE_FP16, 64, 40, 4},
-                {kSM_86, fastertransformer::DATA_TYPE_FP16, 64, 64, 4},
                 {kSM_86, fastertransformer::DATA_TYPE_FP16, 128, 32, 4},
                 {kSM_86, fastertransformer::DATA_TYPE_FP16, 128, 40, 4},
                 {kSM_86, fastertransformer::DATA_TYPE_FP16, 128, 64, 4},
@@ -5331,18 +5322,6 @@ public:
                 {kSM_86, fastertransformer::DATA_TYPE_INT8, 192, 64, 16},
                 {kSM_86, fastertransformer::DATA_TYPE_INT8, 256, 64, 8},
                 {kSM_86, fastertransformer::DATA_TYPE_INT8, 384, 64, 8},
-
-                {kSM_89, fastertransformer::DATA_TYPE_FP16, 64, 32, 4},
-                {kSM_89, fastertransformer::DATA_TYPE_FP16, 64, 40, 4},
-                {kSM_89, fastertransformer::DATA_TYPE_FP16, 64, 64, 4},
-                {kSM_89, fastertransformer::DATA_TYPE_FP16, 128, 32, 4},
-                {kSM_89, fastertransformer::DATA_TYPE_FP16, 128, 40, 4},
-                {kSM_89, fastertransformer::DATA_TYPE_FP16, 128, 64, 4},
-                {kSM_89, fastertransformer::DATA_TYPE_FP16, 256, 64, 4},
-                {kSM_89, fastertransformer::DATA_TYPE_INT8, 128, 64, 4},
-                {kSM_89, fastertransformer::DATA_TYPE_INT8, 192, 64, 16},
-                {kSM_89, fastertransformer::DATA_TYPE_INT8, 256, 64, 8},
-                {kSM_89, fastertransformer::DATA_TYPE_INT8, 384, 64, 8},
 #endif
             };
             for (unsigned int i = 0u; i < sizeof(unrollList) / sizeof(unrollList[0]); ++i) {
