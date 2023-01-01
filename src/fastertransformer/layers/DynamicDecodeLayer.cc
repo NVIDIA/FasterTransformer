@@ -343,14 +343,7 @@ void DynamicDecodeLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_
             }
 
             if (output_tensors->isExist("output_log_probs")) {
-                size_t step_offset =
-                    (step - input_tensors->at("max_input_length").getVal<int>()) * batch_size * beam_width;
-                dynamic_decode_output_tensors.insert(
-                    {"output_log_probs",
-                     Tensor{MEMORY_GPU,
-                            TYPE_FP32,
-                            {dynamic_decode_batch_size * beam_width},
-                            output_tensors->at("output_log_probs").getPtrWithOffset(step_offset + dynamic_id_offset)}});
+                dynamic_decode_output_tensors.insert({"output_log_probs", output_tensors->at("output_log_probs")});
             }
 
             dynamic_decode_input_tensors.insert({"src_cache_indirection", input_tensors->at("src_cache_indirection")});
@@ -362,13 +355,14 @@ void DynamicDecodeLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_
             FT_CHECK_WITH_INFO(dynamic_decode_output_tensors.isExist("cum_log_probs"),
                                "cum_log_probs should be provided in beam search.");
 
-            if (beam_width < 16
+            if (true || beam_width < 16
                 || (output_tensors->isExist("beam_hyps")
                     && input_tensors->getVal<float>("beam_search_diversity_rate", 0.0f) != 0.0f)) {
                 // only online_beamsearch_decode_ support beam_search_diversity_rate when beam_hyps is used
                 online_beamsearch_decode_->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
             }
             else {
+                FT_CHECK(false); // deprecate this module
                 beamsearch_decode_->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
             }
         }  // end of dynamic_ite

@@ -598,6 +598,8 @@ void invokeTopkBeamSearch(void*           workspace,
     FT_LOG_DEBUG("%s", __PRETTY_FUNCTION__);
     // log_probs: (batch, beam, vocab) cumulative log_probs of beams ending with a token.
     const int vocab_size = vocab_size_padded_;
+    // Beam size should be less than or equal to vocab size.
+    assert(beam_width <= vocab_size);
     // Beam search needs the sequence lengths of beams to apply length penalty.
     assert(length_penalty == 0.0f || sequence_lengths != nullptr);
     const int max_block_per_beam      = 8;
@@ -789,27 +791,45 @@ __global__ void insertUnfinishedPath(BeamHypotheses beam_hyps,
                                      const int      batch_size,
                                      const int      beam_width)
 {
-    const int bid            = blockIdx.x;
-    int       unfinished_idx = 0;
-    for (int beam_idx = beam_hyps.num_beams[bid]; beam_idx < beam_width; beam_idx++) {
+    const int bid           = blockIdx.x;
+    const int tgt_start_idx = beam_hyps.num_beams[bid];
+    if (beam_hyps.is_done[bid]) {
+        return;
+    }
+    for (int i = 0; i < beam_width; i++) {
         if (threadIdx.x == 0) {
-            int bbid = bid * beam_width + unfinished_idx;
+            const int src_beam_idx = bid * beam_width + i;
+            const int tgt_beam_idx = bid * beam_width * 2 + i + tgt_start_idx;
 
-            const int length  = beam_hyps.sequence_lengths_src[bbid];
-            int       prev_id = beam_hyps.parent_ids_src[length * batch_size * beam_width + bbid];
+            const int length = beam_hyps.sequence_lengths_src[src_beam_idx];
+
+            beam_hyps.output_ids_tgt[(tgt_beam_idx) * (beam_hyps.max_seq_len + 1) + length] =
+                beam_hyps.output_ids_src[length * batch_size * beam_width + bid * beam_width + src_beam_idx];
+            if (beam_hyps.log_probs != nullptr && beam_hyps.log_probs_src != nullptr) {
+                beam_hyps.log_probs[(tgt_beam_idx) * (beam_hyps.max_seq_len + 1) + length] =
+                    beam_hyps.log_probs_src[length * batch_size * beam_width + bid * beam_width + src_beam_idx];
+            }
+            int prev_id = beam_hyps.parent_ids_src[length * batch_size * beam_width + src_beam_idx];
+            // printf("[INFO] i = %d, cum_log_probs: %f \n", i, cum_log_probs[src_beam_idx]);
             for (int j = length - 1; j >= 0; j--) {
-                beam_hyps.output_ids_tgt[(bid * beam_width + beam_idx) * (beam_hyps.max_seq_len - 1) + j] =
+                // output_ids_tgt need to use max_seq_len + 1 because its shape is
+                // [bs, beam_width, max_seq_len + 1]
+                beam_hyps.output_ids_tgt[(tgt_beam_idx) * (beam_hyps.max_seq_len + 1) + j] =
                     beam_hyps.output_ids_src[j * batch_size * beam_width + bid * beam_width + prev_id];
+                if (beam_hyps.log_probs != nullptr && beam_hyps.log_probs_src != nullptr) {
+                    beam_hyps.log_probs[(tgt_beam_idx) * (beam_hyps.max_seq_len + 1) + j] =
+                        beam_hyps.log_probs_src[j * batch_size * beam_width + bid * beam_width + prev_id];
+                }
                 prev_id = beam_hyps.parent_ids_src[j * batch_size * beam_width + bid * beam_width + prev_id];
             }
-            beam_hyps.sequence_lengths_tgt[bid * beam_width + beam_idx] = length;
+            beam_hyps.sequence_lengths_tgt[tgt_beam_idx] = length;
+
+            beam_hyps.normed_scores[tgt_beam_idx] = apply_length_penalty(
+                cum_log_probs[src_beam_idx], finished[src_beam_idx] ? length + 1 : length, beam_hyps.length_penalty);
+            beam_hyps.cum_log_probs[tgt_beam_idx] = cum_log_probs[src_beam_idx];
 
             beam_hyps.num_beams[bid]++;
-
-            beam_hyps.normed_scores[bid * beam_width + beam_idx] =
-                apply_length_penalty(cum_log_probs[bbid], length, beam_hyps.length_penalty);
         }
-        unfinished_idx++;
     }
 }
 

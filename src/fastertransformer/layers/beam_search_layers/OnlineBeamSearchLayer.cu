@@ -108,7 +108,7 @@ void OnlineBeamSearchLayer<T>::invokeSoftMax(TensorMap* output_tensors, TensorMa
     //      parent_ids [max_seq_len, batch_size * beam_width]
     //      sequence_length [local_batch_size * beam_width]
     //      tgt_cache_indirection [local_batch_size, beam_width, max_seq_len]
-    //      output_log_probs [local_batch_size * beam_width]
+    //      output_log_probs [max_seq_len, batch_size, beam_width]
 
     FT_CHECK(input_tensors->size() >= 7);
     FT_CHECK(output_tensors->size() >= 6);
@@ -124,8 +124,6 @@ void OnlineBeamSearchLayer<T>::invokeSoftMax(TensorMap* output_tensors, TensorMa
     const float length_penalty =
         input_tensors->isExist("len_penalty") ? input_tensors->at("len_penalty").getVal<float>() : 0.0f;
 
-    float* output_log_probs =
-        output_tensors->isExist("output_log_probs") ? output_tensors->at("output_log_probs").getPtr<float>() : nullptr;
     const int id_offset = step * batch_size * beam_width + local_batch_size * ite * beam_width;
 
     BeamHypotheses beam_hyps;
@@ -139,6 +137,7 @@ void OnlineBeamSearchLayer<T>::invokeSoftMax(TensorMap* output_tensors, TensorMa
         beam_hyps.output_ids_src       = output_tensors->at("output_ids").getPtr<int>();
         beam_hyps.parent_ids_src       = output_tensors->at("parent_ids").getPtr<int>();
         beam_hyps.sequence_lengths_src = output_tensors->at("sequence_length").getPtr<int>();
+        beam_hyps.log_probs_src        = output_tensors->getPtr<float>("output_log_probs", nullptr);
         beam_hyps.length_penalty       = length_penalty;
         beam_hyps.end_ids              = input_tensors->at("end_id").getPtr<int>();
     }
@@ -148,7 +147,7 @@ void OnlineBeamSearchLayer<T>::invokeSoftMax(TensorMap* output_tensors, TensorMa
                       output_tensors->at("finished").getPtr<bool>(),
                       output_tensors->at("sequence_length").getPtr<int>(),
                       output_tensors->at("cum_log_probs").getPtr<float>(),
-                      output_log_probs,
+                      output_tensors->getPtrWithOffset<float>("output_log_probs", id_offset, nullptr),
                       output_tensors->at("output_ids").getPtrWithOffset<int>(id_offset),
                       topk_softmax_workspace_,
                       topk_softmax_workspace_size_,
@@ -186,12 +185,15 @@ template<typename T>
 void OnlineBeamSearchLayer<T>::allocateBuffer(size_t batch_size, size_t beam_width)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    // we need to check 2 * beam_width candidates each time
+    // 64 is the max beam width we support now.
     topk_softmax_workspace_size_ =
-        (size_t)(ceil(batch_size * beam_width * beam_width / 4.) * 4 * 2
-                 + ceil(batch_size * beam_width * SMALL_TOP_K_SOFTMAX_MAX_VOC_PARTS * (2 * MAX_K + 2) / 4.) * 4);
+        (size_t)(ceil(batch_size * 64 * (64 * 2) / 4.) * 4 * 2
+                 + ceil(batch_size * (64 * 2) * SMALL_TOP_K_SOFTMAX_MAX_VOC_PARTS * (2 * (MAX_K * 2) + 2) / 4.)
+                       * 4);
 
     topk_softmax_workspace_ = reinterpret_cast<float*>(
-        allocator_->reMalloc(topk_softmax_workspace_, sizeof(float) * topk_softmax_workspace_size_, false));
+        allocator_->reMalloc(topk_softmax_workspace_, sizeof(float) * topk_softmax_workspace_size_, true));
     is_allocate_buffer_ = true;
 }
 

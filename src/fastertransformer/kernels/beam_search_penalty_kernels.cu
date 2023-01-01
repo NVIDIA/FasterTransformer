@@ -108,9 +108,10 @@ __global__ void apply_repetition_penalty(T*          logits,
 
     logits += bbid * vocab_size_padded;
     extern __shared__ char sbuf[];
-    T*                     penalty_logits  = reinterpret_cast<T*>(sbuf);
-    int*                   penalty_indices = reinterpret_cast<int*>(penalty_logits + step);
-    const int              input_length    = (input_lengths != nullptr) ? input_lengths[bbid] : max_input_length;
+    T*                     penalty_logits = reinterpret_cast<T*>(sbuf);
+    // prevent misaligment when sizeof(T) = 2
+    int*      penalty_indices = reinterpret_cast<int*>(sbuf + (sizeof(T) * step + 31) / 32 * 32);
+    const int input_length    = (input_lengths != nullptr) ? input_lengths[bbid] : max_input_length;
     if (tid == 0) {
         T   repet_penalty         = static_cast<T>(repetition_penalty);
         int prev_id               = current_ids[bbid];
@@ -181,7 +182,7 @@ void invokeAddBiasApplyPenalties(int          step,
     }
 
     if (repetition_penalty != 1.0f) {
-        size_t smem_size = (sizeof(T) + sizeof(int)) * step;
+        size_t smem_size = (sizeof(T) * step + 31 / 32 * 32) + sizeof(int) * step;
         dim3   block(256);
         dim3   grid(beam_width * local_batch_size);
         apply_repetition_penalty<<<grid, block, smem_size, stream>>>(

@@ -191,7 +191,7 @@ void BeamSearchLayer<T>::invokeSoftMax(TensorMap* output_tensors, TensorMap* inp
     //      parent_ids [max_seq_len, batch_size * beam_width]
     //      sequence_length [local_batch_size * beam_width]
     //      tgt_cache_indirection [local_batch_size, beam_width, max_seq_len]
-    //      output_log_probs [local_batch_size * beam_width], optional
+    //      output_log_probs [max_seq_len, batch_size * beam_width], optional
     //      beam_hyps, optional
 
     FT_CHECK(input_tensors->size() >= 7);
@@ -252,11 +252,9 @@ void BeamSearchLayer<T>::invokeSoftMax(TensorMap* output_tensors, TensorMap* inp
                                 stream_);
     sync_check_cuda_error();
 
-    float* output_log_probs =
-        output_tensors->isExist("output_log_probs") ? output_tensors->at("output_log_probs").getPtr<float>() : nullptr;
     invokeUpdateStates(float_log_prob_buf_,
                        output_tensors->at("cum_log_probs").getPtr<float>(),
-                       output_log_probs,
+                       output_tensors->getPtrWithOffset<float>("output_log_probs", id_offset, nullptr),
                        output_tensors->at("finished").getPtr<bool>(),
                        output_tensors->at("parent_ids").getPtrWithOffset<int>(id_offset),
                        output_tensors->at("sequence_length").getPtr<int>(),

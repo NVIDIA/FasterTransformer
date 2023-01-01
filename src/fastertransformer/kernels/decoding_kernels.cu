@@ -697,17 +697,27 @@ template void invokePlusScalar(int* buf, const int val, const int size, cudaStre
 
 __global__ void finalize(int*         output_ids,
                          int*         sequence_lengths,
+                         float*       cum_log_probs,
+                         float*       output_log_probs,
                          const int*   topk_output_ids,
                          const int*   topk_sequence_lengths,
                          const float* scores,
+                         const float* topk_cum_log_probs,
+                         const float* topk_log_probs,
+                         const int*   num_beams,
                          const int    beam_width,
                          const int    max_seq_len)
 {
     // output_ids: [bs, beam_width, max_seq_len]
     // sequence_lengths: [bs, beam_width]
-    // topk_output_ids: [bs, beam_width, max_seq_len + 1]
-    // topk_sequence_lengths: [bs, beam_width]
-    // scores: [bs, beam_width]
+    // cum_log_probs: [bs, beam_width]
+    // output_log_probs: [bs, beam_width, max_seq_len]
+    // topk_output_ids: [bs, 2 * beam_width, max_seq_len + 1]
+    // topk_sequence_lengths: [bs, 2 * beam_width]
+    // scores: [bs, 2 * beam_width]
+    // topk_cum_log_probs: [bs, 2 * beam_width]
+    // topk_log_probs: [bs, 2 * beam_width, max_seq_len + 1]
+    // num_beams: [bs]
 
     // This kernel do a sorting for scores first, and then put the topk_output_ids
     // into output_ids by the rank of scores.
@@ -716,19 +726,17 @@ __global__ void finalize(int*         output_ids,
     extern __shared__ char array[];
     int*                   rank     = (int*)(array);
     float*                 s_scores = (float*)(rank + beam_width);
-    __shared__ float       s_max_score;
-
-    if (threadIdx.x < beam_width) {
-        s_scores[threadIdx.x] = scores[blockIdx.x * beam_width + threadIdx.x];
+    if (threadIdx.x < num_beams[blockIdx.x]) {
+        s_scores[threadIdx.x] = scores[blockIdx.x * beam_width * 2 + threadIdx.x];
     }
     __syncthreads();
 
     for (int i = 0; i < beam_width; i++) {
-        float score     = threadIdx.x < beam_width ? s_scores[threadIdx.x] : -FLT_MAX;
+        float score     = threadIdx.x < num_beams[blockIdx.x] ? s_scores[threadIdx.x] : -FLT_MAX;
         float max_score = blockReduceMax<float>(score);
 
         if (threadIdx.x == 0) {
-            for (int j = 0; j < beam_width; j++) {
+            for (int j = 0; j < beam_width * 2; j++) {
                 if (s_scores[j] == max_score) {
                     rank[i]     = j;
                     s_scores[j] = -FLT_MAX;
@@ -741,32 +749,58 @@ __global__ void finalize(int*         output_ids,
 
     if (threadIdx.x < beam_width) {
         sequence_lengths[blockIdx.x * beam_width + threadIdx.x] =
-            topk_sequence_lengths[blockIdx.x * beam_width + rank[threadIdx.x]];
+            topk_sequence_lengths[blockIdx.x * beam_width * 2 + rank[threadIdx.x]];
+        if (cum_log_probs != nullptr) {
+            cum_log_probs[blockIdx.x * beam_width + threadIdx.x] =
+                topk_cum_log_probs[blockIdx.x * beam_width * 2 + rank[threadIdx.x]];
+        }
     }
     for (int beam_idx = 0; beam_idx < beam_width; beam_idx++) {
         // start from step 1 to skip the start token
-        for (int i = threadIdx.x + 1; i < sequence_lengths[blockIdx.x * beam_width + beam_idx]; i += blockDim.x) {
-            output_ids[blockIdx.x * beam_width * max_seq_len + beam_idx * max_seq_len + (i - 1)] =
-                topk_output_ids[blockIdx.x * beam_width * (max_seq_len + 1) + rank[beam_idx] * (max_seq_len + 1) + i];
+        for (int i = threadIdx.x; i < sequence_lengths[blockIdx.x * beam_width + beam_idx]; i += blockDim.x) {
+            output_ids[blockIdx.x * beam_width * max_seq_len + beam_idx * max_seq_len + i] =
+                topk_output_ids[blockIdx.x * (beam_width * 2) * (max_seq_len + 1) + rank[beam_idx] * (max_seq_len + 1)
+                                + (i + 1)];
+            if (output_log_probs != nullptr) {
+                output_log_probs[blockIdx.x * beam_width * max_seq_len + beam_idx * max_seq_len + i] =
+                    topk_log_probs[blockIdx.x * (beam_width * 2) * (max_seq_len + 1) + rank[beam_idx] * (max_seq_len + 1)
+                                + (i + 1)];
+            }
         }
     }
 }
 
 void invokeFinalize(int*         output_ids,
                     int*         sequence_lengths,
+                    float*       cum_log_probs,
+                    float*       output_log_probs,
                     const int*   topk_output_ids,
                     const int*   topk_sequence_lengths,
                     const float* scores,
+                    const float* topk_cum_log_probs,
+                    const float* topk_log_probs,
+                    const int*   num_beams,
                     const int    beam_width,
                     const int    max_seq_len,
                     const int    batch_size,
                     cudaStream_t stream)
 {
-    dim3 block(beam_width);
+    dim3 block(beam_width * 2);
     block.x = (block.x + 31) / 32 * 32;
     FT_CHECK(block.x < 1024);
-    finalize<<<batch_size, block, beam_width * sizeof(int) + beam_width * sizeof(float), stream>>>(
-        output_ids, sequence_lengths, topk_output_ids, topk_sequence_lengths, scores, beam_width, max_seq_len);
+    finalize<<<batch_size, block, beam_width * sizeof(int) + (beam_width * 2) * sizeof(float), stream>>>(
+        output_ids,
+        sequence_lengths,
+        cum_log_probs,
+        output_log_probs,
+        topk_output_ids,
+        topk_sequence_lengths,
+        scores,
+        topk_cum_log_probs,
+        topk_log_probs,
+        num_beams,
+        beam_width,
+        max_seq_len);
 }
 
 }  // namespace fastertransformer
