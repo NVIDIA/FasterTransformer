@@ -201,7 +201,7 @@ void BaseBeamSearchLayer<T>::forward(TensorMap* output_tensors, TensorMap* input
     //      parent_ids [max_seq_len, batch_size * beam_width]
     //      sequence_length [local_batch_size * beam_width], optional
     //      tgt_cache_indirection [local_batch_size, beam_width, max_seq_len]
-    //      output_log_probs [local_batch_size * beam_width], optional
+    //      output_log_probs [max_seq_len, batch_size, beam_width], optional
     //      beam_hyps, optional
 
     FT_CHECK(input_tensors->size() >= 7);
@@ -220,6 +220,7 @@ void BaseBeamSearchLayer<T>::forward(TensorMap* output_tensors, TensorMap* input
         input_tensors->isExist("repetition_penalty") ? input_tensors->at("repetition_penalty").getVal<float>() : 1.0f;
     const T* embedding_bias =
         input_tensors->isExist("embedding_bias") ? input_tensors->at("embedding_bias").getPtr<const T>() : nullptr;
+
     invokeAddBiasApplyPenalties(
         step,
         input_tensors->at("logits").getPtr<T>(),

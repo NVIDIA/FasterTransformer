@@ -366,8 +366,8 @@ public:
                                                   get_ptr<int>(sequence_length)}}});
 
         if (is_return_output_log_probs) {
-            auto output_log_probs = torch::empty({(long int)(batch_size * beam_width * max_seq_len)},
-                                                 torch::dtype(torch::kFloat).device(torch::kCUDA).requires_grad(false));
+             auto output_log_probs = torch::empty({batch_size, beam_width, max_seq_len},
+                                                torch::dtype(torch::kFloat).device(torch::kCUDA).requires_grad(false));
             output_tensors.insert({"output_log_probs",
                                    ft::Tensor{ft::MEMORY_GPU,
                                               ft::TYPE_FP32,

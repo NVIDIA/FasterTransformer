@@ -124,20 +124,29 @@ void T5Decoding<T>::allocateBuffer(
     parent_ids_buf_ =
         (int*)(allocator_->reMalloc(parent_ids_buf_, sizeof(int) * batchxbeam * (max_seq_len + 1), false));
     output_ids_transpose_buf_ =
-        (int*)(allocator_->reMalloc(output_ids_transpose_buf_, sizeof(int) * batchxbeam * max_seq_len, false));
+        (int*)(allocator_->reMalloc(output_ids_transpose_buf_, sizeof(int) * batchxbeam * (max_seq_len + 1), false));
     output_log_probs_buf_ =
-        (float*)(allocator_->reMalloc(output_log_probs_buf_, sizeof(float) * batchxbeam * max_seq_len, false));
+        (float*)(allocator_->reMalloc(output_log_probs_buf_, sizeof(float) * batchxbeam * (max_seq_len + 1), false));
 
     if (using_beam_hyps) {
+        // Let beam_hyps_ can record at most 2*beam_width because we
+        // may find beam_width finished candidates during generation,
+        // and may compare them with unfinifhsed another beam_width candidates
+        // during finalization.
         beam_hyps_.output_ids_tgt = (int*)allocator_->reMalloc(
-            beam_hyps_.output_ids_tgt, sizeof(int) * batch_size * beam_width * (max_seq_len + 1), true);
-        beam_hyps_.sequence_lengths_tgt =
-            (int*)allocator_->reMalloc(beam_hyps_.sequence_lengths_tgt, sizeof(int) * batch_size * beam_width, true);
+            beam_hyps_.output_ids_tgt, sizeof(int) * batch_size * beam_width * 2 * (max_seq_len + 1), true);
+        beam_hyps_.sequence_lengths_tgt = (int*)allocator_->reMalloc(
+            beam_hyps_.sequence_lengths_tgt, sizeof(int) * batch_size * beam_width * 2, true);
+        beam_hyps_.cum_log_probs =
+            (float*)allocator_->reMalloc(beam_hyps_.cum_log_probs, sizeof(float) * batch_size * beam_width * 2, true);
         beam_hyps_.normed_scores =
-            (float*)allocator_->reMalloc(beam_hyps_.normed_scores, sizeof(float) * batch_size * beam_width, true);
+            (float*)allocator_->reMalloc(beam_hyps_.normed_scores, sizeof(float) * batch_size * beam_width * 2, true);
+        beam_hyps_.log_probs = (float*)allocator_->reMalloc(
+            beam_hyps_.log_probs, sizeof(float) * batch_size * beam_width * 2 * (max_seq_len + 1), true);
         beam_hyps_.min_normed_scores =
             (float*)allocator_->reMalloc(beam_hyps_.min_normed_scores, sizeof(float) * batch_size, true);
         beam_hyps_.num_beams = (int*)allocator_->reMalloc(beam_hyps_.num_beams, sizeof(int) * batch_size, true);
+        beam_hyps_.is_done   = (bool*)allocator_->reMalloc(beam_hyps_.is_done, sizeof(bool) * batch_size, true);
     }
     is_allocate_buffer_ = true;
 }
@@ -185,9 +194,12 @@ void T5Decoding<T>::freeBuffer()
         if (using_beam_hyps) {
             allocator_->free((void**)(&beam_hyps_.output_ids_tgt));
             allocator_->free((void**)(&beam_hyps_.sequence_lengths_tgt));
+            allocator_->free((void**)(&beam_hyps_.cum_log_probs));
             allocator_->free((void**)(&beam_hyps_.normed_scores));
+            allocator_->free((void**)(&beam_hyps_.log_probs));
             allocator_->free((void**)(&beam_hyps_.min_normed_scores));
             allocator_->free((void**)(&beam_hyps_.num_beams));
+            allocator_->free((void**)(&beam_hyps_.is_done));
         }
         is_allocate_buffer_ = false;
     }
@@ -854,17 +866,23 @@ void T5Decoding<T>::forward(TensorMap*                 output_tensors,
                 beam_hyps_.sequence_lengths_src = sequence_lengths;
                 beam_hyps_.parent_ids_src       = parent_ids_buf_;
                 beam_hyps_.output_ids_src       = output_ids_buf_;
+                beam_hyps_.log_probs_src        = output_log_probs_buf_;
                 beam_hyps_.max_seq_len          = max_seq_len;
                 beam_hyps_.length_penalty       = input_tensors->at("len_penalty").getVal<float>();
 
                 invokeInsertUnfinishedPath(beam_hyps_, finished_buf_, cum_log_probs_, batch_size, beam_width, stream_);
                 sync_check_cuda_error();
 
-                invokeFinalize(output_tensors->at("output_ids").getPtr<int>(),
-                               output_tensors->at("sequence_length").getPtr<int>(),
+                invokeFinalize(output_tensors->getPtr<int>("output_ids"),
+                               output_tensors->getPtr<int>("sequence_length"),
+                               output_tensors->getPtr<float>("cum_log_probs", nullptr),
+                               output_tensors->getPtr<float>("output_log_probs", nullptr),
                                beam_hyps_.output_ids_tgt,
                                beam_hyps_.sequence_lengths_tgt,
                                beam_hyps_.normed_scores,
+                               beam_hyps_.cum_log_probs,
+                               beam_hyps_.log_probs,
+                               beam_hyps_.num_beams,
                                beam_width,
                                max_seq_len,
                                batch_size,
@@ -901,21 +919,23 @@ void T5Decoding<T>::forward(TensorMap*                 output_tensors,
                                   1,
                                   stream_);
         }
-        if (output_tensors->isExist("output_log_probs")) {
-            invokeTransposeAxis01(output_tensors->at("output_log_probs").getPtr<float>(),
-                                  output_log_probs_buf_,
-                                  max_seq_len,
-                                  batch_size * beam_width,
-                                  1,
-                                  stream_);
-        }
 
-        // Return the cumulative log probability if requested.
-        if (output_tensors->isExist("cum_log_probs")) {
-            Tensor cum_log_probs = output_tensors->at("cum_log_probs");
-            FT_CHECK_WITH_INFO(cum_log_probs.size() == batch_size * beam_width,
-                               "The shape of cum_log_probs does not match with batch_size x beam_width.");
-            cudaD2Dcpy(cum_log_probs.getPtr<float>(), cum_log_probs_, batch_size * beam_width);
+        // Return the cumulative log probability and log probability if requested.
+        if (!using_beam_hyps) {
+            if (output_tensors->isExist("output_log_probs")) {
+                invokeTransposeAxis01(output_tensors->at("output_log_probs").getPtr<float>(),
+                                      output_log_probs_buf_,
+                                      max_seq_len,
+                                      batch_size * beam_width,
+                                      1,
+                                      stream_);
+            }
+            if (output_tensors->isExist("cum_log_probs")) {
+                Tensor cum_log_probs = output_tensors->at("cum_log_probs");
+                FT_CHECK_WITH_INFO(cum_log_probs.size() == batch_size * beam_width,
+                                   "The shape of cum_log_probs does not match with batch_size x beam_width.");
+                cudaD2Dcpy(cum_log_probs.getPtr<float>(), cum_log_probs_, batch_size * beam_width);
+            }
         }
     }
 

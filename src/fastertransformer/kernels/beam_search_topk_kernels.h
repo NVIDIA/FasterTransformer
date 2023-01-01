@@ -31,15 +31,19 @@ namespace fastertransformer {
 struct BeamHypotheses {
     int*   output_ids_tgt       = nullptr;
     int*   sequence_lengths_tgt = nullptr;
+    float* cum_log_probs        = nullptr;  // cum_log
     float* normed_scores        = nullptr;  // cum_log / (length**length_penalty)
+    float* log_probs            = nullptr;  // log probs of each generated token
     float* min_normed_scores    = nullptr;  // record the min normed scores for each batch
     int*   num_beams            = nullptr;  // the number of finished beams we collect
+    bool*  is_done              = nullptr;
 
     // Used to set inputs
-    const int* output_ids_src;
-    const int* parent_ids_src;
-    const int* sequence_lengths_src;
-    const int* end_ids;
+    const int*   output_ids_src;
+    const int*   parent_ids_src;
+    const int*   sequence_lengths_src;
+    const int*   end_ids;
+    const float* log_probs_src;
 
     // some variables for kernels
     int   step;
@@ -48,6 +52,9 @@ struct BeamHypotheses {
     int   local_batch_size;
     int   max_seq_len;
     float length_penalty;
+
+    bool early_stopping         = true;
+    bool is_return_normed_score = true;  // return normed_cum_log_probs or cum_log_probs
 };
 
 template<typename T>
