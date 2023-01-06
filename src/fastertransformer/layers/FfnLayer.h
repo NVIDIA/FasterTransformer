@@ -91,7 +91,9 @@ protected:
                            const int*   ia3_tasks,
                            const T*     ia3_weights,
                            const float* activation_in,
-                           const float* activation_out);
+                           const float* activation_out,
+                           const int*   padding_offset,
+                           const int    seq_len);
 
 public:
     FfnLayer(size_t           max_batch_size,

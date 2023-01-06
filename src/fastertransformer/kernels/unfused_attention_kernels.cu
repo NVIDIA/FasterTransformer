@@ -906,7 +906,7 @@ __global__ void add_QKV_bias_rebuild_padding_ia3(const T*   Q,
     const int n            = head_num * size_per_head;
 
     const bool use_ia3       = ia3_tasks != nullptr;
-    const int  ia3_task      = use_ia3 ? ia3_tasks[bid] : 0;
+    const int  ia3_task      = use_ia3 ? ia3_tasks[tgt_batch_id] : 0;
     const bool use_ia3_key   = use_ia3 && (ia3_key_weights != nullptr);
     const bool use_ia3_value = use_ia3 && (ia3_value_weights != nullptr);
     for (int idx = threadIdx.x; idx < n; idx += blockDim.x) {
@@ -956,7 +956,7 @@ __global__ void rebuild_padding_ia3(const T*   Q,
     const int n            = head_num * size_per_head;
 
     const bool use_ia3       = ia3_tasks != nullptr;
-    const int  ia3_task      = use_ia3 ? ia3_tasks[bid] : 0;
+    const int  ia3_task      = use_ia3 ? ia3_tasks[tgt_batch_id] : 0;
     const bool use_ia3_key   = use_ia3 && (ia3_key_weights != nullptr);
     const bool use_ia3_value = use_ia3 && (ia3_value_weights != nullptr);
     for (int idx = threadIdx.x; idx < n; idx += blockDim.x) {

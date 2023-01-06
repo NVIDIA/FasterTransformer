@@ -810,7 +810,6 @@ __global__ void insertUnfinishedPath(BeamHypotheses beam_hyps,
                     beam_hyps.log_probs_src[length * batch_size * beam_width + bid * beam_width + src_beam_idx];
             }
             int prev_id = beam_hyps.parent_ids_src[length * batch_size * beam_width + src_beam_idx];
-            // printf("[INFO] i = %d, cum_log_probs: %f \n", i, cum_log_probs[src_beam_idx]);
             for (int j = length - 1; j >= 0; j--) {
                 // output_ids_tgt need to use max_seq_len + 1 because its shape is
                 // [bs, beam_width, max_seq_len + 1]

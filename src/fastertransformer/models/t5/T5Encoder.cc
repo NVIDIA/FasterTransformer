@@ -841,6 +841,8 @@ void T5Encoder<T>::forward(TensorMap*                output_tensors,
                 if (has_ia3_tasks) {
                     ffn_input_tensors.insert("ia3_tasks",
                                              input_tensors->at("ia3_tasks").slice({local_batch_size}, id_offset));
+                    ffn_input_tensors.insertIfValid("padding_offset", *padding_offset_tensor_ptr);
+                    ffn_input_tensors.insert("seq_len", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &request_seq_len});
                 }
 
                 TensorMap ffn_output_tensors;

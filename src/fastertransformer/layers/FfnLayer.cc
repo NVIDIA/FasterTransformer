@@ -16,6 +16,7 @@
 
 #include "src/fastertransformer/layers/FfnLayer.h"
 #include "src/fastertransformer/kernels/transpose_int8_kernels.h"
+#include "src/fastertransformer/utils/nvtx_utils.h"
 
 namespace fastertransformer {
 
@@ -36,6 +37,8 @@ void FfnLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, c
     //      ffn_input [token_num, hidden_dimension],
     //      ia3_tasks [batch_size] (optional)
     //      moe_k     [1], uint64 (optional)
+    //      padding_offset [token_num] (optional)
+    //      seq_len [1], int32, (optional), only used for ia3
 
     // output tensors:
     //      ffn_output [token_num, hidden_dimension] or [moe_k * token_num, hidden_dimension] if use_moe
@@ -44,7 +47,7 @@ void FfnLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, c
     //      expert_for_source_row [token_num, moe_k] (optional)
 
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    FT_CHECK(input_tensors->size() >= 1 && input_tensors->size() <= 3);
+    FT_CHECK(input_tensors->size() >= 1 && input_tensors->size() <= 5);
     FT_CHECK(output_tensors->size() >= 1 || output_tensors->size() <= 4);
     bool   use_moe = false;
     size_t moe_k   = 0;
@@ -87,6 +90,7 @@ void FfnLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, c
     const int* ia3_tasks = input_tensors->getPtr<const int>("ia3_tasks", nullptr);
 
     if (use_moe) {
+        PUSH_RANGE("FFN moe");
         FT_CHECK(ia3_tasks == nullptr);
         cublas_wrapper_->Gemm(CUBLAS_OP_N,
                               CUBLAS_OP_N,
@@ -161,9 +165,11 @@ void FfnLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, c
             freeBuffer();
         }
         sync_check_cuda_error();
+        POP_RANGE;
         return;
     }
 
+    PUSH_RANGE("FFN gemm 1");
     int m_tmp = input_tensors->at("ffn_input").shape[0];
     if (m_tmp % 8 != 0) {
         m_tmp = (m_tmp / 8 + 1) * 8;
@@ -174,6 +180,7 @@ void FfnLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, c
 #else
     constexpr bool use_sparse_gemm = false;
 #endif
+
     if (use_sparse_gemm) {
         FT_CHECK(!use_gated_activation);
 #ifdef SPARSITY_ENABLED
@@ -282,21 +289,28 @@ void FfnLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, c
         }
     }
 
+    POP_RANGE;
+
     if (int8_mode_ != 1 || ia3_tasks != nullptr || use_gated_activation) {
         // if int8_mode == 1 && ia3_tasks == nullptr && we don't use gated activations, we use cutlass
         // to fuse GEMM + bias + activation, so we skip the activation function here. In all
         // other cases, we must apply the activation function separately.
+        PUSH_RANGE("add bias act");
         genericActivation(m,
                           ffn_weights->intermediate_weight.bias,
                           use_gated_activation ? ffn_weights->intermediate_weight2.bias : nullptr,
                           input_tensors->at("ia3_tasks", {MEMORY_GPU, TYPE_INT32, {}, nullptr}).getPtr<const int>(),
                           ffn_weights->ia3_weight.kernel,
                           int8_mode_ == 2 ? ffn_weights->intermediate_weight.scale_out : (float*)nullptr,
-                          int8_mode_ == 2 ? ffn_weights->output_weight.scale : (float*)nullptr);
+                          int8_mode_ == 2 ? ffn_weights->output_weight.scale : (float*)nullptr,
+                          input_tensors->getPtr<int>("padding_offset", nullptr),
+                          input_tensors->getVal<int>("seq_len", 1));
+        POP_RANGE;
     }
 
     sync_check_cuda_error();
 
+    PUSH_RANGE("FFN gemm 2");
 #ifdef SPARSITY_ENABLED
     use_sparse_gemm = sparse_ && cublas_wrapper_->isUseSparse(1, hidden_units_, m, inter_size_);
 #endif
@@ -354,6 +368,8 @@ void FfnLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, c
         }
     }
     sync_check_cuda_error();
+    POP_RANGE;
+
     if (is_free_buffer_after_forward_ == true) {
         freeBuffer();
     }
@@ -525,6 +541,22 @@ bool FfnLayer<T>::isValidTokenNum(size_t token_num)
     return true;
 }
 
+#define INVOKE_GENERIC_ACT(ACT)                                                                                        \
+    invokeGenericActivation<ACT>(inter_buf_,                                                                           \
+                                 bias1,                                                                                \
+                                 inter_buf_2_,                                                                         \
+                                 bias2,                                                                                \
+                                 ia3_tasks,                                                                            \
+                                 ia3_weights,                                                                          \
+                                 m,                                                                                    \
+                                 inter_size_,                                                                          \
+                                 int8_mode_,                                                                           \
+                                 activation_in,                                                                        \
+                                 activation_out,                                                                       \
+                                 padding_offset,                                                                       \
+                                 seq_len,                                                                              \
+                                 stream_);
+
 template<typename T>
 void FfnLayer<T>::genericActivation(int          m,
                                     const T*     bias1,
@@ -532,75 +564,47 @@ void FfnLayer<T>::genericActivation(int          m,
                                     const int*   ia3_tasks,
                                     const T*     ia3_weights,
                                     const float* activation_in,
-                                    const float* activation_out)
+                                    const float* activation_out,
+                                    const int*   padding_offset,
+                                    const int    seq_len)
 {
+    if (ia3_tasks != nullptr) {
+        FT_CHECK(seq_len > 0);
+    }
+
     switch (getActivationType()) {
         case ActivationType::Gelu:
         case ActivationType::GeGLU:
             if (inter_buf_2_ == nullptr && int8_mode_ <= 1) {
-                invokeAddBiasGeluV2(inter_buf_, bias1, ia3_tasks, ia3_weights, m, inter_size_, stream_);
+                invokeAddBiasGeluV2(inter_buf_,
+                                    bias1,
+                                    ia3_tasks,
+                                    ia3_weights,
+                                    padding_offset,
+                                    seq_len,
+                                    m,
+                                    inter_size_,
+                                    stream_);
             }
             else {
-                invokeGenericActivation<GeluActivation>(inter_buf_,
-                                                        bias1,
-                                                        inter_buf_2_,
-                                                        bias2,
-                                                        ia3_tasks,
-                                                        ia3_weights,
-                                                        m,
-                                                        inter_size_,
-                                                        int8_mode_,
-                                                        activation_in,
-                                                        activation_out,
-                                                        stream_);
+                INVOKE_GENERIC_ACT(GeluActivation);
             }
             break;
         case ActivationType::Relu:
         case ActivationType::ReGLU:
-            invokeGenericActivation<ReluActivation>(inter_buf_,
-                                                    bias1,
-                                                    inter_buf_2_,
-                                                    bias2,
-                                                    ia3_tasks,
-                                                    ia3_weights,
-                                                    m,
-                                                    inter_size_,
-                                                    int8_mode_,
-                                                    activation_in,
-                                                    activation_out,
-                                                    stream_);
+            INVOKE_GENERIC_ACT(ReluActivation);
             break;
         case ActivationType::Silu:
         case ActivationType::SiGLU:
-            invokeGenericActivation<SiluActivation>(inter_buf_,
-                                                    bias1,
-                                                    inter_buf_2_,
-                                                    bias2,
-                                                    ia3_tasks,
-                                                    ia3_weights,
-                                                    m,
-                                                    inter_size_,
-                                                    int8_mode_,
-                                                    activation_in,
-                                                    activation_out,
-                                                    stream_);
+            INVOKE_GENERIC_ACT(SiluActivation);
             break;
         case ActivationType::Identity:
-            invokeGenericActivation<IdentityActivation>(inter_buf_,
-                                                        bias1,
-                                                        inter_buf_2_,
-                                                        bias2,
-                                                        ia3_tasks,
-                                                        ia3_weights,
-                                                        m,
-                                                        inter_size_,
-                                                        int8_mode_,
-                                                        activation_in,
-                                                        activation_out,
-                                                        stream_);
+            INVOKE_GENERIC_ACT(IdentityActivation);
             break;
     }
 }
+
+#undef INVOKE_GENERIC_ACT
 
 template class FfnLayer<float>;
 template class FfnLayer<half>;

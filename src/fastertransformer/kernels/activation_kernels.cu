@@ -174,6 +174,8 @@ __global__ void generic_activation(T*                      out,
                                    const int               int8_mode,
                                    const float* __restrict activation_in,
                                    const float* __restrict activation_out,
+                                   const int* __restrict padding_offset,
+                                   const int seq_len,
                                    int m,
                                    int n)
 {
@@ -219,7 +221,10 @@ __global__ void generic_activation(T*                      out,
         }
 
         if (with_ia3) {
-            const int task = ia3_tasks[id / n];
+            const int word_id = id / n;
+            const int offset = padding_offset == nullptr ? 0 : padding_offset[word_id];
+            const int batch_id = (word_id + offset) / seq_len;
+            const int task = ia3_tasks[batch_id];
             val            = val * ia3_weights[task * n + (id % n)];
         }
 
@@ -246,6 +251,8 @@ void invokeGenericActivation(T*           out,
                              const int    int8_mode,
                              const float* activation_in,
                              const float* activation_out,
+                             const int*   padding_offset,
+                             const int    seq_len,
                              cudaStream_t stream)
 {
     using PT                   = typename packed_type<T>::type;
@@ -270,6 +277,8 @@ void invokeGenericActivation(T*           out,
                                                                int8_mode,
                                                                activation_in,
                                                                activation_out,
+                                                               padding_offset,
+                                                               seq_len,
                                                                m,
                                                                n / packed_elems);
 }
@@ -286,7 +295,9 @@ void invokeGenericActivation(T*           out,
                                                              const int    int8_mode,                                   \
                                                              const float* activation_in,                               \
                                                              const float* activation_out,                              \
-                                                             cudaStream_t stream)
+                                                             const int*   padding_offset,                              \
+                                                             const int    seq_len,                                     \
+                                                             cudaStream_t stream);
 
 INSTANTIATE_GENERIC_ACTIVATION(GeluActivation, float, float);
 INSTANTIATE_GENERIC_ACTIVATION(GeluActivation, half, half);
@@ -317,8 +328,13 @@ INSTANTIATE_GENERIC_ACTIVATION(IdentityActivation, float, __nv_bfloat16);
 #undef INSTANCIATE_GENERIC_ACTIVATION
 
 template<typename T2, int N>
-__global__ void
-addBiasGeluV2(T2* out, const T2* __restrict bias, const int* ia3_tasks, const T2* ia3_weights, const int size)
+__global__ void addBiasGeluV2(T2* out,
+                              const T2* __restrict bias,
+                              const int* ia3_tasks,
+                              const T2*  ia3_weights,
+                              const int  size,
+                              const int* padding_offset,
+                              const int  seq_len)
 {
     const bool with_ia3 = ia3_tasks != nullptr;
     for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < size; id += blockDim.x * gridDim.x) {
@@ -329,16 +345,24 @@ addBiasGeluV2(T2* out, const T2* __restrict bias, const int* ia3_tasks, const T2
         }
         val = GeluActivation<T2>::apply(val);
         if (with_ia3) {
-            const int task = ia3_tasks[id / N];
-            val            = val * ia3_weights[task * N + (id % N)];
+            const int word_id  = id / N;
+            const int offset   = padding_offset == nullptr ? 0 : padding_offset[word_id];
+            const int batch_id = (word_id + offset) / seq_len;
+            const int task     = ia3_tasks[batch_id];
+            val                = val * ia3_weights[task * N + (id % N)];
         }
         out[id] = val;
     }
 }
 
 template<typename T2, int N, int ELEMENT_PER_ROUND>
-__global__ void
-addBiasGeluV3(T2* out, const T2* __restrict bias, const int* ia3_tasks, const T2* ia3_weights, const int size)
+__global__ void addBiasGeluV3(T2* out,
+                              const T2* __restrict bias,
+                              const int* ia3_tasks,
+                              const T2*  ia3_weights,
+                              const int  size,
+                              const int* padding_offset,
+                              const int  seq_len)
 {
     const bool with_ia3 = ia3_tasks != nullptr;
     T2         buffer[ELEMENT_PER_ROUND];
@@ -359,8 +383,11 @@ addBiasGeluV3(T2* out, const T2* __restrict bias, const int* ia3_tasks, const T2
             }
             buffer[i] = GeluActivation<T2>::apply(buffer[i]);
             if (with_ia3) {
-                const int task = ia3_tasks[(id + i) / N];
-                buffer[i]      = buffer[i] * ia3_weights[task * N + ((id + i) % N)];
+                const int word_id  = (id + i) / N;
+                const int offset   = padding_offset == nullptr ? 0 : padding_offset[word_id];
+                const int batch_id = (word_id + offset) / seq_len;
+                const int task     = ia3_tasks[batch_id];
+                buffer[i]          = buffer[i] * ia3_weights[task * N + ((id + i) % N)];
             }
             out[id + i] = buffer[i];
         }
@@ -371,18 +398,35 @@ addBiasGeluV3(T2* out, const T2* __restrict bias, const int* ia3_tasks, const T2
     case HALF_N:                                                                                                       \
         if (ELEMENT_PER_ROUND > 1) {                                                                                   \
             grid.x = grid.x / ELEMENT_PER_ROUND;                                                                       \
-            addBiasGeluV3<T2, HALF_N, ELEMENT_PER_ROUND>                                                               \
-                <<<grid, block, 0, stream>>>((T2*)out, (const T2*)bias, ia3_tasks, (T2*)ia3_weights, m * half_n);      \
+            addBiasGeluV3<T2, HALF_N, ELEMENT_PER_ROUND><<<grid, block, 0, stream>>>((T2*)out,                         \
+                                                                                     (const T2*)bias,                  \
+                                                                                     ia3_tasks,                        \
+                                                                                     (T2*)ia3_weights,                 \
+                                                                                     m * half_n,                       \
+                                                                                     padding_offset,                   \
+                                                                                     seq_len);                         \
         }                                                                                                              \
         else {                                                                                                         \
-            addBiasGeluV2<T2, HALF_N>                                                                                  \
-                <<<grid, block, 0, stream>>>((T2*)out, (const T2*)bias, ia3_tasks, (T2*)ia3_weights, m * half_n);      \
+            addBiasGeluV2<T2, HALF_N><<<grid, block, 0, stream>>>((T2*)out,                                            \
+                                                                  (const T2*)bias,                                     \
+                                                                  ia3_tasks,                                           \
+                                                                  (T2*)ia3_weights,                                    \
+                                                                  m * half_n,                                          \
+                                                                  padding_offset,                                      \
+                                                                  seq_len);                                            \
         }                                                                                                              \
         break;
 
 template<typename T>
-void invokeAddBiasGeluV2(
-    T* out, const T* bias, const int* ia3_tasks, const T* ia3_weights, const int m, const int n, cudaStream_t stream)
+void invokeAddBiasGeluV2(T*           out,
+                         const T*     bias,
+                         const int*   ia3_tasks,
+                         const T*     ia3_weights,
+                         const int*   padding_offset,
+                         const int    seq_len,
+                         const int    m,
+                         const int    n,
+                         cudaStream_t stream)
 {
     if (n % 2 == 0 && sizeof(T) == 2) {
         const int half_n = n / 2;
@@ -415,6 +459,8 @@ void invokeAddBiasGeluV2(
                                                             0,
                                                             (float*)nullptr,
                                                             (float*)nullptr,
+                                                            padding_offset,
+                                                            seq_len,
                                                             stream);
                     break;
             }
@@ -443,6 +489,8 @@ void invokeAddBiasGeluV2(
                                                             0,
                                                             (float*)nullptr,
                                                             (float*)nullptr,
+                                                            padding_offset,
+                                                            seq_len,
                                                             stream);
                     break;
             }
@@ -460,6 +508,8 @@ void invokeAddBiasGeluV2(
                                                 0,
                                                 (float*)nullptr,
                                                 (float*)nullptr,
+                                                padding_offset,
+                                                seq_len,
                                                 stream);
     }
 }
@@ -470,6 +520,8 @@ template void invokeAddBiasGeluV2(float*       out,
                                   const float* bias,
                                   const int*   ia3_tasks,
                                   const float* ia3_weights,
+                                  const int*   padding_offset,
+                                  const int    seq_len,
                                   const int    m,
                                   const int    n,
                                   cudaStream_t stream);
@@ -477,6 +529,8 @@ template void invokeAddBiasGeluV2(half*        out,
                                   const half*  bias,
                                   const int*   ia3_tasks,
                                   const half*  ia3_weights,
+                                  const int*   padding_offset,
+                                  const int    seq_len,
                                   const int    m,
                                   const int    n,
                                   cudaStream_t stream);
@@ -485,6 +539,8 @@ template void invokeAddBiasGeluV2(__nv_bfloat16*       out,
                                   const __nv_bfloat16* bias,
                                   const int*           ia3_tasks,
                                   const __nv_bfloat16* ia3_weights,
+                                  const int*           padding_offset,
+                                  const int            seq_len,
                                   const int            m,
                                   const int            n,
                                   cudaStream_t         stream);

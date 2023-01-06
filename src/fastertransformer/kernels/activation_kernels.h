@@ -42,11 +42,57 @@ void invokeGenericActivation(T*           out,
                              const int    int8_mode,
                              const float* activation_in,
                              const float* activation_out,
+                             const int*   padding_offset,
+                             const int    seq_len,
                              cudaStream_t stream);
+
+template<template<typename T> class Activation, typename T, typename BT>
+void invokeGenericActivation(T*           out,
+                             const BT*    bias,
+                             const T*     gated_weights,
+                             const BT*    gated_bias,
+                             const int*   ia3_tasks,
+                             const T*     ia3_weights,
+                             const int    m,
+                             const int    n,
+                             const int    int8_mode,
+                             const float* activation_in,
+                             const float* activation_out,
+                             cudaStream_t stream)
+{
+    invokeGenericActivation<Activation, T, BT>(out,
+                                               bias,
+                                               gated_weights,
+                                               gated_bias,
+                                               ia3_tasks,
+                                               ia3_weights,
+                                               m,
+                                               n,
+                                               int8_mode,
+                                               activation_in,
+                                               activation_out,
+                                               (const int*)nullptr,
+                                               0,
+                                               stream);
+}
+
+template<typename T>
+void invokeAddBiasGeluV2(T*           out,
+                         const T*     bias,
+                         const int*   ia3_tasks,
+                         const T*     ia3_weights,
+                         const int*   padding_offset,
+                         const int    seq_len,
+                         const int    m,
+                         const int    n,
+                         cudaStream_t stream);
 
 template<typename T>
 void invokeAddBiasGeluV2(
-    T* out, const T* bias, const int* ia3_tasks, const T* ia3_weights, const int m, const int n, cudaStream_t stream);
+    T* out, const T* bias, const int* ia3_tasks, const T* ia3_weights, const int m, const int n, cudaStream_t stream)
+{
+    invokeAddBiasGeluV2(out, bias, ia3_tasks, ia3_weights, nullptr, 0, m, n, stream);
+}
 
 template<typename T>
 void invokeSigmoid(T* data, const int size, const float scale, cudaStream_t stream);
