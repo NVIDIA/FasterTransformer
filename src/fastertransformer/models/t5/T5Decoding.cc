@@ -921,7 +921,7 @@ void T5Decoding<T>::forward(TensorMap*                 output_tensors,
         }
 
         // Return the cumulative log probability and log probability if requested.
-        if (!using_beam_hyps) {
+        if (beam_width == 1 || !using_beam_hyps) {
             if (output_tensors->isExist("output_log_probs")) {
                 invokeTransposeAxis01(output_tensors->at("output_log_probs").getPtr<float>(),
                                       output_log_probs_buf_,
