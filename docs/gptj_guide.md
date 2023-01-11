@@ -215,7 +215,7 @@ The script accepts the following arguments:
 
 ### Download tables
 
-* The vocabolary and merge tables are the same as for GPT
+* The vocabulary and merge tables are the same as for GPT
 
     ```bash
     wget https://s3.amazonaws.com/models.huggingface.co/bert/gpt2-vocab.json -P ../models
