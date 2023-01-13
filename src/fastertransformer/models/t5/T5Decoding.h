@@ -107,6 +107,7 @@ protected:
     float*             cum_log_probs_             = nullptr;
     bool*              finished_buf_              = nullptr;
     bool*              h_finished_buf_            = nullptr;
+    int*               sequence_lengths_          = nullptr;
 
     int* start_ids_buf_ = nullptr;
     int* end_ids_buf_   = nullptr;
@@ -130,6 +131,14 @@ protected:
 
     const bool     using_beam_hyps = true;
     BeamHypotheses beam_hyps_;
+
+    using callback_sig = void(TensorMap*, void*);
+    callback_sig* token_generated_cb_ = nullptr;
+    void* token_generated_ctx_ = nullptr;
+
+    void setOutputTensors(TensorMap* output_tensors,
+                          const TensorMap* input_tensors);
+    void sendTensorsToFirstPipelineNode(TensorMap* output_tensors);
 
 public:
     T5Decoding(size_t                              max_batch_size,
@@ -184,6 +193,9 @@ public:
     void forward(TensorMap* output_tensors, TensorMap* input_tensors, const T5DecodingWeight<T>* Decoding_weights);
 
     void setStream(cudaStream_t stream) override;
+
+    void registerCallback(callback_sig* fn, void* ctx);
+    void unRegisterCallback();
 };
 
 }  // namespace fastertransformer
