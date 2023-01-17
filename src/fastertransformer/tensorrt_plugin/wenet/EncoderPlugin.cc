@@ -38,6 +38,7 @@ WenetEncoderPlugin::WenetEncoderPlugin(const std::string& name,
                                        int                sm,
                                        float              q_scaling,
                                        const std::string& weightFilePath,
+                                       int                use_layernorm_in_conv_module,
                                        int                useFP16):
     name_(name)
 {
@@ -56,6 +57,7 @@ WenetEncoderPlugin::WenetEncoderPlugin(const std::string& name,
     m_.conv_module_kernel_size = conv_module_kernel_size;
     m_.sm                      = sm;
     m_.q_scaling               = q_scaling;
+    m_.use_layernorm_in_conv_module = (bool)use_layernorm_in_conv_module;
     m_.useFP16                 = (bool)useFP16;
     m_.batch_size              = m_.max_batch_size;
     m_.seq_len                 = m_.max_seq_len;
@@ -143,7 +145,8 @@ void WenetEncoderPlugin::CreateFT()
                                                     m_.is_free_buffer_after_forward,
                                                     m_.attention_type,
                                                     m_.is_sparse,
-                                                    m_.activation_type);
+                                                    m_.activation_type,
+                                                    m_.use_layernorm_in_conv_module);
     }
     else {
         pCublasWrapper_->setFP32GemmConfig();
@@ -168,7 +171,8 @@ void WenetEncoderPlugin::CreateFT()
                                                       m_.is_free_buffer_after_forward,
                                                       m_.attention_type,
                                                       m_.is_sparse,
-                                                      m_.activation_type);
+                                                      m_.activation_type,
+                                                      m_.use_layernorm_in_conv_module);
     }
     PRINT_ENCODER(m_.useFP16)
 }
@@ -481,6 +485,7 @@ std::vector<PluginField> WenetEncoderPluginCreator::attr_{
     {"vocab_size", nullptr, nvinfer1::PluginFieldType::kINT32, 0},
     {"conv_module_kernel_size", nullptr, nvinfer1::PluginFieldType::kINT32, 0},
     {"sm", nullptr, nvinfer1::PluginFieldType::kINT32, 0},
+    {"use_layernorm_in_conv_module", nullptr, nvinfer1::PluginFieldType::kINT32, 0},
     {"useFP16", nullptr, nvinfer1::PluginFieldType::kINT32, 0},
     {"q_scaling", nullptr, nvinfer1::PluginFieldType::kFLOAT32, 0},
     {"weightFilePath", nullptr, nvinfer1::PluginFieldType::kCHAR, 0}};
@@ -515,6 +520,7 @@ IPluginV2* WenetEncoderPluginCreator::createPlugin(const char* name, const Plugi
     int         sm                      = -1;
     float       q_scaling               = 1.0f / (sqrt(size_per_head) * 1.0f);
     std::string weightFilePath          = "";
+    int         use_layernorm_in_conv_module = 0;
     int         useFP16                 = 0;
 
     struct cudaDeviceProp prop;
@@ -534,6 +540,7 @@ IPluginV2* WenetEncoderPluginCreator::createPlugin(const char* name, const Plugi
         {"vocab_size", &vocab_size},
         {"conv_module_kernel_size", &conv_module_kernel_size},
         {"sm", &sm},
+        {"use_layernorm_in_conv_module", &use_layernorm_in_conv_module},
         {"useFP16", &useFP16},
     };
     for (int i = 0; i < fc->nbFields; i++) {
@@ -562,6 +569,7 @@ IPluginV2* WenetEncoderPluginCreator::createPlugin(const char* name, const Plugi
                                     sm,
                                     q_scaling,
                                     weightFilePath,
+                                    use_layernorm_in_conv_module,
                                     useFP16);
     return p;
 }

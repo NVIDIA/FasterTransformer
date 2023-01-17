@@ -44,7 +44,8 @@
     printf("\td_model=%ld\n", m_.d_model);                                                                             \
     printf("\tnum_layer=%ld\n", m_.num_layer);                                                                         \
     printf("\tsm=%d\n", m_.sm);                                                                                        \
-    printf("\tq_scaling=%f\n", m_.q_scaling);                                                                          \
+    printf("\tq_scaling=%f\n", m_.q_scaling);
+    printf("\tuse_layernorm_in_cnn_module=%d\n", m_.use_layernorm_in_cnn_module);                                                                           \
     printf("\tuseFP16=%d\n", m_.useFP16);                                                                              \
     printf("\tweightFilePath=%s\n", m_.weightFilePath);                                                                \
     printf("\tvocab_size=%ld\n", m_.vocab_size);                                                                       \
@@ -111,6 +112,7 @@ private:
         size_t conv_module_kernel_size = 15;
         int    sm                      = -1;  // assign later
         float  q_scaling               = 1.0f / (1.0f * sqrt(size_per_head));
+        bool   use_layernorm_in_conv_module = false;
         bool   useFP16                 = false;
         // internal parameter
         bool                              is_remove_padding            = false;
@@ -144,6 +146,7 @@ public:
                        int                sm,
                        float              q_scaling,
                        const std::string& weightFilePath,
+                       int                use_layernorm_in_conv_module,
                        int                useFP16);
     WenetEncoderPlugin(const std::string& name, const void* buffer, size_t length);
     ~WenetEncoderPlugin();
