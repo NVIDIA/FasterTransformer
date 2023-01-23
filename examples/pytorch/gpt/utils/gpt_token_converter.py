@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -41,13 +41,13 @@ def convert_token(
         end_pos = len(tokens)
         if len(end_index) > 0:
             end_pos = end_index[0]
-        print(f"[INFO] batch {batch_num}: {enc.decode(tokens[:end_pos])}")
+        print(f"[INFO] batch {batch_num}: \n[input]{enc.decode(tokens[:16])}\n[output]{enc.decode(tokens[16:end_pos])}")
         outputs.append(enc.decode(tokens[:end_pos]))
         
         if text_out_file != None:
             with open(text_out_file, "w+") as f:
                 f.writelines("\n".join(outputs))
-    return tokens_batch
+    # return tokens_batch
 
 if __name__ == "__main__":
     fire.Fire(convert_token)

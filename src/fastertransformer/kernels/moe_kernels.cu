@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -888,10 +888,11 @@ void initialize_moe_routing_kernelLauncher(const T*     unpermuted_input,
 
 // Final kernel to unpermute and scale
 // This kernel unpermutes the original data, does the k-way reduction and performs the final skip connection.
-template<typename T>
+template<typename T, int RESIDUAL_NUM>
 __global__ void finalize_moe_routing_kernel(const T*   expanded_permuted_rows,
                                             T*         reduced_unpermuted_output,
-                                            const T*   skip,
+                                            const T*   skip_1,
+                                            const T*   skip_2,
                                             const T*   bias,
                                             const T*   scales,
                                             const int* expanded_source_row_to_expanded_dest_row,
@@ -903,10 +904,20 @@ __global__ void finalize_moe_routing_kernel(const T*   expanded_permuted_rows,
     const int original_row    = blockIdx.x;
     const int num_rows        = gridDim.x;
     T*        reduced_row_ptr = reduced_unpermuted_output + original_row * cols;
-    const T*  skip_row_ptr    = skip + original_row * cols;
+    const T*  skip_1_row_ptr  = skip_1 + original_row * cols;
+    const T*  skip_2_row_ptr;
+    if (RESIDUAL_NUM == 2) {
+        skip_2_row_ptr = skip_2 + original_row * cols;
+    }
 
     for (int tid = threadIdx.x; tid < cols; tid += blockDim.x) {
-        T thread_output = skip_row_ptr[tid];
+        T thread_output;
+        if (RESIDUAL_NUM == 1) {
+            thread_output = skip_1_row_ptr[tid];
+        }
+        else if (RESIDUAL_NUM == 2) {
+            thread_output = skip_1_row_ptr[tid] + skip_2_row_ptr[tid];
+        }
         for (int k_idx = 0; k_idx < k; ++k_idx) {
             const int expanded_original_row = original_row + k_idx * num_rows;
             const int expanded_permuted_row = expanded_source_row_to_expanded_dest_row[expanded_original_row];
@@ -939,15 +950,58 @@ void finalize_moe_routing_kernelLauncher(const T*     expanded_permuted_rows,
 {
     const int blocks  = num_rows;
     const int threads = std::min(cols, 1024);
-    finalize_moe_routing_kernel<T><<<blocks, threads, 0, stream>>>(expanded_permuted_rows,
-                                                                   reduced_unpermuted_output,
-                                                                   skip,
-                                                                   bias,
-                                                                   scales,
-                                                                   expanded_source_row_to_expanded_dest_row,
-                                                                   expert_for_source_row,
-                                                                   cols,
-                                                                   k);
+    finalize_moe_routing_kernel<T, 1><<<blocks, threads, 0, stream>>>(expanded_permuted_rows,
+                                                                      reduced_unpermuted_output,
+                                                                      skip,
+                                                                      nullptr,
+                                                                      bias,
+                                                                      scales,
+                                                                      expanded_source_row_to_expanded_dest_row,
+                                                                      expert_for_source_row,
+                                                                      cols,
+                                                                      k);
+}
+
+template<typename T>
+void finalize_moe_routing_kernelLauncher(const T*     expanded_permuted_rows,
+                                         T*           reduced_unpermuted_output,
+                                         const T*     skip_1,
+                                         const T*     skip_2,
+                                         const T*     bias,
+                                         const T*     scales,
+                                         const int*   expanded_source_row_to_expanded_dest_row,
+                                         const int*   expert_for_source_row,
+                                         const int    num_rows,
+                                         const int    cols,
+                                         const int    k,
+                                         cudaStream_t stream)
+{
+    const int blocks  = num_rows;
+    const int threads = std::min(cols, 1024);
+    if (skip_2 == nullptr) {
+        finalize_moe_routing_kernel<T, 1><<<blocks, threads, 0, stream>>>(expanded_permuted_rows,
+                                                                          reduced_unpermuted_output,
+                                                                          skip_1,
+                                                                          skip_2,
+                                                                          bias,
+                                                                          scales,
+                                                                          expanded_source_row_to_expanded_dest_row,
+                                                                          expert_for_source_row,
+                                                                          cols,
+                                                                          k);
+    }
+    else {
+        finalize_moe_routing_kernel<T, 2><<<blocks, threads, 0, stream>>>(expanded_permuted_rows,
+                                                                          reduced_unpermuted_output,
+                                                                          skip_1,
+                                                                          skip_2,
+                                                                          bias,
+                                                                          scales,
+                                                                          expanded_source_row_to_expanded_dest_row,
+                                                                          expert_for_source_row,
+                                                                          cols,
+                                                                          k);
+    }
 }
 
 // ========================= TopK Softmax specializations ===========================
@@ -1015,9 +1069,45 @@ template void finalize_moe_routing_kernelLauncher(const half*,
                                                   const int,
                                                   const int,
                                                   cudaStream_t);
+template void finalize_moe_routing_kernelLauncher(const float*,
+                                                  float*,
+                                                  const float*,
+                                                  const float*,
+                                                  const float*,
+                                                  const float*,
+                                                  const int*,
+                                                  const int*,
+                                                  const int,
+                                                  const int,
+                                                  const int,
+                                                  cudaStream_t);
+template void finalize_moe_routing_kernelLauncher(const half*,
+                                                  half*,
+                                                  const half*,
+                                                  const half*,
+                                                  const half*,
+                                                  const half*,
+                                                  const int*,
+                                                  const int*,
+                                                  const int,
+                                                  const int,
+                                                  const int,
+                                                  cudaStream_t);
 #ifdef ENABLE_BF16
 template void finalize_moe_routing_kernelLauncher(const __nv_bfloat16*,
                                                   __nv_bfloat16*,
+                                                  const __nv_bfloat16*,
+                                                  const __nv_bfloat16*,
+                                                  const __nv_bfloat16*,
+                                                  const int*,
+                                                  const int*,
+                                                  const int,
+                                                  const int,
+                                                  const int,
+                                                  cudaStream_t);
+template void finalize_moe_routing_kernelLauncher(const __nv_bfloat16*,
+                                                  __nv_bfloat16*,
+                                                  const __nv_bfloat16*,
                                                   const __nv_bfloat16*,
                                                   const __nv_bfloat16*,
                                                   const __nv_bfloat16*,

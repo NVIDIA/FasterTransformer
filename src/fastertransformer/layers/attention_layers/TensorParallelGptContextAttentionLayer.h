@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,7 +29,6 @@ private:
     std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm_;
     int                                 enable_custom_all_reduce_;
     bool                                do_all_reduce_;
-    T*                                  attention_out_fp_ = nullptr;
 
 public:
     TensorParallelGptContextAttentionLayer(size_t                              max_batch_size,
@@ -67,8 +66,6 @@ public:
                                            int                                 enable_custom_all_reduce = 0);
 
     TensorParallelGptContextAttentionLayer(TensorParallelGptContextAttentionLayer<T> const& attention_layer);
-
-    virtual ~TensorParallelGptContextAttentionLayer();
 
     void
     forward(TensorMap* output_tensors, TensorMap* input_tensors, const AttentionWeight<T>* attention_weights) override;

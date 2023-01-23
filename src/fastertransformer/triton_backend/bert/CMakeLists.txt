@@ -1,4 +1,4 @@
-# Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ set(bert_triton_backend_files
     BertTritonModelInstance.cc
 )
 
-add_library(BertTritonBackend SHARED ${bert_triton_backend_files})
+add_library(BertTritonBackend STATIC ${bert_triton_backend_files})
+set_property(TARGET BertTritonBackend PROPERTY POSITION_INDEPENDENT_CODE  ON)
 target_link_libraries(BertTritonBackend PRIVATE Bert TransformerTritonBackend -lcublasLt)
 target_compile_features(BertTritonBackend PRIVATE cxx_std_14)

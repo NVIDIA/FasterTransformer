@@ -80,5 +80,6 @@ private:
     float* d_output_ctx_emb_         = nullptr;
     bool*  d_is_finished_            = nullptr;
 
-    uint32_t* h_total_output_lengths_ = nullptr;
+    uint32_t*          h_total_output_lengths_ = nullptr;
+    std::exception_ptr h_exception_            = nullptr;
 };

@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -34,83 +34,6 @@ dir_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(dir_path + "/../../../..")
 sys.path.append(dir_path)
 
-class Evaluator:
-    def __init__(self, dataset, tokenizer, device):
-        self.dataset = dataset
-        self.tokenizer = tokenizer
-        self.device = device
-
-        # tokenize the dataset
-        def tokenize_function(examples):
-            example = self.tokenizer(examples['text'])
-            return example
-
-        self.dataset = self.dataset.map(tokenize_function, batched=True)
-        self.dataset.set_format(type='torch', columns=['input_ids'])
-
-    @torch.no_grad()
-    def evaluate(self, model):
-        model.eval()
-        # The task is to predict the last word of the input.
-        total, hit = 0, 0
-        for batch in tqdm(self.dataset):
-            input_ids = batch['input_ids'].to(self.device).unsqueeze(0)
-            label = input_ids[:, -1]
-            outputs = model(input_ids)
-            last_token_logits = outputs.logits[:, -2, :]
-            pred = last_token_logits.argmax(dim=-1)
-            total += label.size(0)
-            hit += (pred == label).sum().item()
-        acc = hit / total
-        return acc
-
-class RangeDetector(torch.nn.Module):
-    def __init__(self, layer, name, save_dict):
-        super().__init__()
-        self.layer = layer
-        self.name = f"model.{name}.weight"
-        self.save_dict = save_dict
-
-    @torch.no_grad()
-    def forward(self, x):
-        matmul = x @ self.layer.weight.T
-
-        act_pre_max = x.abs().max()
-        act_post_max = matmul.abs().max()
-
-        if self.name in self.save_dict:
-            act_pre_max = torch.max(act_pre_max, self.save_dict[self.name][0])
-            act_post_max = torch.max(act_post_max, self.save_dict[self.name][1])
-        self.save_dict[self.name] = (act_pre_max, act_post_max)
-
-        return matmul + self.layer.bias
-
-
-def inject_range_detectors(model):
-    capture_dict = {}
-    for name, m in model.model.named_modules():
-        if isinstance(m, OPTDecoderLayer):
-            m.fc1 = RangeDetector(m.fc1, f"{name}.fc1", capture_dict)
-            m.fc2 = RangeDetector(m.fc2, f"{name}.fc2", capture_dict)
-        elif isinstance(m, OPTAttention):
-            m.q_proj = RangeDetector(m.q_proj, f"{name}.q_proj", capture_dict)
-            m.k_proj = RangeDetector(m.k_proj, f"{name}.k_proj", capture_dict)
-            m.v_proj = RangeDetector(m.v_proj, f"{name}.v_proj", capture_dict)
-            m.out_proj = RangeDetector(m.out_proj, f"{name}.out_proj", capture_dict)
-    return capture_dict
-
-
-def remove_range_detectors(model):
-    for name, m in model.model.named_modules():
-        if isinstance(m, OPTDecoderLayer):
-            m.fc1 = m.fc1.layer
-            m.fc2 = m.fc2.layer
-        elif isinstance(m, OPTAttention):
-            m.q_proj = m.q_proj.layer
-            m.k_proj = m.k_proj.layer
-            m.v_proj = m.v_proj.layer
-            m.out_proj = m.out_proj.layer
-
 
 def get_weight_data_type(data_type):
     if data_type == "fp32":
@@ -122,14 +45,16 @@ def get_weight_data_type(data_type):
 
 
 def quantize(mat, act_range):
+    # qkv proj weight quantization
     if mat.ndim == 3 and mat.shape[1] == 3:
+        # get max_q, max_k, max_v
         mat_max = np.abs(mat).clip(1e-8, None).max(axis=(0,2))[None, :, None]
     else:
         mat_max = np.abs(mat).clip(1e-8, None).max()
 
-    act_scale_in = 127. / act_range[0].cpu().numpy()
+    act_scale_in = 127. / np.array(act_range[0])
     weight_scales = 127. / mat_max
-    act_scale_post = 127. / act_range[1].cpu().numpy()
+    act_scale_post = 127. / np.array(act_range[1])
 
     mat_quant = (mat * weight_scales).round().astype(np.int8)
     return mat_quant, weight_scales, act_scale_in, act_scale_post
@@ -145,7 +70,7 @@ def split_and_convert_process(i, saved_dir, factor, key, args, val, capture_dict
 
         val.tofile(path)
 
-    quantized_out = args.quantize or args.act_scale is not None
+    quantized_out = args.act_scale is not None
 
     if "input_layernorm.weight" in key or "input_layernorm.bias" in key or \
         "attention.dense.bias" in key or "post_attention_layernorm.weight" in key or \
@@ -222,8 +147,8 @@ def split_and_convert_process(i, saved_dir, factor, key, args, val, capture_dict
         print("[ERROR] cannot find key '{}'".format(key))
 
 def fuse_qkv_weight(q, k, v):
-    if q.dim() == 0:
-        qkv = torch.tensor((q.item(), k.item(), v.item()))
+    if isinstance(q, float):
+        qkv = torch.tensor((q, k, v))
     else:
         qkv = torch.cat([q, k, v], dim=-1)
     return qkv
@@ -239,29 +164,18 @@ def split_and_convert(args):
     i_gpu_num = args.infer_gpu_num
     assert(i_gpu_num % t_gpu_num == 0)
 
-    save_int8 = args.quantize or args.act_scale is not None
+    save_int8 = args.act_scale is not None
 
     factor = (int)(i_gpu_num / t_gpu_num)
 
     # load position_embedding from rank 0
-    model = AutoModelForCausalLM.from_pretrained(args.in_file)
+    model = AutoModelForCausalLM.from_pretrained(args.in_file, device_map="auto")
 
     capture_dict = None
-    if args.quantize:
-        capture_dict = inject_range_detectors(model)
-        from datasets import load_dataset
-        Evaluator(load_dataset('lambada', split='validation[:1000]'),
-                  AutoTokenizer.from_pretrained("facebook/opt-125m"),
-                  "cuda").evaluate(model.to("cuda"))
-        remove_range_detectors(model)
-        model.to("cpu")
-    elif args.act_scale is not None:
-        scales = {key: value.max() for (key, value) in torch.load(args.act_scale).items()}
+    if args.act_scale is not None:
         capture_dict = {}
-        for key, value in scales.items():
-            if key.endswith(".after"):
-                continue
-            capture_dict[key + ".weight"] = (value, scales[key + ".after"])
+        for key, values in torch.load(args.act_scale).items():
+            capture_dict[key + ".weight"] = (values["input"], values["output"])
 
     hf_config = vars(model.config)
 
@@ -387,7 +301,7 @@ def split_and_convert(args):
                     starmap_args.append((0, saved_dir, factor, new_name, args,
                                         param.detach().cpu().numpy().astype(np_weight_data_type),
                                         capture_dict, name, np_weight_data_type))
-            pool.starmap(split_and_convert_process, starmap_args)
+            pool.starmap_async(split_and_convert_process, starmap_args)
     pool.close()
     pool.join()
 
@@ -402,9 +316,6 @@ if __name__ == "__main__":
     parser.add_argument('-infer_gpu_num', '-i_g', type=int, help='How many gpus for inference', required=True)
     parser.add_argument("-processes", "-p", type=int, help="How many processes to spawn for conversion (default: 4)", default=4)
     parser.add_argument("-weight_data_type", type=str, default="fp32", choices=["fp32", "fp16"])
-    parser.add_argument("-quantize",
-                        help="Store selected in int8, run the models to determine scaling factors",
-                        action="store_true")
     parser.add_argument("-act_scale", default=None, help="path to activation scalings for int8 conversion")
 
     args = parser.parse_args()
@@ -412,10 +323,6 @@ if __name__ == "__main__":
     for key in vars(args):
         print(f"{key}: {vars(args)[key]}")
     print("========================================")
-
-    if args.quantize and args.act_scale is not None:
-        print("[ERROR] Cannot specify both -quantize and -act_scale")
-        sys.exit()
 
     start_time = datetime.now()
     split_and_convert(args)

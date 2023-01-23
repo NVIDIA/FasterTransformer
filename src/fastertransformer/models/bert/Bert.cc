@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -217,7 +217,9 @@ template<typename T>
 void Bert<T>::allocateBuffer(size_t batch_size, size_t seq_len)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    token_num_      = (size_t*)allocator_->reMalloc(token_num_, sizeof(size_t) * 1, false);
+    if (!is_allocate_buffer_) {
+        check_cuda_error(cudaMallocHost((void**)&h_pinned_token_num_ptr_, sizeof(size_t)));
+    }
     padding_offset_ = (int*)allocator_->reMalloc(padding_offset_, sizeof(int) * batch_size * seq_len, false);
     trt_mha_padding_offset_ =
         (int*)allocator_->reMalloc(trt_mha_padding_offset_, sizeof(int) * (2 * batch_size + 1), false);
@@ -240,28 +242,32 @@ void Bert<T>::allocateBuffer(size_t batch_size, size_t seq_len)
         normed_attn_out_buf_ =
             (T*)allocator_->reMalloc(normed_attn_out_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
     }
+    is_allocate_buffer_ = true;
 }
 
 template<typename T>
 void Bert<T>::freeBuffer()
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    allocator_->free((void**)(&token_num_));
-    allocator_->free((void**)(&padding_offset_));
-    allocator_->free((void**)(&trt_mha_padding_offset_));
+    if (is_allocate_buffer_) {
+        check_cuda_error(cudaFreeHost(h_pinned_token_num_ptr_));
+        allocator_->free((void**)(&padding_offset_));
+        allocator_->free((void**)(&trt_mha_padding_offset_));
 
-    allocator_->free((void**)(&attention_mask_));
-    allocator_->free((void**)(&bert_in_buffer_));
-    allocator_->free((void**)(&attn_out_buf_));
-    allocator_->free((void**)(&bert_out_buffer_));
+        allocator_->free((void**)(&attention_mask_));
+        allocator_->free((void**)(&bert_in_buffer_));
+        allocator_->free((void**)(&attn_out_buf_));
+        allocator_->free((void**)(&bert_out_buffer_));
 
-    if (layernorm_type_ == LayerNormType::post_layernorm) {
-        normed_from_tensor_  = nullptr;
-        normed_attn_out_buf_ = nullptr;
-    }
-    else {
-        allocator_->free((void**)(&normed_from_tensor_));
-        allocator_->free((void**)(&normed_attn_out_buf_));
+        if (layernorm_type_ == LayerNormType::post_layernorm) {
+            normed_from_tensor_  = nullptr;
+            normed_attn_out_buf_ = nullptr;
+        }
+        else {
+            allocator_->free((void**)(&normed_from_tensor_));
+            allocator_->free((void**)(&normed_attn_out_buf_));
+        }
+        is_allocate_buffer_ = false;
     }
 }
 
@@ -363,8 +369,8 @@ void Bert<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, const
                     stream_);
                 sync_check_cuda_error();
                 invokeGetPaddingOffset(
+                    h_pinned_token_num_ptr_,
                     &h_token_num,
-                    token_num_,
                     padding_offset_,
                     input_tensors->at("sequence_lengths").getPtrWithOffset<int>(ite * local_batch_size),
                     local_batch_size,
@@ -403,8 +409,8 @@ void Bert<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, const
             }
             case AttentionType::FUSED_MHA: {
                 invokeGetPaddingOffset(
+                    h_pinned_token_num_ptr_,
                     &h_token_num,
-                    token_num_,
                     padding_offset_,
                     input_tensors->at("sequence_lengths").getPtrWithOffset<int>(ite * local_batch_size),
                     local_batch_size,
@@ -560,6 +566,7 @@ void Bert<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, const
                     layernorm_eps_,
                     h_token_num,
                     hidden_units_,
+                    (float*)nullptr,
                     (float*)nullptr,
                     (float*)nullptr,
                     (float*)nullptr,

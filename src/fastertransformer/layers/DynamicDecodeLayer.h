@@ -45,10 +45,15 @@ protected:
 
     // List of argument names which can have different values in runtime
     // and does not support a batched version of kernel in beam search.
-    const std::vector<std::string> runtime_arg_names_ = {
-        "beam_search_diversity_rate", "temperature", "len_penalty", "repetition_penalty"};
+    const std::vector<std::string> runtime_arg_names_ = {"beam_search_diversity_rate",
+                                                         "temperature",
+                                                         "len_penalty",
+                                                         "repetition_penalty",
+                                                         "presence_penalty",
+                                                         "min_length"};
+
     bool has_diff_runtime_args_ = false;
-    int* finished_sum_          = nullptr;
+    int* h_pinned_finished_sum_ = nullptr;
 
 public:
     DynamicDecodeLayer(size_t           vocab_size,

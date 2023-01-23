@@ -22,10 +22,6 @@
 #include <iostream>
 #include <sys/time.h>
 
-#ifdef USE_NVTX
-bool NVTX_ON = true;
-#endif
-
 using namespace fastertransformer;
 using namespace std;
 

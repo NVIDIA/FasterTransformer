@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -39,11 +39,14 @@ void generate_gpt_gemm_config(int   batch_size,
     void* cublas_workspace;
     void* buffer;
     int   workSpaceSize;
-#ifdef ENABLE_BF16
-    if (std::is_same<T, half>::value || std::is_same<T, __nv_bfloat16>::value) {
-#else
-    if (std::is_same<T, half>::value) {
-#endif  // ENABLE_BF16
+    bool  workspace_flag = std::is_same<T, half>::value;
+#ifdef ENABLE_FP8
+    workspace_flag = workspace_flag || std::is_same<T, __nv_fp8_e4m3>::value;
+#endif
+#if ENABLE_BF16
+    workspace_flag = workspace_flag || std::is_same<T, __nv_bfloat16>::value;
+#endif
+    if (workspace_flag) {
         // cublas_workspace_ should be the start pointer of cudaMalloc()
         // to ensure 16B alignemnet
         cublas_workspace = buffer_in;
@@ -87,14 +90,18 @@ void generate_gpt_gemm_config(int   batch_size,
         }
     }
 
-    const int hidden_units       = head_num * size_per_head;
-    const int local_head_num     = head_num / tensor_para_size;
-    const int local_hidden_units = local_head_num * size_per_head;
-    const int gemm_num           = 11;
+    const int hidden_units         = head_num * size_per_head;
+    const int local_head_num       = head_num / tensor_para_size;
+    const int local_hidden_units   = local_head_num * size_per_head;
+    const int max_input_len_padded = (max_input_len + 15) / 16 * 16;
+    const int gemm_num             = 11;
     int       M[gemm_num];
     int       N[gemm_num];
     int       K[gemm_num];
     int       batchCount[gemm_num];
+    int64_t   strideA[gemm_num];
+    int64_t   strideB[gemm_num];
+    int64_t   strideD[gemm_num];
     char      mess[gemm_num][256];
     float     exec_times[gemm_num];
 
@@ -103,20 +110,29 @@ void generate_gpt_gemm_config(int   batch_size,
     K[0]          = hidden_units;
     N[0]          = 3 * local_hidden_units;
     batchCount[0] = 1;
+    strideA[0]    = 0;
+    strideB[0]    = 0;
+    strideD[0]    = 0;
     strcpy(mess[0], "context from_tensor * weightQKV");
 
     // gemm 1
-    M[1]          = max_input_len;
+    M[1]          = max_input_len_padded;
     K[1]          = size_per_head;
-    N[1]          = max_input_len;
+    N[1]          = max_input_len_padded;
     batchCount[1] = batch_size * beam_width * local_head_num;
+    strideA[1]    = max_input_len_padded * size_per_head;
+    strideB[1]    = max_input_len_padded * size_per_head;
+    strideD[1]    = max_input_len_padded * max_input_len_padded;
     strcpy(mess[1], "context batch gemm Q*K^T");
 
     // gemm 2
-    M[2]          = max_input_len;
-    K[2]          = max_input_len;
+    M[2]          = max_input_len_padded;
+    K[2]          = max_input_len_padded;
     N[2]          = size_per_head;
     batchCount[2] = batch_size * beam_width * local_head_num;
+    strideA[2]    = max_input_len_padded * size_per_head;
+    strideB[2]    = max_input_len_padded * max_input_len_padded;
+    strideD[2]    = max_input_len_padded * size_per_head;
     strcpy(mess[2], "context batch gemm QK*V^T");
 
     // gemm 3
@@ -124,6 +140,9 @@ void generate_gpt_gemm_config(int   batch_size,
     K[3]          = local_hidden_units;
     N[3]          = hidden_units;
     batchCount[3] = 1;
+    strideA[3]    = 0;
+    strideB[3]    = 0;
+    strideD[3]    = 0;
     strcpy(mess[3], "context attr * output_kernel");
 
     // gemm 4
@@ -131,6 +150,9 @@ void generate_gpt_gemm_config(int   batch_size,
     K[4]          = hidden_units;
     N[4]          = inter_size / tensor_para_size;
     batchCount[4] = 1;
+    strideA[4]    = 0;
+    strideB[4]    = 0;
+    strideD[4]    = 0;
     strcpy(mess[4], "context ffn gemm 1");
 
     // gemm 5
@@ -138,6 +160,9 @@ void generate_gpt_gemm_config(int   batch_size,
     K[5]          = inter_size / tensor_para_size;
     N[5]          = hidden_units;
     batchCount[5] = 1;
+    strideA[5]    = 0;
+    strideB[5]    = 0;
+    strideD[5]    = 0;
     strcpy(mess[5], "context ffn gemm 2");
 
     // gemm 6
@@ -145,6 +170,9 @@ void generate_gpt_gemm_config(int   batch_size,
     K[6]          = hidden_units;
     N[6]          = 3 * local_hidden_units;
     batchCount[6] = 1;
+    strideA[6]    = 0;
+    strideB[6]    = 0;
+    strideD[6]    = 0;
     strcpy(mess[6], "from_tensor * weightQKV");
 
     // gemm 7
@@ -152,6 +180,9 @@ void generate_gpt_gemm_config(int   batch_size,
     K[7]          = local_hidden_units;
     N[7]          = hidden_units;
     batchCount[7] = 1;
+    strideA[7]    = 0;
+    strideB[7]    = 0;
+    strideD[7]    = 0;
     strcpy(mess[7], "attr * output_kernel");
 
     // gemm 8
@@ -159,6 +190,9 @@ void generate_gpt_gemm_config(int   batch_size,
     K[8]          = hidden_units;
     N[8]          = inter_size / tensor_para_size;
     batchCount[8] = 1;
+    strideA[8]    = 0;
+    strideB[8]    = 0;
+    strideD[8]    = 0;
     strcpy(mess[8], "ffn gemm 1");
 
     // gemm 9
@@ -166,6 +200,9 @@ void generate_gpt_gemm_config(int   batch_size,
     K[9]          = inter_size / tensor_para_size;
     N[9]          = hidden_units;
     batchCount[9] = 1;
+    strideA[9]    = 0;
+    strideB[9]    = 0;
+    strideD[9]    = 0;
     strcpy(mess[9], "ffn gemm 2");
 
     // gemm 10
@@ -173,6 +210,9 @@ void generate_gpt_gemm_config(int   batch_size,
     K[10]          = hidden_units;
     N[10]          = ceil(vocab_size / 8.) * 8 / tensor_para_size;
     batchCount[10] = 1;
+    strideA[10]    = 0;
+    strideB[10]    = 0;
+    strideD[10]    = 0;
     strcpy(mess[10], "logits gemm");
 
     cublasHandle_t cublas_handle;
@@ -183,6 +223,8 @@ void generate_gpt_gemm_config(int   batch_size,
     cudaDataType_t AType;
     cudaDataType_t BType;
     cudaDataType_t CType;
+    cudaDataType_t DType;
+    cudaDataType_t DType_FP8[gemm_num];
     cudaDataType_t computeType;
     int            startAlgo, endAlgo;
     const int      ites = 100;
@@ -194,6 +236,7 @@ void generate_gpt_gemm_config(int   batch_size,
         AType       = CUDA_R_32F;
         BType       = CUDA_R_32F;
         CType       = CUDA_R_32F;
+        DType       = CUDA_R_32F;
         computeType = CUDA_R_32F;
         startAlgo   = (int)CUBLAS_GEMM_DEFAULT;
         endAlgo     = (int)CUBLAS_GEMM_ALGO23;
@@ -203,6 +246,7 @@ void generate_gpt_gemm_config(int   batch_size,
         AType       = CUDA_R_16F;
         BType       = CUDA_R_16F;
         CType       = CUDA_R_16F;
+        DType       = CUDA_R_16F;
         computeType = CUDA_R_32F;
         startAlgo   = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
         endAlgo     = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
@@ -213,9 +257,39 @@ void generate_gpt_gemm_config(int   batch_size,
         AType       = CUDA_R_16BF;
         BType       = CUDA_R_16BF;
         CType       = CUDA_R_16BF;
+        DType       = CUDA_R_16BF;
         computeType = CUDA_R_32F;
         startAlgo   = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
         endAlgo     = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
+    }
+#endif
+#ifdef ENABLE_FP8
+    else if (std::is_same<T, __nv_fp8_e4m3>::value) {
+        data_type = FP8_DATATYPE;
+        AType     = CUDA_R_8F_E4M3;
+        BType     = CUDA_R_8F_E4M3;
+        CType     = CUDA_R_16BF;
+#ifdef FP8_GEMM_OUTPUT_QUANT_DISABLE
+        DType = CUDA_R_16BF
+#else
+        DType_FP8[0] = CUDA_R_8F_E4M3;
+        DType_FP8[1] = CUDA_R_16BF;
+        DType_FP8[2] = CUDA_R_8F_E4M3;
+        DType_FP8[3] = CUDA_R_16BF;
+        DType_FP8[4] = CUDA_R_16BF;
+        DType_FP8[5] = CUDA_R_16BF;
+#ifdef FP8_MHA
+        DType_FP8[6] = CUDA_R_8F_E4M3;
+#else
+        DType_FP8[6] = CUDA_R_16BF;
+#endif
+        DType_FP8[7] = CUDA_R_16BF;
+        DType_FP8[8] = CUDA_R_16BF;
+        DType_FP8[9] = CUDA_R_16BF;
+#endif
+            computeType = CUDA_R_32F;
+        startAlgo       = (int)CUBLAS_GEMM_DEFAULT_TENSOR_OP;
+        endAlgo         = (int)CUBLAS_GEMM_ALGO15_TENSOR_OP;
     }
 #endif
     float alpha = (float)1.0f;
@@ -226,8 +300,15 @@ void generate_gpt_gemm_config(int   batch_size,
     if (line_count == 0) {
         fprintf(fd,
                 "batch_size, seq_len, head_num, size_per_head dataType ### batchCount, n, m, k, algoId, "
-                "customOption, tile, numSplitsK, swizzle, reductionScheme, workspaceSize, stages, exec_time\n");
+                "customOption, tile, numSplitsK, swizzle, reductionScheme, workspaceSize, stages, "
+#if (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH >= 3)
+                "inner_shapeId, cluster_shapeId, "
+#elif (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH < 3)
+                "mma_shapeId, cga_shapeId, schedule_mode, "
+#endif
+                "exec_time\n");
     }
+
     for (int i = 0; i < gemm_num; ++i) {
         int seq_len = i <= 5 ? max_input_len : 1;
 
@@ -357,8 +438,9 @@ void generate_gpt_gemm_config(int   batch_size,
         printf("fast_algo %d costs %.3f ms\n", fast_algo, exec_time);
 
         // for fp16 and bf16, we compare cublasLt
-        if (data_type != FLOAT_DATATYPE && i != 1 && i != 2 && i != 10) {
-            printf("***cublasLt Gemm Testing Begin***\n");
+        // for fp8, compare cublaslt for all gemm kernels
+        if ((data_type != FLOAT_DATATYPE && i != 1 && i != 2 && i != 10) || data_type == FP8_DATATYPE) {
+            printf("***cublasLt Gemm Testing Beign***\n");
             // Let try a fixed number of combinations
             int                ALGO_COMBINATIONS = 5000;
             customMatmulPerf_t perfResults[ALGO_COMBINATIONS];
@@ -381,7 +463,12 @@ void generate_gpt_gemm_config(int   batch_size,
                                         workSpaceSize,
                                         fd,
                                         perfResults,
-                                        ALGO_COMBINATIONS);
+                                        ALGO_COMBINATIONS,
+                                        DType_FP8[i],
+                                        batchCount[i],
+                                        strideA[i],
+                                        strideB[i],
+                                        strideD[i]);
             if (perfResults[0].time < exec_time) {
                 printPerfStructure(batch_size * beam_width,
                                    seq_len,
@@ -393,11 +480,18 @@ void generate_gpt_gemm_config(int   batch_size,
                                    perfResults[0],
                                    fd,
                                    data_type,
-                                   0);
+                                   0,
+                                   batchCount[i]);
             }
             else {
                 fprintf(fd,
-                        "%d %d %d %d %d ### %d %d %d %d %d -1 -1 -1 -1 -1 -1 -1 %f\n",
+                        "%d %d %d %d %d ### %d %d %d %d %d -1 -1 -1 -1 -1 -1 -1 "
+#if (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH >= 3)
+                        "-1 -1 "
+#elif (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH < 3)
+                        "-1 -1 -1 "
+#endif
+                        "%f\n",
                         batch_size * beam_width,
                         seq_len,
                         head_num,
@@ -414,7 +508,13 @@ void generate_gpt_gemm_config(int   batch_size,
         }
         else {
             fprintf(fd,
-                    "%d %d %d %d %d ### %d %d %d %d %d -1 -1 -1 -1 -1 -1 -1 %f\n",
+                    "%d %d %d %d %d ### %d %d %d %d %d -1 -1 -1 -1 -1 -1 -1 "
+#if (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH >= 3)
+                    "-1 -1 "
+#elif (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH < 3)
+                    "-1 -1 -1 "
+#endif
+                    "%f\n",
                     batch_size * beam_width,
                     seq_len,
                     head_num,
@@ -638,6 +738,19 @@ template void generate_gpt_gemm_config<__nv_bfloat16>(int   batch_size,
                                                       bool  isAppend);
 #endif
 
+#ifdef ENABLE_FP8
+template void generate_gpt_gemm_config<__nv_fp8_e4m3>(int   batch_size,
+                                                      int   beam_width,
+                                                      int   max_input_len,
+                                                      int   head_num,
+                                                      int   size_per_head,
+                                                      int   inter_size,
+                                                      int   vocab_size,
+                                                      int   tensor_para_size,
+                                                      void* buffer_in,
+                                                      bool  isAppend);
+#endif
+
 size_t calGptGemmTestBufSizeInByte(int            batch_size,
                                    int            beam_width,
                                    int            max_input_len,
@@ -675,7 +788,9 @@ size_t calGptGemmTestBufSizeInByte(int            batch_size,
         buf_size_in_byte = buf_size_in_byte > t ? buf_size_in_byte : t;
     }
     buf_size_in_byte *= wordSize;
-    buf_size_in_byte += ((data_type == HALF_DATATYPE || data_type == BFLOAT16_DATATYPE) ? CUBLAS_WORKSPACE_SIZE : 0);
+    buf_size_in_byte += ((data_type == HALF_DATATYPE || data_type == BFLOAT16_DATATYPE || data_type == FP8_DATATYPE) ?
+                             CUBLAS_WORKSPACE_SIZE :
+                             0);
 
     return buf_size_in_byte;
 }

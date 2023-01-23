@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
  * Copyright (c) 2021, NAVER Corp.  Authored by CLOVA.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -19,6 +19,7 @@
 
 #include "3rdparty/trt_fused_multihead_attention/qkvToContext.h"
 #include "src/fastertransformer/kernels/cutlass_kernels/fpA_intB_gemm/fpA_intB_gemm.h"
+#include "src/fastertransformer/kernels/cutlass_kernels/int8_gemm/int8_gemm.h"
 #include "src/fastertransformer/layers/attention_layers/BaseAttentionLayer.h"
 
 namespace fastertransformer {
@@ -54,6 +55,7 @@ private:
     bool is_qk_buf_float_;
 
     std::shared_ptr<CutlassFpAIntBGemmRunner<T, uint8_t>> weight_only_int8_fc_runner_;
+    std::shared_ptr<CutlassInt8GemmRunner<T>>             int8_fc_runner_;
 
 protected:
     using BaseAttentionLayer<T>::allocator_;
@@ -69,6 +71,8 @@ protected:
     T*     qkv_buf_3_            = nullptr;
     char*  mixed_gemm_workspace_ = nullptr;
     size_t mixed_gemm_ws_bytes_  = 0;
+    char*  int8_gemm_workspace_  = nullptr;
+    size_t int8_gemm_ws_bytes_   = 0;
 
     // int8_mode_ == 0 means we don't use any mechanism related to INT8.
     // int8_mode_ == 1 for weight quantized only gemm for GPT

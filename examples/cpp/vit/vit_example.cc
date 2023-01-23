@@ -15,6 +15,7 @@
  */
 
 #include "src/fastertransformer/models/vit/ViT.h"
+#include "src/fastertransformer/utils/nvtx_utils.h"
 #include "stdio.h"
 #include "stdlib.h"
 #include <cuda_profiler_api.h>

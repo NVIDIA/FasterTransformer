@@ -77,5 +77,6 @@ private:
     float* d_output_log_probs_ = nullptr;
     float* d_cum_log_probs_    = nullptr;
 
-    uint32_t* h_total_output_lengths_ = nullptr;
+    uint32_t*          h_total_output_lengths_ = nullptr;
+    std::exception_ptr h_exception_            = nullptr;
 };

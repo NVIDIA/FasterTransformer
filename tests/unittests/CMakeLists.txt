@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,6 +20,8 @@ FetchContent_Declare(
   GIT_REPOSITORY https://github.com/google/googletest.git
   GIT_TAG release-1.12.1
 )
+add_definitions(-DTORCH_CUDA=1)
+
 # For Windows: Prevent overriding the parent project's compiler/linker settings
 set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(googletest)
@@ -30,11 +32,10 @@ add_executable(unittest
     test_penalty_kernels.cu
     test_sampling_kernels.cu
     test_sampling_layer.cu
-    test_int8.cu
     test_tensor.cu)
 
 # automatic discovery of unit tests
-target_link_libraries(unittest PUBLIC gtest_main)
+target_link_libraries(unittest PUBLIC "${TORCH_LIBRARIES}" gtest_main)
 target_compile_features(unittest PRIVATE cxx_std_14)
 
 # Sorted by alphabetical order of test name.
@@ -61,9 +62,8 @@ target_link_libraries(  # Libs for test_sampling_layer
     DynamicDecodeLayer TopKSamplingLayer TopPSamplingLayer tensor cuda_utils logger)
 target_link_libraries(  # Libs for test_tensor
   unittest PUBLIC tensor cuda_utils logger)
-target_link_libraries(  # Libs for test_int8
-  unittest PUBLIC transpose_int8_kernels)
 
+remove_definitions(-DTORCH_CUDA=1)
 add_executable(test_gemm test_gemm.cu)
 target_link_libraries(test_gemm PUBLIC -lcublas -lcudart -lcurand gemm cublasMMWrapper tensor cuda_utils logger)
 

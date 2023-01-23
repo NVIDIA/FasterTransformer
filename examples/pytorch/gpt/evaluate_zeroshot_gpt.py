@@ -324,7 +324,7 @@ def main():
     # Set up model and load checkpoint.
     model = GPT(args.num_attention_heads, (int)(args.hidden_size / args.num_attention_heads),
                 args.padded_vocab_size, tokenzier.eod, tokenzier.eod,
-                args.num_layers, args.seq_length, 1, 1, "lib/libth_gpt.so", weights_data_type=args.weights_data_type)
+                args.num_layers, args.seq_length, 1, 1, "lib/libth_transformer.so", weights_data_type=args.weights_data_type)
 
     if not model.load(ckpt_path=args.ckpt_path):
         print("[ERROR] Checkpoint file not found at {}.".format(args.ckpt_path))

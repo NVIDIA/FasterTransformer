@@ -1,4 +1,6 @@
 # T5Plugin in FasterTransformer
++ Original Faster Transformer: [link](https://github.com/NVIDIA/FasterTransformer#model-overview)
++ Newest Version: [link](https://github.com/NVIDIA/FasterTransformer)
 + This project aims to wapper the encoder and decoding parts of the faster transformer as TensoRT plugins respectively. The most of the code file are from original Faster TRansformer project.
   
 ## Environment

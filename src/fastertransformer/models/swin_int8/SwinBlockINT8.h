@@ -23,6 +23,7 @@
 #include "src/fastertransformer/kernels/layernorm_int8_kernels.h"
 #include "src/fastertransformer/layers/FfnINT8Weight.h"
 #include "src/fastertransformer/layers/attention_layers_int8/WindowAttentionINT8.h"
+#include "src/fastertransformer/models/swin_int8/SwinINT8Weight.h"
 
 namespace fastertransformer {
 template<typename T>

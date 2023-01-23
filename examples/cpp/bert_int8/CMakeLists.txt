@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,4 +13,4 @@
 # limitations under the License.
 
 add_executable(bert_int8_example bert_int8_example.cc)
-target_link_libraries(bert_int8_example PUBLIC -lcublas -lcublasLt -lcudart BertINT8 nvtx_utils)
+target_link_libraries(bert_int8_example PUBLIC -lcublas -lcublasLt -lcudart BertINT8 BertLayerINT8Weight nvtx_utils)

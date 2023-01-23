@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 #include <stdexcept>
 #include <stdlib.h>    // rand
 #include <string>      // std::string
+#include <unordered_map>
 #include <vector>      // std::vector
 
 #include <cublas_v2.h>
@@ -27,6 +28,7 @@
 #include <cuda_runtime.h>
 
 #include "src/fastertransformer/kernels/beam_search_penalty_kernels.h"
+#include "src/fastertransformer/kernels/penalty_types.h"
 #include "src/fastertransformer/kernels/sampling_penalty_kernels.h"
 #include "src/fastertransformer/utils/cuda_utils.h"
 #include "src/fastertransformer/utils/memory_utils.h"
@@ -361,16 +363,24 @@ TYPED_TEST(TemperaturePenaltyTest, Consistency)
 }
 
 struct RepetitionPenaltyTestCase {
-    size_t batch_size;
-    size_t vocab_size;
-    size_t max_input_length;
-    float* repetition_penalties;
-    size_t repetition_penalties_size;
+    size_t                batch_size;
+    size_t                vocab_size;
+    size_t                max_input_length;
+    float*                repetition_penalties;
+    size_t                repetition_penalties_size;
+    RepetitionPenaltyType repetition_penalty_type;
 
     std::string toString() {
+        static const std::unordered_map<RepetitionPenaltyType, std::string> typestr_map {
+            {RepetitionPenaltyType::Additive, "additive"},
+            {RepetitionPenaltyType::Multiplicative, "multiplicative"},
+            {RepetitionPenaltyType::None, "none"}};
         return fmtstr(
-            "RepetitionPenaltyTestCase[batch=%ld, vocab=%ld, max_input_length=%ld, repetition_penalties=%s]",
-            batch_size, vocab_size, max_input_length, arr2str(repetition_penalties, repetition_penalties_size).c_str());
+            "RepetitionPenaltyTestCase[batch=%ld, vocab=%ld, max_input_length=%ld, "
+            "repetition_penalties=%s, repetition_penalty_type=%s]",
+            batch_size, vocab_size, max_input_length,
+            arr2str(repetition_penalties, repetition_penalties_size).c_str(),
+            typestr_map.at(repetition_penalty_type).c_str());
     }
 };
 
@@ -437,22 +447,23 @@ protected:
         delete[] h_input_lengths_;
     }
 
-    void computeReference(T*           logits,
-                          const int*   output_ids,
-                          const int*   input_lengths,
-                          const float* repetition_penalties,
-                          const size_t repetition_penalties_size,
-                          const size_t step,
-                          const size_t max_input_length,
-                          const size_t batch_size,
-                          const size_t vocab_size,
-                          const size_t vocab_size_padded)
+    void computeReference(T*                          logits,
+                          const int*                  output_ids,
+                          const int*                  input_lengths,
+                          const float*                repetition_penalties,
+                          const size_t                repetition_penalties_size,
+                          const RepetitionPenaltyType repetition_penalty_type,
+                          const size_t                step,
+                          const size_t                max_input_length,
+                          const size_t                batch_size,
+                          const size_t                vocab_size,
+                          const size_t                vocab_size_padded)
     {
         bool* penalized = new bool[vocab_size];
         for (size_t i = 0; i < batch_size; ++i) {
             float repetition_penalty =
                 repetition_penalties_size > 1 ? repetition_penalties[i] : repetition_penalties[0];
-            ASSERT_GT(repetition_penalty, 0.0f) << "temperature should be positive but got " << repetition_penalty;
+
             std::fill_n(penalized, vocab_size, false);
             size_t offset = i * vocab_size_padded;
             for (size_t t = 0; t < step; ++t) {
@@ -462,8 +473,20 @@ protected:
                 int token_id = output_ids[i + t * batch_size];
                 if (!penalized[token_id]) {
                     float logit = static_cast<float>(logits[offset + token_id]);
-                    logits[offset + token_id] =
-                        static_cast<T>(logit < 0.0f ? logit * repetition_penalty : logit / repetition_penalty);
+                    switch (repetition_penalty_type) {
+                        case RepetitionPenaltyType::Additive:
+                            logits[offset + token_id] = static_cast<T>(logit - repetition_penalty);
+                            break;
+                        case RepetitionPenaltyType::Multiplicative:
+                            logits[offset + token_id] =
+                                static_cast<T>(logit < 0.0f ? logit * repetition_penalty : logit / repetition_penalty);
+                            break;
+                        case RepetitionPenaltyType::None:
+                            // None. do nothing.
+                            break;
+                        default:
+                            throw std::domain_error("Invalid repetition penalty type.");
+                    }
                     penalized[token_id] = true;
                 }
             }
@@ -488,6 +511,7 @@ public:
                                          d_input_lengths_,
                                          max_input_length_,
                                          step_,
+                                         param.repetition_penalty_type,
                                          stream);
         }
         else {
@@ -500,6 +524,7 @@ public:
                                               d_input_lengths_,
                                               max_input_length_,
                                               step_,
+                                              param.repetition_penalty_type,
                                               stream);
         }
         computeReference(h_logits_,
@@ -507,6 +532,7 @@ public:
                          h_input_lengths_,
                          param.repetition_penalties,
                          param.repetition_penalties_size,
+                         param.repetition_penalty_type,
                          step_,
                          max_input_length_,
                          batch_size_,
@@ -534,6 +560,7 @@ public:
                                      d_input_lengths_,
                                      max_input_length_,
                                      step_,
+                                     param.repetition_penalty_type,
                                      stream);
 
         float* h_repetition_penalties = new float[batch_size_];
@@ -554,6 +581,7 @@ public:
                                           d_input_lengths_,
                                           max_input_length_,
                                           step_,
+                                          param.repetition_penalty_type,
                                           stream);
         bool passed =
             checkResult(param.toString(), d_logits_, d_logits_batch, batch_size_ * vocab_size_padded_, true, true);
@@ -570,25 +598,25 @@ TYPED_TEST_SUITE(RepetitionPenaltyTest, FloatAndHalfTypes);
 TYPED_TEST(RepetitionPenaltyTest, NoPenalty)
 {
     float repetition_penalty = 1.0f;
-    this->runTest({6, 4, 5, &repetition_penalty, 1});
+    this->runTest({6, 4, 5, &repetition_penalty, 1, RepetitionPenaltyType::Multiplicative});
 }
 
 TYPED_TEST(RepetitionPenaltyTest, LessThanOne)
 {
     float repetition_penalty = 0.53f;
-    this->runTest({6, 4, 5, &repetition_penalty, 1});
+    this->runTest({6, 4, 5, &repetition_penalty, 1, RepetitionPenaltyType::Multiplicative});
 }
 
 TYPED_TEST(RepetitionPenaltyTest, GreaterThaneOne)
 {
     float repetition_penalty = 2.01f;
-    this->runTest({6, 4, 5, &repetition_penalty, 1});
+    this->runTest({6, 4, 5, &repetition_penalty, 1, RepetitionPenaltyType::Multiplicative});
 }
 
 TYPED_TEST(RepetitionPenaltyTest, LargeVocab)
 {
     float repetition_penalty = 2.01f;
-    this->runTest({6, 50001, 1003, &repetition_penalty, 1});
+    this->runTest({6, 50001, 1003, &repetition_penalty, 1, RepetitionPenaltyType::Multiplicative});
 }
 
 TYPED_TEST(RepetitionPenaltyTest, BatchNoPenalty)
@@ -598,7 +626,7 @@ TYPED_TEST(RepetitionPenaltyTest, BatchNoPenalty)
     for (size_t i = 0; i < batch_size; ++i) {
         repetition_penalties[i] = 1.0f;
     }
-    this->runTest({batch_size, 4, 5, repetition_penalties, batch_size});
+    this->runTest({batch_size, 4, 5, repetition_penalties, batch_size, RepetitionPenaltyType::Multiplicative});
 }
 
 TYPED_TEST(RepetitionPenaltyTest, BatchLessThanOne)
@@ -608,7 +636,7 @@ TYPED_TEST(RepetitionPenaltyTest, BatchLessThanOne)
     for (size_t i = 0; i < batch_size; ++i) {
         repetition_penalties[i] = 0.53f;
     }
-    this->runTest({batch_size, 4, 5, repetition_penalties, batch_size});
+    this->runTest({batch_size, 4, 5, repetition_penalties, batch_size, RepetitionPenaltyType::Multiplicative});
 }
 
 TYPED_TEST(RepetitionPenaltyTest, BatchGreaterThaneOne)
@@ -618,7 +646,7 @@ TYPED_TEST(RepetitionPenaltyTest, BatchGreaterThaneOne)
     for (size_t i = 0; i < batch_size; ++i) {
         temperatures[i] = 2.01f;
     }
-    this->runTest({batch_size, 4, 5, temperatures, batch_size});
+    this->runTest({batch_size, 4, 5, temperatures, batch_size, RepetitionPenaltyType::Multiplicative});
 }
 
 TYPED_TEST(RepetitionPenaltyTest, BatchMixed)
@@ -628,13 +656,39 @@ TYPED_TEST(RepetitionPenaltyTest, BatchMixed)
     for (size_t i = 0; i < batch_size; ++i) {
         repetition_penalties[i] = i % 2 ==0 ? 2.01f : 0.53f;
     }
-    this->runTest({batch_size, 4, 5, repetition_penalties, batch_size});
+    this->runTest({batch_size, 4, 5, repetition_penalties, batch_size, RepetitionPenaltyType::Multiplicative});
 }
 
 TYPED_TEST(RepetitionPenaltyTest, Consistency)
 {
     float repetition_penalty = 2.01f;
-    this->runConsistencyTest({6, 4, 5, &repetition_penalty, 1});
+    this->runConsistencyTest({6, 4, 5, &repetition_penalty, 1, RepetitionPenaltyType::Multiplicative});
+}
+
+TYPED_TEST(RepetitionPenaltyTest, PenaltyTypeAdditive)
+{
+    size_t batch_size = 6;
+    float* repetition_penalties = new float[batch_size];
+    for (size_t i = 0; i < batch_size; ++i) {
+        repetition_penalties[i] = i % 2 ==0 ? 2.01f : 0.53f;
+    }
+    this->runTest({batch_size, 4, 5, repetition_penalties, batch_size, RepetitionPenaltyType::Additive});
+}
+
+TYPED_TEST(RepetitionPenaltyTest, PenaltyTypeAdditiveHasDefaultValueZero)
+{
+    float repetition_penalty = 1.0f;
+    this->runTest({6, 4, 5, &repetition_penalty, 1, RepetitionPenaltyType::Additive});
+}
+
+TYPED_TEST(RepetitionPenaltyTest, PenaltyTypeAdditiveHasDefaultValueZero2)
+{
+    size_t batch_size = 6;
+    float* repetition_penalties = new float[batch_size];
+    for (size_t i = 0; i < batch_size; ++i) {
+        repetition_penalties[i] = i % 2 ==0 ? 1.0f : 0.0f;
+    }
+    this->runTest({batch_size, 4, 5, repetition_penalties, batch_size, RepetitionPenaltyType::Additive});
 }
 
 // Turn on the warning message.

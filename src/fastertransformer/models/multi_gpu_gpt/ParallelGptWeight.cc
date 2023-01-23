@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -81,6 +81,9 @@ ParallelGptWeight<T>::~ParallelGptWeight()
 {
     if (is_maintain_buffer == true) {
         for (int i = 0; i < weights_ptr.size(); i++) {
+            if (i == 6 && shared_embed_ && weights_ptr[i] == nullptr) {
+                continue;
+            }
             deviceFree(weights_ptr[i]);
         }
 
@@ -116,7 +119,8 @@ ParallelGptWeight<T>::ParallelGptWeight(const ParallelGptWeight& other):
     malloc_load_prompt_weights_(other.malloc_load_prompt_weights_),
     prompt_learning_type_(other.prompt_learning_type_),
     prompt_learning_pair_(other.prompt_learning_pair_),
-    gpt_variant_params_(other.gpt_variant_params_)
+    gpt_variant_params_(other.gpt_variant_params_),
+    shared_embed_(other.shared_embed_)
 {
     mallocWeights();
     if (gpt_variant_params_.has_positional_encoding) {
@@ -173,6 +177,7 @@ ParallelGptWeight<T>& ParallelGptWeight<T>::operator=(const ParallelGptWeight& o
     prompt_learning_type_       = other.prompt_learning_type_;
     prompt_learning_pair_       = other.prompt_learning_pair_;
     gpt_variant_params_         = other.gpt_variant_params_;
+    shared_embed_               = other.shared_embed_;
 
     mallocWeights();
     if (gpt_variant_params_.has_positional_encoding) {
@@ -216,14 +221,21 @@ void ParallelGptWeight<T>::setWeightPtr()
 {
     prompt_learning_table.resize(prompt_learning_pair_.size());
 
-    position_encoding_table       = gpt_variant_params_.has_positional_encoding ? weights_ptr[0] : nullptr;
-    pre_decoder_embedding_table   = weights_ptr[1];
-    pre_decoder_layernorm.gamma   = gpt_variant_params_.has_pre_decoder_layernorm ? weights_ptr[2] : nullptr;
-    pre_decoder_layernorm.beta    = gpt_variant_params_.has_pre_decoder_layernorm ? weights_ptr[3] : nullptr;
-    post_decoder_layernorm.beta   = gpt_variant_params_.has_post_decoder_layernorm ? weights_ptr[4] : nullptr;
-    post_decoder_layernorm.gamma  = gpt_variant_params_.has_post_decoder_layernorm ? weights_ptr[5] : nullptr;
-    post_decoder_embedding.kernel = weights_ptr[6];
-    post_decoder_embedding.bias   = nullptr;
+    position_encoding_table      = gpt_variant_params_.has_positional_encoding ? weights_ptr[0] : nullptr;
+    pre_decoder_embedding_table  = weights_ptr[1];
+    pre_decoder_layernorm.gamma  = gpt_variant_params_.has_pre_decoder_layernorm ? weights_ptr[2] : nullptr;
+    pre_decoder_layernorm.beta   = gpt_variant_params_.has_pre_decoder_layernorm ? weights_ptr[3] : nullptr;
+    post_decoder_layernorm.beta  = gpt_variant_params_.has_post_decoder_layernorm ? weights_ptr[4] : nullptr;
+    post_decoder_layernorm.gamma = gpt_variant_params_.has_post_decoder_layernorm ? weights_ptr[5] : nullptr;
+    if (shared_embed_ && weights_ptr[6] != weights_ptr[1]) {
+        deviceFree(weights_ptr[6]);
+        weights_ptr[6]                = nullptr;
+        post_decoder_embedding.kernel = weights_ptr[1];
+    }
+    else {
+        post_decoder_embedding.kernel = weights_ptr[6];
+    }
+    post_decoder_embedding.bias = nullptr;
 
     // prompt learning tables: set weight ptr
     if (malloc_load_prompt_weights_) {
@@ -300,10 +312,12 @@ void ParallelGptWeight<T>::loadModel(std::string dir_path)
             weights_ptr[5], {hidden_units_}, dir_path + "/model.final_layernorm.weight.bin", model_file_type);
     }
     if (checkIfFileExist(dir_path + "/model.lm_head.weight.bin")) {
+        shared_embed_ = false;
         loadWeightFromBin<T>(
             weights_ptr[6], {vocab_size_ * hidden_units_}, dir_path + "/model.lm_head.weight.bin", model_file_type);
     }
     else {
+        shared_embed_ = true;
         loadWeightFromBin<T>(
             weights_ptr[6], {vocab_size_ * hidden_units_}, dir_path + "/model.wte.bin", model_file_type);
     }
@@ -329,6 +343,7 @@ void ParallelGptWeight<T>::loadModel(std::string dir_path)
             }
         }
     }
+    setWeightPtr();
 
     for (int l = 0; l < num_layer_; l++) {
         if (isValidLayerParallelId(l)) {

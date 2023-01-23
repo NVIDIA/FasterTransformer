@@ -110,7 +110,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('-m', '--model-dir', required=True,
                         help='Path to huggingface model dir where model file and config file is stored')
-    parser.add_argument('-l', '--ft-longformer-lib', type=str, default=os.path.join(project_root, 'build', 'lib', 'libth_longformer.so'),
+    parser.add_argument('-l', '--ft-longformer-lib', type=str, default=os.path.join(project_root, 'build', 'lib', 'libth_transformer.so'),
                         help='Path to fastertransformer longformer pytorch op lib')
     parser.add_argument('--data_type', type=str, choices=['fp32', 'fp16', 'bf16'], default='fp32')
     parser.add_argument('-p', '--passage', type=str, nargs='*', help='Text for paragraph/passage for LongformerBERT QA',

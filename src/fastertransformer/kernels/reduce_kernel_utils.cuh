@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -129,6 +129,30 @@ __inline__ __device__ T blockReduceMax(T val)
     // Modify from blockDim.x << 5 to blockDim.x / 32. to prevent
     // blockDim.x is not divided by 32
     val = (threadIdx.x < (blockDim.x / 32.f)) ? shared[lane] : -1e20f;
+    val = warpReduceMax(val);
+
+    return val;
+}
+
+
+/* Calculate the maximum of all elements in a block */
+template<typename T>
+__inline__ __device__ T blockAllReduceMax(T val)
+{
+    static __shared__ T shared[32];
+    int                 lane = threadIdx.x & 0x1f;  // in-warp idx
+    int                 wid  = threadIdx.x >> 5;    // warp idx
+
+    val = warpReduceMax(val);  // get maxx in each warp
+
+    if (lane == 0)  // record in-warp maxx by warp Idx
+        shared[wid] = val;
+
+    __syncthreads();
+
+    // Modify from blockDim.x << 5 to blockDim.x / 32. to prevent
+    // blockDim.x is not divided by 32
+    val = (lane < (blockDim.x / 32.f)) ? shared[lane] : -1e20f;
     val = warpReduceMax(val);
 
     return val;

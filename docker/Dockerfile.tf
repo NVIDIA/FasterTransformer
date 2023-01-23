@@ -1,4 +1,4 @@
-# Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2022-2023, NVIDIA CORPORATION. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -36,7 +36,8 @@ RUN git submodule update --init --recursive
 ENV NCCL_LAUNCH_MODE=GROUP
 ARG SM=80
 ARG FORCE_BACKEND_REBUILD=0
+ARG ENABLE_FP8=OFF
 RUN mkdir /var/run/sshd -p && \
     mkdir build -p && cd build && \
-    cmake -DSM=${SM} -DCMAKE_BUILD_TYPE=Release -DBUILD_TF=ON -DTF_PATH=/usr/local/lib/python3.8/dist-packages/tensorflow_core/ -DBUILD_MULTI_GPU=ON .. && \
+    cmake -DSM=${SM} -DCMAKE_BUILD_TYPE=Release -DBUILD_TF=ON -DTF_PATH=/usr/local/lib/python3.8/dist-packages/tensorflow_core/ -DBUILD_MULTI_GPU=ON -DENABLE_FP8=${ENABLE_FP8} .. && \
     make -j"$(grep -c ^processor /proc/cpuinfo)"

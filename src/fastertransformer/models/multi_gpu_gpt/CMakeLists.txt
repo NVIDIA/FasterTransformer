@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,7 +30,7 @@ set_property(TARGET ParallelGptContextDecoder PROPERTY CUDA_RESOLVE_DEVICE_SYMBO
 target_link_libraries(ParallelGptContextDecoder PUBLIC -lcudart TensorParallelGeluFfnLayer TensorParallelReluFfnLayer
                                                 TensorParallelGptContextAttentionLayer layernorm_kernels
                                                 add_residual_kernels bert_preprocess_kernels nccl_utils gpt_kernels tensor
-                                                cuda_utils logger)
+                                                nvtx_utils cuda_utils logger)
 
 add_library(ParallelGptDecoder STATIC ParallelGptDecoder.cc)
 set_property(TARGET ParallelGptDecoder PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -44,7 +44,7 @@ set_property(TARGET ParallelGpt PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET ParallelGpt PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(ParallelGpt PUBLIC -lcudart ParallelGptDecoder ParallelGptContextDecoder decoding_kernels gpt_kernels
                       DynamicDecodeLayer BaseBeamSearchLayer bert_preprocess_kernels gen_relative_pos_bias ParallelGptWeight
-                      custom_ar_comm logprob_kernels cuda_utils logger)
+                      custom_ar_comm logprob_kernels cuda_utils logger nvtx_utils)
 
 add_executable(gpt_gemm gpt_gemm.cc)
 target_link_libraries(gpt_gemm PUBLIC -lcudart gpt_gemm_func memory_utils cuda_utils logger)

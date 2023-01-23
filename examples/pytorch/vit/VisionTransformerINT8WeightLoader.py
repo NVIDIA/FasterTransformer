@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -146,7 +146,7 @@ class ViTINT8WeightLoader(object):
         
         return ret
 
-    def to_int8(self, ths_path='../../../lib/libpyt_vit.so'):
+    def to_int8(self, ths_path='../../../lib/libth_transformer.so'):
         if 'transformer.encoder.layer.0.attn.query._input_quantizer._amax' not in self.weights:
             raise RuntimeError("There is no quantization node in the checkpoint, cannot be quantized to int8.")
         if self.int8:

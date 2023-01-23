@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -37,10 +37,8 @@ shift_partition(T2* out_ptr, const T2* input_ptr, int batch, int H, int W, int n
     const int idx_in_window      = (shifted_H_idx % window_size) * window_size + (shifted_W_idx % window_size);
     const int output_bid         = batch_offset + window_idx * window_size * window_size + idx_in_window;
     int       tid                = threadIdx.x;
-    float2    local_out_fp2;
 
-    float local_out = 0.0f;
-    int   id        = bid * n + tid;
+    int id = bid * n + tid;
     if (tid < n) {
         out_ptr[output_bid * n + tid] = input_ptr[id];
     }

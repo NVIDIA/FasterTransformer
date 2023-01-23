@@ -29,7 +29,7 @@ python -m torch.distributed.run --nproc_per_node 1 ../examples/pytorch/gpt/evalu
                --no-load-optim \
                --no-load-rng \
                --ckpt-path "${CHECKPOINT}" \
-               --lib-path "lib/libth_gpt.so" \
+               --lib-path "lib/libth_transformer.so" \
                --beam_width 1 \
                --top_k 1 \
                --top_p 0.0
@@ -57,7 +57,7 @@ python -m torch.distributed.run --nproc_per_node 1 ../examples/pytorch/gpt/evalu
                --no-load-optim \
                --no-load-rng \
                --ckpt-path "${CHECKPOINT}" \
-               --lib-path "lib/libth_gpt.so" \
+               --lib-path "lib/libth_transformer.so" \
                --beam_width 1 \
                --top_k 0 \
                --top_p 0.5

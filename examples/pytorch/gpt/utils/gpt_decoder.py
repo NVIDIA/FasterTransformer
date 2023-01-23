@@ -1,4 +1,4 @@
-# Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -767,6 +767,7 @@ class Gpt:
         self.use_fp32_to_compute_logit = use_fp32_to_compute_logit
 
         self.weight = None
+        self.shared_contexts_ratio = shared_contexts_ratio
 
         torch.classes.load_library(os.path.abspath(lib_path))
 
@@ -807,7 +808,8 @@ class Gpt:
         if comm.is_pipeline_group_first():
             register_param(
                 'word_embedding',
-                torch.nn.Embedding(self.vocab_size, hidden_dim, dtype=compute_dtype))
+                torch.nn.Embedding(self.vocab_size_padded, hidden_dim, dtype=compute_dtype))
+            self._mask_padded_vocab_weights(self.word_embedding.weight)
             if self.config.has_positional_encoding:
                 register_param(
                     'position_encoding',
@@ -828,10 +830,10 @@ class Gpt:
                     torch.nn.LayerNorm(hidden_dim, eps=layernorm_eps, dtype=compute_dtype))
             else:
                 self.post_decoder_layernorm = None
-            lm_head_ctype = compute_dtype if not self.use_fp32_to_compute_logit else torch.float32
+            self.lm_head_ctype = compute_dtype if not self.use_fp32_to_compute_logit else torch.float32
             register_param(
                 'lm_head',
-                torch.nn.Linear(hidden_dim, self.vocab_size_padded, bias=False, dtype=lm_head_ctype))
+                torch.nn.Linear(hidden_dim, self.vocab_size_padded, bias=False, dtype=self.lm_head_ctype))
             self._mask_padded_vocab_weights(self.lm_head.weight)
 
     @classmethod
@@ -888,12 +890,11 @@ class Gpt:
             else:
                 raise FileNotFoundError(f'Faile to load {fname}')
 
-        def _safe_load_lm_head_from_bin(param, fname):
+        def _safe_load_lm_head_from_bin(param, fname, ctype):
             if (checkpoint_path / fname).exists():
                 shape = (self.vocab_size, self.config.head_num * self.config.size_per_head)
                 # np_w is 1-D array since a bin file doesn't have shape info.
                 w_ = np.fromfile(checkpoint_path / fname, dtype=weight_dtype)
-                ctype = compute_dtype if not self.use_fp32_to_compute_logit else torch.float32
                 param.data = param.data.to(ctype)
                 param.data[:self.vocab_size, :] = torch.from_numpy(w_).reshape(shape).to(ctype)
             else:
@@ -903,7 +904,7 @@ class Gpt:
 
         # pylint:disable=line-too-long
         if comm.is_pipeline_group_first():
-            _safe_load_from_bin(self.word_embedding.weight,  'model.wte.bin')
+            _safe_load_lm_head_from_bin(self.word_embedding.weight, 'model.wte.bin', compute_dtype)
             self._mask_padded_vocab_weights(self.word_embedding.weight)
             if self.position_encoding is not None:
                 _safe_load_from_bin(self.position_encoding.weight, 'model.wpe.bin')
@@ -919,9 +920,19 @@ class Gpt:
                 _safe_load_from_bin(self.post_decoder_layernorm.bias,
                                     'model.final_layernorm.bias.bin')
             if (checkpoint_path / 'model.lm_head.weight.bin').exists():
-                _safe_load_lm_head_from_bin(self.lm_head.weight, 'model.lm_head.weight.bin')
+                _safe_load_lm_head_from_bin(self.lm_head.weight, 'model.lm_head.weight.bin', self.lm_head_ctype)
             else:
-                _safe_load_lm_head_from_bin(self.lm_head.weight, 'model.wte.bin')
+                if self.use_fp32_to_compute_logit:
+                    _safe_load_lm_head_from_bin(self.lm_head.weight, 'model.wte.bin', torch.float32)
+                else:
+                    # In this branch we can share the pre and post decoder embeddings, but ONLY pipeline size is 1. 
+                    # When pipeline size > 1, these two weights will end up on different GPUs, so we must load the
+                    # post decoder weight again (else case).
+                    if comm.get_pipeline_para_size() == 1:
+                        self.lm_head.weight = self.word_embedding.weight
+                    else:
+                        _safe_load_lm_head_from_bin(self.lm_head.weight, 'model.wte.bin', compute_dtype)
+
         self.to(device)
 
     @property
@@ -1013,6 +1024,8 @@ class Gpt:
                  top_p_reset_ids: Optional[torch.IntTensor] = None,
                  temperature: Optional[torch.FloatTensor] = None,
                  repetition_penalty: Optional[torch.FloatTensor] = None,
+                 presence_penalty: Optional[torch.FloatTensor] = None,
+                 min_length: Optional[torch.IntTensor] = None,
                  len_penalty: Optional[torch.FloatTensor] = None,
                  beam_search_diversity_rate: Optional[torch.FloatTensor] = None,
                  stop_words_list: Optional[torch.IntTensor] = None,
@@ -1048,6 +1061,11 @@ class Gpt:
                 The temperature value for smoothing the logit distribution.
             repetition_penalty: FloatTensor, (batch_size,),
                 The repetition penalty.
+            presence_penalty: FloatTensor, (batch_size,),
+                The presence penalty, which is exclusive with repetition_penalty.
+                Only one of repetition and presence penalties is allowed.
+            min_length: IntTensor, (batch_size,),
+                Minimum length for each sentences. EOS is masked if length is below min.
             len_penalty: FloatTensor, (batch_size,)
                 The exponent of the length penalty of beam scores.
             beam_search_diversity_rate: FloatTensor, (batch_size,),
@@ -1089,7 +1107,10 @@ class Gpt:
         eos_token_id = eos_token_id if eos_token_id is not None else self.config.end_id
         assert eos_token_id is not None, 'eos_token-id must be specified in generation.'
         eos_token_ids = eos_token_id * torch.ones(batch_size, dtype=torch.int32, device=device)
-
+        assert repetition_penalty is None or presence_penalty is None,\
+            'Found ambiguous parameters repetition_penalty and presence_penalty '\
+            'which are mutually exclusive. Please provide one of repetition_penalty '\
+            'and presence_penalty.'
         # Setup decoder_op prior to calling the forward function.
         self.decode_op.setup(batch_size,
                              beam_width,
@@ -1097,6 +1118,8 @@ class Gpt:
                              top_p,
                              temperature,
                              repetition_penalty,
+                             presence_penalty,
+                             min_length,
                              len_penalty,
                              beam_search_diversity_rate,
                              random_seed,
@@ -1160,12 +1183,24 @@ class Gpt:
                 dtype=self.context_decoder.dtype,
                 device=device)
 
+        use_shared_contexts = (self.shared_contexts_ratio > 0.) and (max_input_length >= 1) and (batch_size > 1)
+        batch_to_compact, compact_to_batch = None, None
+        if use_shared_contexts:
+            find_context_duplications = torch.ops.fastertransformer.find_context_duplications
+            batch_to_compact, compact_to_batch = find_context_duplications(input_token_ids)
+            use_shared_contexts = compact_to_batch.shape[0] <= self.shared_contexts_ratio * batch_size
+
+            if not use_shared_contexts:
+                batch_to_compact, compact_to_batch = None , None
+
         profiler.start('ft-context-decoder')
         _, k_cache, v_cache, last_token_hidden_states = self.context_decoder.forward(
             input_embeds=input_embeds,
             attention_mask=attention_mask,
             input_lengths=input_lengths,
-            memory_length=memory_length)
+            memory_length=memory_length,
+            batch_to_compact_index=batch_to_compact,
+            compact_index=compact_to_batch)
         profiler.stop('ft-context-decoder')
 
         for step in range(max_input_length, max_seq_length):
@@ -1240,6 +1275,8 @@ class Gpt:
                         top_p,
                         temperature,
                         repetition_penalty,
+                        presence_penalty,
+                        min_length,
                         len_penalty,
                         beam_search_diversity_rate,
                         top_p_decay,

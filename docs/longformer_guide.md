@@ -102,7 +102,7 @@ Run the python scripts with:
 ```
 cd /workspace/FasterTransformer
 python3 examples/pytorch/longformer/longformer_qa.py \
-    --ft-longformer-lib build/lib/libth_longformer.so \
+    --ft-longformer-lib build/lib/libth_transformer.so \
     --model-dir examples/pytorch/longformer/longformer-large-4096-finetuned-triviaqa \
     --passage "Jim Henson was a nice puppet" \
     --question "Who was Jim Henson?" \

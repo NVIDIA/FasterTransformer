@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,7 +36,8 @@ T5DecodingWeight<T>::T5DecodingWeight(const size_t                head_num,
                                       const bool                  t5_with_bias_para,
                                       const bool                  use_gated_activation_para,
                                       const PositionEmbeddingType pe_type,
-                                      const size_t                ia3_num_tasks):
+                                      const size_t                ia3_num_tasks,
+                                      const size_t                adapter_inter_size):
     head_num_(head_num),
     size_per_head_(size_per_head),
     d_model_(d_model),
@@ -53,7 +54,8 @@ T5DecodingWeight<T>::T5DecodingWeight(const size_t                head_num,
     use_gated_activation(use_gated_activation_para),
     position_embedding_type(pe_type),
     real_weights_num_(t5_with_bias ? 6 : 4),
-    ia3_num_tasks_(ia3_num_tasks)
+    ia3_num_tasks_(ia3_num_tasks),
+    adapter_inter_size_(adapter_inter_size)
 {
     FT_LOG_DEBUG("T5DecodingWeight " + std::string(__func__) + " start");
     FT_CHECK(num_layer_ % pipeline_para_size_ == 0);
@@ -74,7 +76,8 @@ T5DecodingWeight<T>::T5DecodingWeight(const size_t                head_num,
                                                                         tensor_para_rank_,
                                                                         t5_with_bias,
                                                                         use_gated_activation,
-                                                                        ia3_num_tasks_));
+                                                                        ia3_num_tasks_,
+                                                                        adapter_inter_size_));
         }
         else {
             decoder_layer_weights.push_back(new T5DecoderLayerWeight<T>());
@@ -108,6 +111,9 @@ T5DecodingWeight<T>::~T5DecodingWeight()
     if (is_maintain_buffer == true) {
         decoder_layer_weights.clear();
         for (int i = 0; i < real_weights_num_; i++) {
+            if (shared_embed_ && i == 3 && weights_ptr[i] == nullptr) {
+                continue;
+            }
             deviceFree(weights_ptr[i]);
         }
 
@@ -140,7 +146,9 @@ T5DecodingWeight<T>::T5DecodingWeight(const T5DecodingWeight& other):
     use_gated_activation(other.use_gated_activation),
     position_embedding_type(other.position_embedding_type),
     real_weights_num_(other.real_weights_num_),
-    ia3_num_tasks_(other.ia3_num_tasks_)
+    ia3_num_tasks_(other.ia3_num_tasks_),
+    adapter_inter_size_(other.adapter_inter_size_),
+    shared_embed_(other.shared_embed_)
 {
     FT_LOG_DEBUG("T5DecodingWeight " + std::string(__func__) + " start");
     initialize();
@@ -178,6 +186,8 @@ T5DecodingWeight<T>& T5DecodingWeight<T>::operator=(const T5DecodingWeight& othe
     position_embedding_type    = other.position_embedding_type;
     real_weights_num_          = other.real_weights_num_;
     ia3_num_tasks_             = other.ia3_num_tasks_;
+    adapter_inter_size_        = other.adapter_inter_size_;
+    shared_embed_              = other.shared_embed_;
 
     FT_LOG_DEBUG("T5DecodingWeight " + std::string(__func__) + " start");
     initialize();
@@ -213,7 +223,14 @@ void T5DecodingWeight<T>::setWeightPtr()
     pre_decoder_embedding_table             = weights_ptr[0];
     absolute_or_relative_position_embedding = weights_ptr[1];
     post_decoder_layernorm.gamma            = weights_ptr[2];
-    post_decoder_embedding.kernel           = weights_ptr[3];
+    if (shared_embed_ && weights_ptr[1] != weights_ptr[3]) {
+        deviceFree(weights_ptr[3]);
+        weights_ptr[3]                = nullptr;
+        post_decoder_embedding.kernel = weights_ptr[1];
+    }
+    else {
+        post_decoder_embedding.kernel = weights_ptr[3];
+    }
     if (t5_with_bias) {
         post_decoder_layernorm.beta = weights_ptr[4];
         post_decoder_embedding.bias = weights_ptr[5];
@@ -241,10 +258,12 @@ void T5DecodingWeight<T>::loadModel(std::string dir_path)
     loadWeightFromBin<T>(
         weights_ptr[2], {(size_t)weights_size[2]}, dir_path + "/decoder.final_layer_norm.weight.bin", model_file_type);
     if (checkIfFileExist(dir_path + "/lm_head.weight.bin")) {
+        shared_embed_ = false;
         loadWeightFromBin<T>(
             weights_ptr[3], {(size_t)weights_size[3]}, dir_path + "/lm_head.weight.bin", model_file_type);
     }
     else {
+        shared_embed_ = true;
         loadWeightFromBin<T>(
             weights_ptr[3], {(size_t)weights_size[3]}, dir_path + "/shared.weight_T.bin", model_file_type);
     }

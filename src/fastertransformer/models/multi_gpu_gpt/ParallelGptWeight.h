@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -89,7 +89,8 @@ private:
     size_t tensor_para_rank_;
     size_t layer_para_size_;
     size_t layer_para_rank_;
-    size_t int8_mode_ = 0;
+    size_t int8_mode_    = 0;
+    bool   shared_embed_ = false;
 
     // gpt variants: e.g. meta opt
     gptVariantParams gpt_variant_params_;

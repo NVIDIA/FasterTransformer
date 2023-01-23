@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -134,7 +134,7 @@ __global__ void length_criterion(bool*           finished,
 
 void invokeLengthCriterion(bool*           finished,
                            bool*           should_stop,
-                           int*            finished_sum,
+                           int*            h_pinned_finished_sum_,
                            const uint32_t* sequence_limit_length,
                            int             batch_size,
                            int             beam_width,
@@ -146,14 +146,14 @@ void invokeLengthCriterion(bool*           finished,
     FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
     dim3 block{min(512, uint32_t(batch_size * beam_width))};
     dim3 grid{1};
+    h_pinned_finished_sum_[0] = -1;
 
     length_criterion<<<grid, block, 0, stream>>>(
-        finished, should_stop, finished_sum, sequence_limit_length, batch_size, beam_width, step);
+        finished, should_stop, h_pinned_finished_sum_, sequence_limit_length, batch_size, beam_width, step);
+    while (((volatile size_t*)h_pinned_finished_sum_)[0] == -1) {};
     sync_check_cuda_error();
 
-    int h_finished_sum = 0;
-    cudaD2Hcpy(&h_finished_sum, finished_sum, 1);
-    *should_stop = h_finished_sum == batch_size * beam_width;
+    *should_stop = h_pinned_finished_sum_[0] == batch_size * beam_width;
 }
 
 }  // namespace fastertransformer

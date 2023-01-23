@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -189,8 +189,7 @@ void OnlineBeamSearchLayer<T>::allocateBuffer(size_t batch_size, size_t beam_wid
     // 64 is the max beam width we support now.
     topk_softmax_workspace_size_ =
         (size_t)(ceil(batch_size * 64 * (64 * 2) / 4.) * 4 * 2
-                 + ceil(batch_size * (64 * 2) * SMALL_TOP_K_SOFTMAX_MAX_VOC_PARTS * (2 * (MAX_K * 2) + 2) / 4.)
-                       * 4);
+                 + ceil(batch_size * (64 * 2) * SMALL_TOP_K_SOFTMAX_MAX_VOC_PARTS * (2 * (MAX_K * 2) + 2) / 4.) * 4);
 
     topk_softmax_workspace_ = reinterpret_cast<float*>(
         allocator_->reMalloc(topk_softmax_workspace_, sizeof(float) * topk_softmax_workspace_size_, true));

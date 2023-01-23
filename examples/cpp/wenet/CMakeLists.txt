@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,15 +13,13 @@
 # limitations under the License.
 
 add_executable(wenet_encoder_example wenet_encoder_example.cc)
-if (SPARSITY_SUPPORT)
-target_link_libraries(wenet_encoder_example PUBLIC -lcublas -lcublasLt -lcudart -lcusparse -lcusparseLt -lcudnn WenetEncoder)
-else()
 target_link_libraries(wenet_encoder_example PUBLIC -lcublas -lcublasLt -lcudart -lcudnn WenetEncoder)
+if (SPARSITY_SUPPORT)
+target_link_libraries(wenet_encoder_example PUBLIC -lcusparse -lcusparseLt)
 endif()
 
 add_executable(wenet_decoder_example wenet_decoder_example.cc)
+target_link_libraries(wenet_decoder_example PUBLIC -lcublas -lcublasLt -lcudart -lcudnn WenetDecoder)
 if(SPARSITY_SUPPORT)
-    target_link_libraries(wenet_decoder_example PUBLIC -lcublas -lcublasLt -lcudart -lcusparse -lcusparseLt -lcudnn WenetDecoder)
-else()
-    target_link_libraries(wenet_decoder_example PUBLIC -lcublas -lcublasLt -lcudart -lcudnn WenetDecoder)
+    target_link_libraries(wenet_decoder_example PUBLIC -lcublas -lcusparse -lcusparseLt)
 endif()

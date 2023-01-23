@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -5304,12 +5304,6 @@ public:
                 {kSM_75, fastertransformer::DATA_TYPE_INT8, 256, 64, 1},
                 {kSM_75, fastertransformer::DATA_TYPE_INT8, 384, 64, 1},
 #if CUDA_VERSION >= 11000
-                {kSM_80, fastertransformer::DATA_TYPE_FP16, 128, 32, 4},
-                {kSM_80, fastertransformer::DATA_TYPE_FP16, 128, 40, 4},
-                {kSM_80, fastertransformer::DATA_TYPE_FP16, 128, 64, 4},
-                {kSM_80, fastertransformer::DATA_TYPE_FP16, 256, 64, 4},
-                {kSM_80, fastertransformer::DATA_TYPE_FP16, 384, 64, 4},
-                {kSM_80, fastertransformer::DATA_TYPE_INT8, 128, 64, 4},
                 {kSM_80, fastertransformer::DATA_TYPE_INT8, 192, 64, 16},
                 {kSM_80, fastertransformer::DATA_TYPE_INT8, 256, 64, 8},
                 {kSM_80, fastertransformer::DATA_TYPE_INT8, 384, 64, 8},

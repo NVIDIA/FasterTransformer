@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -70,4 +70,6 @@ private:
     T*    d_encoder_outputs_   = nullptr;
     T*    d_output_attentions_ = nullptr;
     bool* d_within_range_      = nullptr;
+
+    std::exception_ptr h_exception_ = nullptr;
 };

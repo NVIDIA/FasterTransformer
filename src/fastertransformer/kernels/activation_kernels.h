@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -88,6 +88,13 @@ void invokeAddBiasGeluV2(T*           out,
                          cudaStream_t stream);
 
 template<typename T>
+void invokeAddBias(T* out, T const* bias, const int m, const int n, cudaStream_t stream)
+{
+    invokeGenericActivation<IdentityActivation, T, T>(
+        out, bias, nullptr, nullptr, nullptr, nullptr, m, n, 0, nullptr, nullptr, stream);
+}
+
+template<typename T>
 void invokeAddBiasGeluV2(
     T* out, const T* bias, const int* ia3_tasks, const T* ia3_weights, const int m, const int n, cudaStream_t stream)
 {
@@ -95,5 +102,9 @@ void invokeAddBiasGeluV2(
 }
 
 template<typename T>
+void invokeAddBiasTanh(T* out, const T* bias, const int m, const int n, cudaStream_t stream);
+
+template<typename T>
 void invokeSigmoid(T* data, const int size, const float scale, cudaStream_t stream);
+
 }  // namespace fastertransformer

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -60,6 +60,8 @@ T5EncoderTritonModel<T>::T5EncoderTritonModel(INIReader reader, std::string mode
     encoder_vocab_size_    = reader.GetInteger("encoder", "vocab_size");
     encoder_num_bucket_or_max_pos_seq_len_ =
         reader.GetInteger("encoder", "relative_attention_num_buckets_or_max_pos_seq_len");
+    encoder_adapter_.interSize(reader.GetInteger("encoder", "adapter_inter_size", 0));
+    encoder_adapter_.layerNormType(reader.Get("encoder", "adapter_norm_position", "pre"));
 
     tensor_para_size_         = reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size");
     pipeline_para_size_       = reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size");
@@ -104,6 +106,8 @@ T5EncoderTritonModel<T>::T5EncoderTritonModel(size_t      tensor_para_size,
     encoder_vocab_size_    = reader.GetInteger("encoder", "vocab_size");
     encoder_num_bucket_or_max_pos_seq_len_ =
         reader.GetInteger("encoder", "relative_attention_num_buckets_or_max_pos_seq_len");
+    encoder_adapter_.interSize(reader.GetInteger("encoder", "adapter_inter_size", 0));
+    encoder_adapter_.layerNormType(reader.Get("encoder", "adapter_norm_position", "pre"));
 
     // encoder prompt
     num_tasks_                = reader.GetInteger("encoder", "num_tasks", 0);
@@ -211,7 +215,8 @@ std::unique_ptr<AbstractTransformerModelInstance> T5EncoderTritonModel<T>::creat
                                                                        prompt_learning_start_id_,
                                                                        prompt_learning_type_,
                                                                        custom_all_reduce_comm,
-                                                                       enable_custom_all_reduce_));
+                                                                       enable_custom_all_reduce_,
+                                                                       encoder_adapter_));
 
     return std::unique_ptr<T5EncoderTritonModelInstance<T>>(
         new T5EncoderTritonModelInstance<T>(std::move(encoder),
@@ -247,7 +252,8 @@ void T5EncoderTritonModel<T>::createSharedWeights(int device_id, int rank)
                                                  position_embedding_type_,
                                                  ft::PromptLearningType::no_prompt,
                                                  std::map<std::string, std::pair<int, int>>{},
-                                                 ia3_num_tasks_);
+                                                 ia3_num_tasks_,
+                                                 encoder_adapter_.interSize());
 
     encoder_shared_weights_[device_id]->loadModel(model_dir_);
     return;
@@ -265,7 +271,8 @@ std::string T5EncoderTritonModel<T>::toString()
        << "\n    encoder_d_model_: " << encoder_d_model_ << "\n    encoder_inter_size_: " << encoder_inter_size_
        << "\n    encoder_num_layer_: " << encoder_num_layer_ << "\n    encoder_vocab_size_: " << encoder_vocab_size_
        << "\n    encoder_num_bucket_or_max_pos_seq_len_: " << encoder_num_bucket_or_max_pos_seq_len_
-       << "\n    t5_with_bias_: " << t5_with_bias_ << "\n    use_gated_activation_: " << use_gated_activation_
+       << "\n    encoder_adapter_: " << encoder_adapter_.toString() << "\n    t5_with_bias_: " << t5_with_bias_
+       << "\n    use_gated_activation_: " << use_gated_activation_
        << "\n   position_embedding_type_: " << position_embedding_type_string << "\n    model_name_: " << model_name_
        << "\n    model_dir_: " << model_dir_ << std::endl;
 

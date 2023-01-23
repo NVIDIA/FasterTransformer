@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -36,6 +36,17 @@ add_library(layernorm_int8_kernels STATIC layernorm_int8_kernels.cu)
 set_property(TARGET layernorm_int8_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET layernorm_int8_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
+if(ENABLE_FP8)
+add_library(layernorm_fp8_kernels STATIC layernorm_fp8_kernels.cu)
+set_property(TARGET layernorm_fp8_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET layernorm_fp8_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+endif()
+
+if(ENABLE_FP8)
+add_executable(layernorm_fp8_kernels_test layernorm_fp8_kernels_test.cc)
+target_link_libraries(layernorm_fp8_kernels_test PUBLIC layernorm_fp8_kernels layernorm_kernels memory_utils)
+endif()
+
 add_library(ban_bad_words STATIC ban_bad_words.cu)
 set_property(TARGET ban_bad_words PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET ban_bad_words PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
@@ -51,6 +62,12 @@ set_property(TARGET activation_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 add_library(activation_int8_kernels STATIC activation_int8_kernels.cu)
 set_property(TARGET activation_int8_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET activation_int8_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+if(ENABLE_FP8)
+add_library(activation_fp8_kernels STATIC activation_fp8_kernels.cu)
+set_property(TARGET activation_fp8_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET activation_fp8_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+endif()
 
 add_library(layout_transformer_int8_kernels STATIC layout_transformer_int8_kernels.cu)
 set_property(TARGET layout_transformer_int8_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -101,6 +118,11 @@ add_library(matrix_transpose_kernels STATIC matrix_transpose_kernels.cu)
 set_property(TARGET matrix_transpose_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET matrix_transpose_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
+if(ENABLE_FP8)
+add_executable(matrix_transpose_fp8_kernels_test matrix_transpose_fp8_kernels_test.cc)
+target_link_libraries(matrix_transpose_fp8_kernels_test PUBLIC matrix_transpose_kernels memory_utils)
+endif()
+
 add_library(unfused_attention_int8_kernels STATIC unfused_attention_int8_kernels.cu)
 set_property(TARGET unfused_attention_int8_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET unfused_attention_int8_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
@@ -108,6 +130,21 @@ set_property(TARGET unfused_attention_int8_kernels PROPERTY CUDA_RESOLVE_DEVICE_
 add_library(unfused_attention_kernels STATIC unfused_attention_kernels.cu)
 set_property(TARGET unfused_attention_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET unfused_attention_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+if(ENABLE_FP8)
+add_library(unfused_attention_fp8_kernels STATIC unfused_attention_fp8_kernels.cu)
+set_property(TARGET unfused_attention_fp8_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET unfused_attention_fp8_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+endif()
+
+add_library(disentangled_attention_kernels STATIC disentangled_attention_kernels.cu)
+set_property(TARGET disentangled_attention_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET disentangled_attention_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+if(ENABLE_FP8)
+add_executable(unfused_attention_fp8_kernels_test unfused_attention_fp8_kernels_test.cc)
+target_link_libraries(unfused_attention_fp8_kernels_test PUBLIC unfused_attention_fp8_kernels unfused_attention_kernels memory_utils)
+endif()
 
 add_library(bert_preprocess_kernels STATIC bert_preprocess_kernels.cu)
 set_property(TARGET bert_preprocess_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -129,6 +166,11 @@ file(GLOB decoder_masked_multihead_attention_files ${decoder_masked_multihead_at
 add_library(decoder_masked_multihead_attention STATIC ${decoder_masked_multihead_attention_files})
 set_property(TARGET decoder_masked_multihead_attention PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET decoder_masked_multihead_attention PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
+if(ENABLE_FP8)
+add_executable(decoder_masked_multihead_attention_fp8_test decoder_masked_multihead_attention_fp8_test.cc)
+target_link_libraries(decoder_masked_multihead_attention_fp8_test PUBLIC decoder_masked_multihead_attention memory_utils)
+endif()
 
 add_library(add_residual_kernels STATIC add_residual_kernels.cu)
 set_property(TARGET add_residual_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -157,6 +199,7 @@ set_property(TARGET gpt_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 add_library(beam_search_penalty_kernels STATIC beam_search_penalty_kernels.cu)
 set_property(TARGET beam_search_penalty_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET beam_search_penalty_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+target_link_libraries(beam_search_penalty_kernels PRIVATE cuda_utils)
 
 add_library(beam_search_topk_kernels STATIC beam_search_topk_kernels.cu)
 set_property(TARGET beam_search_topk_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)

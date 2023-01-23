@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,10 +24,6 @@
 #include <string>
 #include <sys/time.h>
 #include <vector>
-
-#ifdef USE_NVTX
-bool NVTX_ON = true;
-#endif
 
 using namespace fastertransformer;
 
@@ -152,7 +148,9 @@ void gpt_example(const INIReader reader)
     const uint        top_k              = (uint)reader.GetInteger("ft_instance_hyperparameter", "top_k");
     const float       top_p              = reader.GetFloat("ft_instance_hyperparameter", "top_p");
     const float       temperature        = reader.GetFloat("ft_instance_hyperparameter", "temperature");
-    const float       repetition_penalty = reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty");
+    const float       repetition_penalty = reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty", 1.0f);
+    const float       presence_penalty   = reader.GetFloat("ft_instance_hyperparameter", "presence_penalty", 0.0f);
+    const int         min_length         = reader.GetInteger("ft_instance_hyperparameter", "min_length", 0);
     const std::string model_dir          = std::string(reader.Get("ft_instance_hyperparameter", "model_dir"));
     const bool        sparse             = static_cast<bool>(reader.GetInteger("ft_instance_hyperparameter", "sparse"));
     const float shared_contexts_ratio    = reader.GetFloat("ft_instance_hyperparameter", "shared_contexts_ratio", 1.0f);
@@ -160,6 +158,14 @@ void gpt_example(const INIReader reader)
     const float beam_search_diversity_rate =
         reader.GetFloat("ft_instance_hyperparameter", "beam_search_diversity_rate");
     const unsigned long long int random_seed = 0;
+
+    FT_CHECK_WITH_INFO(
+        repetition_penalty == 1.0f || presence_penalty == 0.0f,
+        fmtstr("Found ambiguous parameters repetition_penalty (%f) and presence_penalty (%f) "
+               "which are mutually exclusive. Please remove one of repetition_penalty or presence_penalty "
+               "or set to a default value.",
+               repetition_penalty,
+               presence_penalty));
 
     const size_t head_num       = reader.GetInteger(model_name, "head_num");
     const size_t size_per_head  = reader.GetInteger(model_name, "size_per_head");
@@ -283,6 +289,9 @@ void gpt_example(const INIReader reader)
                                         size_per_head,
                                         inter_size,
                                         decoder_layers,
+                                        0,   // expert_num
+                                        0,   // moe_k
+                                        {},  // moe_layer_index
                                         vocab_size,
                                         start_id,
                                         end_id,
@@ -324,7 +333,16 @@ void gpt_example(const INIReader reader)
          Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<size_t>{request_batch_size}, output_seq_len.data()}},
         {"temperature", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &temperature}},
         {"len_penalty", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &len_penalty}},
-        {"repetition_penalty", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &repetition_penalty}}};
+        {"min_length", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{1}, &min_length}}};
+
+    if (repetition_penalty != 1.0f) {
+        input_tensors.insert(
+            {"repetition_penalty", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &repetition_penalty}});
+    }
+    if (presence_penalty != 0.0f) {
+        input_tensors.insert(
+            {"presence_penalty", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &presence_penalty}});
+    }
     if (top_k == 0 && top_p == 0.0f) {
         FT_CHECK(beam_width > 1);
         input_tensors.insert({"beam_search_diversity_rate",
@@ -373,20 +391,20 @@ void gpt_example(const INIReader reader)
     cudaProfilerStart();
     // warm up
     ite = 1;
-    nvtx::setScope("warmup_time");
+    ft_nvtx::setScope("warmup_time");
     PUSH_RANGE("warmup time")
     for (int i = 0; i < ite; ++i) {
         gpt.forward(&output_tensors, &input_tensors, &gpt_weights);
     }
     cudaDeviceSynchronize();
     POP_RANGE;
-    nvtx::resetScope();
+    ft_nvtx::resetScope();
 
     struct timeval start, end;
     cudaDeviceSynchronize();
     gettimeofday(&start, NULL);
 
-    nvtx::setScope("total_time");
+    ft_nvtx::setScope("total_time");
     PUSH_RANGE("total time")
     for (int i = 0; i < ite; ++i) {
         gpt.forward(&output_tensors, &input_tensors, &gpt_weights);
@@ -394,7 +412,7 @@ void gpt_example(const INIReader reader)
 
     cudaDeviceSynchronize();
     POP_RANGE;
-    nvtx::resetScope();
+    ft_nvtx::resetScope();
     gettimeofday(&end, NULL);
 
     cudaProfilerStop();

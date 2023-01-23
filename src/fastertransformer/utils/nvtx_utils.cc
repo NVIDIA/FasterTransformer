@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,9 +14,14 @@
  * limitations under the License.
  */
 
-#include "nvtx_utils.h"
+#include <iostream>
 
-namespace nvtx {
+#include "nvtx_utils.h"
+#ifdef USE_NVTX
+#include "nvToolsExt.h"
+#endif
+
+namespace ft_nvtx {
 std::string getScope()
 {
     return scope;
@@ -36,4 +41,49 @@ void resetScope()
     scope = "";
     return;
 }
-}  // namespace nvtx
+void setDeviceDomain(int deviceId)
+{
+    domain = deviceId;
+    return;
+}
+void resetDeviceDomain()
+{
+    domain = 0;
+    return;
+}
+int getDeviceDomain()
+{
+    return domain;
+}
+
+bool isEnableNvtx()
+{
+    if (!has_read_nvtx_env) {
+        static char* ft_nvtx_env_char = std::getenv("FT_NVTX");
+        is_enable_ft_nvtx = (ft_nvtx_env_char != nullptr && std::string(ft_nvtx_env_char) == "ON") ? true : false;
+        has_read_nvtx_env = true;
+    }
+    return is_enable_ft_nvtx;
+}
+
+void ftNvtxRangePush(std::string name)
+{
+#ifdef USE_NVTX
+    nvtxStringHandle_t    nameId      = nvtxDomainRegisterStringA(NULL, (getScope() + name).c_str());
+    nvtxEventAttributes_t eventAttrib = {0};
+    eventAttrib.messageType           = NVTX_MESSAGE_TYPE_REGISTERED;
+    eventAttrib.message.registered    = nameId;
+    eventAttrib.payloadType           = NVTX_PAYLOAD_TYPE_INT32;
+    eventAttrib.payload.iValue        = getDeviceDomain();
+    nvtxRangePushEx(&eventAttrib);
+#endif
+}
+
+void ftNvtxRangePop()
+{
+#ifdef USE_NVTX
+    nvtxRangePop();
+#endif
+}
+
+}  // namespace ft_nvtx

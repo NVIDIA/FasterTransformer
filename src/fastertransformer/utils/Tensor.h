@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 #pragma once
 
 #include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
+#include "src/fastertransformer/utils/cuda_fp8_utils.h"
 #include "src/fastertransformer/utils/cuda_utils.h"
 #include "src/fastertransformer/utils/string_utils.h"
 
@@ -50,6 +51,7 @@ typedef enum datatype_enum {
     TYPE_FP64,
     TYPE_BYTES,
     TYPE_BF16,
+    TYPE_FP8_E4M3,
     TYPE_STR,
     TYPE_VOID,
 } DataType;
@@ -66,6 +68,11 @@ DataType getTensorType()
 #ifdef ENABLE_BF16
     else if (std::is_same<T, __nv_bfloat16>::value || std::is_same<T, const __nv_bfloat16>::value) {
         return TYPE_BF16;
+    }
+#endif
+#ifdef ENABLE_FP8
+    else if (std::is_same<T, __nv_fp8_e4m3>::value || std::is_same<T, const __nv_fp8_e4m3>::value) {
+        return TYPE_FP8_E4M3;
     }
 #endif
     else if (std::is_same<T, int>::value || std::is_same<T, const int>::value) {
@@ -326,7 +333,7 @@ public:
     inline void insert(const std::string& key, const Tensor& value)
     {
         FT_CHECK_WITH_INFO(!isExist(key), fmtstr("Duplicated key %s", key.c_str()));
-        FT_CHECK_WITH_INFO(isValid(value), fmtstr("A none tensor or nullptr is not allowed. key: %s", key.c_str()));
+        FT_CHECK_WITH_INFO(isValid(value), fmtstr("A none tensor or nullptr is not allowed (key is %s)", key.c_str()));
         tensor_map_.insert({key, value});
     }
 
@@ -376,6 +383,7 @@ public:
 
     inline Tensor at(const std::string& key, Tensor& default_tensor) const
     {
+        FT_LOG_DEBUG("%s for key %s", __PRETTY_FUNCTION__, key.c_str());
         if (isExist(key)) {
             return tensor_map_.at(key);
         }

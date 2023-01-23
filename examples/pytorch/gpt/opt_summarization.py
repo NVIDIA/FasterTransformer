@@ -1,4 +1,4 @@
-# Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -41,7 +41,7 @@ def main():
     parser.add_argument('--data_type', type=str, choices=['fp32', 'fp16', 'bf16'], default='fp32')
     parser.add_argument("--cache_path", type=str, default="/workdir/datasets/ccdv/")
     parser.add_argument("--max_ite", type=int, default=20)
-    parser.add_argument('--lib_path', type=str, default='./lib/libth_parallel_gpt.so',
+    parser.add_argument('--lib_path', type=str, default='./lib/libth_transformer.so',
                         help='path to the pyt_fastertransformer dynamic lib file.')
     parser.add_argument('--tensor_para_size', type=int, default=1,
                         help='tensor parallel size')

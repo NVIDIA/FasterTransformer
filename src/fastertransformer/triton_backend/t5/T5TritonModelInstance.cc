@@ -196,8 +196,15 @@ T5TritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::string
         decoding_input_tensors.insert({"ia3_tasks", as_GPU_tensor(input_tensors->at("ia3_tasks"), d_input_ia3_tasks_)});
     }
 
-    t5_encoder_->forward(&encoder_output_tensors, &encoder_input_tensors, t5_encoder_weight_.get());
-    t5_decoding_->forward(&decoding_output_tensors, &decoding_input_tensors, t5_decoding_weight_.get());
+    try {
+        t5_encoder_->forward(&encoder_output_tensors, &encoder_input_tensors, t5_encoder_weight_.get());
+        t5_decoding_->forward(&decoding_output_tensors, &decoding_input_tensors, t5_decoding_weight_.get());
+    }
+    catch (...) {
+        h_exception_ = std::current_exception();
+        decoding_output_tensors.insert(
+            {"error_message", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_BYTES, {1}, &h_exception_}});
+    }
 
     return convert_outputs(decoding_output_tensors);
 }

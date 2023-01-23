@@ -1,4 +1,4 @@
-# Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -33,3 +33,11 @@ add_library(fpA_intB_gemm STATIC ${fpA_intB_files})
 set_property(TARGET fpA_intB_gemm PROPERTY POSITION_INDEPENDENT_CODE ON)
 set_property(TARGET fpA_intB_gemm PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
 target_link_libraries(fpA_intB_gemm PRIVATE cutlass_heuristic)
+
+set(int8_files "")
+file(GLOB int8_files ${int8_files} ./int8_gemm/*.cu)
+add_library(int8_gemm STATIC ${int8_files})
+# target_compile_options(int8_gemm PRIVATE "-Xptxas=-v")
+set_property(TARGET int8_gemm PROPERTY POSITION_INDEPENDENT_CODE ON)
+set_property(TARGET int8_gemm PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS ON)
+target_link_libraries(int8_gemm PRIVATE cutlass_heuristic)

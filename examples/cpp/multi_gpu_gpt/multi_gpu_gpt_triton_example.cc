@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@
 #include "src/fastertransformer/utils/custom_ar_comm.h"
 #include "src/fastertransformer/utils/mpi_utils.h"
 #include "src/fastertransformer/utils/nccl_utils.h"
+#include "src/fastertransformer/utils/nvtx_utils.h"
 
 namespace ft = fastertransformer;
 
@@ -40,6 +41,8 @@ broadcastRequest(const std::vector<int>&      v_start_ids,
                  const float                  temperature,
                  const float                  len_penalty,
                  const float                  repetition_penalty,
+                 const float                  presence_penalty,
+                 const int                    min_length,
                  const unsigned long long int random_seed,
                  const bool                   is_return_log_probs,
                  const bool                   is_return_context_cum_log_probs,
@@ -155,6 +158,26 @@ broadcastRequest(const std::vector<int>&      v_start_ids,
         request_list[device_id]->insert(
             {"repetition_penalty",
              triton::Tensor{triton::MEMORY_CPU, triton::TYPE_FP32, std::vector<size_t>{1}, repetition_penalty_ptr}});
+        if (repetition_penalty != 1.0f) {
+            float* repetition_penalty_ptr = new float(repetition_penalty);
+            pointer_record->push_back(repetition_penalty_ptr);
+            request_list[device_id]->insert(
+                {"repetition_penalty",
+                 triton::Tensor{
+                     triton::MEMORY_CPU, triton::TYPE_FP32, std::vector<size_t>{1}, repetition_penalty_ptr}});
+        }
+        if (presence_penalty != 0.0f) {
+            float* presence_penalty_ptr = new float(presence_penalty);
+            pointer_record->push_back(presence_penalty_ptr);
+            request_list[device_id]->insert(
+                {"presence_penalty",
+                 triton::Tensor{triton::MEMORY_CPU, triton::TYPE_FP32, std::vector<size_t>{1}, presence_penalty_ptr}});
+        }
+        int* min_length_ptr = new int(min_length);
+        pointer_record->push_back(min_length_ptr);
+        request_list[device_id]->insert(
+            {"min_length",
+             triton::Tensor{triton::MEMORY_CPU, triton::TYPE_INT32, std::vector<size_t>{1}, min_length_ptr}});
         unsigned long long int* random_seed_ptr = new unsigned long long int(random_seed);
         pointer_record->push_back(random_seed_ptr);
         request_list[device_id]->insert(
@@ -201,7 +224,9 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
     const int    top_k              = reader.GetInteger("ft_instance_hyperparameter", "top_k");
     const float  top_p              = reader.GetFloat("ft_instance_hyperparameter", "top_p");
     const float  temperature        = reader.GetFloat("ft_instance_hyperparameter", "temperature");
-    const float  repetition_penalty = reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty");
+    const float  repetition_penalty = reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty", 1.0f);
+    const float  presence_penalty   = reader.GetFloat("ft_instance_hyperparameter", "presence_penalty", 0.0f);
+    const int    min_length         = reader.GetInteger("ft_instance_hyperparameter", "min_length", 0);
     const float  len_penalty        = reader.GetFloat("ft_instance_hyperparameter", "len_penalty");
     const float  beam_search_diversity_rate =
         reader.GetFloat("ft_instance_hyperparameter", "beam_search_diversity_rate");
@@ -239,6 +264,8 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
                                          temperature,
                                          len_penalty,
                                          repetition_penalty,
+                                         presence_penalty,
+                                         min_length,
                                          random_seed,
                                          is_return_log_probs,
                                          is_return_context_cum_log_probs,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
  */
 
 #include "src/fastertransformer/layers/attention_layers/TensorParallelDecoderSelfAttentionLayer.h"
+#include "src/fastertransformer/utils/nvtx_utils.h"
 
 namespace fastertransformer {
 
@@ -208,47 +209,18 @@ void TensorParallelDecoderSelfAttentionLayer<T>::forward(TensorMap*             
 
     DecoderSelfAttentionLayer<T>::forward(output_tensors, input_tensors, attention_weights);
 
+    PUSH_RANGE("all reduce sum");
     T* attention_out = output_tensors->getPtr<T>("hidden_features");
     if (tensor_para_.world_size_ > 1 && do_all_reduce_) {
-        // TODO(mseznec): temporary fix to increase performance. In the future, use fp16 as gemm output directly (with
-        // cutlass)
-        const bool cast_int_fp = DecoderSelfAttentionLayer<T>::int8_mode_ == 2;
-        if (cast_int_fp) {
-            attention_out_fp_ = reinterpret_cast<T*>(
-                DecoderSelfAttentionLayer<T>::allocator_->reMalloc(attention_out_fp_, sizeof(T) * size, false));
-            invokeCudaD2DScaleCpyConvert(attention_out_fp_,
-                                         reinterpret_cast<int32_t*>(attention_out),
-                                         attention_weights->attention_output_weight.scale_inter,
-                                         false,
-                                         size,
-                                         DecoderSelfAttentionLayer<T>::stream_);
-        }
         if (!use_custom_all_reduce_kernel) {
-            ftNcclAllReduceSum(cast_int_fp ? attention_out_fp_ : attention_out,
-                               cast_int_fp ? attention_out_fp_ : attention_out,
-                               size,
-                               tensor_para_,
-                               DecoderSelfAttentionLayer<T>::stream_);
+            ftNcclAllReduceSum(attention_out, attention_out, size, tensor_para_, DecoderSelfAttentionLayer<T>::stream_);
         }
         else {
             custom_all_reduce_comm_->customAllReduce(size, DecoderSelfAttentionLayer<T>::stream_);
         }
-        if (cast_int_fp) {
-            invokeCudaD2DScaleCpyConvert(reinterpret_cast<int32_t*>(attention_out),
-                                         attention_out_fp_,
-                                         attention_weights->attention_output_weight.scale_inter,
-                                         true,
-                                         size,
-                                         DecoderSelfAttentionLayer<T>::stream_);
-        }
         sync_check_cuda_error();
     }
-}
-
-template<typename T>
-TensorParallelDecoderSelfAttentionLayer<T>::~TensorParallelDecoderSelfAttentionLayer()
-{
-    DecoderSelfAttentionLayer<T>::allocator_->free((void**)&attention_out_fp_);
+    POP_RANGE;
 }
 
 template class TensorParallelDecoderSelfAttentionLayer<float>;

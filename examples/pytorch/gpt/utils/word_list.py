@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -33,8 +33,8 @@ def get_tokenizer(vocab_file=None, bpe_file=None):
     return tokenizer
 
 
-def to_word_list_format(word_dict):
-    tokenizer = get_tokenizer()
+def to_word_list_format(word_dict, tokenizer=None):
+    tokenizer = get_tokenizer() if tokenizer is None else tokenizer
 
     flat_ids = []
     offsets = []
@@ -61,7 +61,10 @@ def to_word_list_format(word_dict):
         flat_ids[i] = np.pad(ids, (0, pad_to - len(ids)), constant_values=0)
         offsets[i] = np.pad(offs, (0, pad_to - len(offs)), constant_values=-1)
 
-    return np.array([flat_ids, offsets], dtype="int32").transpose((1, 0, 2))
+    result = np.array([flat_ids, offsets], dtype="int32").transpose((1, 0, 2))
+    if result.shape[0] == 1:
+      result = result.squeeze(0)
+    return np.ascontiguousarray(result)
 
 
 def save_word_list(filename, word_list):

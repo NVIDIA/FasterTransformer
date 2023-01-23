@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,8 @@
 #include "src/fastertransformer/layers/attention_layers/DecoderSelfAttentionLayer.h"
 #include "src/fastertransformer/kernels/decoder_masked_multihead_attention.h"
 #include "src/fastertransformer/utils/logger.h"
+#include "src/fastertransformer/utils/memory_utils.h"
+#include "src/fastertransformer/utils/nvtx_utils.h"
 
 namespace fastertransformer {
 
@@ -138,7 +140,9 @@ void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
         params.attention_out_scale = attention_out_scale;
     }
 
+    PUSH_RANGE("scaled dot-product fusion");
     masked_multihead_attention(params, stream);
+    POP_RANGE;
 }
 
 #define INSTANTIATE_FUSEDQKV_MASKED_ATTENTION_DISPATCH(T)                                                              \
@@ -187,23 +191,7 @@ INSTANTIATE_FUSEDQKV_MASKED_ATTENTION_DISPATCH(__nv_bfloat16);
 template<typename T>
 void DecoderSelfAttentionLayer<T>::allocateBuffer()
 {
-    const size_t type_size = int8_mode_ == 2 ? sizeof(int8_t) : sizeof(T);
-    if (is_allocate_buffer_ == false) {
-        qkv_buf_ = reinterpret_cast<T*>(
-            allocator_->reMalloc(qkv_buf_, type_size * max_batch_size_ * 3 * local_hidden_units_, false));
-        context_buf_ = reinterpret_cast<T*>(
-            allocator_->reMalloc(context_buf_, type_size * max_batch_size_ * local_hidden_units_, false));
-
-        if (int8_mode_ == 1) {
-            // We use max_size for n and k since we reuse buffers for both FCs and want to allocate the max
-            // possible memory that would be required by any of the individual gemms.
-            const int max_size    = std::max(d_model_, 3 * local_hidden_units_);
-            mixed_gemm_ws_bytes_  = weight_only_int8_fc_runner_->getWorkspaceSize(max_batch_size_, max_size, max_size);
-            mixed_gemm_workspace_ = (char*)allocator_->reMalloc(mixed_gemm_workspace_, mixed_gemm_ws_bytes_, false);
-        }
-
-        is_allocate_buffer_ = true;
-    }
+    FT_CHECK_WITH_INFO(false, "Deprecated. Use `allocateBuffer(size_t batch_size)` instead");
 }
 
 template<typename T>
@@ -223,6 +211,12 @@ void DecoderSelfAttentionLayer<T>::allocateBuffer(size_t batch_size)
         mixed_gemm_ws_bytes_  = weight_only_int8_fc_runner_->getWorkspaceSize(batch_size, max_size, max_size);
         mixed_gemm_workspace_ = (char*)allocator_->reMalloc(mixed_gemm_workspace_, mixed_gemm_ws_bytes_, false);
     }
+    else if (int8_mode_ == 2) {
+        const int max_size   = std::max(d_model_, 3 * local_hidden_units_);
+        int8_gemm_ws_bytes_  = int8_fc_runner_->getWorkspaceSize(batch_size, max_size, max_size);
+        int8_gemm_workspace_ = (char*)allocator_->reMalloc(int8_gemm_workspace_, int8_gemm_ws_bytes_, false);
+    }
+
     is_allocate_buffer_ = true;
 }
 
@@ -280,6 +274,7 @@ DecoderSelfAttentionLayer<T>::DecoderSelfAttentionLayer(size_t           max_bat
     neox_rotary_style_(neox_rotary_style),
     d_model_(d_model),
     q_scaling_(q_scaling),
+    int8_fc_runner_(int8_mode == 2 ? std::make_shared<CutlassInt8GemmRunner<T>>() : nullptr),
     int8_mode_(int8_mode)
 {
     FT_CHECK(size_per_head_ == 32 || size_per_head_ == 48 || size_per_head_ == 64 || size_per_head_ == 80
@@ -520,6 +515,7 @@ void DecoderSelfAttentionLayer<T>::forward(TensorMap*                output_tens
     constexpr bool use_sparse_gemm = false;
 #endif
 
+    PUSH_RANGE("qkv_gemm");
     if (use_sparse_gemm) {
 #ifdef SPARSITY_ENABLED
         cublas_wrapper_->SpGemm(CUBLAS_OP_N,
@@ -581,6 +577,7 @@ void DecoderSelfAttentionLayer<T>::forward(TensorMap*                output_tens
         }
     }
     sync_check_cuda_error();
+    POP_RANGE;
     fusedQKV_masked_attention_dispatch<T>(
         qkv_buf_,
         attention_weights->query_weight.bias,
@@ -617,6 +614,7 @@ void DecoderSelfAttentionLayer<T>::forward(TensorMap*                output_tens
         stream_);
     sync_check_cuda_error();
 
+    PUSH_RANGE("proj gemm");
 #ifdef SPARSITY_ENABLED
     use_sparse_gemm = sparse_ && cublas_wrapper_->isUseSparse(1, d_model_, m_padded, local_hidden_units_);
 #endif
@@ -652,15 +650,18 @@ void DecoderSelfAttentionLayer<T>::forward(TensorMap*                output_tens
                 stream_);
         }
         else if (int8_mode_ == 2) {
-            cublas_wrapper_->Int8Gemm(d_model_,
-                                      batch_size,
-                                      local_hidden_units_,
-                                      attention_weights->attention_output_weight.int8_kernel,
-                                      local_hidden_units_,
-                                      reinterpret_cast<int8_t*>(context_buf_),
-                                      local_hidden_units_,
-                                      output_tensors->getPtr<int32_t>("hidden_features"),
-                                      d_model_);
+            int8_fc_runner_->gemm(reinterpret_cast<int8_t*>(context_buf_),
+                                  attention_weights->attention_output_weight.int8_kernel,
+                                  QuantMode::PerTensorQuant,
+                                  attention_weights->attention_output_weight.scale_inter,
+                                  attention_weights->attention_output_weight.scale_out,
+                                  output_tensors->getPtr<T>("hidden_features"),
+                                  batch_size,
+                                  d_model_,
+                                  local_hidden_units_,
+                                  nullptr,
+                                  0,
+                                  stream_);
         }
         else {
             cublas_wrapper_->Gemm(CUBLAS_OP_N,
@@ -677,6 +678,7 @@ void DecoderSelfAttentionLayer<T>::forward(TensorMap*                output_tens
         }
         sync_check_cuda_error();
     }
+    POP_RANGE;
 
     if (is_free_buffer_after_forward_) {
         freeBuffer();

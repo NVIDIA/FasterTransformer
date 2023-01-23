@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -55,7 +55,7 @@ private:
     bool isValidSeqLen(size_t seq_len);
 
 protected:
-    size_t* token_num_;
+    size_t* h_pinned_token_num_ptr_;
     int*    padding_offset_;
     int*    trt_mha_padding_offset_;
     T*      attention_mask_;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -29,7 +29,6 @@ private:
     std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm_;
     int                                 enable_custom_all_reduce_;
     bool                                do_all_reduce_;
-    T*                                  ffn_output_fp_ = nullptr;
 
 protected:
 public:
@@ -51,8 +50,6 @@ public:
                                int                                 enable_custom_all_reduce = 0);
 
     TensorParallelSiluFfnLayer(TensorParallelSiluFfnLayer<T> const& ffn_layer);
-
-    virtual ~TensorParallelSiluFfnLayer();
 
     void forward(std::vector<fastertransformer::Tensor>*       output_tensors,
                  const std::vector<fastertransformer::Tensor>* input_tensors,

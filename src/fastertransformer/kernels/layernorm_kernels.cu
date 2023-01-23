@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,8 +36,12 @@ __global__ void generalAddBiasResidualLayerNormOpt(T* normed_output,
                                                    const float* scale_inter,
                                                    const float* scale_out,
                                                    const float* scale,
+                                                   float*       dynamic_scale,
                                                    const int    int8_mode)
 {
+    extern __shared__ __align__(sizeof(float)) char _shmem[];  // Align on largest type
+    T*                                              shmem = reinterpret_cast<T*>(_shmem);
+
     __shared__ float s_mean;
     __shared__ float s_variance;
     float            mean     = 0.0f;
@@ -46,8 +50,10 @@ __global__ void generalAddBiasResidualLayerNormOpt(T* normed_output,
     using Int8_Packed_T  = typename packed_as<int8_t, num_elems<T>::value>::type;
     using Int32_Packed_T = typename packed_as<int32_t, num_elems<T>::value>::type;
     using Float_Packed_T = typename packed_as<float, num_elems<T>::value>::type;
+    using Scalar_T       = typename packed_as<T, 1>::type;
 
-    const bool scale_input = int8_mode == 2 && scale_inter != nullptr;
+    const bool scale_input     = int8_mode == 2 && scale_inter != nullptr;
+    const bool dynamic_scaling = dynamic_scale != nullptr;
 
     T local_sum = cuda_cast<T>(0.0f);
 
@@ -80,6 +86,7 @@ __global__ void generalAddBiasResidualLayerNormOpt(T* normed_output,
             }
             val = hadd2(val, input[index]);
         }
+        shmem[i]      = val;
         output[index] = val;
         local_sum     = hadd2(local_sum, val);
     }
@@ -109,19 +116,39 @@ __global__ void generalAddBiasResidualLayerNormOpt(T* normed_output,
     T mean_2 = cuda_cast<T>(s_mean);
     T var_2  = cuda_cast<T>(s_variance);
 
+    Scalar_T abs_max = 1e-6f;
+
 #pragma unroll UNROLL_FACTOR
     for (int i = threadIdx.x; i < n; i += blockDim.x) {
         const int index = blockIdx.x * n + i;
-        T         val   = hmul2(hsub2(output[index], mean_2), var_2, ldg(&gamma[i]));
+        T         val   = hmul2(hsub2(shmem[i], mean_2), var_2, ldg(&gamma[i]));
         if (IS_BETA) {
             val = hadd2(val, ldg(&beta[i]));
         }
-        if (int8_mode == 2) {
+
+        if (dynamic_scaling) {
+            abs_max  = cuda_max(cuda_max<Scalar_T>(cuda_abs(val)), abs_max);
+            shmem[i] = val;
+        }
+        else if (int8_mode == 2) {
             reinterpret_cast<Int8_Packed_T*>(normed_output)[index] =
                 cuda_cast<Int8_Packed_T>(cuda_cast<Float_Packed_T>(val) * scale_to_int);
         }
         else {
             normed_output[index] = val;
+        }
+    }
+
+    if (dynamic_scaling) {
+        float       abs_max_f               = blockAllReduceMax(cuda_cast<float>(abs_max));
+        const float dynamic_per_token_scale = 127. / abs_max_f;
+        for (int i = threadIdx.x; i < n; i += blockDim.x) {
+            const int index                                        = blockIdx.x * n + i;
+            reinterpret_cast<Int8_Packed_T*>(normed_output)[index] = cuda_cast<Int8_Packed_T>(
+                cuda_cast<Float_Packed_T>(shmem[i]) * cuda_cast<Float_Packed_T>(dynamic_per_token_scale));
+        }
+        if (threadIdx.x == 0) {
+            dynamic_scale[blockIdx.x] = (*scale * abs_max_f) / 127.f;
         }
     }
 }
@@ -142,8 +169,12 @@ __global__ void generalAddBiasResidualLayerNormOpt2(T* normed_output,
                                                     const float* scale_inter,
                                                     const float* scale_out,
                                                     const float* scale,
+                                                    float*       dynamic_scale,
                                                     const int    int8_mode)
 {
+    extern __shared__ __align__(sizeof(float)) char _shmem[];
+    T*                                              shmem = reinterpret_cast<T*>(_shmem);
+
     __shared__ float s_mean;
     __shared__ float s_variance;
     float            x_sum    = 0.0f;
@@ -154,10 +185,12 @@ __global__ void generalAddBiasResidualLayerNormOpt2(T* normed_output,
     using Int8_Packed_T  = typename packed_as<int8_t, num_elems<T>::value>::type;
     using Int32_Packed_T = typename packed_as<int32_t, num_elems<T>::value>::type;
     using Float_Packed_T = typename packed_as<float, num_elems<T>::value>::type;
+    using Scalar_T       = typename packed_as<T, 1>::type;
 
     const bool           scale_input  = int8_mode == 2 && scale_inter != nullptr;
     const Float_Packed_T scale_vec_in = cuda_cast<Float_Packed_T>(scale_input ? (*scale_inter) * (*scale_out) : 0.0f);
     const Float_Packed_T scale_vec    = cuda_cast<Float_Packed_T>(int8_mode == 2 ? *scale : 0.0f);
+    const bool           dynamic_scaling = dynamic_scale != nullptr;
 
 #pragma unroll UNROLL_FACTOR
     for (int i = threadIdx.x; i < n; i += blockDim.x) {
@@ -196,6 +229,7 @@ __global__ void generalAddBiasResidualLayerNormOpt2(T* normed_output,
         }
         tmp.x         = cuda_cast<T1>(val_1);
         tmp.y         = cuda_cast<T1>(val_2);
+        shmem[i]      = tmp;
         output[index] = tmp;
         x_sum += val_1 + val_2;
         x2_sum += val_1 * val_1 + val_2 * val_2;
@@ -214,19 +248,39 @@ __global__ void generalAddBiasResidualLayerNormOpt2(T* normed_output,
     T mean_2 = cuda_cast<T>(s_mean);
     T var_2  = cuda_cast<T>(s_variance);
 
+    Scalar_T abs_max = 1e-6f;
+
 #pragma unroll UNROLL_FACTOR
     for (int i = threadIdx.x; i < n; i += blockDim.x) {
-        const int index = b_offset + i;
-        T         val   = hmul2(hsub2(output[index], mean_2), var_2, ldg(&gamma[i]));
+        const int index = blockIdx.x * n + i;
+        T         val   = hmul2(hsub2(shmem[i], mean_2), var_2, ldg(&gamma[i]));
         if (IS_BETA) {
             val = hadd2(val, ldg(&beta[i]));
         }
-        if (int8_mode == 2) {
+
+        if (dynamic_scaling) {
+            abs_max  = cuda_max(cuda_max<Scalar_T>(cuda_abs(val)), abs_max);
+            shmem[i] = val;
+        }
+        else if (int8_mode == 2) {
             reinterpret_cast<Int8_Packed_T*>(normed_output)[index] =
                 cuda_cast<Int8_Packed_T>(cuda_cast<Float_Packed_T>(val) * scale_vec);
         }
         else {
             normed_output[index] = val;
+        }
+    }
+
+    if (dynamic_scaling) {
+        float       abs_max_f               = blockAllReduceMax(cuda_cast<float>(abs_max));
+        const float dynamic_per_token_scale = 127. / abs_max_f;
+        for (int i = threadIdx.x; i < n; i += blockDim.x) {
+            const int index                                        = blockIdx.x * n + i;
+            reinterpret_cast<Int8_Packed_T*>(normed_output)[index] = cuda_cast<Int8_Packed_T>(
+                cuda_cast<Float_Packed_T>(shmem[i]) * cuda_cast<Float_Packed_T>(dynamic_per_token_scale));
+        }
+        if (threadIdx.x == 0) {
+            dynamic_scale[blockIdx.x] = (*scale * abs_max_f) / 127.f;
         }
     }
 }
@@ -688,16 +742,29 @@ __global__ void generalAddBiasResidualLayerNorm(const T* __restrict input,
                                                 const float* scale_inter,
                                                 const float* scale_out,
                                                 const float* scale,
+                                                float*       dynamic_scale,
                                                 const int    int8_mode)
 {
     int tid = threadIdx.x;
+
+    // NOTE: float shmem may exceed the shared memory limit
+    extern __shared__ __align__(sizeof(float)) char _shmem[];
+    T*                                              shmem = reinterpret_cast<T*>(_shmem);
+
+    using Int8_Packed_T  = typename packed_as<int8_t, num_elems<T>::value>::type;
+    using Int32_Packed_T = typename packed_as<int32_t, num_elems<T>::value>::type;
+    using Float_Packed_T = typename packed_as<float, num_elems<T>::value>::type;
+    using Scalar_T       = typename packed_as<T, 1>::type;
+
+    const bool dynamic_scaling = dynamic_scale != nullptr;
 
     __shared__ float s_mean;
     __shared__ float s_variance;
     float            mean     = 0.0f;
     float            variance = 0.0f;
 
-    const float scale_out_val = int8_mode == 2 ? (*scale_inter) * (*scale_out) : 0.0f;
+    const bool  is_input_i32  = int8_mode == 2 && scale_inter != nullptr && scale_out != nullptr;
+    const float scale_out_val = is_input_i32 ? (*scale_inter) * (*scale_out) : 0.0f;
     float       local_sum     = 0.0f;
     for (int i = tid; i < n; i += blockDim.x) {
         float local_out = 0.0f;
@@ -707,7 +774,7 @@ __global__ void generalAddBiasResidualLayerNorm(const T* __restrict input,
         else if (RESIDUAL_NUM == 2) {
             local_out = (float)(ldg(&residual1[blockIdx.x * n + i])) + float(ldg(&residual2[blockIdx.x * n + i]));
         }
-        if (int8_mode == 2) {
+        if (is_input_i32) {
             local_out += cuda_cast<float>(reinterpret_cast<const int32_t*>(input)[blockIdx.x * n + i]) * scale_out_val;
         }
         else {
@@ -717,6 +784,7 @@ __global__ void generalAddBiasResidualLayerNorm(const T* __restrict input,
         if (bias != nullptr) {
             local_out += (float)(ldg(&bias[i]));
         }
+        shmem[i]                   = (T)local_out;
         output[blockIdx.x * n + i] = (T)local_out;
         local_sum += local_out;
     }
@@ -740,73 +808,460 @@ __global__ void generalAddBiasResidualLayerNorm(const T* __restrict input,
     }
     __syncthreads();
 
+    Scalar_T abs_max = 1e-6f;
+
     const float scale_val = int8_mode == 2 ? *scale : 0.0f;
     for (int i = tid; i < n; i += blockDim.x) {
         float       beta_val = (beta == nullptr) ? 0.0f : (float)(ldg(&beta[i]));
-        const float res =
-            ((((float)output[blockIdx.x * n + i] - s_mean) * s_variance) * (float)(ldg(&gamma[i])) + beta_val);
-        if (int8_mode == 2) {
-            reinterpret_cast<int8_t*>(norm_output)[blockIdx.x * n + i] = cuda_cast<int8_t>(res * scale_val);
+        const float val      = ((((float)shmem[i] - s_mean) * s_variance) * (float)(ldg(&gamma[i])) + beta_val);
+
+        if (dynamic_scaling) {
+            abs_max  = cuda_max(cuda_max<Scalar_T, float>(cuda_abs(val)), abs_max);
+            shmem[i] = (T)val;
+        }
+        else if (int8_mode == 2) {
+            reinterpret_cast<int8_t*>(norm_output)[blockIdx.x * n + i] = cuda_cast<int8_t>(val * scale_val);
         }
         else {
-            norm_output[blockIdx.x * n + i] = (T)res;
+            norm_output[blockIdx.x * n + i] = (T)val;
+        }
+    }
+
+    if (dynamic_scaling) {
+        float       abs_max_f               = blockAllReduceMax(cuda_cast<float>(abs_max));
+        const float dynamic_per_token_scale = 127. / abs_max_f;
+        for (int i = tid; i < n; i += blockDim.x) {
+            const int index                                      = blockIdx.x * n + i;
+            reinterpret_cast<Int8_Packed_T*>(norm_output)[index] = cuda_cast<Int8_Packed_T>(
+                cuda_cast<Float_Packed_T>(shmem[i]) * cuda_cast<Float_Packed_T>(dynamic_per_token_scale));
+        }
+        if (threadIdx.x == 0) {
+            dynamic_scale[blockIdx.x] = (*scale * abs_max_f) / 127.f;
         }
     }
 }
 
-#define HALF_LAYERNORM_OPT(UNROLL_FACTOR, RESIDUAL_NUM)                                                                \
-    generalAddBiasResidualLayerNormOpt<T2, true, true, RESIDUAL_NUM, true, UNROLL_FACTOR>                              \
-        <<<grid, block, 0, stream>>>((T2*)norm_output,                                                                 \
-                                     (T2*)output,                                                                      \
-                                     (const T2*)input,                                                                 \
-                                     (const T2*)bias,                                                                  \
-                                     (const T2*)residual1,                                                             \
-                                     (const T2*)residual2,                                                             \
-                                     (const T2*)gamma,                                                                 \
-                                     (const T2*)beta,                                                                  \
-                                     layernorm_eps,                                                                    \
-                                     m,                                                                                \
-                                     half_n,                                                                           \
-                                     scale_inter,                                                                      \
-                                     scale_out,                                                                        \
-                                     scale,                                                                            \
-                                     int8_mode)
-
-#define HALF_LAYERNORM_OPT2(UNROLL_FACTOR, RESIDUAL_NUM)                                                               \
-    generalAddBiasResidualLayerNormOpt2<T2, true, true, RESIDUAL_NUM, true, UNROLL_FACTOR>                             \
-        <<<grid, block, 0, stream>>>((T2*)norm_output,                                                                 \
-                                     (T2*)output,                                                                      \
-                                     (const T2*)input,                                                                 \
-                                     (const T2*)bias,                                                                  \
-                                     (const T2*)residual1,                                                             \
-                                     (const T2*)residual2,                                                             \
-                                     (const T2*)gamma,                                                                 \
-                                     (const T2*)beta,                                                                  \
-                                     layernorm_eps,                                                                    \
-                                     m,                                                                                \
-                                     half_n,                                                                           \
-                                     scale_inter,                                                                      \
-                                     scale_out,                                                                        \
-                                     scale,                                                                            \
-                                     int8_mode)
-
-#define HALF_LAYERNORM_OPT_RESIDUAL(UNROLL_FACTOR, OPT_TYPE)                                                           \
-    if (residual_num == 1) {                                                                                           \
-        if (OPT_TYPE == 1) {                                                                                           \
-            HALF_LAYERNORM_OPT(UNROLL_FACTOR, 1);                                                                      \
-        }                                                                                                              \
-        else if (OPT_TYPE == 2) {                                                                                      \
-            HALF_LAYERNORM_OPT2(UNROLL_FACTOR, 1);                                                                     \
-        }                                                                                                              \
-    }                                                                                                                  \
-    else if (residual_num == 2) {                                                                                      \
-        if (OPT_TYPE == 1) {                                                                                           \
-            HALF_LAYERNORM_OPT(UNROLL_FACTOR, 2);                                                                      \
-        }                                                                                                              \
-        else if (OPT_TYPE == 2) {                                                                                      \
-            HALF_LAYERNORM_OPT2(UNROLL_FACTOR, 2);                                                                     \
-        }                                                                                                              \
+template<typename T, bool IS_OUTPUT, bool IS_BIAS, int UNROLL_FACTOR, int RESIDUAL_NUM>
+void dispatch_generalAddBiasResidualLayerNormOpt_opt_version(T*           norm_output,
+                                                             T*           output,
+                                                             const T*     input,
+                                                             const T*     bias,
+                                                             const T*     residual1,
+                                                             const T*     residual2,
+                                                             const T*     gamma,
+                                                             const T*     beta,
+                                                             float        layernorm_eps,
+                                                             int          m,
+                                                             int          half_n,
+                                                             const float* scale_inter,
+                                                             const float* scale_out,
+                                                             const float* scale,
+                                                             float*       dynamic_scale,
+                                                             int          int8_mode,
+                                                             dim3         grid,
+                                                             dim3         block,
+                                                             cudaStream_t stream,
+                                                             int          opt_version)
+{
+    size_t maxbytes = half_n * sizeof(T);
+    if (opt_version == 1) {
+        if (maxbytes >= (48 << 10)) {
+            check_cuda_error(cudaFuncSetAttribute(
+                generalAddBiasResidualLayerNormOpt<T, IS_OUTPUT, IS_BIAS, RESIDUAL_NUM, true, UNROLL_FACTOR>,
+                cudaFuncAttributeMaxDynamicSharedMemorySize,
+                maxbytes));
+        }
+        generalAddBiasResidualLayerNormOpt<T, IS_OUTPUT, IS_BIAS, RESIDUAL_NUM, true, UNROLL_FACTOR>
+            <<<grid, block, maxbytes, stream>>>(norm_output,
+                                                output,
+                                                input,
+                                                bias,
+                                                residual1,
+                                                residual2,
+                                                gamma,
+                                                beta,
+                                                layernorm_eps,
+                                                m,
+                                                half_n,
+                                                scale_inter,
+                                                scale_out,
+                                                scale,
+                                                dynamic_scale,
+                                                int8_mode);
     }
+    else if (opt_version == 2) {
+        if (maxbytes >= (48 << 10)) {
+            check_cuda_error(cudaFuncSetAttribute(
+                generalAddBiasResidualLayerNormOpt2<T, IS_OUTPUT, IS_BIAS, RESIDUAL_NUM, true, UNROLL_FACTOR>,
+                cudaFuncAttributeMaxDynamicSharedMemorySize,
+                maxbytes));
+        }
+        generalAddBiasResidualLayerNormOpt2<T, IS_OUTPUT, IS_BIAS, RESIDUAL_NUM, true, UNROLL_FACTOR>
+            <<<grid, block, maxbytes, stream>>>(norm_output,
+                                                output,
+                                                input,
+                                                bias,
+                                                residual1,
+                                                residual2,
+                                                gamma,
+                                                beta,
+                                                layernorm_eps,
+                                                m,
+                                                half_n,
+                                                scale_inter,
+                                                scale_out,
+                                                scale,
+                                                dynamic_scale,
+                                                int8_mode);
+    }
+    else {
+        FT_CHECK_WITH_INFO(false, "opt_num must be 1 or 2");
+    }
+}
+
+template<typename T, bool IS_BIAS, int UNROLL_FACTOR, int RESIDUAL_NUM>
+void dispatch_generalAddBiasResidualLayerNormOpt_is_output(T*           norm_output,
+                                                           T*           output,
+                                                           const T*     input,
+                                                           const T*     bias,
+                                                           const T*     residual1,
+                                                           const T*     residual2,
+                                                           const T*     gamma,
+                                                           const T*     beta,
+                                                           float        layernorm_eps,
+                                                           int          m,
+                                                           int          half_n,
+                                                           const float* scale_inter,
+                                                           const float* scale_out,
+                                                           const float* scale,
+                                                           float*       dynamic_scale,
+                                                           int          int8_mode,
+                                                           dim3         grid,
+                                                           dim3         block,
+                                                           cudaStream_t stream,
+                                                           int          opt_version,
+                                                           bool         is_output)
+{
+    if (is_output) {
+        dispatch_generalAddBiasResidualLayerNormOpt_opt_version<T, true, IS_BIAS, UNROLL_FACTOR, RESIDUAL_NUM>(
+            norm_output,
+            output,
+            input,
+            bias,
+            residual1,
+            residual2,
+            gamma,
+            beta,
+            layernorm_eps,
+            m,
+            half_n,
+            scale_inter,
+            scale_out,
+            scale,
+            dynamic_scale,
+            int8_mode,
+            grid,
+            block,
+            stream,
+            opt_version);
+    }
+    else {
+        dispatch_generalAddBiasResidualLayerNormOpt_opt_version<T, false, IS_BIAS, UNROLL_FACTOR, RESIDUAL_NUM>(
+            norm_output,
+            output,
+            input,
+            bias,
+            residual1,
+            residual2,
+            gamma,
+            beta,
+            layernorm_eps,
+            m,
+            half_n,
+            scale_inter,
+            scale_out,
+            scale,
+            dynamic_scale,
+            int8_mode,
+            grid,
+            block,
+            stream,
+            opt_version);
+    }
+}
+
+template<typename T, int UNROLL_FACTOR, int RESIDUAL_NUM>
+void dispatch_generalAddBiasResidualLayerNormOpt_bias(T*           norm_output,
+                                                      T*           output,
+                                                      const T*     input,
+                                                      const T*     bias,
+                                                      const T*     residual1,
+                                                      const T*     residual2,
+                                                      const T*     gamma,
+                                                      const T*     beta,
+                                                      float        layernorm_eps,
+                                                      int          m,
+                                                      int          half_n,
+                                                      const float* scale_inter,
+                                                      const float* scale_out,
+                                                      const float* scale,
+                                                      float*       dynamic_scale,
+                                                      int          int8_mode,
+                                                      dim3         grid,
+                                                      dim3         block,
+                                                      cudaStream_t stream,
+                                                      int          opt_version,
+                                                      bool         is_output)
+{
+    if (bias != nullptr) {
+        dispatch_generalAddBiasResidualLayerNormOpt_is_output<T, true, UNROLL_FACTOR, RESIDUAL_NUM>(norm_output,
+                                                                                                    output,
+                                                                                                    input,
+                                                                                                    bias,
+                                                                                                    residual1,
+                                                                                                    residual2,
+                                                                                                    gamma,
+                                                                                                    beta,
+                                                                                                    layernorm_eps,
+                                                                                                    m,
+                                                                                                    half_n,
+                                                                                                    scale_inter,
+                                                                                                    scale_out,
+                                                                                                    scale,
+                                                                                                    dynamic_scale,
+                                                                                                    int8_mode,
+                                                                                                    grid,
+                                                                                                    block,
+                                                                                                    stream,
+                                                                                                    opt_version,
+                                                                                                    is_output);
+    }
+    else {
+        dispatch_generalAddBiasResidualLayerNormOpt_is_output<T, false, UNROLL_FACTOR, RESIDUAL_NUM>(norm_output,
+                                                                                                     output,
+                                                                                                     input,
+                                                                                                     bias,
+                                                                                                     residual1,
+                                                                                                     residual2,
+                                                                                                     gamma,
+                                                                                                     beta,
+                                                                                                     layernorm_eps,
+                                                                                                     m,
+                                                                                                     half_n,
+                                                                                                     scale_inter,
+                                                                                                     scale_out,
+                                                                                                     scale,
+                                                                                                     dynamic_scale,
+                                                                                                     int8_mode,
+                                                                                                     grid,
+                                                                                                     block,
+                                                                                                     stream,
+                                                                                                     opt_version,
+                                                                                                     is_output);
+    }
+}
+
+template<typename T, int UNROLL_FACTOR>
+void dispatch_generalAddBiasResidualLayerNormOpt_residual_num(T*           norm_output,
+                                                              T*           output,
+                                                              const T*     input,
+                                                              const T*     bias,
+                                                              const T*     residual1,
+                                                              const T*     residual2,
+                                                              const T*     gamma,
+                                                              const T*     beta,
+                                                              float        layernorm_eps,
+                                                              int          m,
+                                                              int          half_n,
+                                                              const float* scale_inter,
+                                                              const float* scale_out,
+                                                              const float* scale,
+                                                              float*       dynamic_scale,
+                                                              int          int8_mode,
+                                                              dim3         grid,
+                                                              dim3         block,
+                                                              cudaStream_t stream,
+                                                              int          opt_version,
+                                                              bool         is_output,
+                                                              int          residual_num)
+{
+    if (residual_num == 1) {
+        dispatch_generalAddBiasResidualLayerNormOpt_bias<T, UNROLL_FACTOR, 1>(norm_output,
+                                                                              output,
+                                                                              input,
+                                                                              bias,
+                                                                              residual1,
+                                                                              residual2,
+                                                                              gamma,
+                                                                              beta,
+                                                                              layernorm_eps,
+                                                                              m,
+                                                                              half_n,
+                                                                              scale_inter,
+                                                                              scale_out,
+                                                                              scale,
+                                                                              dynamic_scale,
+                                                                              int8_mode,
+                                                                              grid,
+                                                                              block,
+                                                                              stream,
+                                                                              opt_version,
+                                                                              is_output);
+    }
+    else if (residual_num == 2) {
+        dispatch_generalAddBiasResidualLayerNormOpt_bias<T, UNROLL_FACTOR, 2>(norm_output,
+                                                                              output,
+                                                                              input,
+                                                                              bias,
+                                                                              residual1,
+                                                                              residual2,
+                                                                              gamma,
+                                                                              beta,
+                                                                              layernorm_eps,
+                                                                              m,
+                                                                              half_n,
+                                                                              scale_inter,
+                                                                              scale_out,
+                                                                              scale,
+                                                                              dynamic_scale,
+                                                                              int8_mode,
+                                                                              grid,
+                                                                              block,
+                                                                              stream,
+                                                                              opt_version,
+                                                                              is_output);
+    }
+    else {
+        FT_CHECK_WITH_INFO(false, "residual_num must be 1 or 2");
+    }
+}
+
+template<typename T>
+void dispatch_generalAddBiasResidualLayerNormOpt_unroll_factor(T*           norm_output,
+                                                               T*           output,
+                                                               const T*     input,
+                                                               const T*     bias,
+                                                               const T*     residual1,
+                                                               const T*     residual2,
+                                                               const T*     gamma,
+                                                               const T*     beta,
+                                                               float        layernorm_eps,
+                                                               int          m,
+                                                               int          half_n,
+                                                               const float* scale_inter,
+                                                               const float* scale_out,
+                                                               const float* scale,
+                                                               float*       dynamic_scale,
+                                                               int          int8_mode,
+                                                               dim3         grid,
+                                                               dim3         block,
+                                                               cudaStream_t stream,
+                                                               int          opt_version,
+                                                               bool         is_output,
+                                                               int          residual_num,
+                                                               int          unroll_factor)
+{
+    switch (unroll_factor) {
+        case 1:
+            dispatch_generalAddBiasResidualLayerNormOpt_residual_num<T, 1>(norm_output,
+                                                                           output,
+                                                                           input,
+                                                                           bias,
+                                                                           residual1,
+                                                                           residual2,
+                                                                           gamma,
+                                                                           beta,
+                                                                           layernorm_eps,
+                                                                           m,
+                                                                           half_n,
+                                                                           scale_inter,
+                                                                           scale_out,
+                                                                           scale,
+                                                                           dynamic_scale,
+                                                                           int8_mode,
+                                                                           grid,
+                                                                           block,
+                                                                           stream,
+                                                                           opt_version,
+                                                                           is_output,
+                                                                           residual_num);
+            break;
+        case 2:
+            dispatch_generalAddBiasResidualLayerNormOpt_residual_num<T, 2>(norm_output,
+                                                                           output,
+                                                                           input,
+                                                                           bias,
+                                                                           residual1,
+                                                                           residual2,
+                                                                           gamma,
+                                                                           beta,
+                                                                           layernorm_eps,
+                                                                           m,
+                                                                           half_n,
+                                                                           scale_inter,
+                                                                           scale_out,
+                                                                           scale,
+                                                                           dynamic_scale,
+                                                                           int8_mode,
+                                                                           grid,
+                                                                           block,
+                                                                           stream,
+                                                                           opt_version,
+                                                                           is_output,
+                                                                           residual_num);
+            break;
+        case 4:
+            dispatch_generalAddBiasResidualLayerNormOpt_residual_num<T, 4>(norm_output,
+                                                                           output,
+                                                                           input,
+                                                                           bias,
+                                                                           residual1,
+                                                                           residual2,
+                                                                           gamma,
+                                                                           beta,
+                                                                           layernorm_eps,
+                                                                           m,
+                                                                           half_n,
+                                                                           scale_inter,
+                                                                           scale_out,
+                                                                           scale,
+                                                                           dynamic_scale,
+                                                                           int8_mode,
+                                                                           grid,
+                                                                           block,
+                                                                           stream,
+                                                                           opt_version,
+                                                                           is_output,
+                                                                           residual_num);
+            break;
+        case 8:
+            dispatch_generalAddBiasResidualLayerNormOpt_residual_num<T, 8>(norm_output,
+                                                                           output,
+                                                                           input,
+                                                                           bias,
+                                                                           residual1,
+                                                                           residual2,
+                                                                           gamma,
+                                                                           beta,
+                                                                           layernorm_eps,
+                                                                           m,
+                                                                           half_n,
+                                                                           scale_inter,
+                                                                           scale_out,
+                                                                           scale,
+                                                                           dynamic_scale,
+                                                                           int8_mode,
+                                                                           grid,
+                                                                           block,
+                                                                           stream,
+                                                                           opt_version,
+                                                                           is_output,
+                                                                           residual_num);
+            break;
+        default:
+            FT_CHECK_WITH_INFO(false, "unroll_factor must be 1, 2, 4 or 8");
+    }
+}
 
 /* output      <- output + bias + residual_1 + residual_2
  * output_norm <- LN(output) */
@@ -824,12 +1279,15 @@ void invokeGeneralAddBiasResidualPreLayerNorm(T*           output,
                                               int          n,
                                               const float* scale_inter,
                                               const float* scale_out,
-                                              const float* scale,
+                                              float*       scale,
+                                              float*       dynamic_scale,
                                               const int    int8_mode,
                                               cudaStream_t stream,
                                               int          opt_version)
 {
-    const int residual_num = residual2 == nullptr ? 1 : 2;
+    const int  residual_num  = residual2 == nullptr ? 1 : 2;
+    const bool dynamic_quant = dynamic_scale != nullptr;
+
     if (opt_version > 0 && sizeof(T) == 2 && n % 2 == 0) {
         dim3 grid(m);
         int  half_n    = n / 2;
@@ -840,41 +1298,34 @@ void invokeGeneralAddBiasResidualPreLayerNorm(T*           output,
         while (unroll_factor > rolls_per_thread && unroll_factor > 1) {
             unroll_factor /= 2;
         }
+
         using T2 = typename TypeConverter<T>::Type;
-        if (opt_version == 1) {
-            if (unroll_factor == 1) {
-                HALF_LAYERNORM_OPT_RESIDUAL(1, 1);
-            }
-            else if (unroll_factor == 2) {
-                HALF_LAYERNORM_OPT_RESIDUAL(2, 1);
-            }
-            else if (unroll_factor == 3) {
-                HALF_LAYERNORM_OPT_RESIDUAL(3, 1);
-            }
-            else if (unroll_factor == 4) {
-                HALF_LAYERNORM_OPT_RESIDUAL(4, 1);
-            }
-            else if (unroll_factor == 8) {
-                HALF_LAYERNORM_OPT_RESIDUAL(8, 1);
-            }
-        }
-        else {
-            if (unroll_factor == 1) {
-                HALF_LAYERNORM_OPT_RESIDUAL(1, 2);
-            }
-            else if (unroll_factor == 2) {
-                HALF_LAYERNORM_OPT_RESIDUAL(2, 2);
-            }
-            else if (unroll_factor == 3) {
-                HALF_LAYERNORM_OPT_RESIDUAL(3, 2);
-            }
-            else if (unroll_factor == 4) {
-                HALF_LAYERNORM_OPT_RESIDUAL(4, 2);
-            }
-            else if (unroll_factor == 8) {
-                HALF_LAYERNORM_OPT_RESIDUAL(8, 2);
-            }
-        }
+
+        /* we launch (and instantiate) the kernel by specializing for unroll_factor -> residual_num -> is_bias ->
+         * opt_version */
+        dispatch_generalAddBiasResidualLayerNormOpt_unroll_factor((T2*)norm_output,
+                                                                  (T2*)output,
+                                                                  (const T2*)input,
+                                                                  (const T2*)bias,
+                                                                  (const T2*)residual1,
+                                                                  (const T2*)residual2,
+                                                                  (const T2*)gamma,
+                                                                  (const T2*)beta,
+                                                                  layernorm_eps,
+                                                                  m,
+                                                                  half_n,
+                                                                  scale_inter,
+                                                                  scale_out,
+                                                                  scale,
+                                                                  dynamic_scale,
+                                                                  int8_mode,
+                                                                  grid,
+                                                                  block,
+                                                                  stream,
+                                                                  opt_version,
+                                                                  true,  // is_output
+                                                                  residual_num,
+                                                                  unroll_factor);
     }
     else {
 
@@ -885,45 +1336,54 @@ void invokeGeneralAddBiasResidualPreLayerNorm(T*           output,
         Since we have warp shuffle inside the code, block.x % 32 should be 0.
         */
         block.x = (block.x + 31) / 32 * 32;
+
+        size_t maxbytes = n * sizeof(T);
         if (residual_num == 1) {
-            generalAddBiasResidualLayerNorm<T, 1><<<grid, block, 0, stream>>>(input,
-                                                                              residual1,
-                                                                              residual2,
-                                                                              gamma,
-                                                                              beta,
-                                                                              bias,
-                                                                              output,
-                                                                              norm_output,
-                                                                              layernorm_eps,
-                                                                              m,
-                                                                              n,
-                                                                              scale_inter,
-                                                                              scale_out,
-                                                                              scale,
-                                                                              int8_mode);  // For gpt-3
+            if (maxbytes >= (48 << 10)) {
+                check_cuda_error(cudaFuncSetAttribute(
+                    generalAddBiasResidualLayerNorm<T, 1>, cudaFuncAttributeMaxDynamicSharedMemorySize, maxbytes));
+            }
+            generalAddBiasResidualLayerNorm<T, 1><<<grid, block, maxbytes, stream>>>(input,
+                                                                                     residual1,
+                                                                                     residual2,
+                                                                                     gamma,
+                                                                                     beta,
+                                                                                     bias,
+                                                                                     output,
+                                                                                     norm_output,
+                                                                                     layernorm_eps,
+                                                                                     m,
+                                                                                     n,
+                                                                                     scale_inter,
+                                                                                     scale_out,
+                                                                                     scale,
+                                                                                     dynamic_scale,
+                                                                                     int8_mode);
         }
         else if (residual_num == 2) {
-            generalAddBiasResidualLayerNorm<T, 2><<<grid, block, 0, stream>>>(input,
-                                                                              residual1,
-                                                                              residual2,
-                                                                              gamma,
-                                                                              beta,
-                                                                              bias,
-                                                                              output,
-                                                                              norm_output,
-                                                                              layernorm_eps,
-                                                                              m,
-                                                                              n,
-                                                                              scale_inter,
-                                                                              scale_out,
-                                                                              scale,
-                                                                              int8_mode);  // For gpt-3
+            if (maxbytes >= (48 << 10)) {
+                check_cuda_error(cudaFuncSetAttribute(
+                    generalAddBiasResidualLayerNorm<T, 2>, cudaFuncAttributeMaxDynamicSharedMemorySize, maxbytes));
+            }
+            generalAddBiasResidualLayerNorm<T, 2><<<grid, block, maxbytes, stream>>>(input,
+                                                                                     residual1,
+                                                                                     residual2,
+                                                                                     gamma,
+                                                                                     beta,
+                                                                                     bias,
+                                                                                     output,
+                                                                                     norm_output,
+                                                                                     layernorm_eps,
+                                                                                     m,
+                                                                                     n,
+                                                                                     scale_inter,
+                                                                                     scale_out,
+                                                                                     scale,
+                                                                                     dynamic_scale,
+                                                                                     int8_mode);
         }
     }
 }
-
-#undef HALF_LAYERNORM_OPT
-#undef HALF_LAYERNORM_OPT2
 
 #define INSTANTIATE_INVOKE_GENERAL_ADD_BIAS_RESIDUAL_PRE_LAYER_NORM(T)                                                 \
     template void invokeGeneralAddBiasResidualPreLayerNorm(T*           output,                                        \
@@ -939,7 +1399,8 @@ void invokeGeneralAddBiasResidualPreLayerNorm(T*           output,
                                                            int          n,                                             \
                                                            const float* scale_inter,                                   \
                                                            const float* scale_out,                                     \
-                                                           const float* scale,                                         \
+                                                           float*       scale,                                         \
+                                                           float*       dynamic_scale,                                 \
                                                            const int    int8_mode,                                     \
                                                            cudaStream_t stream,                                        \
                                                            int          opt_version)
@@ -1041,7 +1502,7 @@ void invokeGeneralAddBiasResidualT5PreLayerNorm(T*           output,
                                                 int          n,
                                                 cudaStream_t stream)
 {
-    if (beta != nullptr && bias != nullptr) {
+    if (beta != nullptr) {
         invokeGeneralAddBiasResidualPreLayerNorm(output,
                                                  norm_output,
                                                  output,
@@ -1056,10 +1517,12 @@ void invokeGeneralAddBiasResidualT5PreLayerNorm(T*           output,
                                                  (float*)nullptr,
                                                  (float*)nullptr,
                                                  (float*)nullptr,
+                                                 (float*)nullptr,
                                                  0,
                                                  stream);
     }
     else {
+        FT_CHECK_WITH_INFO(bias == nullptr, "bias should be nullptr when beta is nullptr");
         invokeGeneralAddResidualT5PreLayerNorm(output, norm_output, input, gamma, layernorm_eps, m, n, stream);
     }
     return;
@@ -1099,23 +1562,34 @@ template void invokeGeneralAddBiasResidualT5PreLayerNorm(__nv_bfloat16*       ou
                                                          cudaStream_t         stream);
 #endif
 
-template<typename T>
+template<typename T, bool DYNAMIC_SCALING = false>
 __global__ void generalLayerNorm(const T* __restrict input,
                                  const T* __restrict gamma,
                                  const T* __restrict beta,
-                                 T*           output,
-                                 const float  layernorm_eps,
-                                 int          m,
-                                 int          n,
-                                 const float* scale,
-                                 const int    int8_mode)
+                                 T*          normed_output,
+                                 const float layernorm_eps,
+                                 int         m,
+                                 int         n,
+                                 float*      scale,
+                                 float*      dynamic_scale,
+                                 const int   int8_mode)
 {
     const int tid = threadIdx.x;
+
+    extern __shared__ __align__(sizeof(float)) char _shmem[];
+    T*                                              shmem = reinterpret_cast<T*>(_shmem);
 
     __shared__ float s_mean;
     __shared__ float s_variance;
     float            mean     = 0.0f;
     float            variance = 0.0f;
+
+    using Int8_Packed_T  = typename packed_as<int8_t, num_elems<T>::value>::type;
+    using Int32_Packed_T = typename packed_as<int32_t, num_elems<T>::value>::type;
+    using Float_Packed_T = typename packed_as<float, num_elems<T>::value>::type;
+    using Scalar_T       = typename packed_as<T, 1>::type;
+
+    const Float_Packed_T scale_to_int = cuda_cast<Float_Packed_T>(int8_mode == 2 ? *scale : 0.0f);
 
     float local_sum = 0.0f;
     for (int i = tid; i < n; i += blockDim.x) {
@@ -1141,48 +1615,39 @@ __global__ void generalLayerNorm(const T* __restrict input,
     }
     __syncthreads();
 
+    Scalar_T abs_max = 1e-6f;
+
     for (int i = tid; i < n; i += blockDim.x) {
-        float beta_val = (beta == nullptr) ? 0.0f : (float)ldg(&beta[i]);
-        output[blockIdx.x * n + i] =
-            (T)((((float)input[blockIdx.x * n + i] - s_mean) * s_variance) * (float)(ldg(&gamma[i])) + beta_val);
+        const int index    = blockIdx.x * n + i;
+        float     beta_val = (beta == nullptr) ? 0.0f : (float)ldg(&beta[i]);
+        T         val      = (T)((((float)input[index] - s_mean) * s_variance) * (float)(ldg(&gamma[i])) + beta_val);
+
+        if (DYNAMIC_SCALING) {
+            abs_max  = cuda_max(cuda_max<Scalar_T, T>(cuda_abs(val)), abs_max);
+            shmem[i] = val;
+        }
+        else if (int8_mode == 2) {
+            reinterpret_cast<Int8_Packed_T*>(normed_output)[index] =
+                cuda_cast<Int8_Packed_T>(cuda_cast<Float_Packed_T>(val) * scale_to_int);
+        }
+        else {
+            normed_output[index] = val;
+        }
+    }
+
+    if (DYNAMIC_SCALING) {
+        float          abs_max_f               = blockAllReduceMax(cuda_cast<float>(abs_max));
+        const Scalar_T dynamic_per_token_scale = 127. / abs_max_f;
+        for (int i = tid; i < n; i += blockDim.x) {
+            const int index                                        = blockIdx.x * n + i;
+            reinterpret_cast<Int8_Packed_T*>(normed_output)[index] = cuda_cast<Int8_Packed_T>(
+                cuda_cast<Float_Packed_T>(shmem[i]) * cuda_cast<Float_Packed_T>(dynamic_per_token_scale));
+        }
+        if (threadIdx.x == 0) {
+            dynamic_scale[blockIdx.x] = (*scale * abs_max_f) / 127.f;
+        }
     }
 }
-
-#define HALF_LAYERNORM_OPT(UNROLL_FACTOR)                                                                              \
-    generalAddBiasResidualLayerNormOpt<T2, false, false, 1, true, UNROLL_FACTOR>                                       \
-        <<<grid, block, 0, stream>>>((T2*)out,                                                                         \
-                                     (T2*)out,                                                                         \
-                                     (const T2*)out,                                                                   \
-                                     nullptr,                                                                          \
-                                     (const T2*)input,                                                                 \
-                                     nullptr,                                                                          \
-                                     (const T2*)gamma,                                                                 \
-                                     (const T2*)beta,                                                                  \
-                                     layernorm_eps,                                                                    \
-                                     m,                                                                                \
-                                     half_n,                                                                           \
-                                     nullptr,                                                                          \
-                                     nullptr,                                                                          \
-                                     scale,                                                                            \
-                                     int8_mode)
-
-#define HALF_LAYERNORM_OPT2(UNROLL_FACTOR)                                                                             \
-    generalAddBiasResidualLayerNormOpt2<T2, false, false, 1, true, UNROLL_FACTOR>                                      \
-        <<<grid, block, 0, stream>>>((T2*)out,                                                                         \
-                                     (T2*)out,                                                                         \
-                                     (const T2*)out,                                                                   \
-                                     nullptr,                                                                          \
-                                     (const T2*)input,                                                                 \
-                                     nullptr,                                                                          \
-                                     (const T2*)gamma,                                                                 \
-                                     (const T2*)beta,                                                                  \
-                                     layernorm_eps,                                                                    \
-                                     m,                                                                                \
-                                     half_n,                                                                           \
-                                     nullptr,                                                                          \
-                                     nullptr,                                                                          \
-                                     scale,                                                                            \
-                                     int8_mode)
 
 template<typename T>
 void invokeGeneralLayerNorm(T*           out,
@@ -1192,13 +1657,20 @@ void invokeGeneralLayerNorm(T*           out,
                             const float  layernorm_eps,
                             const int    m,
                             const int    n,
-                            const float* scale,
+                            float*       scale,
+                            float*       dynamic_scale,
                             const int    int8_mode,
                             cudaStream_t stream,
                             int          opt_version)
 {
-    dim3 grid(m);
-    if (n % 2 == 0 && std::is_same<T, half>::value && opt_version > 0) {
+    dim3       grid(m);
+    const bool dynamic_quant = dynamic_scale != nullptr;
+#ifdef ENABLE_BF16
+    if (n % 2 == 0 && (std::is_same<T, half>::value || std::is_same<T, __nv_bfloat16>::value)
+#else
+    if (n % 2 == 0 && (std::is_same<T, half>::value)
+#endif
+        && opt_version > 0) {
         int  half_n    = n / 2;
         int  half_n_32 = (half_n + 31) / 32 * 32;
         dim3 block(min(half_n_32, 512));
@@ -1208,40 +1680,32 @@ void invokeGeneralLayerNorm(T*           out,
             unroll_factor /= 2;
         }
         using T2 = typename TypeConverter<T>::Type;
-        if (opt_version == 1) {
-            if (unroll_factor == 1) {
-                HALF_LAYERNORM_OPT(1);
-            }
-            else if (unroll_factor == 2) {
-                HALF_LAYERNORM_OPT(2);
-            }
-            else if (unroll_factor == 3) {
-                HALF_LAYERNORM_OPT(3);
-            }
-            else if (unroll_factor == 4) {
-                HALF_LAYERNORM_OPT(4);
-            }
-            else if (unroll_factor == 8) {
-                HALF_LAYERNORM_OPT(8);
-            }
-        }
-        else {
-            if (unroll_factor == 1) {
-                HALF_LAYERNORM_OPT2(1);
-            }
-            else if (unroll_factor == 2) {
-                HALF_LAYERNORM_OPT2(2);
-            }
-            else if (unroll_factor == 3) {
-                HALF_LAYERNORM_OPT2(3);
-            }
-            else if (unroll_factor == 4) {
-                HALF_LAYERNORM_OPT2(4);
-            }
-            else if (unroll_factor == 8) {
-                HALF_LAYERNORM_OPT2(8);
-            }
-        }
+
+        /* we launch (and instantiate) the kernel by specializing for unroll_factor -> residual_num -> is_bias ->
+         * opt_version */
+        dispatch_generalAddBiasResidualLayerNormOpt_unroll_factor((T2*)out,
+                                                                  (T2*)out,
+                                                                  (const T2*)out,
+                                                                  (const T2*)nullptr,
+                                                                  (const T2*)input,
+                                                                  (const T2*)nullptr,
+                                                                  (const T2*)gamma,
+                                                                  (const T2*)beta,
+                                                                  layernorm_eps,
+                                                                  m,
+                                                                  half_n,
+                                                                  nullptr,
+                                                                  nullptr,
+                                                                  scale,
+                                                                  dynamic_scale,
+                                                                  int8_mode,
+                                                                  grid,
+                                                                  block,
+                                                                  stream,
+                                                                  opt_version,
+                                                                  false,  // is_output
+                                                                  1,      // residual_num
+                                                                  unroll_factor);
     }
     else {
         dim3 block(min(n, 1024));
@@ -1254,13 +1718,21 @@ void invokeGeneralLayerNorm(T*           out,
         }
 
         /* should pay attention to the rsqrt precision*/
-        generalLayerNorm<T>
-            <<<grid, block, 0, stream>>>(input, gamma, beta, out, layernorm_eps, m, n, scale, int8_mode);  // For gpt-3
+        if (dynamic_quant) {
+            size_t maxbytes = n * sizeof(T);
+            if (maxbytes >= (48 << 10)) {
+                check_cuda_error(cudaFuncSetAttribute(
+                    generalLayerNorm<T, true>, cudaFuncAttributeMaxDynamicSharedMemorySize, maxbytes));
+            }
+            generalLayerNorm<T, true><<<grid, block, maxbytes, stream>>>(
+                input, gamma, beta, out, layernorm_eps, m, n, scale, dynamic_scale, int8_mode);  // For gpt-3
+        }
+        else {
+            generalLayerNorm<T, false><<<grid, block, 0, stream>>>(
+                input, gamma, beta, out, layernorm_eps, m, n, scale, dynamic_scale, int8_mode);  // For gpt-3
+        }
     }
 }
-
-#undef HALF_LAYERNORM_OPT
-#undef HALF_LAYERNORM_OPT2
 
 template void invokeGeneralLayerNorm(float*       out,
                                      const float* input,
@@ -1269,7 +1741,8 @@ template void invokeGeneralLayerNorm(float*       out,
                                      const float  layernorm_eps,
                                      const int    m,
                                      const int    n,
-                                     const float* scale,
+                                     float*       scale,
+                                     float*       dynamic_scale,
                                      const int    int8_mode,
                                      cudaStream_t stream,
                                      int          opt_version);
@@ -1280,7 +1753,8 @@ template void invokeGeneralLayerNorm(half*        out,
                                      const float  layernorm_eps,
                                      const int    m,
                                      const int    n,
-                                     const float* scale,
+                                     float*       scale,
+                                     float*       dynamic_scale,
                                      const int    int8_mode,
                                      cudaStream_t stream,
                                      int          opt_version);
@@ -1292,7 +1766,8 @@ template void invokeGeneralLayerNorm(__nv_bfloat16*       out,
                                      const float          layernorm_eps,
                                      const int            m,
                                      const int            n,
-                                     const float*         scale,
+                                     float*               scale,
+                                     float*               dynamic_scale,
                                      const int            int8_mode,
                                      cudaStream_t         stream,
                                      int                  opt_version);
@@ -1864,42 +2339,6 @@ __global__ void add_bias_layernorm_v2(
     }
 }
 
-#define HALF_LAYERNORM_OPT(UNROLL_FACTOR)                                                                              \
-    generalAddBiasResidualLayerNormOpt<T2, false, true, 1, true, UNROLL_FACTOR>                                        \
-        <<<grid, block, 0, stream>>>((T2*)out,                                                                         \
-                                     (T2*)out,                                                                         \
-                                     (const T2*)out,                                                                   \
-                                     (const T2*)bias,                                                                  \
-                                     (const T2*)out,                                                                   \
-                                     nullptr,                                                                          \
-                                     (const T2*)gamma,                                                                 \
-                                     (const T2*)beta,                                                                  \
-                                     layernorm_eps,                                                                    \
-                                     m,                                                                                \
-                                     half_n,                                                                           \
-                                     nullptr,                                                                          \
-                                     nullptr,                                                                          \
-                                     (float*)nullptr,                                                                  \
-                                     0)
-
-#define HALF_LAYERNORM_OPT2(UNROLL_FACTOR)                                                                             \
-    generalAddBiasResidualLayerNormOpt2<T2, false, true, 1, true, UNROLL_FACTOR>                                       \
-        <<<grid, block, 0, stream>>>((T2*)out,                                                                         \
-                                     (T2*)out,                                                                         \
-                                     (const T2*)out,                                                                   \
-                                     (const T2*)bias,                                                                  \
-                                     (const T2*)out,                                                                   \
-                                     nullptr,                                                                          \
-                                     (const T2*)gamma,                                                                 \
-                                     (const T2*)beta,                                                                  \
-                                     layernorm_eps,                                                                    \
-                                     m,                                                                                \
-                                     half_n,                                                                           \
-                                     nullptr,                                                                          \
-                                     nullptr,                                                                          \
-                                     (float*)nullptr,                                                                  \
-                                     0)
-
 template<typename T>
 void invokeAddBiasLayernorm(T*           out,
                             const T*     bias,
@@ -1922,40 +2361,32 @@ void invokeAddBiasLayernorm(T*           out,
             unroll_factor /= 2;
         }
         using T2 = typename TypeConverter<T>::Type;
-        if (opt_version == 1) {
-            if (unroll_factor == 1) {
-                HALF_LAYERNORM_OPT(1);
-            }
-            else if (unroll_factor == 2) {
-                HALF_LAYERNORM_OPT(2);
-            }
-            else if (unroll_factor == 3) {
-                HALF_LAYERNORM_OPT(3);
-            }
-            else if (unroll_factor == 4) {
-                HALF_LAYERNORM_OPT(4);
-            }
-            else if (unroll_factor == 8) {
-                HALF_LAYERNORM_OPT(8);
-            }
-        }
-        else {
-            if (unroll_factor == 1) {
-                HALF_LAYERNORM_OPT2(1);
-            }
-            else if (unroll_factor == 2) {
-                HALF_LAYERNORM_OPT2(2);
-            }
-            else if (unroll_factor == 3) {
-                HALF_LAYERNORM_OPT2(3);
-            }
-            else if (unroll_factor == 4) {
-                HALF_LAYERNORM_OPT2(4);
-            }
-            else if (unroll_factor == 8) {
-                HALF_LAYERNORM_OPT2(8);
-            }
-        }
+
+        /* we launch (and instantiate) the kernel by specializing for unroll_factor -> residual_num -> is_bias ->
+         * opt_version */
+        dispatch_generalAddBiasResidualLayerNormOpt_unroll_factor((T2*)out,
+                                                                  (T2*)out,
+                                                                  (const T2*)out,
+                                                                  (const T2*)bias,
+                                                                  (const T2*)out,
+                                                                  (const T2*)nullptr,
+                                                                  (const T2*)gamma,
+                                                                  (const T2*)beta,
+                                                                  layernorm_eps,
+                                                                  m,
+                                                                  half_n,
+                                                                  nullptr,
+                                                                  nullptr,
+                                                                  nullptr,
+                                                                  nullptr,
+                                                                  0,
+                                                                  grid,
+                                                                  block,
+                                                                  stream,
+                                                                  opt_version,
+                                                                  false,  // is_output
+                                                                  1,      // residual_num
+                                                                  unroll_factor);
     }
     else {
         int blockSize = (n + 31) / 32 * 32;
@@ -1968,9 +2399,6 @@ void invokeAddBiasLayernorm(T*           out,
         }
     }
 }
-
-#undef HALF_LAYERNORM_OPT
-#undef HALF_LAYERNORM_OPT2
 
 template void invokeAddBiasLayernorm<float>(float*       out,
                                             const float* bias,

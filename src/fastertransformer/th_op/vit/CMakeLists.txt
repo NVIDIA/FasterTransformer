@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -22,8 +22,9 @@ set(vit_ths_files
 add_definitions(-DTORCH_CUDA=1)
 
 if(BUILD_PYT)
-  set(LIB_NAME "pyt_vit")
-  add_library(${LIB_NAME} SHARED ${vit_ths_files})
+  set(LIB_NAME "th_vit")
+  add_library(${LIB_NAME} STATIC ${vit_ths_files})
+  set_property(TARGET ${LIB_NAME} PROPERTY POSITION_INDEPENDENT_CODE  ON)
   set_target_properties(${LIB_NAME} PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
   target_link_libraries(${LIB_NAME} ViT ViTINT8 quantize_weight cublasMMWrapper trt_fused_multi_head_attention 
     -lcudnn -lcublas -lcudart "${TORCH_LIBRARIES}")

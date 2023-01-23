@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,6 +36,7 @@ ft::Tensor convert_tensor(torch::Tensor tensor)
     return convert_tensor<T>(tensor, mtype);
 }
 
+template ft::Tensor convert_tensor<int8_t>(torch::Tensor tensor);
 template ft::Tensor convert_tensor<float>(torch::Tensor tensor);
 template ft::Tensor convert_tensor<half>(torch::Tensor tensor);
 #ifdef ENABLE_BF16
@@ -52,6 +53,7 @@ ft::Tensor convert_tensor(torch::Tensor tensor, ft::MemoryType memory_type)
     return ft::Tensor{memory_type, ft::getTensorType<T>(), convert_shape(tensor), get_ptr<T>(tensor)};
 }
 
+template ft::Tensor convert_tensor<int8_t>(torch::Tensor tensor, ft::MemoryType memory_type);
 template ft::Tensor convert_tensor<float>(torch::Tensor tensor, ft::MemoryType memory_type);
 template ft::Tensor convert_tensor<half>(torch::Tensor tensor, ft::MemoryType memory_type);
 #ifdef ENABLE_BF16

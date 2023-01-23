@@ -29,7 +29,7 @@ template<typename T>
 void DynamicDecodeLayer<T>::allocateBuffer()
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    finished_sum_ = (int*)allocator_->reMalloc(finished_sum_, sizeof(int), true);
+    check_cuda_error(cudaMallocHost((void**)&h_pinned_finished_sum_, sizeof(int)));
     return;
 }
 
@@ -37,7 +37,9 @@ template<typename T>
 void DynamicDecodeLayer<T>::freeBuffer()
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    allocator_->free((void**)(&finished_sum_));
+    if (h_pinned_finished_sum_ != nullptr) {
+        check_cuda_error(cudaFreeHost(h_pinned_finished_sum_));
+    }
     return;
 }
 
@@ -162,6 +164,8 @@ void DynamicDecodeLayer<T>::setup(const size_t batch_size, const size_t beam_wid
      *   \param  temperature [1] or [batch_size] on cpu, optional
      *   \param  len_penalty [1] or [batch_size] on cpu, optional
      *   \param  repetition_penalty [1] or [batch_size] on cpu, optional
+     *   \param  presence_penalty [1] or [batch_size] on cpu, optional, float
+     *   \param  min_length [1] or [batch_size], optional
      *   \param  top_p_decay [batch_size] on gpu, float, optional
      *   \param  top_p_min [batch_size] on gpu, float, optional
      *   \param  top_p_reset_ids [batch_size] on gpu, uint32, optional
@@ -196,6 +200,7 @@ void DynamicDecodeLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_
      *   \param  step [1] on cpu
      *   \param  max_input_length [1] on cpu
      *   \param  input_lengths [batch_size, beam_width], optional
+     *   \param  min_length [batch_size], optional
      *   \param  sequence_limit_length [batch_size]
      *   \param  ite [1] on cpu
      *   \param  local_batch_size [1] on cpu
@@ -205,6 +210,8 @@ void DynamicDecodeLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_
      *   \param  temperature [1] or [batch_size] on cpu, optional, float
      *   \param  len_penalty [1] or [batch_size] on cpu, optional, float
      *   \param  repetition_penalty [1] or [batch_size] on cpu, optional, float
+     *   \param  presence_penalty [1] or [batch_size] on cpu, optional, float
+     *                Only one of repetition and presence penalties is allowed.
      *   \param  random_seed [1] or [batch_size] on cpu, optional, unsigned long long int
      *   \param  bad_words_list [2, bad_words_length] or [batch_size, 2, bad_words_length], optional
      *   \param  src_cache_indirection
@@ -240,11 +247,23 @@ void DynamicDecodeLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_
     const size_t local_batch_size = (size_t)input_tensors->at("local_batch_size").getVal<int>();
 
     if (input_tensors->isExist("bad_words_list")) {
-        const auto&  bad_words        = input_tensors->at("bad_words_list");
-        const int*   bad_words_ptr    = bad_words.getPtr<const int>();
-        const bool   shared_bad_words = bad_words.shape.size() == 2;
-        const size_t bad_words_len    = bad_words.shape[shared_bad_words ? 1 : 2];
+        const auto& bad_words     = input_tensors->at("bad_words_list");
+        const int*  bad_words_ptr = bad_words.getPtr<const int>();
+        FT_CHECK_WITH_INFO(bad_words.shape.size() == 2 || bad_words.shape.size() == 3,
+                           "Bad words dimension must be 2 or 3.");
 
+        const bool is_matrix = bad_words.shape.size() == 2;
+        if (bad_words.shape.size() == 3) {
+            FT_CHECK_WITH_INFO(bad_words.shape[0] == batch_size,
+                               fmtstr("Shape of dim 0 of bad words is invalid. It must be equal to batch size."
+                                      " However, it is %d and the batch size is %d.",
+                                      bad_words.shape[0],
+                                      batch_size));
+        }
+
+        const bool   shared_bad_words = is_matrix || bad_words.shape[0] == 1;
+        const size_t bad_words_len    = bad_words.shape[is_matrix ? 1 : 2];
+        // Add check on batch size of bad words
         const int id_offset                      = ite * local_batch_size;
         const int decode_vocab_size_units_offset = id_offset * vocab_size_padded_;
 
@@ -362,7 +381,7 @@ void DynamicDecodeLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_
                 online_beamsearch_decode_->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
             }
             else {
-                FT_CHECK(false); // deprecate this module
+                FT_CHECK(false);  // deprecate this module
                 beamsearch_decode_->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
             }
         }  // end of dynamic_ite
@@ -447,7 +466,7 @@ void DynamicDecodeLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_
     if (input_tensors->isExist("sequence_limit_length")) {
         invokeLengthCriterion(output_tensors->at("finished").getPtr<bool>(),
                               output_tensors->at("should_stop").getPtr<bool>(),
-                              finished_sum_,
+                              h_pinned_finished_sum_,
                               input_tensors->at("sequence_limit_length").getPtr<const uint32_t>(),
                               batch_size,
                               beam_width,

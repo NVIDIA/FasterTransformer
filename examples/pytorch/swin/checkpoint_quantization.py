@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@ INT8O_GEMM_NUM = 7
 TRT_FUSED_MHA_AMAX_NUM = 3
 SCALE_RESERVE_NUM = 8
 
-def extract_amaxlist(init_dict, depths, version=1, ths_path='../../../build/lib/libpyt_swintransformer.so', verbose=True):
+def extract_amaxlist(init_dict, depths, version=1, ths_path='../../../build/lib/libth_transformer.so', verbose=True):
     # print("Quantizing checkpoint ...")
     torch.classes.load_library(ths_path)
     weight_quantize = torch.ops.fastertransformer.swin_weight_quantize

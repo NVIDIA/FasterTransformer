@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -22,7 +22,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#ifdef ENABLE_BF16
 #include <cuda_fp16.h>
+#endif
+#ifdef ENABLE_FP8
+#include <cuda_fp8.h>
+#endif
 #include <cuda_profiler_api.h>
 #include <map>
 #include <sys/time.h>
@@ -61,7 +66,12 @@ int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
                       size_t             workSpaceSize,
                       FILE*              fout,
                       customMatmulPerf_t perfResults[],
-                      int                AlgoCombinations);
+                      int                AlgoCombinations,
+                      cudaDataType_t     dtype_fp8  = CUDA_R_32F,
+                      int                batchCount = 1,
+                      int64_t            strideA    = 0,
+                      int64_t            strideB    = 0,
+                      int64_t            strideD    = 0);
 
 size_t calGemmTestBufSizeInByte(int            batch_size,
                                 int            seq_len,
@@ -85,6 +95,7 @@ int printPerfStructure(int                       batch_size,
                        const customMatmulPerf_t& perf,
                        FILE*                     fout,
                        CublasDataType            data_type,
-                       int                       hasPrint);
+                       int                       hasPrint,
+                       int                       batch_count = 1);
 
 }  // namespace fastertransformer

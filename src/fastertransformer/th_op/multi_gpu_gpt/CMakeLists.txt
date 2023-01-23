@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,10 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(th_parallel_gpt SHARED
+add_library(th_parallel_gpt STATIC
     ParallelGptContextDecoderOp.cc ParallelGptDecoderOp.cc ParallelGptOp.cc
     WeightTransposeCalibrateQuantizeOp.cc)
-
+set_property(TARGET th_parallel_gpt PROPERTY POSITION_INDEPENDENT_CODE  ON)
 target_link_libraries(th_parallel_gpt PRIVATE "${TORCH_LIBRARIES}"
     ParallelGptContextDecoder ParallelGptDecoder ParallelGpt
     calibrate_quantize_weight_kernels nccl_utils th_common th_utils)

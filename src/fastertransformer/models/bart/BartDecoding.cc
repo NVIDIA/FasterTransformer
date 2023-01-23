@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -830,7 +830,8 @@ void BartDecoding<T>::forward(TensorMap*                   output_tensors,
                 beam_hyps_.output_ids_src       = output_ids_buf_;
                 beam_hyps_.log_probs_src        = output_log_probs_buf_;
                 beam_hyps_.max_seq_len          = max_seq_len;
-                beam_hyps_.length_penalty       = input_tensors->at("len_penalty").getVal<float>();
+                beam_hyps_.length_penalty =
+                    input_tensors->isExist("len_penalty") ? input_tensors->at("len_penalty").getVal<float>() : 0.0f;
 
                 invokeInsertUnfinishedPath(beam_hyps_, finished_buf_, cum_log_probs_, batch_size, beam_width, stream_);
                 sync_check_cuda_error();

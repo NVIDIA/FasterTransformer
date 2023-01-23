@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,5 +15,8 @@
 add_subdirectory(swin)
 add_subdirectory(t5)
 add_subdirectory(vit)
+if(ENABLE_FP8)
+    add_subdirectory(bert_fp8)
+endif()
 
 add_subdirectory(wenet)

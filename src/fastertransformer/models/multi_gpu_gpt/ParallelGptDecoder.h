@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,13 +36,16 @@ private:
     // buffer handling
     size_t max_batch_size_ = 0;
     // meta data
-    size_t         head_num_;
-    size_t         size_per_head_;
-    size_t         inter_size_;
-    size_t         num_layer_;
-    float          layernorm_eps_;
-    LayerNormType  layernorm_type_;
-    ActivationType activation_type_;
+    size_t               head_num_;
+    size_t               size_per_head_;
+    size_t               inter_size_;
+    size_t               num_layer_;
+    size_t               expert_num_;
+    size_t               moe_k_;
+    std::vector<int64_t> moe_layer_index_;
+    float                layernorm_eps_;
+    LayerNormType        layernorm_type_;
+    ActivationType       activation_type_;
 
     // adapter
     bool   has_adapters_;
@@ -59,12 +62,16 @@ private:
     int                                 enable_custom_all_reduce_;
 
     // buffers
-    T*       decoder_normed_input_       = nullptr;
-    T*       self_attn_output_           = nullptr;
-    T*       normed_self_attn_output_    = nullptr;
-    T*       decoder_layer_output_       = nullptr;
-    int32_t* self_attn_output_int32_     = nullptr;
-    int32_t* decoder_layer_output_int32_ = nullptr;
+    T* decoder_normed_input_    = nullptr;
+    T* self_attn_output_        = nullptr;
+    T* normed_self_attn_output_ = nullptr;
+    T* decoder_layer_output_    = nullptr;
+
+    T*   expert_scales_                            = nullptr;
+    int* expanded_source_row_to_expanded_dest_row_ = nullptr;
+    int* expert_for_source_row_                    = nullptr;
+    T*   fc2_result_                               = nullptr;
+    T*   adapter_fc2_result_                       = nullptr;
 
     BaseAttentionLayer<T>* self_attention_layer_;
     FfnLayer<T>*           ffn_layer_;
@@ -87,6 +94,9 @@ public:
                        size_t                              size_per_head,
                        size_t                              inter_size,
                        size_t                              num_layer,
+                       size_t                              expert_num,
+                       size_t                              moe_k,
+                       std::vector<int64_t>                moe_layer_index,
                        float                               layernorm_eps,
                        gptVariantParams                    gpt_variant_params,
                        NcclParam                           tensor_para,

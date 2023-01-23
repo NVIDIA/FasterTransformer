@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  * Copyright (c) 2021, NAVER Corp.  Authored by CLOVA.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -356,40 +356,43 @@ std::unique_ptr<AbstractTransformerModelInstance> ParallelGptTritonModel<T>::cre
                                                                false,            // with_relative_position_bias
                                                                true);            // causal_mask
 
-    auto gpt =
-        std::make_unique<ft::ParallelGpt<T>>(0,  // max_batch_size, FT will adjust the buffer automatically.
-                                             0,  // max_seq_len, FT will adjust the buffer automatically.
-                                             0,  // max_input_len, FT will adjust the buffer automatically.
-                                             0,
-                                             head_num_,
-                                             size_per_head_,
-                                             inter_size_,
-                                             num_layer_,
-                                             vocab_size_,
-                                             start_id_,
-                                             end_id_,
-                                             prompt_learning_start_id_,  // p/prompt tuning virtual token start id
-                                             prompt_learning_type_,
-                                             gpt_variant_params_,
-                                             0.0f,  // beam_search_diversity_rate_,
-                                             1,     // top_k_,
-                                             0.0f,  // top_p_,
-                                             0,     // random seed, note that all gpus should use same seed
-                                             1.0f,  // temperature_,
-                                             0.0f,  // len_penalty_,
-                                             1.0f,  // repetition_penalty_,
-                                             tensor_para,
-                                             pipeline_para,
-                                             stream,
-                                             cublas_wrapper.get(),
-                                             allocator.get(),
-                                             false,
-                                             cuda_device_prop_ptr.get(),
-                                             attention_type,
-                                             false,
-                                             int8_mode_,
-                                             custom_all_reduce_comm,
-                                             enable_custom_all_reduce_);
+    auto gpt = std::make_unique<ft::ParallelGpt<T>>(
+        ft::ParallelGpt<T>(0,  // max_batch_size, FT will adjust the buffer automatically.
+                           0,  // max_seq_len, FT will adjust the buffer automatically.
+                           0,  // max_input_len, FT will adjust the buffer automatically.
+                           0,
+                           head_num_,
+                           size_per_head_,
+                           inter_size_,
+                           num_layer_,
+                           0,   // expert_num
+                           0,   // moe_k
+                           {},  // moe_layer_index
+                           vocab_size_,
+                           start_id_,
+                           end_id_,
+                           prompt_learning_start_id_,  // p/prompt tuning virtual token start id
+                           prompt_learning_type_,
+                           gpt_variant_params_,
+                           0.0f,  // beam_search_diversity_rate_,
+                           1,     // top_k_,
+                           0.0f,  // top_p_,
+                           0,     // random seed, note that all gpus should use same seed
+                           1.0f,  // temperature_,
+                           0.0f,  // len_penalty_,
+                           1.0f,  // repetition_penalty_,
+                           tensor_para,
+                           pipeline_para,
+                           stream,
+                           cublas_wrapper.get(),
+                           allocator.get(),
+                           false,
+                           cuda_device_prop_ptr.get(),
+                           attention_type,
+                           false,
+                           int8_mode_,
+                           custom_all_reduce_comm,
+                           enable_custom_all_reduce_));
 
     return std::unique_ptr<ParallelGptTritonModelInstance<T>>(
         new ParallelGptTritonModelInstance<T>(std::move(gpt),

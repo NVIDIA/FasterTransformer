@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,6 +26,7 @@
 #include "src/fastertransformer/layers/TensorParallelGeluFfnLayer.h"
 #include "src/fastertransformer/layers/TensorParallelReluFfnLayer.h"
 #include "src/fastertransformer/layers/TensorParallelSiluFfnLayer.h"
+#include "src/fastertransformer/layers/adapter_layers/LinearAdapterLayer.h"
 // #include "src/fastertransformer/layers/attention_layers/FusedAttentionLayer.h"
 #include "src/fastertransformer/layers/attention_layers/TensorParallelUnfusedAttentionLayer.h"
 #include "src/fastertransformer/models/t5/T5EncoderWeight.h"
@@ -62,6 +63,7 @@ private:
 
     BaseAttentionLayer<T>* attention_layer_;
     FfnLayer<T>*           ffn_layer_;
+    LinearAdapterLayer<T>* adapter_layer_ = nullptr;
 
     bool is_allocate_buffer_ = false;
 
@@ -82,10 +84,11 @@ private:
 
     std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm_;
     int                                 enable_custom_all_reduce_;
+    LinearAdapterConfig                 adapter_config_;
 
 protected:
     // model params
-    size_t* token_num_               = nullptr;
+    size_t* h_pinned_token_num_ptr_  = nullptr;
     int*    padding_offset_          = nullptr;
     int*    trt_mha_padding_offset_  = nullptr;
     T*      attention_mask_          = nullptr;
@@ -134,7 +137,8 @@ public:
               int                                 prompt_learning_start_id = 0,
               PromptLearningType                  prompt_learning_type     = PromptLearningType::no_prompt,
               std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
-              int                                 enable_custom_all_reduce = 0);
+              int                                 enable_custom_all_reduce = 0,
+              LinearAdapterConfig const&          adapter_config           = {});
 
     T5Encoder(T5Encoder<T> const& t5_layer);
 
@@ -163,6 +167,11 @@ public:
     inline size_t getNumHeads()
     {
         return head_num_;
+    }
+
+    bool has_adapters() const
+    {
+        return adapter_config_.enabled();
     }
 
     void setStream(cudaStream_t stream) override;

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -70,6 +70,8 @@ void FtDynamicDecode<T>::setup(size_t                   batch_size,
                                th::optional<th::Tensor> runtime_top_p_opt,
                                th::optional<th::Tensor> temperature_opt,
                                th::optional<th::Tensor> repetition_penalty_opt,
+                               th::optional<th::Tensor> presence_penalty_opt,
+                               th::optional<th::Tensor> min_length_opt,
                                th::optional<th::Tensor> length_penalty_opt,
                                th::optional<th::Tensor> beam_search_diversity_rate_opt,
                                th::optional<th::Tensor> random_seed_opt,
@@ -91,6 +93,8 @@ void FtDynamicDecode<T>::setup(size_t                   batch_size,
     SAFE_INSERT(runtime_args, "runtime_top_p", float, runtime_top_p_opt);
     SAFE_INSERT(runtime_args, "temperature", float, temperature_opt);
     SAFE_INSERT(runtime_args, "repetition_penalty", float, repetition_penalty_opt);
+    SAFE_INSERT(runtime_args, "presence_penalty", float, presence_penalty_opt);
+    SAFE_INSERT(runtime_args, "min_length", int, min_length_opt);
     SAFE_INSERT(runtime_args, "len_penalty", float, length_penalty_opt);
     SAFE_INSERT(runtime_args, "beam_search_diversity_rate", float, beam_search_diversity_rate_opt);
     SAFE_INSERT(runtime_args, "random_seed", unsigned long long, random_seed_opt);
@@ -114,6 +118,8 @@ void FtDynamicDecode<T>::forward(th::Tensor&              logits,  // (batch_siz
                                  th::optional<th::Tensor> runtime_top_p_opt,
                                  th::optional<th::Tensor> temperature_opt,
                                  th::optional<th::Tensor> repetition_penalty_opt,
+                                 th::optional<th::Tensor> presence_penalty_opt,
+                                 th::optional<th::Tensor> min_length_opt,
                                  th::optional<th::Tensor> length_penalty_opt,
                                  th::optional<th::Tensor> beam_search_diversity_rate_opt,
                                  th::optional<th::Tensor> top_p_decay_opt,
@@ -152,6 +158,8 @@ void FtDynamicDecode<T>::forward(th::Tensor&              logits,  // (batch_siz
     SAFE_INSERT(input_tensors, "runtime_top_p", float, runtime_top_p_opt);
     SAFE_INSERT(input_tensors, "temperature", float, temperature_opt);
     SAFE_INSERT(input_tensors, "repetition_penalty", float, repetition_penalty_opt);
+    SAFE_INSERT(input_tensors, "presence_penalty", float, presence_penalty_opt);
+    SAFE_INSERT(input_tensors, "min_length", int, min_length_opt);
     SAFE_INSERT(input_tensors, "len_penalty", float, length_penalty_opt);
     SAFE_INSERT(input_tensors, "beam_search_diversity_rate", float, beam_search_diversity_rate_opt);
     SAFE_INSERT(input_tensors, "top_p_decay_opt", float, top_p_decay_opt);
@@ -243,6 +251,8 @@ void DynamicDecodeOp::setup(int64_t                  batch_size,
                             th::optional<th::Tensor> runtime_top_p_opt,
                             th::optional<th::Tensor> temperature_opt,
                             th::optional<th::Tensor> repetition_penalty_opt,
+                            th::optional<th::Tensor> presence_penalty_opt,
+                            th::optional<th::Tensor> min_length_opt,
                             th::optional<th::Tensor> length_penalty_opt,
                             th::optional<th::Tensor> beam_search_diversity_rate_opt,
                             th::optional<th::Tensor> random_seed_opt,
@@ -256,6 +266,8 @@ void DynamicDecodeOp::setup(int64_t                  batch_size,
 
     CHECK_OPTIONAL_CPU_INPUT(temperature_opt, torch::kFloat);
     CHECK_OPTIONAL_CPU_INPUT(repetition_penalty_opt, torch::kFloat);
+    CHECK_OPTIONAL_CPU_INPUT(presence_penalty_opt, torch::kFloat);
+    CHECK_OPTIONAL_CPU_INPUT(min_length_opt, torch::kInt32);
     CHECK_OPTIONAL_CPU_INPUT(length_penalty_opt, torch::kFloat);
     CHECK_OPTIONAL_CPU_INPUT(beam_search_diversity_rate_opt, torch::kFloat);
     CHECK_OPTIONAL_CPU_INPUT(random_seed_opt, torch::kInt64);
@@ -269,6 +281,8 @@ void DynamicDecodeOp::setup(int64_t                  batch_size,
                            runtime_top_p_opt,
                            temperature_opt,
                            repetition_penalty_opt,
+                           presence_penalty_opt,
+                           min_length_opt,
                            length_penalty_opt,
                            beam_search_diversity_rate_opt,
                            random_seed_opt,
@@ -287,6 +301,8 @@ th::Tensor DynamicDecodeOp::forward(th::Tensor               logits,
                                     th::optional<th::Tensor> runtime_top_p_opt,
                                     th::optional<th::Tensor> temperature_opt,
                                     th::optional<th::Tensor> repetition_penalty_opt,
+                                    th::optional<th::Tensor> presence_penalty_opt,
+                                    th::optional<th::Tensor> min_length_opt,
                                     th::optional<th::Tensor> length_penalty_opt,
                                     th::optional<th::Tensor> beam_search_diversity_rate_opt,
                                     th::optional<th::Tensor> top_p_decay_opt,
@@ -314,6 +330,9 @@ th::Tensor DynamicDecodeOp::forward(th::Tensor               logits,
     //     runtime_top_p: [batch_size], float, optional
     //     temperature: [batch_size], float, optional
     //     repetition_penalty: [batch_size], float, optional
+    //     presence_penalty: [batch_size], float, optional,
+    //         only one of repetition_penalty and presence_penalty is allowed.
+    //     min_length: [batch_size], int, optional
     //     length_penalty: [batch_size], float, optional
     //     beam_search_diversity_rate: [batch_size], float, optional
     //     top_p_decay: [batch_size], float, optional
@@ -351,6 +370,8 @@ th::Tensor DynamicDecodeOp::forward(th::Tensor               logits,
     CHECK_OPTIONAL_CPU_INPUT(runtime_top_p_opt, torch::kFloat);
     CHECK_OPTIONAL_CPU_INPUT(temperature_opt, torch::kFloat);
     CHECK_OPTIONAL_CPU_INPUT(repetition_penalty_opt, torch::kFloat);
+    CHECK_OPTIONAL_CPU_INPUT(presence_penalty_opt, torch::kFloat);
+    CHECK_OPTIONAL_CPU_INPUT(min_length_opt, torch::kInt32);
     CHECK_OPTIONAL_CPU_INPUT(length_penalty_opt, torch::kFloat);
     CHECK_OPTIONAL_CPU_INPUT(beam_search_diversity_rate_opt, torch::kFloat);
     CHECK_OPTIONAL_INPUT(top_p_decay_opt, torch::kFloat);
@@ -385,6 +406,8 @@ th::Tensor DynamicDecodeOp::forward(th::Tensor               logits,
         runtime_top_p_opt,
         temperature_opt,
         repetition_penalty_opt,
+        presence_penalty_opt,
+        min_length_opt,
         length_penalty_opt,
         beam_search_diversity_rate_opt,
         top_p_decay_opt,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -317,6 +317,7 @@ T5EncoderPlugin::T5EncoderPlugin(const std::string& name, const void* buffer, si
         new cublasMMWrapper(cublasHandle_, cublasltHandle_, 0, pCublasAlgoMap_, pCublasWrapperMutex_, pAllocator_);
     m_.is_sparse = false;
 #endif
+
     if (m_.useFP16) {
         pCublasWrapper_->setFP16GemmConfig();
 
@@ -996,6 +997,8 @@ T5DecodingPlugin::T5DecodingPlugin(const std::string& name, const void* buffer, 
     pCublasWrapper_ =
         new cublasMMWrapper(cublasHandle_, cublasltHandle_, 0, pCublasAlgoMap_, pCublasWrapperMutex_, pAllocator_);
 
+    NcclParam tensor_para;
+    NcclParam pipeline_para;
     if (m_.useFP16) {
         pCublasWrapper_->setFP16GemmConfig();
 

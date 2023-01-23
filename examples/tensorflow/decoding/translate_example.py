@@ -12,7 +12,7 @@ prefetching, token-based batching, gradients accumulation, beam search, etc.
 Currently, the beam search part is not easily customizable. This is expected to
 be improved for TensorFlow 2.0 which is eager first.
 
-# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.

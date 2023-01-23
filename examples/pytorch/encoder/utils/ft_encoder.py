@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -91,7 +91,7 @@ class EncoderWeights(object):
 
 class CustomEncoder(torch.nn.Module):
     def __init__(self, layer_num, head_num, head_size, weights,
-                 remove_padding=False, allow_gemm_test=False, path='./lib/libth_encoder.so', embedding=None):
+                 remove_padding=False, allow_gemm_test=False, path='./lib/libth_transformer.so', embedding=None):
         super().__init__()
         self.layer_num = layer_num
         self.remove_padding = remove_padding

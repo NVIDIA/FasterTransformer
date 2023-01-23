@@ -1,5 +1,5 @@
 #
-# Copyright (c) 2020-2022, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2020-2023, NVIDIA CORPORATION. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,13 +16,13 @@
 cmake_minimum_required(VERSION 3.8)
 
 set(trt_fused_multi_head_attention_files
-    cudaDriverWrapper.cpp
     qkvToContext.cu
 )
 
 file(GLOB trt_fused_multi_head_attention_files ${trt_fused_multi_head_attention_files} *sm*.cpp)
+file(GLOB trt_fused_multi_head_attention_files ${trt_fused_multi_head_attention_files} ./sm90/*.cubin.cpp)
 
 add_library(trt_fused_multi_head_attention STATIC ${trt_fused_multi_head_attention_files})
-target_link_libraries(trt_fused_multi_head_attention PUBLIC -lcublas -lcudart)
+target_link_libraries(trt_fused_multi_head_attention PUBLIC cuda_driver_wrapper -lcublas -lcudart)
 set_property(TARGET trt_fused_multi_head_attention PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET trt_fused_multi_head_attention PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)

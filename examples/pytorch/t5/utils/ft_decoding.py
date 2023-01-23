@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -42,6 +42,7 @@ class FTT5DecodingWeight(object):
         self.position_embedding_type = position_embedding_type
         self.real_weights_num = 31  # assume all weights are allocated and converted to specific data type
         self.weight_data_type = weight_data_type
+        self.adapter_inter_size = config.adapter_inter_size if hasattr(config, "adapter_inter_size") else 0
         self.w = []
         self.use_mpi = dist.is_mpi_available()
 
@@ -151,9 +152,9 @@ class FTT5DecodingWeight(object):
         self.w.append(t)
 
         #TODO: pass None Type to Torch Op
-        for i in range(15):
+        for i in range(23):
             self.w.append(torch.empty((1,1), dtype=torch_weight_dtype).contiguous().cuda())
-    
+
     def load_from_bin(self, ckpt_path, model_type):
         start_layer = self.pipeline_para_rank * self.num_layer //  self.pipeline_para_size
         end_layer = (self.pipeline_para_rank + 1) * self.num_layer //  self.pipeline_para_size
@@ -243,7 +244,24 @@ class FTT5DecodingWeight(object):
                     self.w.append(torch.empty((1,1), dtype=torch_weight_dtype).contiguous().cuda())
             # add empty moe gate weight
             self.w.append(torch.empty((1,1), dtype=torch_weight_dtype).contiguous().cuda())
-    
+
+            if self.adapter_inter_size > 0:
+                ckpt_path_block = f"{ckpt_path}/decoder.block"
+                for adapter in ["after_attention_adapter", "after_ffn_adapter"]:
+                    for in_out in ["wi", "wo"]:
+                        t = torch.stack([torch.from_numpy(np.fromfile(
+                            f"{ckpt_path_block}.{i}.{adapter}.DenseSiluDense.{in_out}.weight.{self.tensor_para_rank}.bin",
+                            dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+                        self.w.append(t)
+                    for weight_bias in ["weight", "bias"]:
+                        t = torch.stack([torch.from_numpy(np.fromfile(
+                            f"{ckpt_path_block}.{i}.{adapter}.layer_norm.{weight_bias}.bin",
+                            dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+                        self.w.append(t)
+            else:
+                for i in range(8):
+                    self.w.append(torch.empty((1, 1), dtype=torch_weight_dtype).contiguous().cuda())
+
         else:
             # Megatron-DeepSpeed, no tensor parallelism currently
             #TODO: add tensor parallelism in the conversion script
@@ -370,6 +388,10 @@ class FTT5DecodingWeight(object):
             else:
                 self.w.append(torch.empty((1,1), dtype=torch_weight_dtype).contiguous().cuda())
 
+            # adapters are not supported in Megatron-DeepSpeed currently, so here weight placeholder is always empty
+            for i in range(8):
+                self.w.append(torch.empty((1, 1), dtype=torch_weight_dtype).contiguous().cuda())
+
     def to_cuda(self):
         for i in range(self.real_weights_num):
             self.w[i] = self.w[i].cuda()
@@ -393,9 +415,11 @@ class FTT5DecodingWeight(object):
 
 class FTT5Decoding(nn.Module):
     def __init__(self, decoding_weight_list, lib_path, head_num, head_size, inter_size,
-                 mem_d_model, d_model, num_layer, start_id, end_id, vocab_size, q_scaling=1.0, num_bucket=32, num_expert=0, moe_layer_index=[],
-                 max_distance=128, tensor_para_size=1, pipeline_para_size=1, t5_with_bias=False, position_embedding_type=0, moe_k=0,
-                 activation_type="relu", tie_word_embeddings=True):
+                 mem_d_model, d_model, num_layer, start_id, end_id, vocab_size, q_scaling=1.0, num_bucket=32,
+                 num_expert=0, moe_layer_index=[],
+                 max_distance=128, tensor_para_size=1, pipeline_para_size=1, t5_with_bias=False,
+                 position_embedding_type=0, moe_k=0,
+                 activation_type="relu", tie_word_embeddings=True, adapter_inter_size=0, adapter_norm_position="pre"):
         super().__init__()
 
         self.use_mpi = dist.is_mpi_available()
@@ -412,19 +436,31 @@ class FTT5Decoding(nn.Module):
 
         torch.classes.load_library(lib_path)
         try:
-            self.decoding = torch.classes.FasterTransformer.T5Decoding(head_num, head_size, inter_size, mem_d_model, d_model, num_layer,
-                                                                       vocab_size, num_bucket, num_expert, max_distance, q_scaling, start_id, end_id,
-                                                                       tensor_para_size, pipeline_para_size, t5_with_bias,
-                                                                       position_embedding_type, moe_k, activation_type, tie_word_embeddings, moe_layer_index, *decoding_weight_list)
+            self.decoding = torch.classes.FasterTransformer.T5Decoding(head_num, head_size, inter_size, mem_d_model,
+                                                                       d_model, num_layer,
+                                                                       vocab_size, num_bucket, num_expert, max_distance,
+                                                                       q_scaling, start_id, end_id,
+                                                                       tensor_para_size, pipeline_para_size,
+                                                                       t5_with_bias,
+                                                                       position_embedding_type, moe_k, activation_type,
+                                                                       tie_word_embeddings, adapter_inter_size,
+                                                                       adapter_norm_position,
+                                                                       moe_layer_index, *decoding_weight_list)
         except:
-            self.decoding = torch.classes.FasterTransformerT5Decoding(head_num, head_size, inter_size, mem_d_model, d_model, num_layer,
-                                                                      vocab_size, num_bucket, num_expert, max_distance, q_scaling, start_id, end_id,
-                                                                      tensor_para_size, pipeline_para_size, t5_with_bias,
-                                                                      position_embedding_type, moe_k, activation_type, tie_word_embeddings, moe_layer_index, *decoding_weight_list)
+            self.decoding = torch.classes.FasterTransformerT5Decoding(head_num, head_size, inter_size, mem_d_model,
+                                                                      d_model, num_layer,
+                                                                      vocab_size, num_bucket, num_expert, max_distance,
+                                                                      q_scaling, start_id, end_id,
+                                                                      tensor_para_size, pipeline_para_size,
+                                                                      t5_with_bias,
+                                                                      position_embedding_type, moe_k, activation_type,
+                                                                      tie_word_embeddings, adapter_inter_size,
+                                                                      adapter_norm_position,
+                                                                      moe_layer_index, *decoding_weight_list)
 
     def forward(self, beam_width, max_seq_len, top_k, top_p,
                 beam_search_diversity_rate, temperature,
-                len_penalty, repetition_penalty, random_seed,
+                len_penalty, repetition_penalty, presence_penalty, min_length, random_seed,
                 mem_hidden_states, mem_seq_len,
                 is_return_output_log_probs, is_return_cum_log_probs, is_return_cross_attentions=False,
                 bad_words_list=None, stop_words_list=None):
@@ -432,7 +468,7 @@ class FTT5Decoding(nn.Module):
         # So, the top_k and top_p must be some values now.
         results = self.decoding.forward(beam_width, max_seq_len,
                                         top_k, top_p, beam_search_diversity_rate,
-                                        temperature, len_penalty, repetition_penalty,
+                                        temperature, len_penalty, repetition_penalty, presence_penalty, min_length,
                                         random_seed, mem_hidden_states, mem_seq_len,
                                         is_return_output_log_probs, is_return_cum_log_probs, is_return_cross_attentions,
                                         bad_words_list, stop_words_list)
@@ -447,7 +483,7 @@ class FTT5(nn.Module):
 
     def forward(self, input_token, inputs_embeds, beam_size, max_seq_len,
                 top_k, top_p, beam_search_diversity_rate = 0.0,
-                temperature=1.0, len_penalty=0.0, repetition_penalty=1.0, random_seed=0,
+                temperature=1.0, len_penalty=0.0, repetition_penalty=None, presence_penalty=None, min_length=0, random_seed=0,
                 is_return_output_log_probs=False, is_return_cum_log_probs=False, is_return_cross_attentions=False,
                 bad_words_list=None, stop_words_list=None):
         input_ids = input_token.input_ids.to("cuda").type(torch.int32)
@@ -466,6 +502,8 @@ class FTT5(nn.Module):
                                         temperature,  # optional, can be None
                                         len_penalty,  # optional, can be None
                                         repetition_penalty,  # optional, can be None
+                                        presence_penalty,  # optional, can be None
+                                        min_length,  # optional, can be None
                                         random_seed,  # optional, can be None
                                         ft_encoder_outputs,
                                         mem_seq_len,

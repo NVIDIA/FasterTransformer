@@ -36,11 +36,11 @@ parser.add_argument("--model_type", type=str, help="decoding_ext, torch_decoding
 parser.add_argument('--data_type', type=str, choices=['fp32', 'fp16', 'bf16'], default='fp32')
 parser.add_argument('--model_path', type=str, default='./pytorch/translation/models/averaged-10-epoch.pt',
                     help='path for model checkpoint')
-parser.add_argument('--decoding_ths_path', type=str, default='./lib/libth_decoding.so',
+parser.add_argument('--decoding_ths_path', type=str, default='./lib/libth_transformer.so',
                     help='path of the pyt_fastertransformer dynamic lib file')
-parser.add_argument('--decoder_ths_path', type=str, default='./lib/libth_decoder.so',
+parser.add_argument('--decoder_ths_path', type=str, default='./lib/libth_transformer.so',
                     help='path of the pyt_fastertransformer dynamic lib file')
-parser.add_argument('--encoder_ths_path', type=str, default='./lib/libth_encoder.so',
+parser.add_argument('--encoder_ths_path', type=str, default='./lib/libth_transformer.so',
                     help='path of the pyt_fastertransformer dynamic lib file')
 parser.add_argument('--input_file', type=str, default='../examples/tensorflow/decoding/utils/translation/test.en',
                     help='input file path')

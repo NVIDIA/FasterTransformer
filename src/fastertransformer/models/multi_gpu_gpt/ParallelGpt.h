@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  * Copyright (c) 2021, NAVER Corp.  Authored by CLOVA.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -32,11 +32,14 @@ template<typename T>
 class ParallelGpt: public BaseLayer {
 private:
     // meta data
-    size_t head_num_;
-    size_t size_per_head_;
-    size_t inter_size_;
-    size_t num_layer_;
-    size_t vocab_size_;
+    size_t               head_num_;
+    size_t               size_per_head_;
+    size_t               inter_size_;
+    size_t               num_layer_;
+    size_t               vocab_size_;
+    size_t               expert_num_;
+    size_t               moe_k_;
+    std::vector<int64_t> moe_layer_index_;
 
     int    start_id_;
     int    end_id_;
@@ -62,10 +65,10 @@ private:
     std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm_;
     int                                 enable_custom_all_reduce_;
 
-    const bool      is_context_qk_buf_float_ = false;
-    size_t          vocab_size_padded_;
-    const int       int8_mode_      = 0;
-    AttentionType   attention_type_ = AttentionType::UNFUSED_MHA;
+    const bool    is_context_qk_buf_float_ = false;
+    size_t        vocab_size_padded_;
+    const int     int8_mode_      = 0;
+    AttentionType attention_type_ = AttentionType::UNFUSED_MHA;
 
     // Prompt Learning Parameters
     PromptLearningType prompt_learning_type_;
@@ -188,6 +191,9 @@ public:
                 size_t                              size_per_head,
                 size_t                              inter_size,
                 size_t                              num_layer,
+                size_t                              expert_num,
+                size_t                              moe_k,
+                std::vector<int64_t>                moe_layer_index,
                 size_t                              vocab_size,
                 int                                 start_id,
                 int                                 end_id,

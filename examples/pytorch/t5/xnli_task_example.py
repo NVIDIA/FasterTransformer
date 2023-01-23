@@ -1,4 +1,4 @@
-# Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -402,7 +402,7 @@ if __name__ == "__main__":
                         help='Probability (p) value of top p sampling in decoding. Default is 0.0. ')
     parser.add_argument('-d', '--data_type', type=str, default="fp32", metavar='STRING',
                         help='data type (default: fp32)', choices=['fp32', 'fp16', 'bf16'])
-    parser.add_argument('-lib_path', '--lib_path', type=str, default="/workspace/FasterTransformer/build/lib/libth_t5.so", metavar='STRING',
+    parser.add_argument('-lib_path', '--lib_path', type=str, default="/workspace/FasterTransformer/build/lib/libth_transformer.so", metavar='STRING',
                         help='the path of FasterTransformer pytorch t5 op library.')
     parser.add_argument('-data_path', '--data_path', type=str, required=True, help="the xnli task data path")
     parser.add_argument('-tensor_para_size', '--tensor_para_size', type=int, default=1, metavar='NUMBER',

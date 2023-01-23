@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,9 @@
 #include "cnpy.h"
 #include "src/fastertransformer/models/xlnet/Xlnet.h"
 #include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
+
+#include "src/fastertransformer/utils/nvtx_utils.h"
+
 using namespace fastertransformer;
 using namespace std;
 #include <iomanip>

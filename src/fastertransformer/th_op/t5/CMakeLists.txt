@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,5 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(th_t5 SHARED T5EncoderOp.cc T5DecoderOp.cc T5DecodingOp.cc)
+add_library(th_t5 STATIC T5EncoderOp.cc T5DecodingOp.cc)
+set_property(TARGET th_t5 PROPERTY POSITION_INDEPENDENT_CODE  ON)
 target_link_libraries(th_t5 PRIVATE "${TORCH_LIBRARIES}" T5Encoder T5Decoder T5Decoding th_utils nccl_utils)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -324,8 +324,78 @@ INSTANTIATE_GENERIC_ACTIVATION(IdentityActivation, float, half);
 INSTANTIATE_GENERIC_ACTIVATION(IdentityActivation, __nv_bfloat16, __nv_bfloat16);
 INSTANTIATE_GENERIC_ACTIVATION(IdentityActivation, float, __nv_bfloat16);
 #endif
-
 #undef INSTANCIATE_GENERIC_ACTIVATION
+
+template<typename T>
+__global__ void add_bias_tanh(T* out, const T* __restrict bias, int m, int n)
+{
+    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
+        T val = out[id];
+        if (bias != nullptr) {
+            val = val + ldg(&bias[id % n]);
+        }
+        out[id] = tanhf(val);
+    }
+}
+
+template<>
+__global__ void add_bias_tanh(half* out, const half* __restrict bias, int m, int n)
+{
+    half2*       out_ptr  = (half2*)out;
+    const half2* bias_ptr = (half2*)bias;
+
+    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
+        half2 val = out_ptr[id];
+        if (bias != nullptr) {
+            val = val + __ldg(&bias_ptr[id % n]);
+        }
+        val.x       = tanhf(val.x);
+        val.y       = tanhf(val.y);
+        out_ptr[id] = val;
+    }
+}
+
+#ifdef ENABLE_BF16
+template<>
+__global__ void add_bias_tanh(__nv_bfloat16* out, const __nv_bfloat16* __restrict bias, int m, int n)
+{
+    __nv_bfloat162*       out_ptr  = (__nv_bfloat162*)out;
+    const __nv_bfloat162* bias_ptr = (__nv_bfloat162*)bias;
+
+    for (int id = blockIdx.x * blockDim.x + threadIdx.x; id < m * n; id += blockDim.x * gridDim.x) {
+        __nv_bfloat162 val = out_ptr[id];
+        if (bias != nullptr) {
+            val = bf16hadd2(val, ldg(&bias_ptr[id % n]));
+        }
+        val.x       = tanhf(val.x);
+        val.y       = tanhf(val.y);
+        out_ptr[id] = val;
+    }
+}
+#endif
+
+template<typename T>
+void invokeAddBiasTanh(T* out, const T* bias, const int m, const int n, cudaStream_t stream)
+{
+    const int data_type_factor = 4 / sizeof(T);  // 1 for fp32, 2 for fp16 and bf16
+    dim3      block, grid;
+    if (n / 4 / data_type_factor <= 1024) {
+        block.x = n / 4 / data_type_factor;
+        grid.x  = m;
+    }
+    else {
+        block.x = 1024;
+        grid.x  = ceil(m * n / 1024.);
+    }
+    add_bias_tanh<T><<<grid, block, 0, stream>>>(out, bias, m, n / data_type_factor);
+}
+
+template void invokeAddBiasTanh(float* out, const float* bias, const int m, const int n, cudaStream_t stream);
+template void invokeAddBiasTanh(half* out, const half* bias, const int m, const int n, cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void
+invokeAddBiasTanh(__nv_bfloat16* out, const __nv_bfloat16* bias, const int m, const int n, cudaStream_t stream);
+#endif
 
 template<typename T2, int N>
 __global__ void addBiasGeluV2(T2* out,
@@ -398,22 +468,12 @@ __global__ void addBiasGeluV3(T2* out,
     case HALF_N:                                                                                                       \
         if (ELEMENT_PER_ROUND > 1) {                                                                                   \
             grid.x = grid.x / ELEMENT_PER_ROUND;                                                                       \
-            addBiasGeluV3<T2, HALF_N, ELEMENT_PER_ROUND><<<grid, block, 0, stream>>>((T2*)out,                         \
-                                                                                     (const T2*)bias,                  \
-                                                                                     ia3_tasks,                        \
-                                                                                     (T2*)ia3_weights,                 \
-                                                                                     m * half_n,                       \
-                                                                                     padding_offset,                   \
-                                                                                     seq_len);                         \
+            addBiasGeluV3<T2, HALF_N, ELEMENT_PER_ROUND><<<grid, block, 0, stream>>>(                                  \
+                (T2*)out, (const T2*)bias, ia3_tasks, (T2*)ia3_weights, m * half_n, padding_offset, seq_len);          \
         }                                                                                                              \
         else {                                                                                                         \
-            addBiasGeluV2<T2, HALF_N><<<grid, block, 0, stream>>>((T2*)out,                                            \
-                                                                  (const T2*)bias,                                     \
-                                                                  ia3_tasks,                                           \
-                                                                  (T2*)ia3_weights,                                    \
-                                                                  m * half_n,                                          \
-                                                                  padding_offset,                                      \
-                                                                  seq_len);                                            \
+            addBiasGeluV2<T2, HALF_N><<<grid, block, 0, stream>>>(                                                     \
+                (T2*)out, (const T2*)bias, ia3_tasks, (T2*)ia3_weights, m * half_n, padding_offset, seq_len);          \
         }                                                                                                              \
         break;
 
@@ -586,7 +646,6 @@ void invokeSigmoid(T* data, const int size, const float scale, cudaStream_t stre
 }
 
 template void invokeSigmoid(float* data, const int size, const float scale, cudaStream_t stream);
-
 template void invokeSigmoid(half* data, const int size, const float scale, cudaStream_t stream);
 
 }  // namespace fastertransformer

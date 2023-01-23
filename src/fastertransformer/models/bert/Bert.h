@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -70,7 +70,7 @@ private:
 
 protected:
     // model params
-    size_t* token_num_              = nullptr;
+    size_t* h_pinned_token_num_ptr_ = nullptr;
     int*    padding_offset_         = nullptr;
     int*    trt_mha_padding_offset_ = nullptr;
     T*      attention_mask_         = nullptr;

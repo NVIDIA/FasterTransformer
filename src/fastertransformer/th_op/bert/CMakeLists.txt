@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,5 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(th_bert SHARED BertOp.cc BertINT8Op.cc WeightQuantizeOp.cc)
+add_library(th_bert STATIC BertOp.cc BertINT8Op.cc WeightQuantizeOp.cc)
+set_property(TARGET th_bert PROPERTY POSITION_INDEPENDENT_CODE  ON)
 target_link_libraries(th_bert PRIVATE "${TORCH_LIBRARIES}" Bert BertINT8 nccl_utils th_utils quantize_weight)

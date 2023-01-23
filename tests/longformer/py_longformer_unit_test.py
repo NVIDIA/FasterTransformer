@@ -59,7 +59,7 @@ class TestLongformerPytorchQA(unittest.TestCase):
         ]
 
         self.model_dir = "examples/pytorch/longformer/longformer-large-4096-finetuned-triviaqa"
-        self.ft_longformer_lib = os.path.join('build', 'lib', 'libth_longformer.so')
+        self.ft_longformer_lib = os.path.join('build', 'lib', 'libth_transformer.so')
 
     def run_all_qa(self, seq_len, batch_size, ft_longformer, data_type):
         for idx in range(len(self.passage_texts)):

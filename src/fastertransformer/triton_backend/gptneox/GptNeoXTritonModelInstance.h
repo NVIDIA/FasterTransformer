@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -77,5 +77,6 @@ private:
     float* d_output_log_probs_ = nullptr;
     float* d_cum_log_probs_    = nullptr;
 
-    uint32_t* h_total_output_lengths_ = nullptr;
+    uint32_t*          h_total_output_lengths_ = nullptr;
+    std::exception_ptr h_exception_            = nullptr;
 };

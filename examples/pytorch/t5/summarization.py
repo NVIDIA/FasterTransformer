@@ -1,4 +1,4 @@
-# Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -55,7 +55,7 @@ def main():
     parser.add_argument("--max_seq_len", type=int, default=200)
     parser.add_argument("--ft_use_hf_config", action="store_true",
                         help="use the hyper-parameters from the hf model")
-    parser.add_argument('--lib_path', type=str, default='./lib/libth_t5.so',
+    parser.add_argument('--lib_path', type=str, default='./lib/libth_transformer.so',
                         help='path to the pyt_fastertransformer dynamic lib file.')
     parser.add_argument('--tensor_para_size', type=int, default=1,
                         help='tensor parallel size')

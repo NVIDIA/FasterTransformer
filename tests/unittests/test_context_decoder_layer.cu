@@ -14,6 +14,7 @@
 #include "src/fastertransformer/utils/logger.h"
 #include "src/fastertransformer/utils/memory_utils.h"
 #include "src/fastertransformer/utils/Tensor.h"
+#include "src/fastertransformer/utils/nvtx_utils.h"
 
 #include "src/fastertransformer/kernels/gpt_kernels.h"
 #include "src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.h"
@@ -119,6 +120,9 @@ bool test_context_sharing(const std::string& weight_dir, const std::string& data
             size_per_head,
             inter_size,
             num_layer,
+            0,  // expert_num
+            0,  // moe_k
+            {}, // moe_layer_index
             1e-5f, // layernorm_eps
             gptVariantParams {},
             tensor_para,

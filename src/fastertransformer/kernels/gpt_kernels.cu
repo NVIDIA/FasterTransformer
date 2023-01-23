@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+#include "src/fastertransformer/utils/cuda_fp8_utils.h"
 #ifndef CUDART_VERSION
 #error CUDART_VERSION Undefined!
 #elif (CUDART_VERSION >= 11050)
@@ -416,6 +417,15 @@ template void invokeBuildDecoderAttentionMask(half*        attention_mask,
                                               cudaStream_t stream);
 #ifdef ENABLE_BF16
 template void invokeBuildDecoderAttentionMask(__nv_bfloat16* attention_mask,
+                                              const int*     sequence_lengths,
+                                              const int*     prefix_prompt_lengths,
+                                              const int      batch_size,
+                                              const int      max_seq_len,
+                                              const int      max_prompt_length,
+                                              cudaStream_t   stream);
+#endif
+#ifdef ENABLE_FP8
+template void invokeBuildDecoderAttentionMask(__nv_fp8_e4m3* attention_mask,
                                               const int*     sequence_lengths,
                                               const int*     prefix_prompt_lengths,
                                               const int      batch_size,

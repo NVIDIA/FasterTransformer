@@ -1,4 +1,4 @@
-# Copyright (c) 2022, NVIDIA CORPORATION. All rights reserved.
+# Copyright (c) 2022-2023, NVIDIA CORPORATION. All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -44,7 +44,8 @@ RUN git submodule update --init --recursive && \
 # RUN pip uninstall -y apex && \
 #     pip install git+https://github.com/NVIDIA/apex --global-option="--cpp_ext" --global-option="--cuda_ext" --global-option="--fast_layer_norm" && \
 #     pip install 3rdparty/NeMo[nlp]
-RUN pip install 3rdparty/NeMo[nlp]
+RUN pip install --upgrade --no-cache-dir pip \
+ && pip install --no-cache-dir 3rdparty/NeMo[nlp]
 
 ENV NCCL_LAUNCH_MODE=GROUP
 ARG SM=80
@@ -52,11 +53,12 @@ ARG BUILD_MIXED_GEMM=OFF
 ARG FORCE_BACKEND_REBUILD=0
 ARG SPARSITY_SUPPORT=OFF
 ARG BUILD_MULTI_GPU=ON
+ARG ENABLE_FP8=OFF
 RUN mkdir /var/run/sshd -p && \
     mkdir build -p && cd build && \
     wget https://developer.download.nvidia.com/compute/libcusparse-lt/0.1.0/local_installers/libcusparse_lt-linux-x86_64-0.1.0.2.tar.gz && \
     tar -xzvf libcusparse_lt-linux-x86_64-0.1.0.2.tar.gz && \
     cmake -DSM=${SM} -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON -DSPARSITY_SUPPORT=${SPARSITY_SUPPORT} -DMEASURE_BUILD_TIME=ON \
       -DBUILD_CUTLASS_MIXED_GEMM=${BUILD_MIXED_GEMM} -DCUSPARSELT_PATH=/workspace/FasterTransformer/build/libcusparse_lt/ \
-      -DBUILD_MULTI_GPU=${BUILD_MULTI_GPU} -DBUILD_TRT=ON .. && \
+      -DBUILD_MULTI_GPU=${BUILD_MULTI_GPU} -DBUILD_TRT=ON -DENABLE_FP8=${ENABLE_FP8} .. && \
     make -j"$(grep -c ^processor /proc/cpuinfo)"

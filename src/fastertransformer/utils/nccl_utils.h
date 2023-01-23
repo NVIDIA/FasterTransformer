@@ -33,7 +33,6 @@
 #endif
 
 namespace fastertransformer {
-
 #ifdef BUILD_MULTI_GPU
 #define NCCLCHECK(cmd)                                                                                                 \
     do {                                                                                                               \
@@ -44,7 +43,7 @@ namespace fastertransformer {
         }                                                                                                              \
     } while (0)
 #else
-#define NCCLCHECK(cmd)
+#define NCCLCHECK(cmd) printf("[WARNING} No NCCL");
 #endif
 
 struct NcclUid {

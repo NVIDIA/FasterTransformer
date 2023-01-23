@@ -1,4 +1,4 @@
-# Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -114,7 +114,7 @@ class TestMoeSoftmax(unittest.TestCase):
 
 class TestGroupedGemmBias(unittest.TestCase):
     def setUp(self) -> None:
-        torch.classes.load_library("lib/libth_weight_only_quant_ops.so")
+        torch.classes.load_library("lib/libth_transformer.so")
         torch.classes.load_library("lib/libmoe_unit_ops.so")
         self.grouped_gemm_bias = torch.ops.moe_unit_ops.grouped_gemm_bias
         self.unpack_packed_int4s = torch.ops.fastertransformer.unpack_int4_packed_tensor_to_int8
@@ -279,7 +279,7 @@ class TestGroupedGemmBias(unittest.TestCase):
 class TestMoe(unittest.TestCase):
 
   def setUp(self) -> None:
-    torch.classes.load_library("lib/libth_weight_only_quant_ops.so")
+    torch.classes.load_library("lib/libth_transformer.so")
     torch.classes.load_library("lib/libmoe_unit_ops.so")
 
     self.run_moe_fc = torch.ops.moe_unit_ops.run_moe_fc

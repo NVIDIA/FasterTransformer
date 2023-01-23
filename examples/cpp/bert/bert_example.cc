@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +16,8 @@
 
 #include "src/fastertransformer/models/bert/Bert.h"
 #include "src/fastertransformer/utils/logger.h"
+#include "src/fastertransformer/utils/nvtx_utils.h"
+#include <cuda_profiler_api.h>
 
 using namespace fastertransformer;
 
@@ -161,12 +163,14 @@ int bertExample(
     print_mem_usage("After inference");
 
     // profile time
-    const int ite = 10;
+    const int ite = 100;
     CudaTimer cuda_timer(stream);
     cuda_timer.start();
+    cudaProfilerStart();
     for (int i = 0; i < ite; i++) {
         bert.forward(&output_tensors, &input_tensors, &bert_weights);
     }
+    cudaProfilerStop();
     float total_time = cuda_timer.stop();
 
     FT_LOG_INFO("batch_size %ld seq_len %ld layer %ld "

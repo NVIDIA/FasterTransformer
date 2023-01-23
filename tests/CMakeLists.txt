@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,4 +16,5 @@ add_subdirectory(unittests)
 if(BUILD_PYT)
     add_subdirectory(gemm_dequantize)
     add_subdirectory(moe)
+    add_subdirectory(int8_gemm)
 endif()

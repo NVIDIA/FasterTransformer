@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@
 #include "src/fastertransformer/utils/Tensor.h"
 #include "src/fastertransformer/utils/allocator.h"
 #include "src/fastertransformer/utils/cublasMMWrapper.h"
+#include "src/fastertransformer/utils/cuda_fp8_utils.h"
 #include "src/fastertransformer/utils/memory_utils.h"
 
 namespace fastertransformer {
@@ -51,7 +52,7 @@ AttentionType getAttentionType(size_t     size_per_head,
                                const bool causal_mask                      = false)
 {
 
-    if (std::is_same<T, half>::value && is_fuse == true) {
+    if (std::is_same<T, half>::value && is_fuse) {
         // Bert/Vit
         if (!causal_mask) {
             if (!with_swin_relative_position_bias
@@ -74,6 +75,18 @@ AttentionType getAttentionType(size_t     size_per_head,
             }
         }
     }
+#ifdef ENABLE_FP8
+    else if (std::is_same<T, __nv_fp8_e4m3>::value && is_fuse) {
+        if (!causal_mask) {
+            if (sm == kSM_90 && max_seq_len < 512 && is_fuse && size_per_head == 64) {
+                return remove_padding ? AttentionType::FUSED_MHA : AttentionType::FUSED_PADDED_MHA;
+            }
+            else {
+                return remove_padding ? AttentionType::UNFUSED_MHA : AttentionType::UNFUSED_PADDED_MHA;
+            }
+        }
+    }
+#endif
 
     return remove_padding ? AttentionType::UNFUSED_MHA : AttentionType::UNFUSED_PADDED_MHA;
 }
@@ -101,6 +114,11 @@ inline bool isFusedMHA(AttentionType attention_type)
 inline bool isUnPaddedMHA(AttentionType attention_type)
 {
     return attention_type == AttentionType::FUSED_MHA || attention_type == AttentionType::UNFUSED_MHA;
+}
+
+inline bool isPaddedMHA(AttentionType attention_type)
+{
+    return attention_type == AttentionType::FUSED_PADDED_MHA || attention_type == AttentionType::UNFUSED_PADDED_MHA;
 }
 
 inline AttentionType getUnfusedAttentionType(AttentionType attention_type)

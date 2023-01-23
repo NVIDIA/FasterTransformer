@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
  */
 #include "examples/cpp/multi_gpu_gpt/gpt_example_utils.h"
 #include "src/fastertransformer/utils/mpi_utils.h"
+#include "src/fastertransformer/utils/nvtx_utils.h"
 
 #include <cuda.h>
 #include <cuda_profiler_api.h>
@@ -174,11 +175,21 @@ request_config_t read_request_config(const INIReader& reader)
 {
     request_config_t config;
 
-    config.beam_width         = reader.GetInteger("ft_instance_hyperparameter", "beam_width");
-    config.top_k              = reader.GetInteger("ft_instance_hyperparameter", "top_k");
-    config.top_p              = reader.GetFloat("ft_instance_hyperparameter", "top_p");
-    config.temperature        = reader.GetFloat("ft_instance_hyperparameter", "temperature");
-    config.repetition_penalty = reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty");
+    config.beam_width  = reader.GetInteger("ft_instance_hyperparameter", "beam_width");
+    config.top_k       = reader.GetInteger("ft_instance_hyperparameter", "top_k");
+    config.top_p       = reader.GetFloat("ft_instance_hyperparameter", "top_p");
+    config.temperature = reader.GetFloat("ft_instance_hyperparameter", "temperature");
+    config.min_length  = reader.GetInteger("ft_instance_hyperparameter", "min_length", 0);
+
+    config.repetition_penalty = reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty", 1.0f);
+    config.presence_penalty   = reader.GetFloat("ft_instance_hyperparameter", "presence_penalty", 0.0f);
+    FT_CHECK_WITH_INFO(
+        config.repetition_penalty == 1.0f || config.presence_penalty == 0.0f,
+        fmtstr("Found ambiguous parameters repetition_penalty (%f) and presence_penalty (%f) "
+               "which are mutually exclusive. Please remove one of repetition_penalty or presence_penalty "
+               "or set to a default value.",
+               config.repetition_penalty,
+               config.presence_penalty));
 
     config.request_batch_size = reader.GetInteger("request", "request_batch_size");
     // The length of tokens we hope this model to generate
@@ -255,6 +266,7 @@ Allocator<AllocatorType::CUDA> init_cuda_ctx(cudaStream_t& stream, cudaDevicePro
 
     check_cuda_error(cudaGetDeviceProperties(&prop, device));
     printf("Device %s\n", prop.name);
+    ft_nvtx::setDeviceDomain(getDevice());
 
     return Allocator<AllocatorType::CUDA>(getDevice());
 }
@@ -358,7 +370,13 @@ void populate_request(std::unordered_map<std::string, Tensor>& input_tensors,
     input_tensors.insert({"output_seq_len", {MEMORY_CPU, TYPE_UINT32, {request_batch_size}, output_seq_len.data()}});
     input_tensors.insert({"temperature", {MEMORY_CPU, TYPE_FP32, {1}, &request_config.temperature}});
     input_tensors.insert({"len_penalty", {MEMORY_CPU, TYPE_FP32, {1}, &request_config.len_penalty}});
-    input_tensors.insert({"repetition_penalty", {MEMORY_CPU, TYPE_FP32, {1}, &request_config.repetition_penalty}});
+    if (request_config.repetition_penalty != 1.0f) {
+        input_tensors.insert({"repetition_penalty", {MEMORY_CPU, TYPE_FP32, {1}, &request_config.repetition_penalty}});
+    }
+    if (request_config.presence_penalty != 0.0f) {
+        input_tensors.insert({"presence_penalty", {MEMORY_CPU, TYPE_FP32, {1}, &request_config.presence_penalty}});
+    }
+    input_tensors.insert({"min_length", {MEMORY_CPU, TYPE_FP32, {1}, &request_config.min_length}});
     input_tensors.insert({"random_seed", {MEMORY_CPU, TYPE_UINT64, {1}, &random_seed}});
 
     if (request_config.top_k == 0 && request_config.top_p == 0.0f) {

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
  */
 
 #include "src/fastertransformer/utils/cuda_utils.h"
+#include "src/fastertransformer/utils/cuda_fp8_utils.h"
 
 namespace fastertransformer {
 
@@ -31,13 +32,7 @@ void print_to_file(const T* result, const int size, const char* file, cudaStream
         T* tmp = new T[size];
         check_cuda_error(cudaMemcpyAsync(tmp, result, sizeof(T) * size, cudaMemcpyDeviceToHost, stream));
         for (int i = 0; i < size; ++i) {
-            float val;
-            if (sizeof(T) == 2) {
-                val = (T)__half2float(tmp[i]);
-            }
-            else {
-                val = (T)tmp[i];
-            }
+            float val = (float)(tmp[i]);
             outFile << val << std::endl;
         }
         delete[] tmp;
@@ -54,16 +49,15 @@ print_to_file(const float* result, const int size, const char* file, cudaStream_
 template void
 print_to_file(const half* result, const int size, const char* file, cudaStream_t stream, std::ios::openmode open_mode);
 #ifdef ENABLE_BF16
-// template void print_to_file(
-//     const __nv_bfloat16* result, const int size, const char* file, cudaStream_t stream, std::ios::openmode
-//     open_mode);
+template void print_to_file(
+    const __nv_bfloat16* result, const int size, const char* file, cudaStream_t stream, std::ios::openmode open_mode);
 #endif
 
 template<typename T>
 void print_abs_mean(const T* buf, uint size, cudaStream_t stream, std::string name)
 {
     if (buf == nullptr) {
-        printf("[WARNING] It is an nullptr, skip!");
+        FT_LOG_WARNING("It is an nullptr, skip!");
         return;
     }
     cudaDeviceSynchronize();
@@ -107,12 +101,16 @@ template void print_abs_mean(const __nv_bfloat16* buf, uint size, cudaStream_t s
 #endif
 template void print_abs_mean(const int* buf, uint size, cudaStream_t stream, std::string name);
 template void print_abs_mean(const uint* buf, uint size, cudaStream_t stream, std::string name);
+template void print_abs_mean(const int8_t* buf, uint size, cudaStream_t stream, std::string name);
+#ifdef ENABLE_FP8
+template void print_abs_mean(const __nv_fp8_e4m3* buf, uint size, cudaStream_t stream, std::string name);
+#endif
 
 template<typename T>
 void print_to_screen(const T* result, const int size)
 {
     if (result == nullptr) {
-        printf("[WARNING] It is an nullptr, skip! \n");
+        FT_LOG_WARNING("It is an nullptr, skip! \n");
         return;
     }
     T* tmp = reinterpret_cast<T*>(malloc(sizeof(T) * size));
@@ -131,6 +129,9 @@ template void print_to_screen(const __nv_bfloat16* result, const int size);
 template void print_to_screen(const int* result, const int size);
 template void print_to_screen(const uint* result, const int size);
 template void print_to_screen(const bool* result, const int size);
+#ifdef ENABLE_FP8
+template void print_to_screen(const __nv_fp8_e4m3* result, const int size);
+#endif
 
 template<typename T>
 void printMatrix(T* ptr, int m, int k, int stride, bool is_device_ptr)

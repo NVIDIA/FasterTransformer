@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@
 namespace fastertransformer {
 
 class cublasMMWrapper {
-private:
+protected:
     cublasHandle_t   cublas_handle_;
     cublasLtHandle_t cublaslt_handle_;
 #ifdef SPARSITY_ENABLED
@@ -87,6 +87,10 @@ public:
 
     cublasMMWrapper(const cublasMMWrapper& wrapper);
 
+    virtual void cublasVersionCheck()
+    {
+        return;
+    };
     cublasStatus_t cublasLtMatmulWrapper(cublasLtHandle_t            lightHandle,
                                          cublasLtMatmulDesc_t        computeDesc,
                                          const void*                 alpha,

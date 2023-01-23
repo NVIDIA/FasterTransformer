@@ -1,4 +1,4 @@
-# Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -138,7 +138,7 @@ def get_args():
         help='A file path of a pretrained tokenizer or a checkpoint directory '
              'of HF pretrained model.')
     group.add_argument(
-        '--lib-path', type=str, metavar='PATH', default='./lib/libth_parallel_gpt.so',
+        '--lib-path', type=str, metavar='PATH', default='./lib/libth_transformer.so',
         help='A FT library path to load `FasterTransformer.ParallelGptOp`')
     group.add_argument(
         '--test-hf', action='store_true',
@@ -162,6 +162,11 @@ def get_args():
         choices=[None, 'fp32', 'fp16'],
         help='The data type of FT checkpoint. If None, it will be retrieved '
              'from the config file in the checkpoint directory.')
+    group.add_argument(
+        '--int8_mode', type=int, default=0, choices=[0, 1],
+        help='The level of quantization to perform.'
+             ' 0: No quantization. All computation in data_type'
+             ' 1: Quantize weights to int8, all compute occurs in fp16/bf16. Not supported when data_type is fp32')
     args = parser.parse_args()
 
     print('\n=================== Arguments ===================')
@@ -233,7 +238,8 @@ def get_model_and_tokenizer(args: argparse.Namespace):
     model_args.update(dict(
         lib_path=args.lib_path,
         pipeline_para_size=args.pipeline_para_size,
-        shared_contexts_ratio=args.shared_contexts_ratio
+        shared_contexts_ratio=args.shared_contexts_ratio,
+        int8_mode=args.int8_mode
     ))
 
     print('[FT][INFO] Load BLOOM model')

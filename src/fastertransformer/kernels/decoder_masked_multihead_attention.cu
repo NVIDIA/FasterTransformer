@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -87,6 +87,17 @@ void masked_multihead_attention(const Masked_multihead_attention_params<__nv_bfl
     multihead_attention_<__nv_bfloat16, Masked_multihead_attention_params<__nv_bfloat16>>(params, stream);
 }
 #endif
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#ifdef ENABLE_FP8
+void masked_multihead_attention(const Masked_multihead_attention_params<__nv_fp8_e4m3>& params,
+                                const cudaStream_t&                                     stream)
+{
+    multihead_attention_<__nv_fp8_e4m3, Masked_multihead_attention_params<__nv_fp8_e4m3>>(params, stream);
+}
+#endif
+
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 void cross_multihead_attention(const Cross_multihead_attention_params<float>& params, const cudaStream_t& stream)
@@ -108,6 +119,16 @@ void cross_multihead_attention(const Cross_multihead_attention_params<__nv_bfloa
                                const cudaStream_t&                                    stream)
 {
     multihead_attention_<__nv_bfloat16, Cross_multihead_attention_params<__nv_bfloat16>>(params, stream);
+}
+#endif
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#ifdef ENABLE_FP8
+void cross_multihead_attention(const Cross_multihead_attention_params<__nv_fp8_e4m3>& params,
+                               const cudaStream_t&                                    stream)
+{
+    multihead_attention_<__nv_fp8_e4m3, Cross_multihead_attention_params<__nv_fp8_e4m3>>(params, stream);
 }
 #endif
 

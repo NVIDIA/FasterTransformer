@@ -1,0 +1,15 @@
+docker
+.dockerignore
+.gitlab
+.gitlab-ci.yml
+
+*build*
+./models
+__pycache__
+.vscode
+translation
+.cache
+*.npy
+*.pth
+*.o
+**/.ipynb_checkpoints

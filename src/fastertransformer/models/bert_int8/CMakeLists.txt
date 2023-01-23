@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,12 +14,19 @@
 
 cmake_minimum_required(VERSION 3.8)
 
+
+add_library(BertLayerINT8Weight STATIC BertLayerINT8Weight.cc)
+set_property(TARGET BertLayerINT8Weight PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET BertLayerINT8Weight PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+target_link_libraries(BertLayerINT8Weight PUBLIC -lcublasLt -lcublas -lcudart -lcurand cublasMMWrapper 
+                      cublasINT8MMWrapper BertLayerWeight)
+
 add_library(BertLayerINT8 STATIC BertLayerINT8.cc)
 set_property(TARGET BertLayerINT8 PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET BertLayerINT8 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(BertLayerINT8 PUBLIC -lcublasLt -lcublas -lcudart -lcurand cublasMMWrapper 
                       cublasINT8MMWrapper UnfusedAttentionLayerINT8 FusedAttentionLayerINT8 
-                      FfnLayerINT8 layernorm_int8_kernels
+                      FfnLayerINT8 layernorm_int8_kernels BertLayerINT8Weight
                       layout_transformer_int8_kernels quantization_int8_kernels nvtx_utils tensor cuda_utils logger)
 
 add_library(BertINT8 STATIC BertINT8.cc)

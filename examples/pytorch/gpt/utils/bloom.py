@@ -1,4 +1,4 @@
-# Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -29,7 +29,8 @@ from . import parallel_gpt
 class BloomWeight(gpt.GPTWeights):
 
     def __init__(self, head_num, size_per_head, layer_num, vocab_size,
-                 tensor_para_size, pipeline_para_size, weights_data_type, inference_data_type):
+                 tensor_para_size, pipeline_para_size, weights_data_type, inference_data_type,
+                 int8_mode=0):
         super().__init__(
             head_num, size_per_head, layer_num, vocab_size, 0,
             tensor_para_size, pipeline_para_size, weights_data_type,
@@ -39,7 +40,7 @@ class BloomWeight(gpt.GPTWeights):
             has_positional_encoding=False,
             has_pre_decoder_layernorm=True,
             has_post_decoder_layernorm=True,
-            int8_mode=0)
+            int8_mode=int8_mode)
 
 
 @dataclasses.dataclass
@@ -239,7 +240,8 @@ class Bloom(parallel_gpt.ParallelGPT):
                  inference_data_type: str,
                  weights_data_type: str | np.dtype = np.float32,
                  layernorm_eps: float = 1e-5,
-                 shared_contexts_ratio: float = 1.0):
+                 shared_contexts_ratio: float = 1.0,
+                 int8_mode: int = 0):
         super().__init__(
             head_num, size_per_head, vocab_size, start_id, end_id, layer_num,
             0, tensor_para_size,  pipeline_para_size,
@@ -255,7 +257,7 @@ class Bloom(parallel_gpt.ParallelGPT):
             has_adapters=False,
             adapter_inter_size=0,
             use_attention_linear_bias=True,
-            int8_mode=0,
+            int8_mode=int8_mode,
             weights_data_type=weights_data_type,
             shared_contexts_ratio=shared_contexts_ratio)
 

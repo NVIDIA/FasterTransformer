@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -186,7 +186,7 @@ void ViTTransformerINT8<T>::allocateBuffer()
             (T*)allocator_->reMalloc(mask_buf_, sizeof(T) * max_batch_size_ * max_seq_len_ * max_seq_len_, false);
         padding_offset_ =
             (int*)allocator_->reMalloc(padding_offset_, sizeof(int) * max_batch_size_ * max_seq_len_, false);
-        token_num_ = (size_t*)allocator_->reMalloc(token_num_, sizeof(size_t) * 1, false);
+        check_cuda_error(cudaMallocHost((void**)&h_pinned_token_num_ptr_, sizeof(size_t)));
 
         trt_mha_padding_offset_ =
             (int*)allocator_->reMalloc(trt_mha_padding_offset_, sizeof(int) * (2 * max_batch_size_ + 1), false);
@@ -222,7 +222,9 @@ void ViTTransformerINT8<T>::allocateBuffer(size_t batch_size)
     embed_buf_4_ = (T*)allocator_->reMalloc(embed_buf_4_, sizeof(T) * batch_size * max_seq_len_ * embed_dim_, false);
     mask_buf_    = (T*)allocator_->reMalloc(mask_buf_, sizeof(T) * batch_size * max_seq_len_ * max_seq_len_, false);
     REMALLOC(padding_offset_, sizeof(int) * batch_size * max_seq_len_);
-    REMALLOC(token_num_, sizeof(size_t) * 1);
+    if (!is_allocate_buffer_) {
+        check_cuda_error(cudaMallocHost((void**)&h_pinned_token_num_ptr_, sizeof(size_t)));
+    }
     trt_mha_padding_offset_ =
         (int*)allocator_->reMalloc(trt_mha_padding_offset_, sizeof(int) * (2 * batch_size + 1), false);
     seq_len_vec_ = (int*)allocator_->reMalloc(seq_len_vec_, sizeof(int) * batch_size, false);
@@ -238,17 +240,19 @@ void ViTTransformerINT8<T>::allocateBuffer(size_t batch_size)
 template<typename T>
 void ViTTransformerINT8<T>::freeBuffer()
 {
-    allocator_->free((void**)(&embed_buf_1_));
-    allocator_->free((void**)(&embed_buf_2_));
-    allocator_->free((void**)(&embed_buf_3_));
-    allocator_->free((void**)(&embed_buf_4_));
-    allocator_->free((void**)(&mask_buf_));
-    allocator_->free((void**)(&trt_mha_padding_offset_));
-    allocator_->free((void**)(&seq_len_vec_));
-    allocator_->free((void**)(&padding_offset_));
-    allocator_->free((void**)(&token_num_));
+    if (is_allocate_buffer_) {
+        allocator_->free((void**)(&embed_buf_1_));
+        allocator_->free((void**)(&embed_buf_2_));
+        allocator_->free((void**)(&embed_buf_3_));
+        allocator_->free((void**)(&embed_buf_4_));
+        allocator_->free((void**)(&mask_buf_));
+        allocator_->free((void**)(&trt_mha_padding_offset_));
+        allocator_->free((void**)(&seq_len_vec_));
+        allocator_->free((void**)(&padding_offset_));
+        check_cuda_error(cudaFreeHost(h_pinned_token_num_ptr_));
 
-    is_allocate_buffer_ = false;
+        is_allocate_buffer_ = false;
+    }
 }
 
 template<typename T>
@@ -483,7 +487,7 @@ template<typename T>
 void ViTTransformerINT8<T>::setDefaultPaddingOffset(size_t batch_size)
 {
     invokeGetPaddingOffset(
-        &nopad_token_num_, token_num_, padding_offset_, seq_len_vec_, batch_size, max_seq_len_, stream_);
+        h_pinned_token_num_ptr_, &nopad_token_num_, padding_offset_, seq_len_vec_, batch_size, max_seq_len_, stream_);
 }
 
 template<typename T>

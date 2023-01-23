@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@
 #include <cuda_fp16.h>
 #include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
 #include "src/fastertransformer/utils/cuda_bf16_fallbacks.cuh"
+#include "src/fastertransformer/utils/cuda_fp8_utils.h"
 
 namespace fastertransformer {
 
@@ -309,6 +310,62 @@ template<> __device__ inline __nv_bfloat162 cuda_cast<__nv_bfloat162, int16_t>(i
     return res;
 }
 
-#endif  // ENABLE_BF16
+template<> __device__ inline __nv_bfloat162 cuda_cast<__nv_bfloat162, half2>(half2 val) { return float22bf162(__half22float2(val)); }
+
+#endif // ENABLE BF16
+
+template<typename T> __device__ inline T cuda_abs(T val);
+template<> __device__ inline float cuda_abs(float val) { return fabs(val); }
+template<> __device__ inline half  cuda_abs(half  val) { return __habs(val); }
+template<> __device__ inline half2 cuda_abs(half2 val) { return __habs2(val); }
+
+#ifdef ENABLE_BF16
+
+#if __CUDA_ARCH__ >= 800 || !defined(__CUDA_ARCH__)
+template<> __device__ inline __nv_bfloat16  cuda_abs(__nv_bfloat16  val) { return __habs(val); }
+template<> __device__ inline __nv_bfloat162 cuda_abs(__nv_bfloat162 val) { return __habs2(val); }
+#else
+template<> __device__ inline __nv_bfloat16  cuda_abs(__nv_bfloat16  val) { return fabs(val); }
+template<> __device__ inline __nv_bfloat162 cuda_abs(__nv_bfloat162 val) { return make_bfloat162(fabs(val.x), fabs(val.y)); }
+#endif
+
+#endif // ENABLE_FP16
+
+// Unary maximum: compute the max of a vector type
+template<typename To, typename Ti> __device__ inline To cuda_max(Ti val)
+{
+    return cuda_cast<To>(val);
+};
+
+template<> __device__ inline half cuda_max(half2 val) { return (val.x > val.y) ? val.x : val.y; }
+#ifdef ENABLE_BF16
+template<> __device__ inline __nv_bfloat16 cuda_max(__nv_bfloat162 val) { return (val.x > val.y) ? val.x : val.y; }
+#endif
+
+// Binary maximum: compute the max of two scalar types
+template<typename T> __device__ inline T cuda_max(T val1, T val2) { return (val1 > val2) ? val1 : val2; }
+
+#ifdef ENABLE_FP8
+template<> __device__ inline float2 cuda_cast<float2, __nv_fp8x2_e4m3>(__nv_fp8x2_e4m3 val) { return bf1622float2(fp8x2_e4m3_to_bfloat2(&val)); }
+template<> __device__ inline __nv_fp8x2_e4m3 cuda_cast<__nv_fp8x2_e4m3, float2>(float2 val) { return __nv_fp8x2_e4m3(bf1622float2(float22bf162(val))); }
+
+template<> __device__ inline __nv_fp8_e4m3 cuda_cast<__nv_fp8_e4m3, half>(half val) { return __nv_fp8_e4m3(val); }
+template<> __device__ inline __nv_fp8_e4m3 cuda_cast<__nv_fp8_e4m3, __nv_bfloat16>(__nv_bfloat16 val) { return __nv_fp8_e4m3(val); }
+template<> __device__ inline __nv_fp8_e4m3 cuda_cast<__nv_fp8_e4m3, float>(float val) { return __nv_fp8_e4m3(val); }
+template<> __device__ inline float cuda_cast<float, __nv_fp8_e4m3>(__nv_fp8_e4m3 val) { return (float)val; }
+template<> __device__ inline __nv_bfloat162 cuda_cast<__nv_bfloat162, __nv_fp8x2_e4m3>(__nv_fp8x2_e4m3 val) { return fp8x2_e4m3_to_bfloat2(&val); }
+
+template<> __device__ inline int8_t cuda_cast<int8_t, __nv_fp8_e4m3>(__nv_fp8_e4m3 val)
+{
+    // no impl
+    return 0;
+}
+
+template<> __device__ inline __nv_fp8_e4m3 cuda_cast<__nv_fp8_e4m3, int8_t>(int8_t val)
+{
+    return cuda_cast<__nv_fp8_e4m3>(cuda_cast<__nv_bfloat16>(cuda_cast<float>(val)));
+}
+
+#endif // ENABLE_FP8
 
 }

@@ -38,7 +38,7 @@ class TestEncoder(unittest.TestCase):
                         'remove_padding': False,
                         'avg_seq_len': -1,
                         'thread_num': 1,
-                        'ths_path': 'lib/libth_bert.so',
+                        'ths_path': 'lib/libth_transformer.so',
                         'weight_path': None,
                         'int8_mode': 0,
                         'tensor_para_size': 1,
@@ -59,7 +59,6 @@ class TestEncoder(unittest.TestCase):
             max_diff = bert_example(args_dict)
             sys.stdout.flush()
             self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
-            args_dict['ths_path'] = 'lib/libth_encoder.so'
             max_diff = encoder_example(args_dict)
             sys.stdout.flush()
             self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
@@ -77,7 +76,6 @@ class TestEncoder(unittest.TestCase):
             max_diff = bert_example(args_dict)
             sys.stdout.flush()
             self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
-            args_dict['ths_path'] = 'lib/libth_encoder.so'
             max_diff = encoder_example(args_dict)
             sys.stdout.flush()
             self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
@@ -96,7 +94,6 @@ class TestEncoder(unittest.TestCase):
             max_diff = bert_example(args_dict)
             sys.stdout.flush()
             self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
-            args_dict['ths_path'] = 'lib/libth_encoder.so'
             max_diff = encoder_example(args_dict)
             sys.stdout.flush()
             self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
@@ -116,7 +113,6 @@ class TestEncoder(unittest.TestCase):
             max_diff = bert_example(args_dict)
             sys.stdout.flush()
             self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
-            args_dict['ths_path'] = 'lib/libth_encoder.so'
             max_diff = encoder_example(args_dict)
             sys.stdout.flush()
             self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
@@ -137,7 +133,6 @@ class TestEncoder(unittest.TestCase):
             max_diff = bert_example(args_dict)
             sys.stdout.flush()
             self.assertTrue(max_diff < threshold_tmp[args_dict['data_type']])
-            args_dict['ths_path'] = 'lib/libth_encoder.so'
             max_diff = encoder_example(args_dict)
             sys.stdout.flush()
             self.assertTrue(max_diff < threshold_tmp[args_dict['data_type']])
@@ -157,7 +152,6 @@ class TestEncoder(unittest.TestCase):
             max_diff = bert_example(args_dict)
             sys.stdout.flush()
             self.assertTrue(max_diff < self.threshold[args_dict['data_type']])
-            args_dict['ths_path'] = 'lib/libth_encoder.so'
             max_diff = encoder_example(args_dict)
             sys.stdout.flush()
             self.assertTrue(max_diff < self.threshold[args_dict['data_type']])

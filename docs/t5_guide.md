@@ -1,6 +1,6 @@
 # FasterTransformer T5
 
-The FasterTransformer T5 implements the huggingface t5 model (https://huggingface.co/t5-base).
+The FasterTransformer T5 implements the huggingface t5 model (<https://huggingface.co/t5-base>).
 
 ## Table Of Contents
 
@@ -30,7 +30,7 @@ The FasterTransformer T5 implements the huggingface t5 model (https://huggingfac
 
 ## Introduction
 
-This document describes what FasterTransformer provides for the `T5` model, explaining the workflow and optimization. We also provide a guide to help users to run the `T5` model on FasterTransformer. Finally, we provide benchmark to demonstrate the speed of FasterTransformer on `T5`. 
+This document describes what FasterTransformer provides for the `T5` model, explaining the workflow and optimization. We also provide a guide to help users to run the `T5` model on FasterTransformer. Finally, we provide benchmark to demonstrate the speed of FasterTransformer on `T5`.
 
 ### Supported features
 
@@ -66,7 +66,7 @@ The source codes are put in `src/fastertransformer/models/t5`.
 |      [1]       |         max_seq_len          |       size_t       |                                                                                                   **Deprecated, move to input**                                                                                                   |
 |      [2]       |           head_num           |       size_t       |                                                                                                Head number for model configuration                                                                                                |
 |      [3]       |        size_per_head         |       size_t       |                                                                                               Size per head for model configuration                                                                                               |
-|      [4]       |          inter_size          |       size_t       |                                                                     The inter size of feed forward network. It is often set to 4 * head_num * size_per_head.                                                                      |
+|      [4]       |          inter_size          |       size_t       |                                                                    The inter size of feed forward network. It is often set to 4 \* head_num \* size_per_head.                                                                     |
 |      [5]       |           d_model            |       size_t       |                                                                                         The dimension of embedding of transformer input.                                                                                          |
 |      [6]       |          num_layer           |       size_t       |                                                                                       Number of transformer layers for model configuration                                                                                        |
 |      [7]       |  num_bucket_or_max_seq_len   |       size_t       |                                                              Number of bucket in relative position embedding, or max sequence length for absolute position embedding                                                              |
@@ -80,7 +80,7 @@ The source codes are put in `src/fastertransformer/models/t5`.
 |      [15]      |        attention_type        |   AttentionType    |                                      Determine fusing the attention or not, remove padding or not, which is declared in `src/fastertransformer/layers/attention_layers/BaseAttentionLayer.h`                                      |
 |      [16]      |            sparse            |        bool        |                                                                                            Is using sparsity. **Experimental feature**                                                                                            |
 |      [17]      |       activation_type        |   ActivationType   |                                                         Determine the activation in FFN, which is declared in `src/fastertransformer/layers/attention_layers/FfnLayer.h`                                                          |
-|      [18]      |        layernorm_type        |   LayerNormType    |                                                     Determine using pre-layernorm or post-layernorm, which is declared in `src/fastertransformer/kernels/layernorm_kernels.h`                                                     |
+|      [18]      |        layernorm_type        |   LayerNormType    |                       Determine using pre-layernorm or post-layernorm, which is declared in `src/fastertransformer/kernels/layernorm_kernels.h`. Note that only `pre_layernorm` is supported at the moment.                       |
 |      [19]      |         tensor_para          |     NcclParam      |                                                                   Tensor Parallel information, which is declared in `src/fastertransformer/utils/nccl_utils.h`                                                                    |
 |      [20]      |        pipeline_para         |     NcclParam      |                                                                  Pipeline Parallel information, which is declared in `src/fastertransformer/utils/nccl_utils.h`                                                                   |
 |      [21]      |   prompt_learning_start_id   |        int         |                                                                                         The start id of virtual token in p/prompt-tuning                                                                                          |
@@ -116,7 +116,7 @@ The source codes are put in `src/fastertransformer/models/t5`.
 |      [3]       |          beam_width          |       size_t       |                                                                                                   **Deprecated, move to input**                                                                                                   |
 |      [4]       |           head_num           |       size_t       |                                                                                                Head number for model configuration                                                                                                |
 |      [5]       |        size_per_head         |       size_t       |                                                                                               Size per head for model configuration                                                                                               |
-|      [6]       |          inter_size          |       size_t       |                                                                     The inter size of feed forward network. It is often set to 4 * head_num * size_per_head.                                                                      |
+|      [6]       |          inter_size          |       size_t       |                                                                     The inter size of feed forward network. It is often set to 4 \* head_num \* size_per_head                                                                     |
 |      [7]       |           d_model            |       size_t       |                                                                                         The dimension of embedding of transformer input.                                                                                          |
 |      [8]       |          num_layer           |       size_t       |                                                                                       Number of transformer layers for model configuration                                                                                        |
 |      [9]       |          vocab_size          |       size_t       |                                                                                              Vocabulary size for model configuration                                                                                              |
@@ -145,22 +145,24 @@ The source codes are put in `src/fastertransformer/models/t5`.
 
 * Input of T5 Decoding
 
-|            Name            |            Tensor/Parameter Shape             | Location |       Data Type        |                                                Description                                                |
-| :------------------------: | :-------------------------------------------: | :------: | :--------------------: | :-------------------------------------------------------------------------------------------------------: |
-|       encoder_output       | [batch_size, mem_max_seq_len, memory_d_model] |   GPU    |     fp32/fp16/bf16     |                                         The output of T5 Encoder                                          |
-|  encoder_sequence_length   |                 [batch_size]                  |   GPU    |          int           |                                The sequence length of encoder input/output                                |
-|      stop_words_list       |      [batch_size, 2, stop_words_length]       |   GPU    |          int           | **Optional**. When FT generates words in this list, it will stop the generation. An extension of stop id  |
-|       bad_words_list       |       [batch_size, 2, bad_words_length]       |   GPU    |          int           |                        **Optional**. The words in the list will never be sampled.                         |
-|          start_id          |                 [batch_size]                  |   CPU    |          int           |              **Optional**. If FT receives this input, FT will replace default start id by it              |
-|           end_id           |                 [batch_size]                  |   CPU    |          int           |               **Optional**. If FT receives this input, FT will replace default end id by it               |
-|       runtime_top_k        |              [1] or [batch_size]              |   CPU    |          uint          |                               **Optional**. top_k value for top k sampling                                |
-|       runtime_top_p        |              [1] or [batch_size]              |   CPU    |         float          |                               **Optional**. top_p value for top p sampling                                |
-| beam_search_diversity_rate |              [1] or [batch_size]              |   CPU    |         float          | **Optional**. A hyper hyper-parameter for [simple diverse decoding](https://arxiv.org/pdf/1611.08562.pdf) |
-|        temperature         |              [1] or [batch_size]              |   CPU    |         float          |               **Optional**. Temperature applied to logits for both beam search and sampling               |
-|        len_penalty         |              [1] or [batch_size]              |   CPU    |         float          |                    **Optional**. Length penalty applied to logits for only beam search                    |
-|     repetition_penalty     |              [1] or [batch_size]              |   CPU    |         float          |           **Optional**. Repetition penalty applied to logits for both beam search and sampling            |
-|        random_seed         |              [1] or [batch_size]              |   CPU    | unsigned long long int |                   **Optional**. Random seed to initialize the random table in sampling.                   |
-|         ia3_tasks          |                 [batch_size]                  |   GPU    |          int           |                         **Optional**. Which IA3 weights to use for each sequence.                         |
+|            Name            |            Tensor/Parameter Shape             | Location |       Data Type        |                                                                          Description                                                                           |
+| :------------------------: | :-------------------------------------------: | :------: | :--------------------: | :------------------------------------------------------------------------------------------------------------------------------------------------------------: |
+|       encoder_output       | [batch_size, mem_max_seq_len, memory_d_model] |   GPU    |     fp32/fp16/bf16     |                                                                    The output of T5 Encoder                                                                    |
+|  encoder_sequence_length   |                 [batch_size]                  |   GPU    |          int           |                                                          The sequence length of encoder input/output                                                           |
+|      stop_words_list       |      [batch_size, 2, stop_words_length]       |   GPU    |          int           |                            **Optional**. When FT generates words in this list, it will stop the generation. An extension of stop id                            |
+|       bad_words_list       |       [batch_size, 2, bad_words_length]       |   GPU    |          int           |                                                   **Optional**. The words in the list will never be sampled.                                                   |
+|          start_id          |                 [batch_size]                  |   CPU    |          int           |                                        **Optional**. If FT receives this input, FT will replace default start id by it                                         |
+|           end_id           |                 [batch_size]                  |   CPU    |          int           |                                         **Optional**. If FT receives this input, FT will replace default end id by it                                          |
+|       runtime_top_k        |              [1] or [batch_size]              |   CPU    |          uint          |                                                          **Optional**. top_k value for top k sampling                                                          |
+|       runtime_top_p        |              [1] or [batch_size]              |   CPU    |         float          |                                                          **Optional**. top_p value for top p sampling                                                          |
+| beam_search_diversity_rate |              [1] or [batch_size]              |   CPU    |         float          |                           **Optional**. A hyper hyper-parameter for [simple diverse decoding](https://arxiv.org/pdf/1611.08562.pdf)                            |
+|        temperature         |              [1] or [batch_size]              |   CPU    |         float          |                                         **Optional**. Temperature applied to logits for both beam search and sampling                                          |
+|        len_penalty         |              [1] or [batch_size]              |   CPU    |         float          |                                              **Optional**. Length penalty applied to logits for only beam search                                               |
+|     repetition_penalty     |              [1] or [batch_size]              |   CPU    |         float          |                     **Optional**. Repetition penalty applied to logits for both beam search and sampling. Exclusive with presence_penalty                      |
+|      presence_penalty      |              [1] or [batch_size]              |   CPU    |         float          | **Optional**. Presence penalty - additive type of repetition penalty - applied to logits for both beam search and sampling. Exclusive with repetition_penalty. |
+|         min_length         |              [1] or [batch_size]              |   CPU    |          int           |                                                       **Optional**. Minimum number of tokens to generate                                                       |
+|        random_seed         |              [1] or [batch_size]              |   CPU    | unsigned long long int |                                             **Optional**. Random seed to initialize the random table in sampling.                                              |
+|         ia3_tasks          |                 [batch_size]                  |   GPU    |          int           |                                                   **Optional**. Which IA3 weights to use for each sequence.                                                    |
 
 * Output of T5 Decoding
 
@@ -174,7 +176,7 @@ The source codes are put in `src/fastertransformer/models/t5`.
 
 ### Optimization
 
-1.	Kernel optimization: First, since the sequence length of query in `SelfAttention` and `CrossAttention` is always 1, we use customed fused multi-head attention kernel to optimize. Second, we fuse many small operations into one kernel. For example, `AddBiasResidualLayerNorm` combines the adding bias, adding residual of previous block and the computation of layer normalization into 1 kernel. Third, we optimize top k operation and sampling to accelerate the beam search and sampling. Finally, to prevent from recomputing the previous keys and values, we allocate a buffer to store them at each step. Although it takes some additional memory usage, we can save the cost of recomputing, allocating buffer at each step, and the cost of concatenation.
+1. Kernel optimization: First, since the sequence length of query in `SelfAttention` and `CrossAttention` is always 1, we use customed fused multi-head attention kernel to optimize. Second, we fuse many small operations into one kernel. For example, `AddBiasResidualLayerNorm` combines the adding bias, adding residual of previous block and the computation of layer normalization into 1 kernel. Third, we optimize top k operation and sampling to accelerate the beam search and sampling. Finally, to prevent from recomputing the previous keys and values, we allocate a buffer to store them at each step. Although it takes some additional memory usage, we can save the cost of recomputing, allocating buffer at each step, and the cost of concatenation.
 
 ## Setup
 
@@ -182,23 +184,24 @@ The following section lists the requirements to use FasterTransformer.
 
 ### Requirements
 
-- CMake >= 3.13 for PyTorch
-- CUDA 11.0 or newer version
-- NCCL 2.10 or newer version
-- Python: Only verify on Python 3.
-- PyTorch: Verify on 1.10.0, >= 1.5.0 should work.
+* CMake >= 3.13 for PyTorch
+* CUDA 11.0 or newer version
+* NCCL 2.10 or newer version
+* Python: Only verify on Python 3.
+* PyTorch: Verify on 1.10.0, >= 1.5.0 should work.
 
 Recommend use nvcr image like `nvcr.io/nvidia/pytorch:22.09-py3`.
 
 Ensure you have the following components:
-- [NVIDIA Docker](https://github.com/NVIDIA/nvidia-docker) and NGC container are recommended
-- [NVIDIA Pascal](https://www.nvidia.com/en-us/data-center/pascal-gpu-architecture/) or [Volta](https://www.nvidia.com/en-us/data-center/volta-gpu-architecture/) or [Turing](https://www.nvidia.com/en-us/geforce/turing/) or [Ampere](https://www.nvidia.com/en-us/data-center/nvidia-ampere-gpu-architecture/) based GPU 
+
+* [NVIDIA Docker](https://github.com/NVIDIA/nvidia-docker) and NGC container are recommended
+* [NVIDIA Pascal](https://www.nvidia.com/en-us/data-center/pascal-gpu-architecture/) or [Volta](https://www.nvidia.com/en-us/data-center/volta-gpu-architecture/) or [Turing](https://www.nvidia.com/en-us/geforce/turing/) or [Ampere](https://www.nvidia.com/en-us/data-center/nvidia-ampere-gpu-architecture/) based GPU
 
 For more information about how to get started with NGC containers, see the following sections from the NVIDIA GPU Cloud Documentation and the Deep Learning Documentation:
 
-- [Getting Started Using NVIDIA GPU Cloud](https://docs.nvidia.com/ngc/ngc-getting-started-guide/index.html)
-- [Accessing And Pulling From The NGC Container Registry](https://docs.nvidia.com/deeplearning/frameworks/user-guide/index.html#accessing_registry)
-- [Running PyTorch](https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/index.html)
+* [Getting Started Using NVIDIA GPU Cloud](https://docs.nvidia.com/ngc/ngc-getting-started-guide/index.html)
+* [Accessing And Pulling From The NGC Container Registry](https://docs.nvidia.com/deeplearning/frameworks/user-guide/index.html#accessing_registry)
+* [Running PyTorch](https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/index.html)
 
 For those unable to use the NGC container, to set up the required environment or create your own container, see the versioned [NVIDIA Container Support Matrix](https://docs.nvidia.com/deeplearning/frameworks/support-matrix/index.html).
 
@@ -242,7 +245,6 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     This will build the TorchScript custom class. Please make sure that the `PyTorch >= 1.5.0`.
 
 2. build with TensorRT
-  
     Can use `nvcr.io/nvidia/pytorch:22.09-py3` docker image, too.
 
     ```bash
@@ -275,20 +277,20 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
 
     Assume the settings of decoding are as follows.
 
-    - `batch_size` = 8
-    - `beam_width` = 4
-    - `max_mem_seq_len` = 32
-    - `encoder_d_model` = 512
-    - `encoder_head_num` = 8
-    - `encoder_size_per_head` = 64
-    - `encoder_inter_size` = 2048
-    - `decoder_d_model` = 512
-    - `decoder_head_num` = 8
-    - `decoder_size_per_head` = 64
-    - `decoder_inter_size` = 2048
-    - `decoder_vocab_size` = 32128
-    - `data_type` = 0 (FP32) or 1 (FP16) or 2 (BF16)
-    - `tensor_para_size` = 2
+    * `batch_size` = 8
+    * `beam_width` = 4
+    * `max_mem_seq_len` = 32
+    * `encoder_d_model` = 512
+    * `encoder_head_num` = 8
+    * `encoder_size_per_head` = 64
+    * `encoder_inter_size` = 2048
+    * `decoder_d_model` = 512
+    * `decoder_head_num` = 8
+    * `decoder_size_per_head` = 64
+    * `decoder_inter_size` = 2048
+    * `decoder_vocab_size` = 32128
+    * `data_type` = 0 (FP32) or 1 (FP16) or 2 (BF16)
+    * `tensor_para_size` = 2
 
     Then the following scripts can generate the best GEMM configuration under such settings and record the configuration into the `gemm_config.in` file.
 
@@ -303,7 +305,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     ./bin/t5_gemm 16 4 32 512 8 64 2048 512 8 64 2048 32128 0 2 1 # bs 16, append results in existed gemm_config.ini
     ```
 
-    1.2 Run the PyTorch T5 example: 
+    1.2 Run the PyTorch T5 example:
 
     ```bash
     python ../examples/pytorch/t5/translate_example.py \
@@ -365,6 +367,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
             --data_type fp16 \
             --ckpt_path ./ft_t5_small/1-gpu
     ```
+
 * Input/Output Tensor/Parameter of T5Encoder Plugin
 
 | Classification  |      Tensor/Parameter Shape      |   Data Type    |              Description               |
@@ -406,7 +409,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
 |       [0]       | [batch_size,beam_width,max_seq_len] | float32/float16 |            decoding output            |
 |       [1]       |       [batch_size,beam_width]       | float32/float16 |  real sequence length of each output  |
 
-The model configuration are stored in `config.ini` of checkpoint path. For example, after running, 
+The model configuration are stored in `config.ini` of checkpoint path. For example, after running,
 
 ```
 python ../examples/tensorrt/t5/extractT5ModelToBIN.py \
@@ -430,20 +433,20 @@ users can see the model configuration in `./ft_t5_small/1-gpu/config.ini`
 
     Assume the settings of decoding are as follows.
 
-    - `batch_size` = 8
-    - `beam_width` = 4
-    - `max_mem_seq_len` = 32
-    - `encoder_d_model` = 512
-    - `encoder_head_num` = 8
-    - `encoder_size_per_head` = 64
-    - `encoder_inter_size` = 2048
-    - `decoder_d_model` = 512
-    - `decoder_head_num` = 8
-    - `decoder_size_per_head` = 64
-    - `decoder_inter_size` = 2048
-    - `decoder_vocab_size` = 32128
-    - `data_type` = 0 (FP32) or 1 (FP16) or 2 (BF16)
-    - `tensor_para_size` = 2
+    * `batch_size` = 8
+    * `beam_width` = 4
+    * `max_mem_seq_len` = 32
+    * `encoder_d_model` = 512
+    * `encoder_head_num` = 8
+    * `encoder_size_per_head` = 64
+    * `encoder_inter_size` = 2048
+    * `decoder_d_model` = 512
+    * `decoder_head_num` = 8
+    * `decoder_size_per_head` = 64
+    * `decoder_inter_size` = 2048
+    * `decoder_vocab_size` = 32128
+    * `data_type` = 0 (FP32) or 1 (FP16) or 2 (BF16)
+    * `tensor_para_size` = 2
 
     Then the following scripts can generate the best GEMM configuration under such settings and record the configuration into the `gemm_config.in` file.
 
@@ -451,7 +454,7 @@ users can see the model configuration in `./ft_t5_small/1-gpu/config.ini`
     ./bin/t5_gemm 8 4 32 512 8 64 2048 512 8 64 2048 32128 0 2 1
     ```
 
-    3.2 Run the Tensorflow T5 example: 
+    3.2 Run the Tensorflow T5 example:
 
     ```bash
     python ../examples/tensorflow/t5/translate_example.py \
@@ -473,7 +476,7 @@ users can see the model configuration in `./ft_t5_small/1-gpu/config.ini`
     2022-11-09 01:34:30,687 __main__ [INFO] ft-sampling translates 94 batches taking 14.80 sec to translate 99745 tokens, BLEU score: 25.36, 6740 tokens/sec. (62029 words, 4191 words/sec)
     ```
 
-    3.3 Run the Tensorflow T5 v1_1 example: 
+    3.3 Run the Tensorflow T5 v1_1 example:
 
     ```bash
     python ../examples/tensorflow/t5/translate_example.py \
@@ -506,19 +509,19 @@ users can see the model configuration in `./ft_t5_small/1-gpu/config.ini`
 
 We show how to sever UL2 by FasterTransformer PyTorch op on huggingface's model in this section.
 
-    3.1 Download model (It requires some time because the model size is about 40GBs)
+1. Download model (It requires some time because the model size is about 40GBs)
 
-    ```
+    ```bash
     sudo apt-get install git-lfs
     git lfs install
     git lfs clone https://huggingface.co/google/ul2
     ```
 
-    3.2 Convert the checkpoint to FT
+2. Convert the checkpoint to FT
 
     Because loading UL2 model on pytorch and do prprocessing takes long time, and `summarization.py` only supports loading FT's model from binary files, we convert the pytorch checkpoint to FasterTransformer by converter `huggingface_t5_ckpt_convert.py`.
 
-    ```
+    ```bash
     python3 ../examples/pytorch/t5/utils/huggingface_t5_ckpt_convert.py \
             -saved_dir ul2/c-models \
             -in_file ul2/ \
@@ -526,9 +529,9 @@ We show how to sever UL2 by FasterTransformer PyTorch op on huggingface's model 
             -weight_data_type fp32
     ```
 
-    3.3 Run UL2 on summarization task
+3. Run UL2 on summarization task
 
-    ```
+    ```bash
     mpirun -n 2 python3 ../examples/pytorch/t5/summarization.py  \
                           --ft_model_location ul2/c-models/ \
                           --hf_model_location ul2/ \
@@ -539,7 +542,7 @@ We show how to sever UL2 by FasterTransformer PyTorch op on huggingface's model 
 
     The results would be like
 
-    ```
+    ```bash
     rouge1 : 23.673944166014593
     rouge2 : 5.946485383012474
     rougeL : 14.749827731626247
@@ -548,18 +551,17 @@ We show how to sever UL2 by FasterTransformer PyTorch op on huggingface's model 
 
 ### Running t5-v1.1
 
-    3.1 Download model (It requires some time because the model size is about 40GBs)
+1. Download model (It requires some time because the model size is about 40GBs)
 
-    ```
+    ```bash
     sudo apt-get install git-lfs
     git lfs install
     git lfs clone https://huggingface.co/google/t5-v1_1-base
     ```
 
+2. Convert the checkpoint to FT
 
-    3.2 Convert the checkpoint to FT
-
-    ```
+    ```bash
     python3 ../examples/pytorch/t5/utils/huggingface_t5_ckpt_convert.py \
             -saved_dir t5-v1_1-base/c-models \
             -in_file t5-v1_1-base/ \
@@ -567,9 +569,9 @@ We show how to sever UL2 by FasterTransformer PyTorch op on huggingface's model 
             -weight_data_type fp32
     ```
 
-    3.3 Run t5-v1.1 on summarization task
+3. Run t5-v1.1 on summarization task
 
-    ```
+    ```bash
     python3 ../examples/pytorch/t5/summarization.py  \
             --ft_model_location t5-v1_1-base/c-models/ \
             --hf_model_location t5-v1_1-base/ \
@@ -579,7 +581,7 @@ We show how to sever UL2 by FasterTransformer PyTorch op on huggingface's model 
 
     The results would be like
 
-    ```
+    ```bash
     Hugging Face (total latency: 21.826529 sec)
     rouge1 : 10.786476875527406
     rouge2 : 1.8231246974441166
@@ -592,22 +594,21 @@ We show how to sever UL2 by FasterTransformer PyTorch op on huggingface's model 
     rougeLsum : 10.453229536094794
     ```
 
-    * Note that these models are not fine-tuned, so running with FP16 or setting topk > 1 may lead to unstable results.
+* Note that these models are not fine-tuned, so running with FP16 or setting topk > 1 may lead to unstable results.
 
 ### Running mt5
 
-    3.1 Download model (It requires some time because the model size is about 40GBs)
+1. Download model (It requires some time because the model size is about 40GBs)
 
-    ```
+    ```bash
     sudo apt-get install git-lfs
     git lfs install
     git lfs clone https://huggingface.co/google/mt5-base
     ```
 
+2. Convert the checkpoint to FT
 
-    3.2 Convert the checkpoint to FT
-
-    ```
+    ```bash
     python3 ../examples/pytorch/t5/utils/huggingface_t5_ckpt_convert.py \
             -saved_dir mt5-base/c-models \
             -in_file mt5-base/ \
@@ -615,9 +616,9 @@ We show how to sever UL2 by FasterTransformer PyTorch op on huggingface's model 
             -weight_data_type fp32
     ```
 
-    3.3 Run mt5 on summarization task
+3. Run mt5 on summarization task
 
-    ```
+    ```bash
     python3 ../examples/pytorch/t5/summarization.py  \
             --ft_model_location mt5-base/c-models/ \
             --hf_model_location mt5-base/ \
@@ -627,7 +628,7 @@ We show how to sever UL2 by FasterTransformer PyTorch op on huggingface's model 
 
     The results would be like
 
-    ```
+    ```bash
     Hugging Face (total latency: 3.143815 sec)
     rouge1 : 4.636193727758547
     rouge2 : 0.20661157024793395
@@ -644,7 +645,8 @@ We show how to sever UL2 by FasterTransformer PyTorch op on huggingface's model 
 
 ## Performance
 
-Hardware settings: 
+Hardware settings:
+
 * CPU: Intel(R) Xeon(R) Gold 6132 CPU @ 2.60GHz
 * V100-16GB (with mclk 877MHz, pclk 1380MHz) with Intel(R) Xeon(R) CPU E5-2698 v4 @ 2.20GHz (dgx-1 server)
 * A100-40GB

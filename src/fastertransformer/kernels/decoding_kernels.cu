@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -763,8 +763,8 @@ __global__ void finalize(int*         output_ids,
                                 + (i + 1)];
             if (output_log_probs != nullptr) {
                 output_log_probs[blockIdx.x * beam_width * max_seq_len + beam_idx * max_seq_len + i] =
-                    topk_log_probs[blockIdx.x * (beam_width * 2) * (max_seq_len + 1) + rank[beam_idx] * (max_seq_len + 1)
-                                + (i + 1)];
+                    topk_log_probs[blockIdx.x * (beam_width * 2) * (max_seq_len + 1)
+                                   + rank[beam_idx] * (max_seq_len + 1) + (i + 1)];
             }
         }
     }

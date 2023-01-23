@@ -213,6 +213,7 @@ void SwinTransformerBlock<T>::forward(TensorMap*                     output_tens
                                                  (float*)nullptr,
                                                  (float*)nullptr,
                                                  (float*)nullptr,
+                                                 (float*)nullptr,
                                                  0,
                                                  stream_);
     }

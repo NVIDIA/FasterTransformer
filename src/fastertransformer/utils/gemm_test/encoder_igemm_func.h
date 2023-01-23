@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,11 +32,11 @@
 namespace fastertransformer {
 
 /* CAUTION : must match cublasLtMatmulTile_t */
-const char* const matmulTileName[] = {
-    "UNDEF",  "8x8",    "8x16",    "16x8",   "8x32",   "16x16",   "32x8",    "8x64",   "16x32",
-    "32x16",  "64x8",   "32x32",   "32x64",  "64x32",  "32x128",  "64x64",   "128x32", "64x128",
-    "128x64", "64x256", "128x128", "256x64", "64x512", "128x256", "256x128", "512x64",
-};
+const char* const matmulTileName[] = {"UNDEF",  "8x8",     "8x16",    "16x8",    "8x32",    "16x16",  "32x8",
+                                      "8x64",   "16x32",   "32x16",   "64x8",    "32x32",   "32x64",  "64x32",
+                                      "32x128", "64x64",   "128x32",  "64x128",  "128x64",  "64x256", "128x128",
+                                      "256x64", "64x512",  "128x256", "256x128", "512x64",  "64x96",  "96*64",
+                                      "96x128", "128x160", "160x128", "192x128", "128x192", "128x96", "END"};
 
 int generate_encoder_igemm_config(
     int batch_size, int seq_len, int head_num, int size_per_head, void* buffer, bool isAppend = true);

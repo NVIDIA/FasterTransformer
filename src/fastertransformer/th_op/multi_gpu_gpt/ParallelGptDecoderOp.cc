@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -200,6 +200,9 @@ void FtGptDecoder<T>::forward(const int64_t            max_input_length,
                                           size_per_head_,
                                           inter_size_,
                                           num_layers_,
+                                          0,   // expert_num
+                                          0,   // moe_k
+                                          {},  // moe_layer_index
                                           gpt_variant_params_.layernorm_eps,
                                           gpt_variant_params_,
                                           tensor_para_,
