@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -32,7 +32,9 @@ T5DecoderLayerWeight<T>::T5DecoderLayerWeight(const size_t head_num,
                                               const size_t tensor_para_rank,
                                               const bool   t5_with_bias,
                                               const bool   use_gated_activation,
-                                              const size_t ia3_num_tasks):
+                                              const size_t ia3_num_tasks,
+                                              const size_t adapter_inter_size):
+    adapter_weights_{d_model, adapter_inter_size, tensor_para_size, tensor_para_rank},
     head_num_(head_num),
     size_per_head_(size_per_head),
     d_model_(d_model),
@@ -184,6 +186,7 @@ T5DecoderLayerWeight<T>::~T5DecoderLayerWeight()
 
 template<typename T>
 T5DecoderLayerWeight<T>::T5DecoderLayerWeight(const T5DecoderLayerWeight& other):
+    adapter_weights_{other.adapter_weights_},
     head_num_(other.head_num_),
     size_per_head_(other.size_per_head_),
     d_model_(other.d_model_),
@@ -213,6 +216,10 @@ T5DecoderLayerWeight<T>::T5DecoderLayerWeight(const T5DecoderLayerWeight& other)
 template<typename T>
 T5DecoderLayerWeight<T>& T5DecoderLayerWeight<T>::operator=(const T5DecoderLayerWeight& other)
 {
+    if (this == &other)
+        return *this;
+
+    adapter_weights_      = other.adapter_weights_;
     head_num_             = other.head_num_;
     size_per_head_        = other.size_per_head_;
     d_model_              = other.d_model_;
@@ -452,6 +459,8 @@ void T5DecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType mod
                              dir_path + "layer.2.DenseReluDense.ia3.weight." + tp_rank + ".bin",
                              model_file_type);
     }
+
+    adapter_weights_.loadModel(dir_path, model_file_type);
 
     FT_LOG_DEBUG("T5DecoderLayerWeight " + std::string(__func__) + " end");
 }

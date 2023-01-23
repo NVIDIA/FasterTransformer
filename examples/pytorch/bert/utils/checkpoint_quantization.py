@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ INT8O_GEMM_NUM = 8
 TRT_FUSED_MHA_AMAX_NUM = 3
 SCALE_RESERVE_NUM = 21
 
-def checkpoint_quantization(init_dict, sparse, ths_path='./lib/libth_bert_int8.so', verbose=True):
+def checkpoint_quantization(init_dict, sparse, ths_path='./lib/libth_transformer.so', verbose=True):
     print("Quantizing checkpoint ...")
     torch.classes.load_library(ths_path)
     weight_quantize = torch.ops.fastertransformer.weight_quantize

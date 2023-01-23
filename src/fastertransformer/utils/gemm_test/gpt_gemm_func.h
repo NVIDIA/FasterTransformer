@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,7 +24,12 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#ifdef ENABLE_BF16
 #include <cuda_fp16.h>
+#endif
+#ifdef ENABLE_FP8
+#include <cuda_fp8.h>
+#endif
 #include <cuda_profiler_api.h>
 #include <map>
 #include <sys/time.h>

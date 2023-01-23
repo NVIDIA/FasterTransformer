@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -50,6 +50,7 @@ void cublasAlgoMap::loadGemmConfig()
     int   batchCount2, m2, n2, k2, algoId, customOption, tile, splitK_val;
     int   batch_size, seq_len, head_num, size_per_head, dataType;
     int   swizzle, reductionScheme, workspaceSize, stages;
+    int   inner_shapeId, cluster_shapeId, mma_shapeId, cga_shapeId, sche_mode;
     float exec_time;
     char  tmp[1024];
     if (!fgets(tmp, 1024, fd)) {
@@ -57,7 +58,13 @@ void cublasAlgoMap::loadGemmConfig()
         exit(-1);
     }
     while (fscanf(fd,
-                  "%d %d %d %d %d ### %d %d %d %d %d %d %d %d %d %d %d %d %f\n",
+                  "%d %d %d %d %d ### %d %d %d %d %d %d %d %d %d %d %d %d "
+#if (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH >= 3)
+                  "%d %d "
+#elif (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH < 3)
+                  "%d %d %d "
+#endif
+                  "%f\n",
                   &batch_size,
                   &seq_len,
                   &head_num,
@@ -75,10 +82,18 @@ void cublasAlgoMap::loadGemmConfig()
                   &reductionScheme,
                   &workspaceSize,
                   &stages,
+#if (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH >= 3)
+                  &inner_shapeId,
+                  &cluster_shapeId,
+#elif (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH < 3)
+                  &mma_shapeId,
+                  &cga_shapeId,
+                  &sche_mode,
+#endif
                   &exec_time)
            != EOF) {
         if (dataType != FLOAT_DATATYPE && dataType != HALF_DATATYPE && dataType != BFLOAT16_DATATYPE
-            && dataType != INT8_DATATYPE) {
+            && dataType != INT8_DATATYPE && dataType != FP8_DATATYPE) {
             printf("[WARNING][readAlgoFromConfig] wrong dataType %d!\n", dataType);
             continue;
         }
@@ -95,7 +110,15 @@ void cublasAlgoMap::loadGemmConfig()
             algo_map_[markStr].reductionScheme = reductionScheme;
             algo_map_[markStr].workspaceSize   = workspaceSize;
             algo_map_[markStr].stages          = stages;
-            algo_map_[markStr].exec_time       = exec_time;
+#if (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH >= 3)
+            algo_map_[markStr].inner_shapeId   = (uint16_t)inner_shapeId;
+            algo_map_[markStr].cluster_shapeId = (uint16_t)cluster_shapeId;
+#elif (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH < 3)
+            algo_map_[markStr].mma_shapeId = (uint16_t)mma_shapeId;
+            algo_map_[markStr].cga_shapeId = (uint16_t)cga_shapeId;
+            algo_map_[markStr].sche_mode   = (uint16_t)sche_mode;
+#endif
+            algo_map_[markStr].exec_time = exec_time;
         }
     }
     fclose(fd);

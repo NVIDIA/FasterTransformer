@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -405,6 +405,7 @@ void GptJ<T>::forward(std::unordered_map<std::string, Tensor>*       output_tens
     //      temperature [1] or [batch_size] on cpu, optional, float.
     //      len_penalty [1] or [batch_size] on cpu, optional, float.
     //      repetition_penalty [1] or [batch_size] on cpu, optional, float.
+    //      min_length [1] or [batch_size] on cpu, optional, int
     //      random_seed [1] or [batch_size] on cpu, optional, unsigned long long int.
     //      request_prompt_lengths [batch_size], optional
     //      request_prompt_embedding [batch_size, max_prompt_length, hidden_units], float, optional

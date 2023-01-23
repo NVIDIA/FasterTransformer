@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -319,6 +319,7 @@ void GptNeoXDecoder<T>::forward(std::unordered_map<std::string, Tensor>*        
                 layernorm_eps_,
                 local_batch_size,
                 hidden_units_,
+                (float*)nullptr,
                 (float*)nullptr,
                 (float*)nullptr,
                 (float*)nullptr,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -95,6 +95,20 @@ template<typename T>
 void finalize_moe_routing_kernelLauncher(const T*     expanded_permuted_rows,
                                          T*           reduced_unpermuted_output,
                                          const T*     skip,
+                                         const T*     bias,
+                                         const T*     scales,
+                                         const int*   expanded_source_row_to_expanded_dest_row,
+                                         const int*   expert_for_source_row,
+                                         const int    num_rows,
+                                         const int    cols,
+                                         const int    k,
+                                         cudaStream_t stream);
+
+template<typename T>
+void finalize_moe_routing_kernelLauncher(const T*     expanded_permuted_rows,
+                                         T*           reduced_unpermuted_output,
+                                         const T*     skip_1,
+                                         const T*     skip_2,
                                          const T*     bias,
                                          const T*     scales,
                                          const int*   expanded_source_row_to_expanded_dest_row,

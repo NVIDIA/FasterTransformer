@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -27,7 +27,7 @@ target_link_libraries(multi_gpu_gpt_async_example PUBLIC -lcublas -lcublasLt -lc
 add_executable(multi_gpu_gpt_triton_example multi_gpu_gpt_triton_example.cc)
 target_link_libraries(multi_gpu_gpt_triton_example PUBLIC -lcublas -lcublasLt -lcudart
                             ParallelGptTritonBackend TransformerTritonBackend memory_utils
-                            custom_ar_comm mpi_utils nccl_utils gpt_example_utils -lpthread)
+                            custom_ar_comm nvtx_utils mpi_utils nccl_utils gpt_example_utils -lpthread)
 
 add_executable(multi_gpu_gpt_interactive_example multi_gpu_gpt_interactive_example.cc)
 target_link_libraries(multi_gpu_gpt_interactive_example PUBLIC -lcublas -lcublasLt -lcudart

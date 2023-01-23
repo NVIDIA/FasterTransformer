@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -61,14 +61,16 @@ void invokeAddBiasResidual(T*           output,
                            const float* scale_out,
                            const int    m,
                            const int    n,
-                           const int    int8_mode,
                            cudaStream_t stream)
 {
-    int  blocks_per_row = ceil(float(n) / 1024);
-    dim3 grid(m, blocks_per_row);
-    dim3 block(min(n, 1024));
+    FT_CHECK_WITH_INFO(!((scale_inter == nullptr) ^ (scale_out == nullptr)),
+                       "Cannot use `scale_inter` without `scale_out`");
+    const bool should_scale_input = scale_inter != nullptr;
+    int        blocks_per_row     = ceil(float(n) / 1024);
+    dim3       grid(m, blocks_per_row);
+    dim3       block(min(n, 1024));
     if (residual2 == nullptr) {
-        if (int8_mode == 2) {
+        if (should_scale_input) {
             addBiasResidual<T, 1><<<grid, block, 0, stream>>>(output,
                                                               reinterpret_cast<const int32_t*>(input),
                                                               residual1,
@@ -85,7 +87,7 @@ void invokeAddBiasResidual(T*           output,
         }
     }
     else {
-        if (int8_mode == 2) {
+        if (should_scale_input) {
             addBiasResidual<T, 2><<<grid, block, 0, stream>>>(output,
                                                               reinterpret_cast<const int32_t*>(input),
                                                               residual1,
@@ -107,7 +109,7 @@ template<typename T>
 void invokeAddBiasResidual(
     T* output, const T* residual1, const T* residual2, const T* bias, const int m, const int n, cudaStream_t stream)
 {
-    invokeAddBiasResidual(output, output, residual1, residual2, bias, nullptr, nullptr, m, n, 0, stream);
+    invokeAddBiasResidual(output, output, residual1, residual2, bias, nullptr, nullptr, m, n, stream);
 }
 
 template<typename T>
@@ -183,7 +185,6 @@ void invokeAddBiasAttentionFfnResidual(T*           block_output,
                                         const float* scale_out,                                                        \
                                         const int    m,                                                                \
                                         const int    n,                                                                \
-                                        const int    int8_mode,                                                        \
                                         cudaStream_t stream)
 INSTANTIATE_INVOKE_ADD_BIAS_RESIDUAL(float);
 INSTANTIATE_INVOKE_ADD_BIAS_RESIDUAL(half);

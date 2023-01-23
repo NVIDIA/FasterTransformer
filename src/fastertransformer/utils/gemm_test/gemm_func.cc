@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,8 @@
  */
 
 #include "encoder_gemm_func.h"
+#include <assert.h>
+#include <sys/types.h>
 
 #ifndef CUDART_VERSION
 #error CUDART_VERSION Undefined!
@@ -33,7 +35,8 @@ int printPerfStructure(int                       batch_size,
                        const customMatmulPerf_t& perf,
                        FILE*                     fout,
                        CublasDataType            data_type,
-                       int                       hasPrint)
+                       int                       hasPrint,
+                       int                       batch_count)
 {
     int algoId, tile, swizzle, customOption, numSplitsK, reductionScheme, stages;
 
@@ -53,9 +56,32 @@ int printPerfStructure(int                       batch_size,
 #else
     stages = 0;
 #endif
+#if (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH >= 3)
+    uint16_t inner_shapeId, cluster_shapeId;
+    cublasLtMatmulAlgoConfigGetAttribute(
+        matmulAlgo, CUBLASLT_ALGO_CONFIG_INNER_SHAPE_ID, &inner_shapeId, sizeof(inner_shapeId), NULL);
+    cublasLtMatmulAlgoConfigGetAttribute(
+        matmulAlgo, CUBLASLT_ALGO_CONFIG_CLUSTER_SHAPE_ID, &cluster_shapeId, sizeof(cluster_shapeId), NULL);
+#elif (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH < 3)
+    uint16_t mma_shapeId, cga_shapeId, sche_mode;
+    cublasLtMatmulAlgoConfigGetAttribute(
+        matmulAlgo, CUBLASLT_ALGO_CONFIG_MMA_SHAPE_ID, &mma_shapeId, sizeof(mma_shapeId), NULL);
+    cublasLtMatmulAlgoConfigGetAttribute(
+        matmulAlgo, CUBLASLT_ALGO_CONFIG_CGA_SHAPE_ID, &cga_shapeId, sizeof(cga_shapeId), NULL);
+    cublasLtMatmulAlgoConfigGetAttribute(
+        matmulAlgo, CUBLASLT_ALGO_CONFIG_SCHEDULING_MODE, &sche_mode, sizeof(sche_mode), NULL);
+#endif
 
     printf("algo={ Id=%d, tileIdx=%d (%s) splitK=%d reduc=%d swizzle=%d custom=%d "
-           "stages=%d} status %d "
+#if (CUDART_VERSION >= 11000)
+           "stages=%d "
+#endif
+#if (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH >= 3)
+           "inner_shapeId=%d cluster_shapeId=%d"
+#elif (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH < 3)
+           "mma_shapeId=%d cga_shapeId=%d schedule_mode=%d"
+#endif
+           "} status %d "
            "time %fms workspace=%d mathMode=%d waves=%f\n",
            algoId,
            tile,
@@ -64,7 +90,17 @@ int printPerfStructure(int                       batch_size,
            reductionScheme,
            swizzle,
            customOption,
+#if (CUDART_VERSION >= 11000)
            stages,
+#endif
+#if (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH >= 3)
+           inner_shapeId,
+           cluster_shapeId,
+#elif (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH < 3)
+           mma_shapeId,
+           cga_shapeId,
+           sche_mode,
+#endif
            perf.status,
            perf.time,
            (int)perf.workspaceSize,
@@ -72,13 +108,19 @@ int printPerfStructure(int                       batch_size,
            perf.wavesCount);
     if (hasPrint == 0) {
         fprintf(fout,
-                "%d %d %d %d %d ### %d %d %d %d %d %d %d %d %d %d %d %d %f\n",
+                "%d %d %d %d %d ### %d %d %d %d %d %d %d %d %d %d %d %d "
+#if (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH >= 3)
+                "%d %d "
+#elif (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH < 3)
+                "%d %d %d "
+#endif
+                "%f\n",
                 batch_size,
                 seq_len,
                 head_num,
                 size_per_head,
                 data_type,
-                1,
+                batch_count,
                 m,
                 n,
                 k,
@@ -90,6 +132,14 @@ int printPerfStructure(int                       batch_size,
                 reductionScheme,
                 (int)perf.workspaceSize,
                 stages,
+#if (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH >= 3)
+                inner_shapeId,
+                cluster_shapeId,
+#elif (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH < 3)
+                mma_shapeId,
+                cga_shapeId,
+                sche_mode,
+#endif
                 perf.time);
         return 1;
     }
@@ -198,7 +248,12 @@ int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
                       size_t             workSpaceSize,
                       FILE*              fout,
                       customMatmulPerf_t perfResults[],
-                      int                AlgoCombinations)
+                      int                AlgoCombinations,
+                      cudaDataType_t     dtype_fp8,
+                      int                batchCount,
+                      int64_t            strideA,
+                      int64_t            strideB,
+                      int64_t            strideD)
 {
     cublasStatus_t status = CUBLAS_STATUS_SUCCESS;
     cudaEvent_t    startEvent;
@@ -206,7 +261,7 @@ int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
     CublasDataType data_type;
 
     cublasLtMatmulDesc_t   operationDesc = NULL;
-    cublasLtMatrixLayout_t Adesc = NULL, Bdesc = NULL, Cdesc = NULL;
+    cublasLtMatrixLayout_t Adesc = NULL, Bdesc = NULL, Cdesc = NULL, Ddesc = NULL;
 
     cudaStream_t stream = 0;
     // SplitK value that we are going to try when SplitK is supported for a
@@ -224,7 +279,7 @@ int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
 #define ALGO_IDS 100                                       // Number of algorithms requested.
     int algoIdA[ALGO_IDS];                                 // Array containing the algorithm IDs returned by
                                                            // cublasLtMatmulAlgoGetIds function.
-    cudaDataType_t Atype, Btype, Ctype, scaleType;
+    cudaDataType_t Atype, Btype, Ctype, scaleType, Dtype;
 #if (CUDART_VERSION >= 11000)
     cublasComputeType_t computeType;
 #else
@@ -233,16 +288,27 @@ int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
 
     if (std::is_same<T, float>::value) {
         data_type = FLOAT_DATATYPE;
-        Atype = CUDA_R_32F, Btype = CUDA_R_32F, Ctype = CUDA_R_32F;
+        Atype = CUDA_R_32F, Btype = CUDA_R_32F, Ctype = CUDA_R_32F, Dtype = CUDA_R_32F;
     }
     else if (std::is_same<T, half>::value) {
         data_type = HALF_DATATYPE;
-        Atype = CUDA_R_16F, Btype = CUDA_R_16F, Ctype = CUDA_R_16F;
+        Atype = CUDA_R_16F, Btype = CUDA_R_16F, Ctype = CUDA_R_16F, Dtype = CUDA_R_16F;
     }
 #ifdef ENABLE_BF16
     else if (std::is_same<T, __nv_bfloat16>::value) {
         data_type = BFLOAT16_DATATYPE;
-        Atype = CUDA_R_16BF, Btype = CUDA_R_16BF, Ctype = CUDA_R_16BF;
+        Atype = CUDA_R_16BF, Btype = CUDA_R_16BF, Ctype = CUDA_R_16BF, Dtype = CUDA_R_16BF;
+    }
+#endif
+#ifdef ENABLE_FP8
+    else if (std::is_same<T, __nv_fp8_e4m3>::value) {
+        data_type = FP8_DATATYPE;
+        Atype = CUDA_R_8F_E4M3, Btype = CUDA_R_8F_E4M3, Ctype = CUDA_R_16BF;
+#ifdef FP8_GEMM_OUTPUT_QUANT_DISABLE
+        Dtype = CUDA_R_16BF;
+#else
+        Dtype = dtype_fp8;
+#endif
     }
 #endif
 
@@ -263,6 +329,8 @@ int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
 #endif
     }
 
+    const cublasOperation_t tA = data_type == FP8_DATATYPE ? CUBLAS_OP_T : CUBLAS_OP_N;
+
 // Create operation descriptor; see cublasLtMatmulDescAttributes_t for
 // details about defaults; here we just need to set the transforms for A and
 // B
@@ -276,12 +344,33 @@ int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
         goto CLEANUP;
     }
 
-    // Create matrix descriptors. We are good with the details here so no need
-    // to set any extra attributes
-    status = cublasLtMatrixLayoutCreate(&Adesc, Atype, m, k, m);
+    status = cublasLtMatmulDescSetAttribute(operationDesc, CUBLASLT_MATMUL_DESC_TRANSA, &tA, sizeof(tA));
     if (status != CUBLAS_STATUS_SUCCESS) {
         goto CLEANUP;
     }
+#ifdef ENABLE_FP8
+    if (data_type == FP8_DATATYPE) {
+        const int8_t fastAccuMode = 1;  // enable fast imprecise accum
+        status                    = cublasLtMatmulDescSetAttribute(
+            operationDesc, CUBLASLT_MATMUL_DESC_FAST_ACCUM, &fastAccuMode, sizeof(decltype(fastAccuMode)));
+        if (status != CUBLAS_STATUS_SUCCESS) {
+            goto CLEANUP;
+        }
+    }
+#endif
+
+    // Create matrix descriptors. We are good with the details here so no need
+    // to set any extra attributes
+    if (data_type == FP8_DATATYPE) {
+        status = cublasLtMatrixLayoutCreate(&Adesc, Atype, k, m, k);
+    }
+    else {
+        status = cublasLtMatrixLayoutCreate(&Adesc, Atype, m, k, m);
+    }
+    if (status != CUBLAS_STATUS_SUCCESS) {
+        goto CLEANUP;
+    }
+
     status = cublasLtMatrixLayoutCreate(&Bdesc, Btype, k, n, k);
     if (status != CUBLAS_STATUS_SUCCESS) {
         goto CLEANUP;
@@ -290,6 +379,30 @@ int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
     status = cublasLtMatrixLayoutCreate(&Cdesc, Ctype, m, n, m);
     if (status != CUBLAS_STATUS_SUCCESS) {
         goto CLEANUP;
+    }
+    status = cublasLtMatrixLayoutCreate(&Ddesc, Dtype, m, n, m);
+    if (status != CUBLAS_STATUS_SUCCESS) {
+        goto CLEANUP;
+    }
+
+    if (batchCount > 1) {
+        check_cuda_error(cublasLtMatrixLayoutSetAttribute(
+            Adesc, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &batchCount, sizeof(batchCount)));
+        check_cuda_error(cublasLtMatrixLayoutSetAttribute(
+            Bdesc, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &batchCount, sizeof(batchCount)));
+        check_cuda_error(cublasLtMatrixLayoutSetAttribute(
+            Cdesc, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &batchCount, sizeof(batchCount)));
+        check_cuda_error(cublasLtMatrixLayoutSetAttribute(
+            Ddesc, CUBLASLT_MATRIX_LAYOUT_BATCH_COUNT, &batchCount, sizeof(batchCount)));
+
+        check_cuda_error(cublasLtMatrixLayoutSetAttribute(
+            Adesc, CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET, &strideA, sizeof(strideA)));
+        check_cuda_error(cublasLtMatrixLayoutSetAttribute(
+            Bdesc, CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET, &strideB, sizeof(strideB)));
+        check_cuda_error(cublasLtMatrixLayoutSetAttribute(
+            Cdesc, CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET, &strideD, sizeof(strideD)));
+        check_cuda_error(cublasLtMatrixLayoutSetAttribute(
+            Ddesc, CUBLASLT_MATRIX_LAYOUT_STRIDED_BATCH_OFFSET, &strideD, sizeof(strideD)));
     }
 
     // Create CUDA event to time the execution time of each algo
@@ -302,18 +415,23 @@ int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
 
     // Request the 100 first AlgoId available
     status = cublasLtMatmulAlgoGetIds(
-        ltHandle, computeType, scaleType, Atype, Btype, Ctype, Ctype, ALGO_IDS, algoIdA, &nbAlgoIds);
+        ltHandle, computeType, scaleType, Atype, Btype, Ctype, Dtype, ALGO_IDS, algoIdA, &nbAlgoIds);
     if (status != CUBLAS_STATUS_SUCCESS) {
         goto CLEANUP;
     }
+    if (nbAlgoIds > ALGO_IDS) {
+        printf(
+            "Warning: the algo id count is not large enough to guarantee the best algo %d, %d\n", nbAlgoIds, ALGO_IDS);
+    }
 
     // Loop over the Algo IDs
+    // This loop doesn't work for fp8 gemm
     for (int idx = 0; (idx < nbAlgoIds) && (AlgoCount < AlgoCombinations); idx++) {
         cublasLtMatmulAlgo_t algo;
         size_t               sizeWritten = 0;
         /* Initialize algo structure with given Algp ID */
         status =
-            cublasLtMatmulAlgoInit(ltHandle, computeType, scaleType, Atype, Btype, Ctype, Ctype, algoIdA[idx], &algo);
+            cublasLtMatmulAlgoInit(ltHandle, computeType, scaleType, Atype, Btype, Ctype, Dtype, algoIdA[idx], &algo);
         if (status != CUBLAS_STATUS_SUCCESS) {
             continue;
         }
@@ -456,7 +574,10 @@ int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
     }  // end idx
 
     printf("AlgoCount: %d\n", AlgoCount);
-    if (AlgoCount < maxNumTraversal) {
+    if (data_type == FP8_DATATYPE) {
+        assert(AlgoCount == 0);
+    }
+    if (AlgoCount < maxNumTraversal && data_type != FP8_DATATYPE) {
         // 0 <= workspacesize <= 32MB
         for (int i = 0; i < AlgoCount; i++) {
             status                = customMatmulRun(ltHandle,
@@ -499,7 +620,7 @@ int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
                                        Adesc,
                                        Bdesc,
                                        Cdesc,
-                                       Cdesc,
+                                       Ddesc,
                                        pref,
                                        maxNumTraversal,
                                        heuristicResultsArray,
@@ -519,7 +640,7 @@ int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
                                          C,
                                          Cdesc,
                                          C,
-                                         Cdesc,
+                                         Ddesc,
                                          heuristicResultsArray[i].algo,
                                          kernelRepeats,
                                          workSpace,
@@ -549,7 +670,7 @@ int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
                                      C,
                                      Cdesc,
                                      C,
-                                     Cdesc,
+                                     Ddesc,
                                      algosRestrict[i],
                                      kernelRepeats,
                                      NULL,
@@ -570,8 +691,18 @@ int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
     // Print timing and perf details
     for (int i = 0, hasPrint = 1; i < AlgoCount; i++) {
         printf("result %03d : ", i);
-        hasPrint = printPerfStructure(
-            batch_size, seq_len, head_num, size_per_head, m, n, k, perfResults[i], fout, data_type, hasPrint);
+        hasPrint = printPerfStructure(batch_size,
+                                      seq_len,
+                                      head_num,
+                                      size_per_head,
+                                      m,
+                                      n,
+                                      k,
+                                      perfResults[i],
+                                      fout,
+                                      data_type,
+                                      hasPrint,
+                                      batchCount);
     }
 
 CLEANUP:
@@ -614,7 +745,12 @@ template int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
                                size_t             workSpaceSize,
                                FILE*              fout,
                                customMatmulPerf_t perfResults[],
-                               int                AlgoCombinations);
+                               int                AlgoCombinations,
+                               cudaDataType_t     dtype_fp8,
+                               int                batchCount,
+                               int64_t            strideA,
+                               int64_t            strideB,
+                               int64_t            strideD);
 
 template int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
                                int                batch_size,
@@ -633,7 +769,12 @@ template int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
                                size_t             workSpaceSize,
                                FILE*              fout,
                                customMatmulPerf_t perfResults[],
-                               int                AlgoCombinations);
+                               int                AlgoCombinations,
+                               cudaDataType_t     dtype_fp8,
+                               int                batchCount,
+                               int64_t            strideA,
+                               int64_t            strideB,
+                               int64_t            strideD);
 
 #ifdef ENABLE_BF16
 template int LtHgemmCustomFind(cublasLtHandle_t     ltHandle,
@@ -653,7 +794,38 @@ template int LtHgemmCustomFind(cublasLtHandle_t     ltHandle,
                                size_t               workSpaceSize,
                                FILE*                fout,
                                customMatmulPerf_t   perfResults[],
-                               int                  AlgoCombinations);
+                               int                  AlgoCombinations,
+                               cudaDataType_t       dtype_fp8,
+                               int                  batchCount,
+                               int64_t              strideA,
+                               int64_t              strideB,
+                               int64_t              strideD);
+#endif
+
+#ifdef ENABLE_FP8
+template int LtHgemmCustomFind(cublasLtHandle_t     ltHandle,
+                               int                  batch_size,
+                               int                  seq_len,
+                               int                  head_num,
+                               int                  size_per_head,
+                               int                  m,
+                               int                  n,
+                               int                  k,
+                               const float*         alpha, /* host pointer */
+                               const __nv_fp8_e4m3* A,
+                               const __nv_fp8_e4m3* B,
+                               const float*         beta, /* host pointer */
+                               __nv_fp8_e4m3*       C,
+                               void*                workSpace,
+                               size_t               workSpaceSize,
+                               FILE*                fout,
+                               customMatmulPerf_t   perfResults[],
+                               int                  AlgoCombinations,
+                               cudaDataType_t       dtype_fp8,
+                               int                  batchCount,
+                               int64_t              strideA,
+                               int64_t              strideB,
+                               int64_t              strideD);
 #endif
 
 template int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
@@ -673,7 +845,12 @@ template int LtHgemmCustomFind(cublasLtHandle_t   ltHandle,
                                size_t             workSpaceSize,
                                FILE*              fout,
                                customMatmulPerf_t perfResults[],
-                               int                AlgoCombinations);
+                               int                AlgoCombinations,
+                               cudaDataType_t     dtype_fp8,
+                               int                batchCount,
+                               int64_t            strideA,
+                               int64_t            strideB,
+                               int64_t            strideD);
 
 size_t calGemmTestBufSizeInByte(int            batch_size,
                                 int            seq_len,

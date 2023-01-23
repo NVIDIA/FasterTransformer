@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -84,7 +84,7 @@ template<typename T>
 __global__ void image_merge_col32_kernel(
     int8_t* out, const T* __restrict input, int batch, int H, int W, int n, const float* merge_inFactor)
 {
-    const int   ite       = 4;
+    // const int   ite       = 4; // not used
     const int   tid       = threadIdx.x;
     const int   W_idx     = blockIdx.x;
     const int   H_idx     = blockIdx.y;

@@ -28,10 +28,6 @@
 #include <sys/time.h>
 #include <vector>
 
-#ifdef USE_NVTX
-bool NVTX_ON = true;
-#endif
-
 using namespace fastertransformer;
 
 template<typename T>
@@ -86,8 +82,10 @@ void gptj_example(const INIReader reader)
     const uint        top_k              = (uint)reader.GetInteger("ft_instance_hyperparameter", "top_k");
     const float       top_p              = reader.GetFloat("ft_instance_hyperparameter", "top_p");
     const float       temperature        = reader.GetFloat("ft_instance_hyperparameter", "temperature");
-    const float       repetition_penalty = reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty");
+    const float       repetition_penalty = reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty", 1.0f);
+    const float       presence_penalty   = reader.GetFloat("ft_instance_hyperparameter", "presence_penalty", 0.0f);
     const float       len_penalty        = reader.GetFloat("ft_instance_hyperparameter", "len_penalty");
+    const int         min_length         = reader.GetInteger("ft_instance_hyperparameter", "min_length", 0);
     const float       beam_search_diversity_rate =
         reader.GetFloat("ft_instance_hyperparameter", "beam_search_diversity_rate");
     std::string model_dir = std::string(reader.Get("ft_instance_hyperparameter", "model_dir"));
@@ -113,6 +111,13 @@ void gptj_example(const INIReader reader)
 
     FT_CHECK(head_num % tensor_para_size == 0);
     FT_CHECK(decoder_layers % pipeline_para_size == 0);
+    FT_CHECK_WITH_INFO(
+        repetition_penalty == 1.0f || presence_penalty == 0.0f,
+        fmtstr("Found ambiguous parameters repetition_penalty (%f) and presence_penalty (%f) "
+               "which are mutually exclusive. Please remove one of repetition_penalty or presence_penalty "
+               "or set to a default value.",
+               repetition_penalty,
+               presence_penalty));
 
     // Prepare the parallelism parameters
     int rank       = mpi::getCommWorldRank();
@@ -349,9 +354,19 @@ void gptj_example(const INIReader reader)
          Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<size_t>{request_batch_size}, output_seq_len.data()}},
         {"temperature", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &temperature}},
         {"len_penalty", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &len_penalty}},
-        {"repetition_penalty", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &repetition_penalty}},
+        {"min_length", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{1}, &min_length}},
         {"start_id", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{request_batch_size}, start_ids.data()}},
         {"end_id", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{request_batch_size}, end_ids.data()}}};
+
+    if (repetition_penalty != 1.0f) {
+        input_tensors.insert(
+            {"repetition_penalty", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &repetition_penalty}});
+    }
+    if (presence_penalty != 0.0f) {
+        input_tensors.insert(
+            {"presence_penalty", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &presence_penalty}});
+    }
+
     if (!bad_words.empty()) {
         input_tensors.insert(
             {"bad_words_list", Tensor{MEMORY_GPU, TYPE_INT32, {2, bad_words.size() / 2}, d_bad_words}});
@@ -401,7 +416,7 @@ void gptj_example(const INIReader reader)
     cudaProfilerStart();
     // warm up
     ite = 1;
-    nvtx::setScope("warmup_time");
+    ft_nvtx::setScope("warmup_time");
     PUSH_RANGE("warmup time")
     for (int i = 0; i < ite; ++i) {
         gpt.forward(&output_tensors, &input_tensors, &gpt_weights);
@@ -411,7 +426,7 @@ void gptj_example(const INIReader reader)
     mpi::barrier();
 
     POP_RANGE;
-    nvtx::resetScope();
+    ft_nvtx::resetScope();
 
     if (rank == 0) {
 
@@ -456,7 +471,7 @@ void gptj_example(const INIReader reader)
     cudaDeviceSynchronize();
     gettimeofday(&start, NULL);
 
-    nvtx::setScope("total_time");
+    ft_nvtx::setScope("total_time");
     PUSH_RANGE("total time")
     for (int i = 0; i < ite; ++i) {
         gpt.forward(&output_tensors, &input_tensors, &gpt_weights);
@@ -466,7 +481,7 @@ void gptj_example(const INIReader reader)
     mpi::barrier();
 
     POP_RANGE;
-    nvtx::resetScope();
+    ft_nvtx::resetScope();
     gettimeofday(&end, NULL);
 
     cudaProfilerStop();

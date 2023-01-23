@@ -6,7 +6,7 @@ def random_tensor(shape, dtype, device, mean=0, std=1):
   
 class TestGemmDequantize(unittest.TestCase):
     def setUp(self) -> None:
-        torch.classes.load_library("lib/libth_weight_only_quant_ops.so")
+        torch.classes.load_library("lib/libth_transformer.so")
         torch.classes.load_library("lib/libgemm_dq_unit_ops.so")
         self.unpack_packed_int4s = torch.ops.fastertransformer.unpack_int4_packed_tensor_to_int8
         self.pack_int4s = torch.ops.fastertransformer.pack_int8_tensor_to_packed_int4

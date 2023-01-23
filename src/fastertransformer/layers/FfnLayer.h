@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@
 
 #include "src/fastertransformer/kernels/activation_kernels.h"
 #include "src/fastertransformer/kernels/cutlass_kernels/fpA_intB_gemm/fpA_intB_gemm.h"
+#include "src/fastertransformer/kernels/cutlass_kernels/int8_gemm/int8_gemm.h"
 #include "src/fastertransformer/kernels/matrix_vector_multiplication.h"
 #include "src/fastertransformer/kernels/moe_kernels.h"
 #include "src/fastertransformer/layers/BaseLayer.h"
@@ -37,8 +38,8 @@ private:
     size_t max_token_num_ = 0;
 
     // meta data
-    size_t head_num_;
-    size_t size_per_head_;
+    size_t head_num_;       // (martinma): this member is not used in this class. Remove it?
+    size_t size_per_head_;  // (martinma): this member is not used in this class. Remove it?
     size_t expert_num_;
 
     // calculated data
@@ -51,10 +52,10 @@ private:
     std::shared_ptr<CutlassMoeFCRunner<T, uint8_t>> moe_int8_weight_only_fc_runner_;
 
     std::shared_ptr<CutlassFpAIntBGemmRunner<T, uint8_t>> weight_only_int8_fc_runner_;
+    std::shared_ptr<CutlassInt8GemmRunner<T>>             int8_fc_runner_;
 
     void allocateBuffer() override;
     void freeBuffer() override;
-    bool isValidTokenNum(size_t token_num);
     void allocateBuffer(int moe_k = 0, bool use_moe = false);
     void allocateBuffer(size_t token_num, int moe_k = 0, bool use_moe = false);
 
@@ -66,6 +67,8 @@ protected:
 
     char*  mixed_gemm_workspace_ = nullptr;
     size_t mixed_gemm_ws_bytes_  = 0;
+    char*  int8_gemm_workspace_  = nullptr;
+    size_t int8_gemm_ws_bytes_   = 0;
 
     size_t inter_size_;
     /* used to allocater memory buffers
@@ -98,8 +101,8 @@ protected:
 public:
     FfnLayer(size_t           max_batch_size,
              size_t           max_seq_len,
-             size_t           head_num,
-             size_t           size_per_head,
+             size_t           head_num,       // (martinma): redundant parameter?
+             size_t           size_per_head,  // (martinma): redundant parameter?
              size_t           expert_num,
              size_t           inter_size,
              cudaStream_t     stream,

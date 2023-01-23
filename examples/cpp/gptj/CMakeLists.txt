@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,4 +19,4 @@ target_link_libraries(gptj_example PUBLIC -lcublas -lcublasLt -lcudart
 add_executable(gptj_triton_example gptj_triton_example.cc)
 target_link_libraries(gptj_triton_example PUBLIC -lcublas -lcublasLt -lcudart -lpthread
                       GptJTritonBackend TransformerTritonBackend custom_ar_comm
-                      gpt_example_utils word_list mpi_utils nccl_utils)
+                      gpt_example_utils word_list mpi_utils nccl_utils nvtx_utils)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,40 +16,34 @@
 
 #pragma once
 
-#include "nvToolsExt.h"
-#include <iostream>
-
-extern bool NVTX_ON;
-
-namespace nvtx {
+namespace ft_nvtx {
 static std::string scope;
 std::string        getScope();
 void               addScope(std::string name);
 void               setScope(std::string name);
 void               resetScope();
-}  // namespace nvtx
+static int         domain = 0;
+void               setDeviceDomain(int deviceId);
+int                getDeviceDomain();
+void               resetDeviceDomain();
+bool               isEnableNvtx();
 
-#ifdef USE_NVTX
+static bool has_read_nvtx_env = false;
+static bool is_enable_ft_nvtx = false;
+void        ftNvtxRangePush(std::string name);
+void        ftNvtxRangePop();
+}  // namespace ft_nvtx
 
 #define PUSH_RANGE(name)                                                                                               \
     {                                                                                                                  \
-        if (NVTX_ON == true) {                                                                                         \
-            cudaDeviceSynchronize();                                                                                   \
-            nvtxRangePush((nvtx::getScope() + name).c_str());                                                          \
+        if (ft_nvtx::isEnableNvtx()) {                                                                                 \
+            ft_nvtx::ftNvtxRangePush(name);                                                                            \
         }                                                                                                              \
     }
 
 #define POP_RANGE                                                                                                      \
     {                                                                                                                  \
-        if (NVTX_ON == true) {                                                                                         \
-            cudaDeviceSynchronize();                                                                                   \
-            nvtxRangePop();                                                                                            \
+        if (ft_nvtx::isEnableNvtx()) {                                                                                 \
+            ft_nvtx::ftNvtxRangePop();                                                                                 \
         }                                                                                                              \
     }
-
-#else
-
-#define PUSH_RANGE(name)
-#define POP_RANGE
-
-#endif

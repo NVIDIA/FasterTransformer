@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -119,6 +119,21 @@ void T5Encoder<T>::initialize()
                                                        custom_all_reduce_comm_,
                                                        enable_custom_all_reduce_);
     }
+    if (has_adapters()) {
+        adapter_layer_ = new LinearAdapterLayer<T>(adapter_config_,
+                                                   max_batch_size_,
+                                                   max_seq_len_,
+                                                   d_model_,
+                                                   tensor_para_,
+                                                   stream_,
+                                                   cublas_wrapper_,
+                                                   allocator_,
+                                                   is_free_buffer_after_forward_,
+                                                   sparse_,
+                                                   custom_all_reduce_comm_,
+                                                   enable_custom_all_reduce_,
+                                                   layernorm_eps_);
+    }
 }
 
 template<typename T>
@@ -149,7 +164,8 @@ T5Encoder<T>::T5Encoder(size_t                              max_batch_size,
                         int                                 prompt_learning_start_id,
                         PromptLearningType                  prompt_learning_type,
                         std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
-                        int                                 enable_custom_all_reduce):
+                        int                                 enable_custom_all_reduce,
+                        LinearAdapterConfig const&          adapter_config):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     max_batch_size_(max_batch_size),
     max_seq_len_(max_seq_len),
@@ -175,8 +191,10 @@ T5Encoder<T>::T5Encoder(size_t                              max_batch_size,
     prompt_learning_start_id_(prompt_learning_start_id),
     prompt_learning_type_(prompt_learning_type),
     custom_all_reduce_comm_(custom_all_reduce_comm),
-    enable_custom_all_reduce_(enable_custom_all_reduce)
+    enable_custom_all_reduce_(enable_custom_all_reduce),
+    adapter_config_{adapter_config}
 {
+    FT_CHECK_WITH_INFO(layernorm_type_ == LayerNormType::pre_layernorm, "T5Encoder only supports pre_layernorm");
     initialize();
 }
 
@@ -207,7 +225,8 @@ T5Encoder<T>::T5Encoder(T5Encoder<T> const& t5_encoder):
     prompt_learning_start_id_(t5_encoder.prompt_learning_start_id_),
     prompt_learning_type_(t5_encoder.prompt_learning_type_),
     custom_all_reduce_comm_(t5_encoder.custom_all_reduce_comm_),
-    enable_custom_all_reduce_(t5_encoder.enable_custom_all_reduce_)
+    enable_custom_all_reduce_(t5_encoder.enable_custom_all_reduce_),
+    adapter_config_(t5_encoder.adapter_config_)
 {
     initialize();
 }
@@ -218,6 +237,10 @@ T5Encoder<T>::~T5Encoder()
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     delete attention_layer_;
     delete ffn_layer_;
+    if (adapter_layer_ != nullptr) {
+        delete adapter_layer_;
+        adapter_layer_ = nullptr;
+    }
     freeBuffer();
 }
 
@@ -226,6 +249,9 @@ void T5Encoder<T>::setStream(cudaStream_t stream)
 {
     attention_layer_->setStream(stream);
     ffn_layer_->setStream(stream);
+    if (adapter_layer_ != nullptr) {
+        adapter_layer_->setStream(stream);
+    }
     BaseLayer::setStream(stream);
 }
 
@@ -233,7 +259,7 @@ template<typename T>
 void T5Encoder<T>::allocateBuffer()
 {
     if (is_allocate_buffer_ == false) {
-        token_num_ = (size_t*)allocator_->reMalloc(token_num_, sizeof(size_t) * 1, false);
+        check_cuda_error(cudaMallocHost((void**)&h_pinned_token_num_ptr_, sizeof(size_t)));
         padding_offset_ =
             (int*)allocator_->reMalloc(padding_offset_, sizeof(int) * max_batch_size_ * max_seq_len_, false);
         trt_mha_padding_offset_ =
@@ -280,7 +306,9 @@ template<typename T>
 void T5Encoder<T>::allocateBuffer(size_t batch_size, size_t seq_len)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    token_num_      = (size_t*)allocator_->reMalloc(token_num_, sizeof(size_t) * 1, false);
+    if (!is_allocate_buffer_) {
+        check_cuda_error(cudaMallocHost((void**)&h_pinned_token_num_ptr_, sizeof(size_t)));
+    }
     padding_offset_ = (int*)allocator_->reMalloc(padding_offset_, sizeof(int) * batch_size * seq_len, false);
     trt_mha_padding_offset_ =
         (int*)allocator_->reMalloc(trt_mha_padding_offset_, sizeof(int) * (2 * batch_size + 1), false);
@@ -331,7 +359,7 @@ template<typename T>
 void T5Encoder<T>::freeBuffer()
 {
     if (is_allocate_buffer_) {
-        allocator_->free((void**)(&token_num_));
+        check_cuda_error(cudaFreeHost(h_pinned_token_num_ptr_));
         allocator_->free((void**)(&padding_offset_));
         allocator_->free((void**)(&trt_mha_padding_offset_));
 
@@ -637,8 +665,8 @@ void T5Encoder<T>::forward(TensorMap*                output_tensors,
                     attention_mask_, sequence_lengths, local_batch_size, request_seq_len, stream_);
 
                 sync_check_cuda_error();
-                invokeGetPaddingOffset(&h_token_num,
-                                       token_num_,
+                invokeGetPaddingOffset(h_pinned_token_num_ptr_,
+                                       &h_token_num,
                                        padding_offset_,
                                        sequence_lengths,
                                        local_batch_size,
@@ -802,31 +830,41 @@ void T5Encoder<T>::forward(TensorMap*                output_tensors,
                 attention_layer_->forward(&attn_output_tensors, &attn_input_tensors, &layer_weight->attention_weights_);
             }
 
+            auto* attention_bias = layer_weight->attention_weights_.attention_output_weight.bias;
+            if (has_adapters() && layer_weight->has_adapters()) {
+                if (attention_bias != nullptr) {
+                    invokeAddBias(attn_out_buf_, attention_bias, h_token_num, d_model_, stream_);
+                    attention_bias = nullptr;
+                }
+                Tensor input_tensor{MEMORY_GPU, data_type, std::vector<size_t>{h_token_num, d_model_}, attn_out_buf_};
+                Tensor output_tensor{MEMORY_GPU, data_type, std::vector<size_t>{h_token_num, d_model_}, attn_out_buf_};
+                adapter_layer_->forward(
+                    &input_tensor, &output_tensor, &layer_weight->adapter_weights_.after_attention_adapter_weights_);
+            }
+
             if (layernorm_type_ == LayerNormType::post_layernorm) {
-                invokeGeneralAddBiasResidualT5PreLayerNorm(
-                    attn_out_buf_,
-                    attn_out_buf_,
-                    from_tensor,
-                    layer_weight->attn_layernorm_weights_.gamma,
-                    layer_weight->attn_layernorm_weights_.beta,
-                    layer_weight->attention_weights_.attention_output_weight.bias,
-                    layernorm_eps_,
-                    h_token_num,
-                    d_model_,
-                    stream_);
+                invokeGeneralAddBiasResidualT5PreLayerNorm(attn_out_buf_,
+                                                           attn_out_buf_,
+                                                           from_tensor,
+                                                           layer_weight->attn_layernorm_weights_.gamma,
+                                                           layer_weight->attn_layernorm_weights_.beta,
+                                                           attention_bias,
+                                                           layernorm_eps_,
+                                                           h_token_num,
+                                                           d_model_,
+                                                           stream_);
             }
             else if (layernorm_type_ == LayerNormType::pre_layernorm) {
-                invokeGeneralAddBiasResidualT5PreLayerNorm(
-                    attn_out_buf_,
-                    normed_attn_out_buf_,
-                    from_tensor,
-                    layer_weight->ffn_layernorm_weights_.gamma,
-                    layer_weight->ffn_layernorm_weights_.beta,
-                    layer_weight->attention_weights_.attention_output_weight.bias,
-                    layernorm_eps_,
-                    h_token_num,
-                    d_model_,
-                    stream_);
+                invokeGeneralAddBiasResidualT5PreLayerNorm(attn_out_buf_,
+                                                           normed_attn_out_buf_,
+                                                           from_tensor,
+                                                           layer_weight->ffn_layernorm_weights_.gamma,
+                                                           layer_weight->ffn_layernorm_weights_.beta,
+                                                           attention_bias,
+                                                           layernorm_eps_,
+                                                           h_token_num,
+                                                           d_model_,
+                                                           stream_);
             }
 
             bool use_moe = false;
@@ -871,66 +909,77 @@ void T5Encoder<T>::forward(TensorMap*                output_tensors,
                 ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &layer_weight->ffn_weights_);
             }
 
-            if (use_moe && layernorm_type_ == LayerNormType::pre_layernorm) {
-                // residual addition for moe, we should pass the unnormed attention output if using pre_layernorm
-                // and pass the normed attention output if using post_layernorm. They all point to the attn_out_buf_.
-                finalize_moe_routing_kernelLauncher(fc2_result_,
-                                                    out_tensor,
-                                                    attn_out_buf_,
-                                                    layer_weight->ffn_weights_.output_weight.bias,
-                                                    expert_scales_,
-                                                    expanded_source_row_to_expanded_dest_row_,
-                                                    expert_for_source_row_,
-                                                    h_token_num,
-                                                    d_model_,
-                                                    moe_k_,
-                                                    stream_);
+            if (use_moe) {
+                if (layernorm_type_ == LayerNormType::pre_layernorm) {
+                    // residual addition for moe, we should pass the unnormed attention output if using pre_layernorm
+                    // and pass the normed attention output if using post_layernorm. They all point to the
+                    // attn_out_buf_.
+                    finalize_moe_routing_kernelLauncher(fc2_result_,
+                                                        out_tensor,
+                                                        attn_out_buf_,
+                                                        layer_weight->ffn_weights_.output_weight.bias,
+                                                        expert_scales_,
+                                                        expanded_source_row_to_expanded_dest_row_,
+                                                        expert_for_source_row_,
+                                                        h_token_num,
+                                                        d_model_,
+                                                        moe_k_,
+                                                        stream_);
+                }
+                else if (layernorm_type_ == LayerNormType::post_layernorm) {
+                    finalize_moe_routing_kernelLauncher(fc2_result_,
+                                                        out_tensor,
+                                                        attn_out_buf_,
+                                                        layer_weight->ffn_weights_.output_weight.bias,
+                                                        expert_scales_,
+                                                        expanded_source_row_to_expanded_dest_row_,
+                                                        expert_for_source_row_,
+                                                        h_token_num,
+                                                        d_model_,
+                                                        moe_k_,
+                                                        stream_);
+                    invokeGeneralT5LayerNorm(out_tensor,
+                                             out_tensor,
+                                             layer_weight->ffn_layernorm_weights_.gamma,
+                                             layer_weight->ffn_layernorm_weights_.beta,
+                                             layernorm_eps_,
+                                             h_token_num,
+                                             d_model_,
+                                             stream_);
+                }
             }
-            if (use_moe && layernorm_type_ == LayerNormType::post_layernorm) {
-                finalize_moe_routing_kernelLauncher(fc2_result_,
-                                                    out_tensor,
-                                                    attn_out_buf_,
-                                                    layer_weight->ffn_weights_.output_weight.bias,
-                                                    expert_scales_,
-                                                    expanded_source_row_to_expanded_dest_row_,
-                                                    expert_for_source_row_,
-                                                    h_token_num,
-                                                    d_model_,
-                                                    moe_k_,
-                                                    stream_);
-                invokeGeneralT5LayerNorm(out_tensor,
-                                         out_tensor,
-                                         layer_weight->ffn_layernorm_weights_.gamma,
-                                         layer_weight->ffn_layernorm_weights_.beta,
-                                         layernorm_eps_,
-                                         h_token_num,
-                                         d_model_,
-                                         stream_);
-            }
+            else {  // not using moe
+                auto* ffn_bias = layer_weight->ffn_weights_.output_weight.bias;
+                if (has_adapters() && layer_weight->has_adapters()) {
+                    if (ffn_bias != nullptr) {
+                        invokeAddBias(out_tensor, ffn_bias, h_token_num, d_model_, stream_);
+                        ffn_bias = nullptr;
+                    }
+                    Tensor input_tensor{MEMORY_GPU, data_type, std::vector<size_t>{h_token_num, d_model_}, out_tensor};
+                    Tensor output_tensor{MEMORY_GPU, data_type, std::vector<size_t>{h_token_num, d_model_}, out_tensor};
+                    adapter_layer_->forward(
+                        &input_tensor, &output_tensor, &layer_weight->adapter_weights_.after_ffn_adapter_weights_);
+                }
 
-            if (!use_moe && layernorm_type_ == LayerNormType::post_layernorm) {
-                invokeGeneralAddBiasResidualT5PreLayerNorm(out_tensor,
-                                                           out_tensor,
-                                                           attn_out_buf_,
-                                                           layer_weight->ffn_layernorm_weights_.gamma,
-                                                           layer_weight->ffn_layernorm_weights_.beta,
-                                                           layer_weight->ffn_weights_.output_weight.bias,
-                                                           layernorm_eps_,
-                                                           h_token_num,
-                                                           d_model_,
-                                                           stream_);
-            }
-            else if (!use_moe && layernorm_type_ == LayerNormType::pre_layernorm) {
-                invokeT5AddBiasResidual(out_tensor,
-                                        attn_out_buf_,
-                                        layer_weight->ffn_weights_.output_weight.bias,
-                                        h_token_num,
-                                        d_model_,
-                                        stream_);
+                if (layernorm_type_ == LayerNormType::post_layernorm) {
+                    invokeGeneralAddBiasResidualT5PreLayerNorm(out_tensor,
+                                                               out_tensor,
+                                                               attn_out_buf_,
+                                                               layer_weight->ffn_layernorm_weights_.gamma,
+                                                               layer_weight->ffn_layernorm_weights_.beta,
+                                                               ffn_bias,
+                                                               layernorm_eps_,
+                                                               h_token_num,
+                                                               d_model_,
+                                                               stream_);
+                }
+                else if (layernorm_type_ == LayerNormType::pre_layernorm) {
+                    invokeT5AddBiasResidual(out_tensor, attn_out_buf_, ffn_bias, h_token_num, d_model_, stream_);
+                }
             }
             sync_check_cuda_error();
 
-            if (isLastLayerParallelId(i) == true && pipeline_para_.rank_ != pipeline_para_.world_size_ - 1) {
+            if (isLastLayerParallelId(i) && pipeline_para_.rank_ != pipeline_para_.world_size_ - 1) {
                 const int data_size = h_token_num * d_model_ / tensor_para_.world_size_;
                 ftNcclSend(out_tensor + data_size * tensor_para_.rank_,
                            data_size,

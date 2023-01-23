@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -43,6 +43,7 @@ class FTT5EncoderWeight(object):
         self.t5_with_moe = t5_with_moe
         self.position_embedding_type = position_embedding_type
         self.weight_data_type = weight_data_type
+        self.adapter_inter_size = config.adapter_inter_size if hasattr(config, "adapter_inter_size") else 0
         self.w = []
         self.use_mpi = dist.is_mpi_available()
 
@@ -119,7 +120,7 @@ class FTT5EncoderWeight(object):
         self.w.append(t)
 
         #TODO: pass None Type to Torch Op
-        for i in range(11):
+        for i in range(19):
             self.w.append(torch.empty((1,1), dtype=torch_weight_dtype).contiguous().cuda())
         
     def load_from_bin(self, ckpt_path, model_type): # assume this only applies to megatron models and megatron-deepspedd models
@@ -195,7 +196,24 @@ class FTT5EncoderWeight(object):
                     self.w.append(torch.empty((1,1), dtype=torch_weight_dtype).contiguous().cuda())
             # add empty moe gate weight
             self.w.append(torch.empty((1,1), dtype=torch_weight_dtype).contiguous().cuda())
-        
+
+            if self.adapter_inter_size > 0:
+                ckpt_path_block = f"{ckpt_path}/encoder.block"
+                for adapter in ["after_attention_adapter", "after_ffn_adapter"]:
+                    for in_out in ["wi", "wo"]:
+                        t = torch.stack([torch.from_numpy(np.fromfile(
+                            f"{ckpt_path_block}.{i}.{adapter}.DenseSiluDense.{in_out}.weight.{self.tensor_para_rank}.bin",
+                            dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+                        self.w.append(t)
+                    for weight_bias in ["weight", "bias"]:
+                        t = torch.stack([torch.from_numpy(np.fromfile(
+                            f"{ckpt_path_block}.{i}.{adapter}.layer_norm.{weight_bias}.bin",
+                            dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+                        self.w.append(t)
+            else:
+                for i in range(8):
+                    self.w.append(torch.empty((1, 1), dtype=torch_weight_dtype).contiguous().cuda())
+
         else: # Megatron-DeepSpeed, no tensor parallelism currently
             #TODO: add tensor parallelism in the conversion script
             t = torch.stack([torch.from_numpy(np.fromfile(f"{ckpt_path}/encoder.layers.{i}.input_layernorm.weight.bin", dtype=np_weight_dtype)) for i in range(start_layer, end_layer)], 0).contiguous().cuda()
@@ -306,6 +324,10 @@ class FTT5EncoderWeight(object):
             else:
                 self.w.append(torch.empty((1,1), dtype=torch_weight_dtype).contiguous().cuda())
 
+            # adapters are not supported in Megatron-DeepSpeed currently, so here weight placeholder is always empty
+            for i in range(8):
+                self.w.append(torch.empty((1, 1), dtype=torch_weight_dtype).contiguous().cuda())
+
     def to_cuda(self):
         for i in range(self.real_weights_num):
             self.w[i] = self.w[i].cuda()
@@ -329,8 +351,10 @@ class FTT5EncoderWeight(object):
 
 class FTT5Encoder(nn.Module):
     def __init__(self, encoder_weight_list, lib_path, head_num, head_size, inter_size, d_model, is_remove_padding,
-                 num_layer, num_bucket=32, num_expert=0, moe_layer_index=[], max_distance=128, sparse=False, q_scaling=1.0, tensor_para_size=1, pipeline_para_size=1, t5_with_bias=False,
-                 position_embedding_type=0, moe_k=0, activation_type="relu"):
+                 num_layer, num_bucket=32, num_expert=0, moe_layer_index=[], max_distance=128, sparse=False,
+                 q_scaling=1.0, tensor_para_size=1, pipeline_para_size=1, t5_with_bias=False,
+                 position_embedding_type=0, moe_k=0, activation_type="relu", adapter_inter_size=0,
+                 adapter_norm_position="pre"):
         super().__init__()
 
         self.use_mpi = dist.is_mpi_available()
@@ -347,13 +371,23 @@ class FTT5Encoder(nn.Module):
 
         torch.classes.load_library(lib_path)
         try:
-            self.encoder = torch.classes.FasterTransformer.T5Encoder(*encoder_weight_list, moe_layer_index, head_num, head_size, inter_size, d_model,
-                                                                     is_remove_padding, num_layer, num_bucket, num_expert, max_distance, sparse, q_scaling, tensor_para_size, pipeline_para_size,
-                                                                     t5_with_bias, position_embedding_type, moe_k, activation_type)
+            self.encoder = torch.classes.FasterTransformer.T5Encoder(*encoder_weight_list, moe_layer_index, head_num,
+                                                                     head_size, inter_size, d_model,
+                                                                     is_remove_padding, num_layer, num_bucket,
+                                                                     num_expert, max_distance, sparse, q_scaling,
+                                                                     tensor_para_size, pipeline_para_size,
+                                                                     t5_with_bias, position_embedding_type, moe_k,
+                                                                     activation_type, adapter_inter_size,
+                                                                     adapter_norm_position)
         except:
-            self.encoder = torch.classes.FasterTransformerT5Encoder(*encoder_weight_list, moe_layer_index, head_num, head_size, inter_size, d_model,
-                                                                    is_remove_padding, num_layer, num_bucket, num_expert, max_distance, sparse, q_scaling, tensor_para_size, pipeline_para_size,
-                                                                    t5_with_bias, position_embedding_type, moe_k, activation_type)
+            self.encoder = torch.classes.FasterTransformerT5Encoder(*encoder_weight_list, moe_layer_index, head_num,
+                                                                    head_size, inter_size, d_model,
+                                                                    is_remove_padding, num_layer, num_bucket,
+                                                                    num_expert, max_distance, sparse, q_scaling,
+                                                                    tensor_para_size, pipeline_para_size,
+                                                                    t5_with_bias, position_embedding_type, moe_k,
+                                                                    activation_type, adapter_inter_size,
+                                                                    adapter_norm_position)
 
     def forward(self, input, seq_len, inputs_embeds=None):
         output = self.encoder.forward(input, seq_len, inputs_embeds)

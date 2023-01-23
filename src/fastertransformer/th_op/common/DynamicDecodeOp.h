@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -33,6 +33,8 @@ public:
                        th::optional<th::Tensor> runtime_top_p_opt,
                        th::optional<th::Tensor> temperature_opt,
                        th::optional<th::Tensor> repetition_penalty_opt,
+                       th::optional<th::Tensor> presence_penalty_opt,
+                       th::optional<th::Tensor> min_length_opt,
                        th::optional<th::Tensor> length_penalty_opt,
                        th::optional<th::Tensor> beam_search_diversity_rate_opt,
                        th::optional<th::Tensor> random_seed_opt,
@@ -50,6 +52,8 @@ public:
                          th::optional<th::Tensor> runtime_top_p_opt,
                          th::optional<th::Tensor> temperature_opt,
                          th::optional<th::Tensor> repetition_penalty_opt,
+                         th::optional<th::Tensor> presence_penalty_opt,
+                         th::optional<th::Tensor> min_length_opt,
                          th::optional<th::Tensor> length_penalty_opt,
                          th::optional<th::Tensor> beam_search_diversity_rate_opt,
                          th::optional<th::Tensor> top_p_decay_opt,
@@ -89,6 +93,8 @@ public:
                th::optional<th::Tensor> runtime_top_p_opt,
                th::optional<th::Tensor> temperature_opt,
                th::optional<th::Tensor> repetition_penalty_opt,
+               th::optional<th::Tensor> presence_penalty_opt,
+               th::optional<th::Tensor> min_length_opt,
                th::optional<th::Tensor> length_penalty_opt,
                th::optional<th::Tensor> beam_search_diversity_rate_opt,
                th::optional<th::Tensor> random_seed_opt,
@@ -106,6 +112,8 @@ public:
                  th::optional<th::Tensor> runtime_top_p_opt,
                  th::optional<th::Tensor> temperature_opt,
                  th::optional<th::Tensor> repetition_penalty_opt,
+                 th::optional<th::Tensor> presence_penalty_opt,
+                 th::optional<th::Tensor> min_length_opt,
                  th::optional<th::Tensor> length_penalty_opt,
                  th::optional<th::Tensor> beam_search_diversity_rate_opt,
                  th::optional<th::Tensor> top_p_decay_opt,
@@ -161,6 +169,8 @@ public:
                th::optional<th::Tensor> runtime_top_p_opt,
                th::optional<th::Tensor> temperature_opt,
                th::optional<th::Tensor> reptition_penalty_opt,
+               th::optional<th::Tensor> presence_penalty_opt,
+               th::optional<th::Tensor> min_length_opt,
                th::optional<th::Tensor> length_penalty_opt,
                th::optional<th::Tensor> beam_search_diversity_rate_opt,
                th::optional<th::Tensor> random_seed_opt,
@@ -178,6 +188,8 @@ public:
                        th::optional<th::Tensor> runtime_top_p_opt,
                        th::optional<th::Tensor> temperature_opt,
                        th::optional<th::Tensor> repetition_penalty_opt,
+                       th::optional<th::Tensor> presence_penalty_opt,
+                       th::optional<th::Tensor> min_length_opt,
                        th::optional<th::Tensor> length_penalty_opt,
                        th::optional<th::Tensor> beam_search_diversity_rate_opt,
                        th::optional<th::Tensor> top_p_decay_opt,

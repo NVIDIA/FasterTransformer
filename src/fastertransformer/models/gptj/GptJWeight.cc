@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -274,7 +274,9 @@ void GptJWeight<T>::loadModel(std::string dir_path)
     }
 
     for (int l = 0; l < num_layer_; l++) {
-        decoder_layer_weights[l].loadModel(dir_path + "/model.layers." + std::to_string(l), model_file_type);
+        if (isValidLayerParallelId(l)) {
+            decoder_layer_weights[l].loadModel(dir_path + "/model.layers." + std::to_string(l), model_file_type);
+        }
     }
 }
 

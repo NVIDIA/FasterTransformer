@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -343,15 +343,18 @@ void FfnLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, c
                                               stream_);
         }
         else if (int8_mode_ == 2) {
-            cublas_wrapper_->Int8Gemm(hidden_units_,
-                                      m,
-                                      inter_size_,
-                                      ffn_weights->output_weight.int8_kernel,
-                                      inter_size_,
-                                      reinterpret_cast<int8_t*>(inter_buf_),
-                                      inter_size_,
-                                      output_tensors->getPtr<int32_t>("ffn_output"),
-                                      hidden_units_);
+            int8_fc_runner_->gemm(reinterpret_cast<int8_t*>(inter_buf_),
+                                  ffn_weights->output_weight.int8_kernel,
+                                  QuantMode::PerTensorQuant,
+                                  ffn_weights->output_weight.scale_inter,
+                                  ffn_weights->output_weight.scale_out,
+                                  output_tensors->getPtr<T>("ffn_output"),
+                                  m,
+                                  hidden_units_,
+                                  inter_size_,
+                                  nullptr,
+                                  0,
+                                  stream_);
         }
         else {
             cublas_wrapper_->Gemm(CUBLAS_OP_N,
@@ -399,7 +402,8 @@ FfnLayer<T>::FfnLayer(size_t           max_batch_size,
     max_inter_size_(inter_size),
     inter_size_(inter_size),
     int8_mode_(int8_mode),
-    use_gated_activation_(use_gated_activation)
+    use_gated_activation_(use_gated_activation),
+    int8_fc_runner_(int8_mode == 2 ? std::make_shared<CutlassInt8GemmRunner<T>>() : nullptr)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (int8_mode_ == 0) {
@@ -431,7 +435,8 @@ FfnLayer<T>::FfnLayer(FfnLayer<T> const& ffn_layer):
     use_gated_activation_(ffn_layer.use_gated_activation_),
     moe_fc_runner_(ffn_layer.moe_fc_runner_),
     moe_int8_weight_only_fc_runner_(ffn_layer.moe_int8_weight_only_fc_runner_),
-    weight_only_int8_fc_runner_(ffn_layer.weight_only_int8_fc_runner_)
+    weight_only_int8_fc_runner_(ffn_layer.weight_only_int8_fc_runner_),
+    int8_fc_runner_(ffn_layer.int8_fc_runner_)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
 }
@@ -447,25 +452,8 @@ FfnLayer<T>::~FfnLayer()
 template<typename T>
 void FfnLayer<T>::allocateBuffer()
 {
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    const auto type_size = int8_mode_ == 2 ? sizeof(int8_t) : sizeof(T);
-    if (is_allocate_buffer_ == false) {
-        inter_buf_ = (T*)allocator_->reMalloc(inter_buf_, type_size * max_token_num_ * max_inter_size_, false);
-        if (use_gated_activation_) {
-            inter_buf_2_ = (T*)allocator_->reMalloc(inter_buf_2_, sizeof(T) * max_token_num_ * max_inter_size_, false);
-        }
-
-        if (int8_mode_ == 1) {
-            FT_CHECK_WITH_INFO(weight_only_int8_fc_runner_.get() != NULL, "weight only runner was not initialized.");
-            // We use max_size for n and k since we reuse buffers for both FCs and want to allocate the max
-            // possible memory that would be required by any of the individual gemms.
-            const int max_size    = std::max(hidden_units_, max_inter_size_);
-            mixed_gemm_ws_bytes_  = weight_only_int8_fc_runner_->getWorkspaceSize(max_token_num_, max_size, max_size);
-            mixed_gemm_workspace_ = (char*)allocator_->reMalloc(mixed_gemm_workspace_, mixed_gemm_ws_bytes_, false);
-        }
-
-        is_allocate_buffer_ = true;
-    }
+    FT_CHECK_WITH_INFO(false,
+                       "FfnLayer::allocateBuffer() is deprecated. Use `allocateBuffer(size_t token_num, ...)` instead");
 }
 
 template<typename T>
@@ -504,6 +492,11 @@ void FfnLayer<T>::allocateBuffer(size_t token_num, int moe_k, bool use_moe)
             mixed_gemm_ws_bytes_  = weight_only_int8_fc_runner_->getWorkspaceSize(token_num, max_size, max_size);
             mixed_gemm_workspace_ = (char*)allocator_->reMalloc(mixed_gemm_workspace_, mixed_gemm_ws_bytes_, false);
         }
+        else if (int8_mode_ == 2) {
+            const int max_size   = std::max(hidden_units_, inter_size_);
+            int8_gemm_ws_bytes_  = int8_fc_runner_->getWorkspaceSize(token_num, max_size, max_size);
+            int8_gemm_workspace_ = (char*)allocator_->reMalloc(int8_gemm_workspace_, int8_gemm_ws_bytes_, false);
+        }
     }
 
     is_allocate_buffer_ = true;
@@ -530,15 +523,6 @@ void FfnLayer<T>::freeBuffer()
 
         is_allocate_buffer_ = false;
     }
-}
-
-template<typename T>
-bool FfnLayer<T>::isValidTokenNum(size_t token_num)
-{
-    if (max_token_num_ < token_num) {
-        max_token_num_ = token_num;
-    }
-    return true;
 }
 
 #define INVOKE_GENERIC_ACT(ACT)                                                                                        \
@@ -572,19 +556,13 @@ void FfnLayer<T>::genericActivation(int          m,
         FT_CHECK(seq_len > 0);
     }
 
+    // dispatch according to actual activation
     switch (getActivationType()) {
         case ActivationType::Gelu:
         case ActivationType::GeGLU:
             if (inter_buf_2_ == nullptr && int8_mode_ <= 1) {
-                invokeAddBiasGeluV2(inter_buf_,
-                                    bias1,
-                                    ia3_tasks,
-                                    ia3_weights,
-                                    padding_offset,
-                                    seq_len,
-                                    m,
-                                    inter_size_,
-                                    stream_);
+                invokeAddBiasGeluV2(
+                    inter_buf_, bias1, ia3_tasks, ia3_weights, padding_offset, seq_len, m, inter_size_, stream_);
             }
             else {
                 INVOKE_GENERIC_ACT(GeluActivation);

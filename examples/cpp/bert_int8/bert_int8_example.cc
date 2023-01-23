@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,10 +20,6 @@
 
 #ifndef CUDART_VERSION
 #error CUDART_VERSION Undefined!
-#endif
-
-#ifdef USE_NVTX
-bool NVTX_ON = true;
 #endif
 
 using namespace fastertransformer;
@@ -173,11 +169,12 @@ int bertINT8Example(size_t batch_size,
     }
 
     // profile time
+    cudaProfilerStart();
     const int ite = 100;
     cudaProfilerStart();
     CudaTimer cuda_timer(stream);
-    nvtx::resetScope();
-    nvtx::addScope("BertInt8");
+    ft_nvtx::resetScope();
+    ft_nvtx::addScope("BertInt8");
     cuda_timer.start();
     for (int i = 0; i < ite; i++) {
         bert_int8.forward(&output_tensors, &input_tensors, &bert_layer_weights);

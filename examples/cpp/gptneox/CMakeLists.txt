@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,4 +19,4 @@ target_link_libraries(gptneox_example PUBLIC -lcublas -lcublasLt -lcudart
 add_executable(gptneox_triton_example gptneox_triton_example.cc)
 target_link_libraries(gptneox_triton_example PUBLIC -lcublas -lcublasLt -lcudart
                       GptNeoXTritonBackend TransformerTritonBackend custom_ar_comm
-                      mpi_utils nccl_utils gpt_example_utils word_list -lpthread)
+                      mpi_utils nccl_utils gpt_example_utils word_list -lpthread nvtx_utils)

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
  */
 
 #include "src/fastertransformer/kernels/matrix_transpose_kernels.h"
+#include "src/fastertransformer/utils/cuda_fp8_utils.h"
 
 namespace fastertransformer {
 
@@ -51,7 +52,10 @@ void invokeMatrixTranspose(T* dst, const T* src, const int k, const int n, cudaS
 }
 
 template void invokeMatrixTranspose(float* dst, const float* src, const int m, const int n, cudaStream_t stream);
-
 template void invokeMatrixTranspose(half* dst, const half* src, const int m, const int n, cudaStream_t stream);
+#ifdef ENABLE_FP8
+template void
+invokeMatrixTranspose(__nv_fp8_e4m3* dst, const __nv_fp8_e4m3* src, const int m, const int n, cudaStream_t stream);
+#endif  // ENABLE_FP8
 
 }  // namespace fastertransformer

@@ -1,4 +1,4 @@
-# Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,12 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(th_common SHARED
-    DynamicDecodeOp.cc WeightOnlyQuantOps.cc)
+add_library(th_common STATIC
+    DynamicDecodeOp.cc WeightOnlyQuantOps.cc GptOps.cc)
+set_property(TARGET th_common PROPERTY POSITION_INDEPENDENT_CODE  ON)
 target_link_libraries(th_common PRIVATE "${TORCH_LIBRARIES}"
-    cublasMMWrapper cutlass_preprocessors DynamicDecodeLayer
+    cublasMMWrapper cutlass_preprocessors DynamicDecodeLayer gpt_kernels memory_utils
     th_utils nccl_utils)
-
-add_library(th_weight_only_quant_ops SHARED WeightOnlyQuantOps.cc)
-target_link_libraries(th_weight_only_quant_ops PRIVATE "${TORCH_LIBRARIES}"
-    cutlass_preprocessors th_utils)

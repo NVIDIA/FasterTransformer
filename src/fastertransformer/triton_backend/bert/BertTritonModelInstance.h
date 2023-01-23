@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -59,4 +59,6 @@ private:
     T*   d_input_hidden_state_  = nullptr;
     int* d_sequence_lengths_    = nullptr;
     T*   d_output_hidden_state_ = nullptr;
+
+    std::exception_ptr h_exception_ = nullptr;
 };

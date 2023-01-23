@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,10 +28,6 @@
 #include <sys/time.h>
 #include <tuple>
 #include <vector>
-
-#ifdef USE_NVTX
-bool NVTX_ON = true;
-#endif
 
 using namespace fastertransformer;
 
@@ -170,6 +166,9 @@ void multi_gpu_gpt_example(const INIReader reader, std::string in_csv)
                                         model_config.size_per_head,
                                         model_config.inter_size,
                                         model_config.decoder_layers,
+                                        0,   // expert_num
+                                        0,   // moe_k
+                                        {},  // moe_layer_index
                                         model_config.vocab_size,
                                         model_config.start_id,
                                         model_config.end_id,
@@ -236,7 +235,8 @@ void multi_gpu_gpt_example(const INIReader reader, std::string in_csv)
     cudaProfilerStart();
     // warm up
     ite = 1;
-    nvtx::setScope("warmup_time");
+
+    ft_nvtx::setScope("warmup_time");
     PUSH_RANGE("warmup time")
     for (int i = 0; i < ite; ++i) {
         gpt.forward(&output_tensors, &input_tensors, &gpt_weights);
@@ -245,7 +245,7 @@ void multi_gpu_gpt_example(const INIReader reader, std::string in_csv)
     mpi::barrier();
 
     POP_RANGE;
-    nvtx::resetScope();
+    ft_nvtx::resetScope();
 
     if (rank == 0) {
         write_output_tensors(output_tensors);
@@ -258,17 +258,15 @@ void multi_gpu_gpt_example(const INIReader reader, std::string in_csv)
 
     ite = 10;
 
-    nvtx::setScope("total_time");
-    PUSH_RANGE("total time")
     for (int i = 0; i < ite; ++i) {
+        PUSH_RANGE("batch");
         gpt.forward(&output_tensors, &input_tensors, &gpt_weights);
+        POP_RANGE;
     }
 
     cudaDeviceSynchronize();
     mpi::barrier();
 
-    POP_RANGE;
-    nvtx::resetScope();
     gettimeofday(&end, NULL);
 
     cudaProfilerStop();

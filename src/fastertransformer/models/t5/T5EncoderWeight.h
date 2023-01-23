@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -26,23 +26,24 @@ template<typename T>
 struct T5EncoderWeight {
 
     T5EncoderWeight() = default;
-    T5EncoderWeight(const size_t                               head_num,
-                    const size_t                               size_per_head,
-                    const size_t                               d_model,
-                    const size_t                               inter_size,
-                    const size_t                               vocab_size,
-                    const size_t                               num_layer,
-                    const size_t                               num_bucket_or_max_seq_len,
-                    const size_t                               tensor_para_size,
-                    const size_t                               tensor_para_rank,
-                    const size_t                               pipeline_para_size,
-                    const size_t                               pipeline_para_rank,
-                    const bool                                 t5_with_bias_para         = false,
-                    const bool                                 use_gated_activation_para = false,
-                    const PositionEmbeddingType                pe_type              = PositionEmbeddingType::relative,
+    T5EncoderWeight(size_t                                     head_num,
+                    size_t                                     size_per_head,
+                    size_t                                     d_model,
+                    size_t                                     inter_size,
+                    size_t                                     vocab_size,
+                    size_t                                     num_layer,
+                    size_t                                     num_bucket_or_max_seq_len,
+                    size_t                                     tensor_para_size,
+                    size_t                                     tensor_para_rank,
+                    size_t                                     pipeline_para_size,
+                    size_t                                     pipeline_para_rank,
+                    bool                                       t5_with_bias_para         = false,
+                    bool                                       use_gated_activation_para = false,
+                    PositionEmbeddingType                      pe_type              = PositionEmbeddingType::relative,
                     PromptLearningType                         prompt_learning_type = PromptLearningType::no_prompt,
                     std::map<std::string, std::pair<int, int>> prompt_learning_pair = {},
-                    const size_t                               ia3_num_tasks        = 0);
+                    size_t                                     ia3_num_tasks        = 0,
+                    size_t                                     adapter_inter_size   = 0);
     ~T5EncoderWeight();
     T5EncoderWeight(const T5EncoderWeight& other);
     T5EncoderWeight& operator=(const T5EncoderWeight& other);
@@ -87,6 +88,7 @@ private:
     size_t pipeline_para_size_;
     size_t pipeline_para_rank_;
     size_t ia3_num_tasks_;
+    size_t adapter_inter_size_;
 
     bool is_maintain_buffer = false;
 

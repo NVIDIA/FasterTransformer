@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -219,7 +219,7 @@ class EncoderWeights(object):
         for k, v in self.weights.items():
             self.weights[k] = v.bfloat16()
 
-    def to_int8(self, sparse=False, ths_path='./lib/libth_bert.so'):
+    def to_int8(self, sparse=False, ths_path='./lib/libth_transformer.so'):
         if self._generated_weights:
             amax_tensor_1 = torch.Tensor(self.hidden_dim).fill_(127.)
             amax_tensor_2 = torch.Tensor(self.hidden_dim * 4).fill_(127.)
@@ -270,7 +270,7 @@ class EncoderWeights(object):
 class CustomEncoder(torch.nn.Module):
     def __init__(self, layer_num, head_num, head_size, weights,
                  int8_mode=0, remove_padding=False, sparse=False,
-                 path='./lib/libth_bert.so', tensor_para_size=1,
+                 path='./lib/libth_transformer.so', tensor_para_size=1,
                  pipeline_para_size=1):
         super().__init__()
         self.layer_num = layer_num

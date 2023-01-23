@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,9 @@
 
 #pragma once
 
+#include "src/fastertransformer/layers/attention_layers_fp8/AttentionFP8Weight.h"
 #include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
+#include "src/fastertransformer/utils/cuda_fp8_utils.h"
 #include <cuda_fp16.h>
 #include <cuda_runtime_api.h>
 #include <stdint.h>
@@ -65,6 +67,11 @@ struct Multihead_attention_params_base {
     T* v_cache = nullptr;
     // The indirections to use for cache when beam sampling.
     const int* cache_indir = nullptr;
+
+    // scales
+    const float* query_weight_output_scale               = nullptr;
+    const float* attention_qk_scale                      = nullptr;
+    const float* attention_output_weight_input_scale_inv = nullptr;
 
     // Stride to handle the case when KQV is a single buffer
     int stride = 0;
@@ -167,6 +174,10 @@ void masked_multihead_attention(const Masked_multihead_attention_params<float>& 
 void masked_multihead_attention(const Masked_multihead_attention_params<uint16_t>& params, const cudaStream_t& stream);
 #ifdef ENABLE_BF16
 void masked_multihead_attention(const Masked_multihead_attention_params<__nv_bfloat16>& params,
+                                const cudaStream_t&                                     stream);
+#endif
+#ifdef ENABLE_FP8
+void masked_multihead_attention(const Masked_multihead_attention_params<__nv_fp8_e4m3>& params,
                                 const cudaStream_t&                                     stream);
 #endif
 void cross_multihead_attention(const Cross_multihead_attention_params<float>& params, const cudaStream_t& stream);

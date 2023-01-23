@@ -43,7 +43,7 @@ The following configurations are supported in the FasterTransformer encoder.
 - Sequence length (S): smaller or equal to 4096. For INT8 mode=1, S should be a multiple of 32 when S > 384.
 - Size per head (N): Even number and smaller than 128.
 - Head number (H): Any number satisfying that H * N <= 1024 under FP32, or H * N <= 2048 under FP16.
-- Data type: FP32, FP16, BF16 and INT8
+- Data type: FP32, FP16, BF16, INT8 and FP8 (**Experimental**).
 - Any number layer (N<sub>1</sub>) if the memory is enough
 
 In the FasterTransformer v1.0, we provide a highly optimized BERT-equivalent encoder model. Next, based on the idea of [Effective Transformer](https://github.com/bytedance/effective_transformer), we further optimize BERT inference by removing the useless padding in FasterTransformer v2.1 and provide the Effective FasterTransformer. In FasterTransformer v3.0, we provide INT8 quantization inference to get better performance. In FasterTransformer v3.1, we optimize the INT8 kernels to improve the performance of INT8 inference and integrate the multi-head attention of TensorRT plugin into FasterTransformer. In FasterTransformer v4.0, we add the multi-head attention kernel to support FP16 on V100 and INT8 on T4, A100. The following graph demonstrates the flow chart of these optimization, except INT8. In FasterTransformer v5.0, we refactor the codes, encapsulating the mask building and padding removing into the Bert forward function, and add the sparsity feature of Ampere GPU to accelerate the GEMM. In FasterTransformer v5.1, we support multi-node multi-GPU inference on Bert FP16.
@@ -392,6 +392,24 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
     before allocate free 14.64 GB total 14.76 GB
     After allocate free 14.62 GB used 0.14 GB total 14.76 GB
     [INFO] batch_size 32 seq_len 32 layer 12 FT-CPP-time 2.69 ms ( 50 iterations)
+    ```
+
+7. Run FasterTransformer under FP8 on C++ (Experimental)
+
+    Note that FP8 is supported since Hopper and CUDA 11.8. Here, we use docker image `nvcr.io/nvidia/pytorch:22.10-py3` to demonstrate
+
+    ```bash
+    nvidia-docker run -ti --shm-size 5g --rm nvcr.io/nvidia/pytorch:22.10-py3 bash
+    git clone https://github.com/NVIDIA/FasterTransformer.git
+    mkdir -p FasterTransformer/build
+    cd FasterTransformer/build
+    git submodule init && git submodule update
+    cmake -DSM=90 -DCMAKE_BUILD_TYPE=Release -DENABLE_FP8=ON ..
+    make -j12
+    git lfs clone https://huggingface.co/bert-base-uncased
+    python3 ../examples/pytorch/bert/utils/huggingface_bert_convert.py -i bert-base-uncased/ -o bert-base-uncased/ft_fp32/ -i_g 1
+    python3 ../examples/pytorch/bert/utils/huggingface_bert_fp8_convert.py -i bert-base-uncased/ -o bert-base-uncased/ft_fp8/
+    ./bin/bert_fp8_example 4 12 384 12 64 1 1 ./bert-base-uncased/
     ```
 
 ### Run FasterTransformer BERT on TensorFlow

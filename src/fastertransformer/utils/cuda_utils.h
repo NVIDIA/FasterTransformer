@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -50,20 +50,24 @@ enum CublasDataType {
     FLOAT_DATATYPE    = 0,
     HALF_DATATYPE     = 1,
     BFLOAT16_DATATYPE = 2,
-    INT8_DATATYPE     = 3
+    INT8_DATATYPE     = 3,
+    FP8_DATATYPE      = 4
 };
 
 enum FtCudaDataType {
     FP32 = 0,
     FP16 = 1,
     BF16 = 2,
-    INT8 = 3
+    INT8 = 3,
+    FP8  = 4
 };
 
 enum class OperationType {
     FP32,
     FP16,
-    BF16
+    BF16,
+    INT8,
+    FP8
 };
 
 /* **************************** debug tools ********************************* */
@@ -133,7 +137,7 @@ inline void syncAndCheck(const char* const file, int const line)
                 throw std::runtime_error(std::string("[FT][ERROR] CUDA runtime error: ") + (_cudaGetErrorEnum(result))
                                          + " " + file + ":" + std::to_string(line) + " \n");
             }
-            FT_LOG_DEBUG("run syncAndCheck");
+            FT_LOG_DEBUG(fmtstr("run syncAndCheck at %s:%d", file, line));
         }
     }
 
@@ -190,16 +194,22 @@ void check_abs_mean_val(const T* result, const int size);
         std::cout << "[FT][CALL] " << __FUNCTION__ << " " << std::endl;                                                \
     } while (0)
 
-inline void myAssert(bool result, const char* const file, int const line, std::string info = "")
+[[noreturn]] inline void throwRuntimeError(const char* const file, int const line, std::string const& info = "")
 {
-    if (result != true) {
-        throw std::runtime_error(std::string("[FT][ERROR] ") + info + std::string(" Assertion fail: ") + file + ":"
-                                 + std::to_string(line) + " \n");
+    throw std::runtime_error(std::string("[FT][ERROR] ") + info + " Assertion fail: " + file + ":"
+                             + std::to_string(line) + " \n");
+}
+
+inline void myAssert(bool result, const char* const file, int const line, std::string const& info = "")
+{
+    if (!result) {
+        throwRuntimeError(file, line, info);
     }
 }
 
 #define FT_CHECK(val) myAssert(val, __FILE__, __LINE__)
 #define FT_CHECK_WITH_INFO(val, info) myAssert(val, __FILE__, __LINE__, info)
+#define FT_THROW(info) throwRuntimeError(__FILE__, __LINE__, info)
 
 #ifdef SPARSITY_ENABLED
 #define CHECK_CUSPARSE(func)                                                                                           \
@@ -270,6 +280,15 @@ inline int getSMVersion()
     check_cuda_error(cudaDeviceGetAttribute(&sm_major, cudaDevAttrComputeCapabilityMajor, device));
     check_cuda_error(cudaDeviceGetAttribute(&sm_minor, cudaDevAttrComputeCapabilityMinor, device));
     return sm_major * 10 + sm_minor;
+}
+
+inline int getMaxSharedMemoryPerBlock()
+{
+    int device{-1};
+    check_cuda_error(cudaGetDevice(&device));
+    int max_shared_memory_size = 0;
+    check_cuda_error(cudaDeviceGetAttribute(&max_shared_memory_size, cudaDevAttrMaxSharedMemoryPerBlock, device));
+    return max_shared_memory_size;
 }
 
 inline std::string getDeviceName()
@@ -390,16 +409,73 @@ template<>                    struct packed_as<half,  2>          { using type =
 template<>                    struct packed_as<float,  2>         { using type = float2; };
 template<>                    struct packed_as<int8_t, 2>         { using type = int16_t; };
 template<>                    struct packed_as<int32_t, 2>        { using type = int2; };
+template<>                    struct packed_as<half2, 1>          { using type = half; };
 #ifdef ENABLE_BF16
-template<>
-struct packed_as<__nv_bfloat16, 2> {
-    using type = __nv_bfloat162;
-};
+template<> struct packed_as<__nv_bfloat16,  2> { using type = __nv_bfloat162; };
+template<> struct packed_as<__nv_bfloat162, 1> { using type = __nv_bfloat16;  };
 #endif
 
 inline __device__ float2 operator*(float2 a, float2 b) { return make_float2(a.x * b.x, a.y * b.y); }
 inline __device__ float2 operator*(float2 a, float  b) { return make_float2(a.x * b, a.y * b); }
 // clang-format on
+
+template<typename T1, typename T2>
+void compareTwoTensor(
+    const T1* pred, const T2* ref, const int size, const int print_size = 0, const std::string filename = "")
+{
+    T1* h_pred = new T1[size];
+    T2* h_ref  = new T2[size];
+    check_cuda_error(cudaMemcpy(h_pred, pred, size * sizeof(T1), cudaMemcpyDeviceToHost));
+    check_cuda_error(cudaMemcpy(h_ref, ref, size * sizeof(T2), cudaMemcpyDeviceToHost));
+
+    FILE* fd = nullptr;
+    if (filename != "") {
+        fd = fopen(filename.c_str(), "w");
+        fprintf(fd, "| %10s | %10s | %10s | %10s | \n", "pred", "ref", "abs_diff", "rel_diff(%)");
+    }
+
+    if (print_size > 0) {
+        FT_LOG_INFO("  id |   pred  |   ref   |abs diff | rel diff (%) |");
+    }
+    float mean_abs_diff = 0.0f;
+    float mean_rel_diff = 0.0f;
+    int   count         = 0;
+    for (int i = 0; i < size; i++) {
+        if (i < print_size) {
+            FT_LOG_INFO("%4d | % 6.4f | % 6.4f | % 6.4f | % 7.4f |",
+                        i,
+                        (float)h_pred[i],
+                        (float)h_ref[i],
+                        abs((float)h_pred[i] - (float)h_ref[i]),
+                        abs((float)h_pred[i] - (float)h_ref[i]) / (abs((float)h_ref[i]) + 1e-6f) * 100.f);
+        }
+        if ((float)h_pred[i] == 0) {
+            continue;
+        }
+        count += 1;
+        mean_abs_diff += abs((float)h_pred[i] - (float)h_ref[i]);
+        mean_rel_diff += abs((float)h_pred[i] - (float)h_ref[i]) / (abs((float)h_ref[i]) + 1e-6f) * 100.f;
+
+        if (fd != nullptr) {
+            fprintf(fd,
+                    "| %10.5f | %10.5f | %10.5f | %11.5f |\n",
+                    (float)h_pred[i],
+                    (float)h_ref[i],
+                    abs((float)h_pred[i] - (float)h_ref[i]),
+                    abs((float)h_pred[i] - (float)h_ref[i]) / (abs((float)h_ref[i]) + 1e-6f) * 100.f);
+        }
+    }
+    mean_abs_diff = mean_abs_diff / (float)count;
+    mean_rel_diff = mean_rel_diff / (float)count;
+    FT_LOG_INFO("mean_abs_diff: % 6.4f, mean_rel_diff: % 6.4f (%%)", mean_abs_diff, mean_rel_diff);
+
+    if (fd != nullptr) {
+        fprintf(fd, "mean_abs_diff: % 6.4f, mean_rel_diff: % 6.4f (%%)", mean_abs_diff, mean_rel_diff);
+        fclose(fd);
+    }
+    delete[] h_pred;
+    delete[] h_ref;
+}
 
 /* ************************** end of common utils ************************** */
 }  // namespace fastertransformer

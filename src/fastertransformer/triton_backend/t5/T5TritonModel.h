@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -57,13 +57,14 @@ struct T5TritonModel: public AbstractTransformerModel {
 
 private:
     // encoder
-    size_t encoder_head_num_;
-    size_t encoder_size_per_head_;
-    size_t encoder_d_model_;
-    size_t encoder_inter_size_;
-    size_t encoder_num_layer_;
-    size_t encoder_vocab_size_;
-    size_t encoder_num_bucket_or_max_pos_seq_len_;
+    size_t                  encoder_head_num_;
+    size_t                  encoder_size_per_head_;
+    size_t                  encoder_d_model_;
+    size_t                  encoder_inter_size_;
+    size_t                  encoder_num_layer_;
+    size_t                  encoder_vocab_size_;
+    size_t                  encoder_num_bucket_or_max_pos_seq_len_;
+    ft::LinearAdapterConfig encoder_adapter_{};
 
     // prompt for encoder
     size_t                                     num_tasks_                  = 0;
@@ -72,13 +73,14 @@ private:
     std::map<std::string, std::pair<int, int>> prompt_learning_table_pair_ = {};
 
     // decoding
-    size_t decoding_head_num_;
-    size_t decoding_size_per_head_;
-    size_t decoding_d_model_;
-    size_t decoding_inter_size_;
-    size_t decoding_num_layer_;
-    size_t decoding_vocab_size_;
-    size_t decoding_num_bucket_or_max_pos_seq_len_;
+    size_t                  decoding_head_num_;
+    size_t                  decoding_size_per_head_;
+    size_t                  decoding_d_model_;
+    size_t                  decoding_inter_size_;
+    size_t                  decoding_num_layer_;
+    size_t                  decoding_vocab_size_;
+    size_t                  decoding_num_bucket_or_max_pos_seq_len_;
+    ft::LinearAdapterConfig decoding_adapter_{};
 
     float  q_scaling_;
     size_t ia3_num_tasks_;

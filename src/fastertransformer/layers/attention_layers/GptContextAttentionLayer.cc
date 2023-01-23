@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
  * Copyright (c) 2021, NAVER Corp.  Authored by CLOVA.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,6 +17,7 @@
 
 #include "src/fastertransformer/layers/attention_layers/GptContextAttentionLayer.h"
 #include "src/fastertransformer/kernels/unfused_attention_kernels.h"
+#include "src/fastertransformer/utils/nvtx_utils.h"
 
 namespace fastertransformer {
 
@@ -56,6 +57,8 @@ void GptContextAttentionLayer<T>::forward(TensorMap*                output_tenso
     const int* padding_offset          = input_tensors->getPtr<int>("padding_offset", nullptr);
     int*       cu_seqlens              = input_tensors->getPtr<int>("cu_seqlens", nullptr);
     T*         linear_bias_slopes      = input_tensors->getPtr<T>("linear_bias_slopes", nullptr);
+    /* float*     attention_query_dynamic_scale = input_tensors->getPtr<float>("attention_query_dynamic_scale",
+     * nullptr); */
 
     T* attention_out   = output_tensors->at("hidden_features").getPtr<T>();
     T* attention_input = input_tensors->at("input_query").getPtr<T>();
@@ -65,12 +68,16 @@ void GptContextAttentionLayer<T>::forward(TensorMap*                output_tenso
     FT_CHECK_WITH_INFO(attention_type != AttentionType::FUSED_PADDED_MHA,
                        "Gpt Context FUSED_PADDED_MHA is not supported !");
 
+    PUSH_RANGE("attention buffer alloc");
     allocateBuffer(request_batch_size, request_seq_len + max_prompt_length, attention_type != AttentionType::FUSED_MHA);
+    POP_RANGE;
     sync_check_cuda_error();
 
     const bool is_final = input_tensors->at("is_final_layer").getVal<bool>();
 
     const int m = input_tensors->at("input_query").shape[0];
+
+    PUSH_RANGE("qkv_gemm");
 
 #ifdef SPARSITY_ENABLED
     const int m_padded   = 8 * div_up(m, 8);
@@ -190,6 +197,7 @@ void GptContextAttentionLayer<T>::forward(TensorMap*                output_tenso
     }
     // NOTE: qkv buffer shape (batch_size, num_heads,L or prompt_len + L, Dh)
 
+    POP_RANGE;
     if (is_final == false) {
         const cudaDataType_t gemm_data_type      = getCudaDataType<T>();
         const int            attention_seq_len_1 = request_seq_len;                      // q length
@@ -197,6 +205,7 @@ void GptContextAttentionLayer<T>::forward(TensorMap*                output_tenso
         const T              qk_scale            = static_cast<T>(1.0f / sqrtf(size_per_head_ * 1.0f));
         if (attention_type != AttentionType::FUSED_MHA) {
             if (is_qk_buf_float_ == true && gemm_data_type != CUDA_R_32F) {
+                PUSH_RANGE("Q*K batch gemm");
                 cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_T,
                                                     CUBLAS_OP_N,
                                                     attention_seq_len_2,  // n
@@ -220,7 +229,9 @@ void GptContextAttentionLayer<T>::forward(TensorMap*                output_tenso
                                                     CUDA_R_32F);
 
                 sync_check_cuda_error();
+                POP_RANGE;
 
+                PUSH_RANGE("softmax");
                 MaskedSoftmaxParam<T, float> param;
                 param.attention_score    = qk_buf_;         // (batch_size, head_num, q_length, k_length)
                 param.qk                 = qk_buf_float_;   // (batch_size, head_num, q_length, k_length)
@@ -233,8 +244,10 @@ void GptContextAttentionLayer<T>::forward(TensorMap*                output_tenso
                 param.linear_bias_slopes = const_cast<T*>(linear_bias_slopes);  // (head_num,), optional
                 invokeMaskedSoftmax(param, stream_);
                 sync_check_cuda_error();
+                POP_RANGE;
             }
             else {
+                PUSH_RANGE("Q*K batch gemm");
                 cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_T,
                                                     CUBLAS_OP_N,
                                                     attention_seq_len_2,
@@ -251,6 +264,8 @@ void GptContextAttentionLayer<T>::forward(TensorMap*                output_tenso
                                                     attention_seq_len_2 * attention_seq_len_1,
                                                     request_batch_size * local_head_num_);
 
+                POP_RANGE;
+                PUSH_RANGE("softmax");
                 MaskedSoftmaxParam<T, T> param;
                 param.attention_score    = qk_buf_;         // (batch_size, head_num, q_length, k_length)
                 param.qk                 = qk_buf_;         // (batch_size, head_num, q_length, k_length)
@@ -263,7 +278,10 @@ void GptContextAttentionLayer<T>::forward(TensorMap*                output_tenso
                 param.linear_bias_slopes = const_cast<T*>(linear_bias_slopes);  // (head_num,), optional
                 invokeMaskedSoftmax(param, stream_);
                 sync_check_cuda_error();
+                POP_RANGE;
             }
+
+            PUSH_RANGE("QK*V batch gemm");
 
             cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_N,
                                                 CUBLAS_OP_N,
@@ -307,9 +325,11 @@ void GptContextAttentionLayer<T>::forward(TensorMap*                output_tenso
                                                          int8_mode_,
                                                          stream_);
             }
+            POP_RANGE;
         }
         sync_check_cuda_error();
 
+        PUSH_RANGE("proj gemm");
 #ifdef SPARSITY_ENABLED
         bool use_sparse = sparse_ && cublas_wrapper_->isUseSparse(1, hidden_units_, m_padded, local_hidden_units_);
 #endif
@@ -345,15 +365,18 @@ void GptContextAttentionLayer<T>::forward(TensorMap*                output_tenso
                     stream_);
             }
             else if (int8_mode_ == 2) {
-                cublas_wrapper_->Int8Gemm(hidden_units_,
-                                          m,
-                                          local_hidden_units_,
-                                          attention_weights->attention_output_weight.int8_kernel,
-                                          local_hidden_units_,
-                                          reinterpret_cast<int8_t*>(qkv_buf_3_),
-                                          local_hidden_units_,
-                                          output_tensors->at("hidden_features").getPtr<int32_t>(),
-                                          hidden_units_);
+                int8_fc_runner_->gemm(reinterpret_cast<int8_t*>(qkv_buf_3_),
+                                      attention_weights->attention_output_weight.int8_kernel,
+                                      QuantMode::PerTensorQuant,
+                                      attention_weights->attention_output_weight.scale_inter,
+                                      attention_weights->attention_output_weight.scale_out,
+                                      output_tensors->at("hidden_features").getPtr<T>(),
+                                      m,
+                                      hidden_units_,
+                                      local_hidden_units_,
+                                      nullptr,
+                                      0,
+                                      stream_);
             }
             else {
                 cublas_wrapper_->Gemm(CUBLAS_OP_N,
@@ -369,6 +392,7 @@ void GptContextAttentionLayer<T>::forward(TensorMap*                output_tenso
                                       hidden_units_);
             }
         }
+        POP_RANGE;
     }
 
     if (is_free_buffer_after_forward_ == true) {
@@ -402,6 +426,7 @@ GptContextAttentionLayer<T>::GptContextAttentionLayer(size_t           max_batch
     neox_rotary_style_(false),
     is_qk_buf_float_(is_qk_buf_float || int8_mode == 2),
     weight_only_int8_fc_runner_(int8_mode == 1 ? std::make_shared<CutlassFpAIntBGemmRunner<T, uint8_t>>() : nullptr),
+    int8_fc_runner_(int8_mode == 2 ? std::make_shared<CutlassInt8GemmRunner<T>>() : nullptr),
     int8_mode_(int8_mode)
 {
 }
@@ -431,6 +456,7 @@ GptContextAttentionLayer<T>::GptContextAttentionLayer(size_t           max_batch
     neox_rotary_style_(false),
     is_qk_buf_float_(is_qk_buf_float || int8_mode == 2),
     weight_only_int8_fc_runner_(int8_mode == 1 ? std::make_shared<CutlassFpAIntBGemmRunner<T, uint8_t>>() : nullptr),
+    int8_fc_runner_(int8_mode == 2 ? std::make_shared<CutlassInt8GemmRunner<T>>() : nullptr),
     int8_mode_(int8_mode)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
@@ -464,6 +490,7 @@ GptContextAttentionLayer<T>::GptContextAttentionLayer(size_t           max_batch
     neox_rotary_style_(neox_rotary_style),
     is_qk_buf_float_(is_qk_buf_float),
     weight_only_int8_fc_runner_(int8_mode == 1 ? std::make_shared<CutlassFpAIntBGemmRunner<T, uint8_t>>() : nullptr),
+    int8_fc_runner_(int8_mode == 2 ? std::make_shared<CutlassInt8GemmRunner<T>>() : nullptr),
     int8_mode_(int8_mode)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
@@ -488,6 +515,7 @@ GptContextAttentionLayer<T>::GptContextAttentionLayer(GptContextAttentionLayer<T
     neox_rotary_style_(attention_layer.neox_rotary_style_),
     is_qk_buf_float_(attention_layer.is_qk_buf_float_),
     weight_only_int8_fc_runner_(attention_layer.weight_only_int8_fc_runner_),
+    int8_fc_runner_(attention_layer.int8_fc_runner_),
     int8_mode_(attention_layer.int8_mode_)
 {
 }
@@ -509,7 +537,9 @@ template<typename T>
 void GptContextAttentionLayer<T>::allocateBuffer(size_t batch_size, size_t seq_len, bool allocate_qk_buf)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    const auto type_size = int8_mode_ == 2 ? sizeof(int8_t) : sizeof(T);
+    // const auto type_size = int8_mode_ == 2 ? sizeof(int8_t) : sizeof(T);
+    // NOTE (perkzz): use sizeof(T) here for cutlass int8 kernels.
+    const auto type_size = sizeof(T);
     qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, type_size * 3 * batch_size * seq_len * local_hidden_units_, true);
     q_buf_2_ = (T*)allocator_->reMalloc(q_buf_2_, sizeof(T) * batch_size * seq_len * 3 * local_hidden_units_, true);
     k_buf_2_ = q_buf_2_ + batch_size * seq_len * local_hidden_units_;
@@ -517,12 +547,11 @@ void GptContextAttentionLayer<T>::allocateBuffer(size_t batch_size, size_t seq_l
 
     // save memory usage when using fmha
     if (allocate_qk_buf) {
-        qk_buf_    = (T*)allocator_->reMalloc(qk_buf_, sizeof(T) * batch_size * local_head_num_ * seq_len * seq_len, true);
+        qk_buf_ = (T*)allocator_->reMalloc(qk_buf_, sizeof(T) * batch_size * local_head_num_ * seq_len * seq_len, true);
     }
     else {
         allocator_->free((void**)(&qk_buf_));
     }
-    qk_buf_    = (T*)allocator_->reMalloc(qk_buf_, sizeof(T) * batch_size * local_head_num_ * seq_len * seq_len, true);
     qkv_buf_2_ = (T*)allocator_->reMalloc(qkv_buf_2_, sizeof(T) * batch_size * seq_len * local_hidden_units_, true);
     qkv_buf_3_ = (T*)allocator_->reMalloc(qkv_buf_3_, type_size * batch_size * seq_len * local_hidden_units_, true);
 
@@ -543,6 +572,19 @@ void GptContextAttentionLayer<T>::allocateBuffer(size_t batch_size, size_t seq_l
         mixed_gemm_ws_bytes_  = weight_only_int8_fc_runner_->getWorkspaceSize(batch_size * seq_len, max_size, max_size);
         mixed_gemm_workspace_ = (char*)allocator_->reMalloc(mixed_gemm_workspace_, mixed_gemm_ws_bytes_, false);
     }
+
+    if (int8_mode_ == 1) {
+        // We use max_size for n and k since we reuse buffers for both FCs and want to allocate the max
+        // possible memory that would be required by any of the individual gemms.
+        const int max_size    = std::max(hidden_units_, 3 * local_hidden_units_);
+        mixed_gemm_ws_bytes_  = weight_only_int8_fc_runner_->getWorkspaceSize(batch_size * seq_len, max_size, max_size);
+        mixed_gemm_workspace_ = (char*)allocator_->reMalloc(mixed_gemm_workspace_, mixed_gemm_ws_bytes_, false);
+    }
+    else if (int8_mode_ == 2) {
+        const int max_size   = std::max(hidden_units_, 3 * local_hidden_units_);
+        int8_gemm_ws_bytes_  = int8_fc_runner_->getWorkspaceSize(batch_size * seq_len, max_size, max_size);
+        int8_gemm_workspace_ = (char*)allocator_->reMalloc(int8_gemm_workspace_, int8_gemm_ws_bytes_, false);
+    }
     is_allocate_buffer_ = true;
 }
 
@@ -561,10 +603,11 @@ void GptContextAttentionLayer<T>::freeBuffer()
             allocator_->free((void**)(&qk_buf_float_));
         }
 
-        if (mixed_gemm_workspace_) {
-            allocator_->free((void**)(&mixed_gemm_workspace_));
-            mixed_gemm_ws_bytes_ = 0;
-        }
+        allocator_->free((void**)(&mixed_gemm_workspace_));
+        mixed_gemm_ws_bytes_ = 0;
+
+        allocator_->free((void**)(&int8_gemm_workspace_));
+        int8_gemm_ws_bytes_ = 0;
 
         is_allocate_buffer_ = false;
     }

@@ -1,5 +1,6 @@
+
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -30,15 +31,17 @@ T5EncoderLayerWeight<T>::T5EncoderLayerWeight(const size_t head_num,
                                               const size_t tensor_para_rank,
                                               const bool   t5_with_bias,
                                               const bool   use_gated_activation,
-                                              const size_t ia3_num_tasks):
+                                              const size_t ia3_num_tasks,
+                                              const size_t adapter_inter_size):
+    adapter_weights_{d_model, adapter_inter_size, tensor_para_size, tensor_para_rank},
+    t5_with_bias_(t5_with_bias),
+    use_gated_activation_(use_gated_activation),
     head_num_(head_num),
     size_per_head_(size_per_head),
     d_model_(d_model),
     inter_size_(inter_size),
     tensor_para_size_(tensor_para_size),
     tensor_para_rank_(tensor_para_rank),
-    t5_with_bias_(t5_with_bias),
-    use_gated_activation_(use_gated_activation),
     ia3_num_tasks_(ia3_num_tasks)
 {
     real_weights_num_ = (8 + (use_gated_activation_ ? 1 : 0)) * (t5_with_bias_ ? 2 : 1);
@@ -136,8 +139,8 @@ T5EncoderLayerWeight<T>::~T5EncoderLayerWeight()
     }
 
     if (is_maintain_sp_buffer_) {
-        for (int i = 0; i < 6; i++) {
-            deviceFree(sp_weights_ptr_[i]);
+        for (auto w : sp_weights_ptr_) {
+            deviceFree(w);
         }
         attention_weights_.query_weight.sp_kernel            = nullptr;
         attention_weights_.key_weight.sp_kernel              = nullptr;
@@ -149,8 +152,8 @@ T5EncoderLayerWeight<T>::~T5EncoderLayerWeight()
     }
 
     if (maintain_ia3_buffer_) {
-        for (int i = 0; i < IA3_ADAPTER_MAX_NUM_ENCODER; i++) {
-            deviceFree(ia3_weights_ptr_[i]);
+        for (auto w : ia3_weights_ptr_) {
+            deviceFree(w);
         }
         attention_weights_.ia3_key_weight.kernel   = nullptr;
         ffn_weights_.ia3_weight.kernel             = nullptr;
@@ -162,15 +165,16 @@ T5EncoderLayerWeight<T>::~T5EncoderLayerWeight()
 
 template<typename T>
 T5EncoderLayerWeight<T>::T5EncoderLayerWeight(const T5EncoderLayerWeight& other):
+    adapter_weights_{other.adapter_weights_},
+    t5_with_bias_(other.t5_with_bias_),
     head_num_(other.head_num_),
     size_per_head_(other.size_per_head_),
     d_model_(other.d_model_),
     inter_size_(other.inter_size_),
     tensor_para_size_(other.tensor_para_size_),
     tensor_para_rank_(other.tensor_para_rank_),
-    t5_with_bias_(other.t5_with_bias_),
-    real_weights_num_(other.real_weights_num_),
-    ia3_num_tasks_(other.ia3_num_tasks_)
+    ia3_num_tasks_(other.ia3_num_tasks_),
+    real_weights_num_(other.real_weights_num_)
 {
     FT_LOG_DEBUG("T5EncoderLayerWeight " + std::string(__func__) + " start");
     initialize();
@@ -179,7 +183,7 @@ T5EncoderLayerWeight<T>::T5EncoderLayerWeight(const T5EncoderLayerWeight& other)
         cudaD2Dcpy(weights_ptr_[i], other.weights_ptr_[i], weights_size_[i]);
     }
     if (ia3_num_tasks_ > 0) {
-        for (int i = 0; i < IA3_ADAPTER_MAX_NUM_ENCODER; i++) {
+        for (size_t i = 0; i < IA3_ADAPTER_MAX_NUM_ENCODER; i++) {
             cudaD2Dcpy(ia3_weights_ptr_[i], other.ia3_weights_ptr_[i], ia3_weights_size_[i]);
         }
     }
@@ -190,8 +194,12 @@ T5EncoderLayerWeight<T>::T5EncoderLayerWeight(const T5EncoderLayerWeight& other)
 template<typename T>
 T5EncoderLayerWeight<T>& T5EncoderLayerWeight<T>::operator=(const T5EncoderLayerWeight<T>& other)
 {
+    if (this == &other)
+        return *this;
+
     FT_LOG_DEBUG("T5EncoderLayerWeight " + std::string(__func__) + " start");
 
+    adapter_weights_  = other.adapter_weights_;
     head_num_         = other.head_num_;
     size_per_head_    = other.size_per_head_;
     d_model_          = other.d_model_;
@@ -207,7 +215,7 @@ T5EncoderLayerWeight<T>& T5EncoderLayerWeight<T>::operator=(const T5EncoderLayer
         cudaD2Dcpy(weights_ptr_[i], other.weights_ptr_[i], weights_size_[i]);
     }
     if (ia3_num_tasks_ > 0) {
-        for (int i = 0; i < IA3_ADAPTER_MAX_NUM_ENCODER; i++) {
+        for (size_t i = 0; i < IA3_ADAPTER_MAX_NUM_ENCODER; i++) {
             cudaD2Dcpy(ia3_weights_ptr_[i], other.ia3_weights_ptr_[i], ia3_weights_size_[i]);
         }
     }
@@ -324,7 +332,7 @@ void T5EncoderLayerWeight<T>::mallocWeights()
         deviceMalloc(&weights_ptr_[i], weights_size_[i]);
     }
     if (ia3_num_tasks_ > 0) {
-        for (int i = 0; i < IA3_ADAPTER_MAX_NUM_ENCODER; i++) {
+        for (size_t i = 0; i < IA3_ADAPTER_MAX_NUM_ENCODER; i++) {
             deviceMalloc(&ia3_weights_ptr_[i], ia3_weights_size_[i]);
         }
         maintain_ia3_buffer_ = true;
@@ -334,7 +342,7 @@ void T5EncoderLayerWeight<T>::mallocWeights()
 }
 
 template<typename T>
-void T5EncoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType model_file_type)
+void T5EncoderLayerWeight<T>::loadModel(std::string const& dir_path, FtCudaDataType model_file_type)
 {
     FT_LOG_DEBUG("T5EncoderLayerWeight " + std::string(__func__) + " start");
 
@@ -442,6 +450,8 @@ void T5EncoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType mod
                              dir_path + "layer.1.DenseReluDense.ia3.weight." + tp_rank + ".bin",
                              model_file_type);
     }
+
+    adapter_weights_.loadModel(dir_path, model_file_type);
 
     FT_LOG_DEBUG("T5EncoderLayerWeight " + std::string(__func__) + " end");
 }

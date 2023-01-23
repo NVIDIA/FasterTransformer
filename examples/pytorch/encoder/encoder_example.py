@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -52,7 +52,7 @@ def main():
                         help='Remove the padding of sentences of encoder.')
     parser.add_argument('--allow_gemm_test', action='store_true',
                         help='Whether allow gemm test inside FT.')
-    parser.add_argument('--ths_path', type=str, default='./lib/libth_encoder.so',
+    parser.add_argument('--ths_path', type=str, default='./lib/libth_transformer.so',
                         help='path of the pyt_fastertransformer dynamic lib file')    
     args = parser.parse_args()
     encoder_example(vars(args))

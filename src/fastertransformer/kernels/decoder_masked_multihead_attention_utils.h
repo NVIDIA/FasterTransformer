@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,6 +17,7 @@
 #pragma once
 
 #include "src/fastertransformer/utils/cuda_bf16_wrapper.h"
+#include "src/fastertransformer/utils/cuda_fp8_utils.h"
 #include "src/fastertransformer/utils/cuda_type_utils.cuh"
 #include <stdint.h>
 
@@ -55,6 +56,17 @@ struct bf16_8_t {
     __nv_bfloat162 y;
     __nv_bfloat162 z;
     __nv_bfloat162 w;
+};
+#endif
+
+#ifdef ENABLE_FP8
+using fp8_2_t = __nv_fp8x2_e4m3;
+using fp8_4_t = __nv_fp8x4_e4m3;
+struct fp8_8_t {
+    __nv_fp8_e4m3 x;
+    __nv_fp8_e4m3 y;
+    __nv_fp8_e4m3 z;
+    __nv_fp8_e4m3 w;
 };
 #endif
 
@@ -107,6 +119,25 @@ struct num_elems<bf16_4_t> {
 };
 template<>
 struct num_elems<bf16_8_t> {
+    static constexpr int value = 8;
+};
+#endif
+
+#ifdef ENABLE_FP8
+template<>
+struct num_elems<__nv_fp8_e4m3> {
+    static constexpr int value = 1;
+};
+template<>
+struct num_elems<fp8_2_t> {
+    static constexpr int value = 2;
+};
+template<>
+struct num_elems<fp8_4_t> {
+    static constexpr int value = 4;
+};
+template<>
+struct num_elems<fp8_8_t> {
     static constexpr int value = 8;
 };
 #endif
@@ -261,8 +292,8 @@ inline __device__ uint16_t float_to_half(float f)
         uint16_t u16[2];
     } tmp;
 #if 0 && defined(__CUDA_ARCH__) && __CUDA_ARCH__ >= 800  // Is it better?
-  float zero = 0.f;
-  asm volatile("cvt.rn.f16x2.f32 %0, %1, %2;\n" : "=r"(tmp.u32) : "f"(zero), "f"(f));
+    float zero = 0.f;
+    asm volatile("cvt.rn.f16x2.f32 %0, %1, %2;\n" : "=r"(tmp.u32) : "f"(zero), "f"(f));
 #else
     asm volatile("cvt.rn.f16.f32 %0, %1;\n" : "=h"(tmp.u16[0]) : "f"(f));
 #endif
@@ -317,6 +348,15 @@ inline __device__ float add(float a, uint16_t b)
 inline __device__ float add(float a, __nv_bfloat16 b)
 {
     return a + __bfloat162float(b);
+}
+#endif
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#ifdef ENABLE_FP8
+inline __device__ float add(float a, __nv_fp8_e4m3 b)
+{
+    return a + (float)(b);
 }
 #endif
 
@@ -407,6 +447,18 @@ inline __device__ float4 fma(float a, float4 b, float4 c)
     d.y = fma(a, b.y, c.y);
     d.z = fma(a, b.z, c.z);
     d.w = fma(a, b.w, c.w);
+    return d;
+}
+
+////////////////////////////////////////////////////////////////////////////////////////////////////
+
+inline __device__ float4 fma(float a, float4 b, Float4_ c)
+{
+    float4 d;
+    d.x = fma(a, b.x, c.x.x);
+    d.y = fma(a, b.y, c.x.y);
+    d.z = fma(a, b.z, c.y.x);
+    d.w = fma(a, b.w, c.y.y);
     return d;
 }
 
@@ -730,7 +782,7 @@ inline __device__ Float8_ fma(__nv_bfloat16 a, bf16_8_t b, Float8_ fc)
 template<typename Acc, typename A, typename B>
 inline __device__ Acc mul(A a, B b)
 {
-    return a * b;
+    return Acc{};  // for compile
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -795,10 +847,10 @@ template<>
 inline __device__ Float8_ mul(float a, Float8_ b)
 {
     Float8_ c;
-    c.x = make_float2(a * b.x.x, a * b.x.y);
-    c.y = make_float2(a * b.y.x, a * b.y.y);
-    c.z = make_float2(a * b.z.x, a * b.z.y);
-    c.w = make_float2(a * b.w.x, a * b.w.y);
+    c.x = mul<float2, float, float2>(a, b.x);
+    c.y = mul<float2, float, float2>(a, b.y);
+    c.z = mul<float2, float, float2>(a, b.z);
+    c.w = mul<float2, float, float2>(a, b.w);
     return c;
 }
 
@@ -1683,6 +1735,15 @@ write_smem_transpose(const bf16_8_t& vec, __nv_bfloat16* smem, int transpose_idx
 }
 #endif
 
+#ifdef ENABLE_FP8
+template<>
+__device__ __inline__ void vec_from_smem_transpose(float4& vec, __nv_fp8_e4m3* smem, int transpose_idx, int smem_pitch)
+{
+    // TODO
+    printf("[ERROR] still no have implementation for vec_from_smem_transpose under __nv_fp8_e4m3 \n");
+}
+#endif  // ENABLE_FP8
+
 template<>
 __device__ __inline__ void write_smem_transpose(const uint4& vec, uint16_t* smem, int transpose_idx, int smem_pitch)
 {
@@ -1782,5 +1843,14 @@ __device__ __inline__ void write_smem_transpose(const float2& vec, float* smem, 
     smem[transpose_idx]              = vec.x;
     smem[smem_pitch + transpose_idx] = vec.y;
 }
+
+#ifdef ENABLE_FP8
+template<>
+__device__ __inline__ void
+write_smem_transpose(const float4& vec, __nv_fp8_e4m3* smem, int transpose_idx, int smem_pitch)
+{
+    printf("[ERROR] still no have implementation for vec_from_smem_transpose under __nv_fp8_e4m3 \n");
+}
+#endif  // ENABLE_FP8
 
 }  // namespace mmha

@@ -78,7 +78,9 @@ Optimization in GPT-j are similar to optimization in GPT, describing in the [gpt
 |  beam_search_diversity_rate   |              [1] or [batch_size]              |   CPU    |         float          |                **Optional**. A hyper hyper-parameter for [simple diverse decoding](https://arxiv.org/pdf/1611.08562.pdf)                |
 |          temperature          |              [1] or [batch_size]              |   CPU    |         float          |                              **Optional**. Temperature applied to logits for both beam search and sampling                              |
 |          len_penalty          |              [1] or [batch_size]              |   CPU    |         float          |                                   **Optional**. Length penalty applied to logits for only beam search                                   |
-|      repetition_penalty       |              [1] or [batch_size]              |   CPU    |         float          |                          **Optional**. Repetition penalty applied to logits for both beam search and sampling                           |
+|      repetition_penalty       |              [1] or [batch_size]              |   CPU    |         float          |                          **Optional**. Repetition penalty applied to logits for both beam search and sampling. Exclusive with presence_penalty.                          |
+|       presence_penalty        |              [1] or [batch_size]              |   CPU    |         float          |                                                  **Optional**. Presence penalty - additive type of repetition penalty - applied to logits for both beam search and sampling. Exclusive with repetition_penalty.                                                  |
+|           min_length          |              [1] or [batch_size]              |   CPU    |          int           |                                                  **Optional**. Minimum number of tokens to generate                                                  |
 |          random_seed          |              [1] or [batch_size]              |   CPU    | unsigned long long int |                                  **Optional**. Random seed to initialize the random table in sampling.                                  |
 |    request_prompt_lengths     |                 [batch_size],                 |   GPU    |          int           |     **Optional**. Length of prefix soft prompt embedding. This describes how many tokens of soft prompt embedding in each sentence.     |
 |   request_prompt_embedding    | [batch_size, max_prompt_length, hidden_units] |   GPU    |         float          |                 **Optional**. Prefix soft prompt embedding. FT will concat them with results of embedding lookup kernel                 |
@@ -98,7 +100,7 @@ The `beam_width` value is set by the output shape directly. When the `beam_width
 
 ### Note
 
-- `is_context_qk_buf_float_` (whether use float accumulation for GPT-Neox context QK GEMM or not) is set to `false` by default. If you meet accuracy issues releated to GPT-NeoX Context attention blocks, please try to enable it in the `GptNeoX.h`.
+- `is_context_qk_buf_float_` (whether use float accumulation for GPT-J context QK GEMM or not) is set to `false` by default. If you meet accuracy issues related to GPT-J Context attention blocks, please try to enable it in the `GptJ.h`.
 
 ### Supported features
 
@@ -134,7 +136,7 @@ These components are readily available within the NGC Docker image below.
 
 Ensure you have the following components:
 - [NVIDIA Docker](https://github.com/NVIDIA/nvidia-docker) and NGC container are recommended
-- [NVIDIA Pascal](https://www.nvidia.com/en-us/data-center/pascal-gpu-architecture/) or [Volta](https://www.nvidia.com/en-us/data-center/volta-gpu-architecture/) or [Turing](https://www.nvidia.com/en-us/geforce/turing/) or [Ampere](https://www.nvidia.com/en-us/data-center/nvidia-ampere-gpu-architecture/) based GPU 
+- [NVIDIA Pascal](https://www.nvidia.com/en-us/data-center/pascal-gpu-architecture/) or [Volta](https://www.nvidia.com/en-us/data-center/volta-gpu-architecture/) or [Turing](https://www.nvidia.com/en-us/geforce/turing/) or [Ampere](https://www.nvidia.com/en-us/data-center/nvidia-ampere-gpu-architecture/) based GPU
 
 For more information about how to get started with NGC containers, see the following sections from the NVIDIA GPU Cloud Documentation and the Deep Learning Documentation:
 

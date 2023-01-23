@@ -141,7 +141,7 @@ python infer_visiontransformer_op.py \
   --img_size=384 \
   --pretrained_dir=./ViT-quantization/ViT-B_16.npz \
   --batch-size=32 \
-  --th-path=$WORKSPACE/build/lib/libpyt_vit.so
+  --th-path=$WORKSPACE/build/lib/libth_transformer.so
 ```
 
 **Run INT8 pytorch op** 
@@ -186,7 +186,7 @@ python infer_visiontransformer_int8_op.py \
     --img_size 384 \
     --calibrated_dir ViT-B_16_calib.pth \
     --batch-size=32 \
-    --th-path=$WORKSPACE/build/lib/libpyt_vit.so \
+    --th-path=$WORKSPACE/build/lib/libth_transformer.so \
     --quant-mode ft2
 ```
 

@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -54,9 +54,9 @@ def main():
                         help='test the time or not.')
     parser.add_argument('--use_pretrained', action='store_true',
                         help='use pretrained weights or not.')
-    parser.add_argument('--decoding_ths_path', type=str, default='./lib/libth_decoding.so',
+    parser.add_argument('--decoding_ths_path', type=str, default='./lib/libth_transformer.so',
                         help='path of the pyt_fastertransformer dynamic lib file')
-    parser.add_argument('--decoder_ths_path', type=str, default='./lib/libth_decoder.so',
+    parser.add_argument('--decoder_ths_path', type=str, default='./lib/libth_transformer.so',
                         help='path of the pyt_fastertransformer dynamic lib file')
     parser.add_argument('-diversity_rate', '--beam_search_diversity_rate', type=float, default=0.0, metavar='NUMBER',
                         help='deviersity rate of beam search. default is 0. When diversity rate = 0, it is equivalent to the naive beam search.')

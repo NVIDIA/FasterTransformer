@@ -255,7 +255,7 @@ def main():
 
     parser.add_argument("--model_type", type=str, help="ori, ths, thsext")
     parser.add_argument('--data_type', type=str, choices=['fp32', 'fp16', 'bf16'], default='fp32')
-    parser.add_argument('--ths_path', type=str, default='./lib/libth_bert.so',
+    parser.add_argument('--ths_path', type=str, default='./lib/libth_transformer.so',
                         help='path of the pyt_fastertransformer dynamic lib file')
     parser.add_argument('--remove_padding', action='store_true',
                         help='Remove the padding of sentences of encoder.')

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  * Copyright (c) 2021, NAVER Corp.  Authored by CLOVA.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -274,6 +274,9 @@ public:
                                                                   size_per_head_,
                                                                   inter_size_,
                                                                   num_layer_,
+                                                                  0,   // expert_num
+                                                                  0,   // moe_k
+                                                                  {},  // moe_layer_index
                                                                   vocab_size,
                                                                   start_id_,
                                                                   end_id_,

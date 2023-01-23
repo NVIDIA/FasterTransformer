@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -385,7 +385,7 @@ if __name__ == "__main__":
                         help='data type for inference (default: fp32)', choices=['fp32', 'fp16'])
     parser.add_argument('-ld', '--load_data_type', type=str, default="fp32", metavar='STRING',
                         help='data type for loading weights (default: fp32)', choices=['fp32', 'fp16'])
-    parser.add_argument('-lib_path', '--lib_path', type=str, default="lib/libth_t5.so", metavar='STRING',
+    parser.add_argument('-lib_path', '--lib_path', type=str, default="lib/libth_transformer.so", metavar='STRING',
                         help='the path of FasterTransformer pytorch t5 op library.')
     parser.add_argument('-model_path', '--model_path', type=str, default=None, metavar='STRING',
                         help='T5 model path.')

@@ -1,4 +1,4 @@
-# Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -112,8 +112,9 @@ class InputToken:
 
 
 class EncoderDecoderConfig:
-    def __init__(self, d_model, vocab_size, num_heads, d_kv, d_ff, num_layers, 
-                 relative_attention_num_buckets_or_max_pos_seq_len, decoder_start_token_id=0, decoder_end_token_id=1):
+    def __init__(self, d_model, vocab_size, num_heads, d_kv, d_ff, num_layers,
+                 relative_attention_num_buckets_or_max_pos_seq_len,
+                 adapter_inter_size, adapter_norm_position, decoder_start_token_id=0, decoder_end_token_id=1):
         self.d_model = d_model
         self.vocab_size = vocab_size
         self.num_heads = num_heads
@@ -121,8 +122,11 @@ class EncoderDecoderConfig:
         self.d_ff = d_ff
         self.num_layers = num_layers
         self.relative_attention_num_buckets = relative_attention_num_buckets_or_max_pos_seq_len
+        self.adapter_inter_size = adapter_inter_size
+        self.adapter_norm_position = adapter_norm_position
         self.decoder_start_token_id = decoder_start_token_id
         self.decoder_end_token_id = decoder_end_token_id
+
 
 data_type_mapping = {"fp32": 0, "fp16": 1, "bf16": 2}
 
@@ -222,16 +226,22 @@ def mnli_task(args_dict):
                                           ckpt_config.getint('encoder', 'd_kv'),
                                           ckpt_config.getint('encoder', 'd_ff'),
                                           ckpt_config.getint('encoder', 'num_layers'),
-                                          ckpt_config.getint('encoder', 'relative_attention_num_buckets_or_max_pos_seq_len')
+                                          ckpt_config.getint('encoder',
+                                                             'relative_attention_num_buckets_or_max_pos_seq_len'),
+                                          ckpt_config.getint('encoder', 'adapter_inter_size', fallback=0),
+                                          ckpt_config.get('encoder', 'adapter_norm_position', fallback="pre")
                                           )
-    
+
     decoder_config = EncoderDecoderConfig(ckpt_config.getint('decoder', 'd_model'),
                                           ckpt_config.getint('decoder', 'vocab_size'),
                                           ckpt_config.getint('decoder', 'num_heads'),
                                           ckpt_config.getint('decoder', 'd_kv'),
                                           ckpt_config.getint('decoder', 'd_ff'),
                                           ckpt_config.getint('decoder', 'num_layers'),
-                                          ckpt_config.getint('decoder', 'relative_attention_num_buckets_or_max_pos_seq_len'),
+                                          ckpt_config.getint('decoder',
+                                                             'relative_attention_num_buckets_or_max_pos_seq_len'),
+                                          ckpt_config.getint('decoder', 'adapter_inter_size', fallback=0),
+                                          ckpt_config.get('decoder', 'adapter_norm_position', fallback="pre"),
                                           tokenizer_t5.bos_id,
                                           tokenizer_t5.eos_id
                                           )
@@ -286,28 +296,32 @@ def mnli_task(args_dict):
 
     remove_padding = True if batch_size > 32 else False
     ft_encoder = FTT5Encoder(ft_encoder_weight.w, lib_path, encoder_config.num_heads,
-                            encoder_config.d_kv, encoder_config.d_ff,
-                            encoder_config.d_model, remove_padding, encoder_config.num_layers,
-                            encoder_config.relative_attention_num_buckets,
-                            0, # num_experts
-                            [], # moe_layer_index
-                            128, False,
-                            q_scaling, tensor_para_size, pipeline_para_size, t5_with_bias,
-                            position_embedding_type, 0, activation_type)
+                             encoder_config.d_kv, encoder_config.d_ff,
+                             encoder_config.d_model, remove_padding, encoder_config.num_layers,
+                             encoder_config.relative_attention_num_buckets,
+                             0,  # num_experts
+                             [],  # moe_layer_index
+                             128, False,
+                             q_scaling, tensor_para_size, pipeline_para_size, t5_with_bias,
+                             position_embedding_type, 0, activation_type,
+                             adapter_inter_size=encoder_config.adapter_inter_size,
+                             adapter_norm_position=encoder_config.adapter_norm_position)
     ft_decoding = FTT5Decoding(ft_decoding_weight.w, lib_path,
-                            decoder_config.num_heads, decoder_config.d_kv,
-                            decoder_config.d_ff, encoder_config.d_model,
-                            decoder_config.d_model, decoder_config.num_layers,
-                            decoder_config.decoder_start_token_id, decoder_config.decoder_end_token_id,
-                            decoder_config.vocab_size,
-                            q_scaling,
-                            decoder_config.relative_attention_num_buckets,
-                            0, # num_experts
-                            [], # moe_layer_index
-                            max_distance=128,
-                            tensor_para_size=tensor_para_size, pipeline_para_size=pipeline_para_size,
-                            moe_k=0, activation_type=activation_type,
-                            t5_with_bias=t5_with_bias, position_embedding_type = position_embedding_type)
+                               decoder_config.num_heads, decoder_config.d_kv,
+                               decoder_config.d_ff, encoder_config.d_model,
+                               decoder_config.d_model, decoder_config.num_layers,
+                               decoder_config.decoder_start_token_id, decoder_config.decoder_end_token_id,
+                               decoder_config.vocab_size,
+                               q_scaling,
+                               decoder_config.relative_attention_num_buckets,
+                               0,  # num_experts
+                               [],  # moe_layer_index
+                               max_distance=128,
+                               tensor_para_size=tensor_para_size, pipeline_para_size=pipeline_para_size,
+                               moe_k=0, activation_type=activation_type,
+                               t5_with_bias=t5_with_bias, position_embedding_type=position_embedding_type,
+                               adapter_inter_size=decoder_config.adapter_inter_size,
+                               adapter_norm_position=decoder_config.adapter_norm_position)
 
     ft_t5 = FTT5(ft_encoder, ft_decoding)
 
@@ -381,7 +395,7 @@ if __name__ == "__main__":
                         help='Probability (p) value of top p sampling in decoding. Default is 0.0. ')
     parser.add_argument('-d', '--data_type', type=str, default="fp32", metavar='STRING',
                         help='data type (default: fp32)', choices=['fp32', 'fp16', 'bf16'])
-    parser.add_argument('-lib_path', '--lib_path', type=str, default="/workspace/FasterTransformer/build/lib/libth_t5.so", metavar='STRING',
+    parser.add_argument('-lib_path', '--lib_path', type=str, default="/workspace/FasterTransformer/build/lib/libth_transformer.so", metavar='STRING',
                         help='the path of FasterTransformer pytorch t5 op library.')
     parser.add_argument('-data_path', '--data_path', type=str, required=True, help="the MNLI task data path")
     parser.add_argument('-tensor_para_size', '--tensor_para_size', type=int, default=1, metavar='NUMBER',

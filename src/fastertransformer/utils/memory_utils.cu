@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@ namespace fastertransformer {
 template<typename T>
 void deviceMalloc(T** ptr, size_t size, bool is_random_initialize)
 {
-    FT_CHECK_WITH_INFO(size >= 0, "Ask deviceMalloc size " + std::to_string(size) + "< 0 is invalid.");
+    FT_CHECK_WITH_INFO(size >= ((size_t)0), "Ask deviceMalloc size " + std::to_string(size) + "< 0 is invalid.");
     check_cuda_error(cudaMalloc((void**)(ptr), sizeof(T) * size));
     if (is_random_initialize) {
         cudaRandomUniform(*ptr, size);
@@ -45,6 +45,9 @@ template void deviceMalloc(int** ptr, size_t size, bool is_random_initialize);
 template void deviceMalloc(bool** ptr, size_t size, bool is_random_initialize);
 template void deviceMalloc(char** ptr, size_t size, bool is_random_initialize);
 template void deviceMalloc(int8_t** ptr, size_t size, bool is_random_initialize);
+#ifdef ENABLE_FP8
+template void deviceMalloc(__nv_fp8_e4m3** ptr, size_t size, bool is_random_initialize);
+#endif
 
 template<typename T>
 void deviceMemSetZero(T* ptr, int size)
@@ -57,6 +60,12 @@ template void deviceMemSetZero(half* ptr, int size);
 template void deviceMemSetZero(int* ptr, int size);
 template void deviceMemSetZero(uint32_t* ptr, int size);
 template void deviceMemSetZero(bool* ptr, int size);
+#ifdef ENABLE_FP8
+template void deviceMemSetZero(__nv_fp8_e4m3* ptr, int size);
+#endif
+#ifdef ENABLE_BF16
+template void deviceMemSetZero(__nv_bfloat16* ptr, int size);
+#endif
 
 template<typename T>
 void deviceFree(T*& ptr)
@@ -77,6 +86,9 @@ template void deviceFree(int*& ptr);
 template void deviceFree(bool*& ptr);
 template void deviceFree(char*& ptr);
 template void deviceFree(int8_t*& ptr);
+#ifdef ENABLE_FP8
+template void deviceFree(__nv_fp8_e4m3*& ptr);
+#endif
 
 template<typename T>
 void deviceFill(T* devptr, int size, T value, cudaStream_t stream)
@@ -108,6 +120,9 @@ template void cudaD2Hcpy(__nv_bfloat16* tgt, const __nv_bfloat16* src, int size)
 #endif
 template void cudaD2Hcpy(int* tgt, const int* src, int size);
 template void cudaD2Hcpy(bool* tgt, const bool* src, int size);
+#ifdef ENABLE_FP8
+template void cudaD2Hcpy(__nv_fp8_e4m3* tgt, const __nv_fp8_e4m3* src, int size);
+#endif
 template void cudaD2Hcpy(unsigned long long* tgt, const unsigned long long* src, int size);
 template void cudaD2Hcpy(unsigned int* tgt, const unsigned int* src, int size);
 template void cudaD2Hcpy(int8_t* tgt, const int8_t* src, int size);
@@ -125,6 +140,9 @@ template void cudaH2Dcpy(__nv_bfloat16* tgt, const __nv_bfloat16* src, int size)
 #endif
 template void cudaH2Dcpy(int* tgt, const int* src, int size);
 template void cudaH2Dcpy(bool* tgt, const bool* src, int size);
+#ifdef ENABLE_FP8
+template void cudaH2Dcpy(__nv_fp8_e4m3* tgt, const __nv_fp8_e4m3* src, int size);
+#endif
 template void cudaH2Dcpy(unsigned long long* tgt, const unsigned long long* src, int size);
 template void cudaH2Dcpy(unsigned int* tgt, const unsigned int* src, int size);
 template void cudaH2Dcpy(int8_t* tgt, const int8_t* src, int size);
@@ -143,7 +161,40 @@ template void cudaD2Dcpy(__nv_bfloat16* tgt, const __nv_bfloat16* src, int size)
 template void cudaD2Dcpy(int* tgt, const int* src, int size);
 template void cudaD2Dcpy(bool* tgt, const bool* src, int size);
 template void cudaD2Dcpy(int8_t* tgt, const int8_t* src, int size);
+#ifdef ENABLE_FP8
+template void cudaD2Dcpy(__nv_fp8_e4m3* tgt, const __nv_fp8_e4m3* src, int size);
+#endif
 template void cudaD2Dcpy(unsigned long long* tgt, const unsigned long long* src, int size);
+
+template<typename T_OUT, typename T_IN>
+__global__ void cudaCast(T_OUT* dst, T_IN* src, const int size)
+{
+    for (int tid = threadIdx.x + blockIdx.x * blockDim.x; tid < size; tid += blockDim.x * gridDim.x) {
+        dst[tid] = (T_OUT)((float)(src[tid]));
+    }
+}
+
+template<typename T_OUT, typename T_IN>
+void invokeCudaCast(T_OUT* dst, T_IN const* const src, const int size, cudaStream_t stream)
+{
+    cudaCast<<<256, 256, 0, stream>>>(dst, src, size);
+}
+
+template void invokeCudaCast(float* dst, half const* const src, const int size, cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeCudaCast(float* dst, __nv_bfloat16 const* const src, const int size, cudaStream_t stream);
+template void invokeCudaCast(__nv_bfloat16* dst, float const* const src, const int size, cudaStream_t stream);
+template void invokeCudaCast(__nv_bfloat16* dst, half const* const src, const int size, cudaStream_t stream);
+template void invokeCudaCast(half* dst, __nv_bfloat16 const* const src, const int size, cudaStream_t stream);
+#endif
+#ifdef ENABLE_FP8
+template void invokeCudaCast(float* dst, __nv_fp8_e4m3 const* const src, const int size, cudaStream_t stream);
+template void invokeCudaCast(__nv_bfloat16* dst, __nv_fp8_e4m3 const* const src, const int size, cudaStream_t stream);
+template void invokeCudaCast(half* dst, __nv_fp8_e4m3 const* const src, const int size, cudaStream_t stream);
+template void invokeCudaCast(__nv_fp8_e4m3* dst, float const* const src, const int size, cudaStream_t stream);
+template void invokeCudaCast(__nv_fp8_e4m3* dst, __nv_bfloat16 const* const src, const int size, cudaStream_t stream);
+template void invokeCudaCast(__nv_fp8_e4m3* dst, half const* const src, const int size, cudaStream_t stream);
+#endif
 
 template<typename T>
 void cudaAutoCpy(T* tgt, const T* src, const int size, cudaStream_t stream)
@@ -180,47 +231,55 @@ template void
 cudaAutoCpy(unsigned long long const** tgt, unsigned long long const* const* src, int size, cudaStream_t stream);
 
 template<typename T>
-__global__ void cuda_random_uniform_kernel(T* buffer, const int size)
+__global__ void cuda_random_uniform_kernel(T* buffer, const int size, const int seq_offset)
 {
     const int     idx = blockIdx.x * blockDim.x + threadIdx.x;
     curandState_t local_state;
-    curand_init((unsigned long long int)1337, idx, 0, &local_state);
+    curand_init((unsigned long long int)1337, idx + seq_offset, 0, &local_state);
     for (int index = idx; index < size; index += blockDim.x * gridDim.x) {
         buffer[index] = (T)(curand_uniform(&local_state) * 0.2f - 0.1f);
     }
 }
 
-template<typename T>
-__global__ void cuda_random_uniform_kernel(int* buffer, const int size)
+template<>
+__global__ void cuda_random_uniform_kernel<int>(int* buffer, const int size, const int seq_offset)
 {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int     idx = blockIdx.x * blockDim.x + threadIdx.x;
+    curandState_t local_state;
+    curand_init((float)1337.f, idx + seq_offset, 0, &local_state);
     for (int index = idx; index < size; index += blockDim.x * gridDim.x) {
-        buffer[index] = 0;
+        buffer[index] = curand(&local_state);
     }
 }
 
-template<typename T>
-__global__ void cuda_random_uniform_kernel(bool* buffer, const int size)
+template<>
+__global__ void cuda_random_uniform_kernel<bool>(bool* buffer, const int size, const int seq_offset)
 {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int     idx = blockIdx.x * blockDim.x + threadIdx.x;
+    curandState_t local_state;
+    curand_init((float)1337.f, idx + seq_offset, 0, &local_state);
     for (int index = idx; index < size; index += blockDim.x * gridDim.x) {
-        buffer[index] = false;
+        buffer[index] = (curand(&local_state) % 2 == 0);
     }
 }
 
-template<typename T>
-__global__ void cuda_random_uniform_kernel(char* buffer, const int size)
+template<>
+__global__ void cuda_random_uniform_kernel<char>(char* buffer, const int size, const int seq_offset)
 {
-    const int idx = blockIdx.x * blockDim.x + threadIdx.x;
+    const int     idx = blockIdx.x * blockDim.x + threadIdx.x;
+    curandState_t local_state;
+    curand_init((float)1337.f, idx + seq_offset, 0, &local_state);
     for (int index = idx; index < size; index += blockDim.x * gridDim.x) {
-        buffer[index] = '\0';
+        buffer[index] = curand(&local_state) % 0xFF;
     }
 }
 
 template<typename T>
 void cudaRandomUniform(T* buffer, const int size)
 {
-    cuda_random_uniform_kernel<T><<<256, 256>>>(buffer, size);
+    static int seq_offset = 0;
+    cuda_random_uniform_kernel<T><<<256, 256>>>(buffer, size, seq_offset);
+    seq_offset += 256 * 256;
 }
 
 template void cudaRandomUniform(float* buffer, const int size);
@@ -231,6 +290,9 @@ template void cudaRandomUniform(__nv_bfloat16* buffer, const int size);
 template void cudaRandomUniform(int* buffer, const int size);
 template void cudaRandomUniform(bool* buffer, const int size);
 template void cudaRandomUniform(char* buffer, const int size);
+#ifdef ENABLE_FP8
+template void cudaRandomUniform(__nv_fp8_e4m3* buffer, const int size);
+#endif
 
 // loads data from binary file. If it succeeds, returns a non-empty vector. If loading fails or
 // the product of the elements in shape is 0, this function will return an empty vector.
@@ -316,6 +378,11 @@ template int loadWeightFromBinFunc<__nv_bfloat16, __nv_bfloat16>(__nv_bfloat16* 
                                                                  std::vector<size_t> shape,
                                                                  std::string         filename);
 #endif  // ENABLE_BF16
+template int loadWeightFromBinFunc<int, int>(int* ptr, std::vector<size_t> shape, std::string filename);
+#ifdef ENABLE_FP8
+template int
+loadWeightFromBinFunc<__nv_fp8_e4m3, float>(__nv_fp8_e4m3* ptr, std::vector<size_t> shape, std::string filename);
+#endif  // ENABLE_FP8
 
 template<typename T>
 int loadWeightFromBin(T* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type)
@@ -335,10 +402,22 @@ int loadWeightFromBin(T* ptr, std::vector<size_t> shape, std::string filename, F
             loadWeightFromBinFunc<T, __nv_bfloat16>(ptr, shape, filename);
             break;
 #endif
+#ifdef ENABLE_FP8
+        case FtCudaDataType::FP8:
+            loadWeightFromBinFunc<T, float>(ptr, shape, filename);
+            break;
+#endif
         default:
             FT_LOG_ERROR("Does not support FtCudaDataType=%d", model_file_type);
             FT_CHECK(false);
     }
+    return 0;
+}
+
+template<>
+int loadWeightFromBin(int* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type)
+{
+    loadWeightFromBinFunc<int, int>(ptr, shape, filename);
     return 0;
 }
 
@@ -352,6 +431,12 @@ loadWeightFromBin(int8_t* ptr, std::vector<size_t> shape, std::string filename, 
 template int
 loadWeightFromBin(__nv_bfloat16* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type);
 #endif
+#ifdef ENABLE_FP8
+template int
+loadWeightFromBin(__nv_fp8_e4m3* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type);
+#endif
+template int
+loadWeightFromBin(int* ptr, std::vector<size_t> shape, std::string filename, FtCudaDataType model_file_type);
 
 template<typename T, typename T_IN>
 int loadWeightFromBinAndQuantizeForWeightOnlyFunc(int8_t*             ptr,
@@ -490,6 +575,9 @@ template void invokeCudaD2DScaleCpyConvert(int32_t* tgt, const half* src, const 
 template void invokeCudaD2DScaleCpyConvert(__nv_bfloat16* tgt, const int32_t* src, const float* scale, bool invert_scale, const int size, cudaStream_t stream);
 template void invokeCudaD2DScaleCpyConvert(int32_t* tgt, const __nv_bfloat16* src, const float* scale, bool invert_scale, const int size, cudaStream_t stream);
 #endif  // ENABLE_BF16
+#ifdef ENABLE_FP8
+template void invokeCudaD2DScaleCpyConvert(float* tgt, const __nv_fp8_e4m3* src, const float* scale, bool invert_scale, const int size, cudaStream_t stream);
+#endif  // ENABLE_FP8
 // clang-format on
 
 void invokeCudaD2DcpyHalf2Float(float* dst, half* src, const int size, cudaStream_t stream)
@@ -540,7 +628,6 @@ __global__ void fakeCast(T_IN* input_ptr, const size_t size)
 {
     for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < size; i += blockDim.x * gridDim.x) {
         T_fake_type tmp_val = (T_fake_type)((float)input_ptr[i]);
-        tmp_val             = tmp_val * (T_fake_type)(1.0f);
         input_ptr[i]        = (T_IN)((float)tmp_val);
     }
 }
@@ -553,6 +640,218 @@ void invokeFakeCast(T_IN* input_ptr, const size_t size, cudaStream_t stream)
     fakeCast<T_IN, T_fake_type><<<grid, block, 0, stream>>>(input_ptr, size);
 }
 
+#ifdef ENABLE_FP8
+__global__ void cudaD2Dcpyfp82Float(float* dst, __nv_fp8_e4m3* src, const int size)
+{
+    for (int tid = threadIdx.x + blockIdx.x * blockDim.x; tid < size; tid += blockDim.x * gridDim.x) {
+        dst[tid] = (float)(src[tid]);
+    }
+}
+
+void invokeCudaD2Dcpyfp82Float(float* dst, __nv_fp8_e4m3* src, const int size, cudaStream_t stream)
+{
+    cudaD2Dcpyfp82Float<<<256, 256, 0, stream>>>(dst, src, size);
+}
+
+__global__ void cudaD2Dcpyfp82Half(half* dst, __nv_fp8_e4m3* src, const int size)
+{
+    for (int tid = threadIdx.x + blockIdx.x * blockDim.x; tid < size; tid += blockDim.x * gridDim.x) {
+        dst[tid] = (half)((float)(src[tid]));
+    }
+}
+
+void invokeCudaD2Dcpyfp82Half(half* dst, __nv_fp8_e4m3* src, const int size, cudaStream_t stream)
+{
+    cudaD2Dcpyfp82Half<<<256, 256, 0, stream>>>(dst, src, size);
+}
+
+__global__ void cudaD2DcpyFloat2fp8(__nv_fp8_e4m3* dst, float* src, const int size)
+{
+    for (int tid = threadIdx.x + blockIdx.x * blockDim.x; tid < size; tid += blockDim.x * gridDim.x) {
+        dst[tid] = (__nv_fp8_e4m3)src[tid];
+    }
+}
+
+void invokeCudaD2DcpyFloat2fp8(__nv_fp8_e4m3* dst, float* src, const int size, cudaStream_t stream)
+{
+    cudaD2DcpyFloat2fp8<<<256, 256, 0, stream>>>(dst, src, size);
+}
+
+__global__ void cudaD2DcpyHalf2fp8(__nv_fp8_e4m3* dst, half* src, const int size)
+{
+    for (int tid = threadIdx.x + blockIdx.x * blockDim.x; tid < size; tid += blockDim.x * gridDim.x) {
+        dst[tid] = (__nv_fp8_e4m3)src[tid];
+    }
+}
+
+void invokeCudaD2DcpyHalf2fp8(__nv_fp8_e4m3* dst, half* src, const int size, cudaStream_t stream)
+{
+    cudaD2DcpyHalf2fp8<<<256, 256, 0, stream>>>(dst, src, size);
+}
+
+__global__ void cudaD2DcpyBfloat2fp8(__nv_fp8_e4m3* dst, __nv_bfloat16* src, const int size)
+{
+    for (int tid = threadIdx.x + blockIdx.x * blockDim.x; tid < size; tid += blockDim.x * gridDim.x) {
+        dst[tid] = (__nv_fp8_e4m3)src[tid];
+    }
+}
+
+void invokeCudaD2DcpyBfloat2fp8(__nv_fp8_e4m3* dst, __nv_bfloat16* src, const int size, cudaStream_t stream)
+{
+    cudaD2DcpyBfloat2fp8<<<256, 256, 0, stream>>>(dst, src, size);
+}
+
+#endif  // ENABLE_FP8
+
+template<typename T_OUT, typename T_IN>
+__global__ void transpose(T_OUT* dst, T_IN* src, const int dim0, const int dim1)
+{
+    for (int tid = threadIdx.x + blockIdx.x * blockDim.x; tid < dim0 * dim1; tid += blockDim.x * gridDim.x) {
+        const int src_col_id                = tid % dim1;
+        const int src_row_id                = tid / dim1;
+        dst[src_col_id * dim0 + src_row_id] = (T_OUT)(src[tid]);
+    }
+}
+
+template<typename T>
+void invokeInPlaceTranspose(T* data, T* workspace, const int dim0, const int dim1)
+{
+    // copy data to workspace, and then transpose from workspace to data
+    cudaD2Dcpy(workspace, data, dim0 * dim1);
+    transpose<<<256, 256>>>(data, workspace, dim0, dim1);
+}
+
+#ifdef ENABLE_FP8
+template void invokeInPlaceTranspose(__nv_fp8_e4m3* data, __nv_fp8_e4m3* workspace, const int dim0, const int dim1);
+#endif  // ENABLE_FP8
+#ifdef ENABLE_BF16
+template void invokeInPlaceTranspose(__nv_bfloat16* data, __nv_bfloat16* workspace, const int dim0, const int dim1);
+#endif  // ENABLE_BF16
+template void invokeInPlaceTranspose(float* data, float* workspace, const int dim0, const int dim1);
+
+template<typename T_OUT, typename T_IN>
+__global__ void transpose0213(T_OUT* dst, T_IN* src, const int dim0, const int dim1, const int dim2, const int dim3)
+{
+    // src permutation: [0, 1, 2, 3]
+    // dst permutation: [0, 2, 1, 3]
+    for (int tid = threadIdx.x + blockIdx.x * blockDim.x; tid < dim0 * dim1 * dim2 * dim3;
+         tid += blockDim.x * gridDim.x) {
+        int       tmp_idx   = tid;
+        const int dim_3_idx = tmp_idx % dim3;
+        tmp_idx             = (tmp_idx - dim_3_idx) / dim3;
+        const int dim_2_idx = tmp_idx % dim2;
+        tmp_idx             = (tmp_idx - dim_2_idx) / dim2;
+        const int dim_1_idx = tmp_idx % dim1;
+        tmp_idx             = (tmp_idx - dim_1_idx) / dim1;
+        const int dim_0_idx = tmp_idx % dim0;
+        dst[dim_0_idx * dim1 * dim2 * dim3 + dim_2_idx * dim1 * dim3 + dim_1_idx * dim3 + dim_3_idx] = src[tid];
+    }
+}
+
+template<typename T>
+void invokeInPlaceTranspose0213(T* data, T* workspace, const int dim0, const int dim1, const int dim2, const int dim3)
+{
+    // copy data to workspace, and then transpose from workspace to data
+    // Note that this kernel is used for pre-processing and not very efficient.
+    cudaD2Dcpy(workspace, data, dim0 * dim1 * dim2 * dim3);
+    transpose0213<<<256, 256>>>(data, workspace, dim0, dim1, dim2, dim3);
+}
+
+#ifdef ENABLE_FP8
+template void invokeInPlaceTranspose0213(
+    __nv_fp8_e4m3* data, __nv_fp8_e4m3* workspace, const int dim0, const int dim1, const int dim2, const int dim3);
+#endif  // ENABLE_FP8
+#ifdef ENABLE_BF16
+template void invokeInPlaceTranspose0213(
+    __nv_bfloat16* data, __nv_bfloat16* workspace, const int dim0, const int dim1, const int dim2, const int dim3);
+#endif  // ENABLE_BF16
+template void invokeInPlaceTranspose0213(
+    float* data, float* workspace, const int dim0, const int dim1, const int dim2, const int dim3);
+
+template<typename T_OUT, typename T_IN>
+__global__ void transpose102(T_OUT* dst, T_IN* src, const int dim0, const int dim1, const int dim2)
+{
+    // src permutation: [0, 1, 2]
+    // dst permutation: [1, 0, 2]
+    for (int tid = threadIdx.x + blockIdx.x * blockDim.x; tid < dim0 * dim1 * dim2; tid += blockDim.x * gridDim.x) {
+        int       tmp_idx                                           = tid;
+        const int dim_2_idx                                         = tmp_idx % dim2;
+        tmp_idx                                                     = (tmp_idx - dim_2_idx) / dim2;
+        const int dim_1_idx                                         = tmp_idx % dim1;
+        tmp_idx                                                     = (tmp_idx - dim_1_idx) / dim1;
+        const int dim_0_idx                                         = tmp_idx % dim0;
+        dst[dim_1_idx * dim0 * dim2 + dim_0_idx * dim2 + dim_2_idx] = src[tid];
+    }
+}
+
+template<typename T>
+void invokeInPlaceTranspose102(T* data, T* workspace, const int dim0, const int dim1, const int dim2)
+{
+    // copy data to workspace, and then transpose from workspace to data
+    // Note that this kernel is used for pre-processing and not very efficient.
+    cudaD2Dcpy(workspace, data, dim0 * dim1 * dim2);
+    transpose102<<<256, 256>>>(data, workspace, dim0, dim1, dim2);
+}
+
+#ifdef ENABLE_FP8
+template void invokeInPlaceTranspose102(
+    __nv_fp8_e4m3* data, __nv_fp8_e4m3* workspace, const int dim0, const int dim1, const int dim2);
+#endif  // ENABLE_FP8
+#ifdef ENABLE_BF16
+template void invokeInPlaceTranspose102(
+    __nv_bfloat16* data, __nv_bfloat16* workspace, const int dim0, const int dim1, const int dim2);
+#endif  // ENABLE_BF16
+template void invokeInPlaceTranspose102(float* data, float* workspace, const int dim0, const int dim1, const int dim2);
+
+template<typename T>
+void __global__ multiplyScale(T* tensor, float scale, const size_t size)
+{
+    for (int index = threadIdx.x + blockIdx.x * blockDim.x; index < size; index += blockDim.x * gridDim.x) {
+        tensor[index] = (T)(((float)tensor[index]) * scale);
+    }
+}
+
+template<typename T>
+void invokeMultiplyScale(T* tensor, float scale, const size_t size, cudaStream_t stream)
+{
+    int block = 256;
+    int grid  = (size + 255) / 256;
+    multiplyScale<<<grid, block, 0, stream>>>(tensor, scale, size);
+}
+
+template void invokeMultiplyScale(float* tensor, float scale, const size_t size, cudaStream_t stream);
+template void invokeMultiplyScale(half* tensor, float scale, const size_t size, cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeMultiplyScale(__nv_bfloat16* tensor, float scale, const size_t size, cudaStream_t stream);
+#endif
+#ifdef ENABLE_FP8
+template void invokeMultiplyScale(__nv_fp8_e4m3* tensor, float scale, const size_t size, cudaStream_t stream);
+#endif
+
+template<typename T>
+void __global__ divideScale(T* tensor, float scale, const size_t size)
+{
+    for (int index = threadIdx.x + blockIdx.x * blockDim.x; index < size; index += blockDim.x * gridDim.x) {
+        tensor[index] = (T)(((float)tensor[index]) / scale);
+    }
+}
+
+template<typename T>
+void invokeDivideScale(T* tensor, float scale, const size_t size, cudaStream_t stream)
+{
+    int block = 256;
+    int grid  = (size + 255) / 256;
+    divideScale<<<grid, block, 0, stream>>>(tensor, scale, size);
+}
+
+template void invokeDivideScale(float* tensor, float scale, const size_t size, cudaStream_t stream);
+template void invokeDivideScale(half* tensor, float scale, const size_t size, cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeDivideScale(__nv_bfloat16* tensor, float scale, const size_t size, cudaStream_t stream);
+#endif
+#ifdef ENABLE_FP8
+template void invokeDivideScale(__nv_fp8_e4m3* tensor, float scale, const size_t size, cudaStream_t stream);
+#endif
 #ifdef ENABLE_BF16
 template void invokeFakeCast<float, __nv_bfloat16>(float* input_ptr, const size_t size, cudaStream_t stream);
 template void
@@ -561,6 +860,12 @@ template void invokeFakeCast<half, __nv_bfloat16>(half* input_ptr, const size_t 
 #endif
 template void invokeFakeCast<float, half>(float* input_ptr, const size_t size, cudaStream_t stream);
 template void invokeFakeCast<float, float>(float* input_ptr, const size_t size, cudaStream_t stream);
+#ifdef ENABLE_FP8
+template void invokeFakeCast<float, __nv_fp8_e4m3>(float* input_ptr, const size_t size, cudaStream_t stream);
+template void invokeFakeCast<half, __nv_fp8_e4m3>(half* input_ptr, const size_t size, cudaStream_t stream);
+template void
+invokeFakeCast<__nv_bfloat16, __nv_fp8_e4m3>(__nv_bfloat16* input_ptr, const size_t size, cudaStream_t stream);
+#endif
 
 size_t cuda_datatype_size(FtCudaDataType dt)
 {

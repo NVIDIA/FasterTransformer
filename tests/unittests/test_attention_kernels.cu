@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -271,9 +271,9 @@ public:
         }
 
         // Clone to host for reference computation if needed.
-        Tensor h_qk        = is_benchmark ? Tensor() : toHost(qk);
-        Tensor h_attn_mask = is_benchmark ? Tensor() : toHost(attn_mask);
-        Tensor h_qk_fp32   = is_benchmark ? Tensor() : toHost(qk_fp32);
+        Tensor h_qk        = is_benchmark ? Tensor() : toHost<T>(qk);
+        Tensor h_attn_mask = is_benchmark ? Tensor() : toHost<T>(attn_mask);
+        Tensor h_qk_fp32   = is_benchmark ? Tensor() : toHost<float>(qk_fp32);
 
         T scale = static_cast<T>(1 / sqrtf(param.size_per_head * 1.0f));
 
@@ -377,9 +377,9 @@ public:
             checkResult("CheckAlibiSlopes", alibi_slopes.getPtr<T>(), h_alibi_slopes.getPtr<T>(), param.head_num));
 
         // Clone to host for reference computation if needed.
-        Tensor h_qk        = is_benchmark ? Tensor() : toHost(qk);
-        Tensor h_attn_mask = is_benchmark ? Tensor() : toHost(attn_mask);
-        Tensor h_qk_fp32   = is_benchmark ? Tensor() : toHost(qk_fp32);
+        Tensor h_qk        = is_benchmark ? Tensor() : toHost<T>(qk);
+        Tensor h_attn_mask = is_benchmark ? Tensor() : toHost<T>(attn_mask);
+        Tensor h_qk_fp32   = is_benchmark ? Tensor() : toHost<float>(qk_fp32);
 
         T scale = static_cast<T>(1 / sqrtf(param.size_per_head * 1.0f));
 

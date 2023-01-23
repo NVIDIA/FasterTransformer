@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -252,6 +252,7 @@ void Decoder<T>::forward(std::vector<Tensor>*                      output_tensor
             (float*)nullptr,
             (float*)nullptr,
             (float*)nullptr,
+            (float*)nullptr,
             0,
             stream_);
         sync_check_cuda_error();
@@ -289,6 +290,7 @@ void Decoder<T>::forward(std::vector<Tensor>*                      output_tensor
             layernorm_eps_,
             batch_size,
             hidden_units_,
+            (float*)nullptr,
             (float*)nullptr,
             (float*)nullptr,
             (float*)nullptr,

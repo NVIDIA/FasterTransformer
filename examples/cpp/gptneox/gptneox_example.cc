@@ -29,10 +29,6 @@
 #include <sys/time.h>
 #include <vector>
 
-#ifdef USE_NVTX
-bool NVTX_ON = true;
-#endif
-
 using namespace fastertransformer;
 
 template<typename T>
@@ -96,15 +92,24 @@ void gptneox_example(const INIReader reader)
     const uint   top_k                      = (uint)reader.GetInteger("request", "top_k");
     const float  top_p                      = reader.GetFloat("request", "top_p");
     const float  temperature                = reader.GetFloat("request", "temperature");
-    const float  repetition_penalty         = reader.GetFloat("request", "repetition_penalty");
+    const float  repetition_penalty         = reader.GetFloat("request", "repetition_penalty", 1.0f);
+    const float  presence_penalty           = reader.GetFloat("request", "presence_penalty", 0.0f);
     const float  len_penalty                = reader.GetFloat("request", "len_penalty");
     const float  beam_search_diversity_rate = reader.GetFloat("request", "beam_search_diversity_rate");
+    const int    min_length                 = reader.GetInteger("request", "min_length", 0);
     const size_t request_batch_size         = reader.GetInteger("request", "request_batch_size");
     // The length of tokens we hope this model to generate
     const int request_output_len = reader.GetInteger("request", "request_output_len");
 
     FT_CHECK(head_num % tensor_para_size == 0);
     FT_CHECK(decoder_layers % pipeline_para_size == 0);
+    FT_CHECK_WITH_INFO(
+        repetition_penalty == 1.0f || presence_penalty == 0.0f,
+        fmtstr("Found ambiguous parameters repetition_penalty (%f) and presence_penalty (%f) "
+               "which are mutually exclusive. Please remove one of repetition_penalty or presence_penalty "
+               "or set to a default value.",
+               repetition_penalty,
+               presence_penalty));
 
     // Prepare the parallelism parameters
     int rank       = mpi::getCommWorldRank();
@@ -336,9 +341,18 @@ void gptneox_example(const INIReader reader)
         {"stop_words_list", Tensor{MEMORY_GPU, TYPE_INT32, {request_batch_size, 2, stop_words_len}, d_stop_words}},
         {"temperature", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &temperature}},
         {"len_penalty", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &len_penalty}},
-        {"repetition_penalty", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &repetition_penalty}},
+        {"min_length", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{1}, &min_length}},
         {"start_id", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{request_batch_size}, start_ids.data()}},
         {"end_id", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{request_batch_size}, end_ids.data()}}};
+
+    if (repetition_penalty != 1.0f) {
+        input_tensors.insert(
+            {"repetition_penalty", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &repetition_penalty}});
+    }
+    if (presence_penalty != 0.0f) {
+        input_tensors.insert(
+            {"presence_penalty", Tensor{MEMORY_CPU, TYPE_FP32, std::vector<size_t>{1}, &presence_penalty}});
+    }
 
     if (num_tasks > 0) {
         // Prefix Prompt Task Name Ids here
@@ -385,7 +399,7 @@ void gptneox_example(const INIReader reader)
     cudaProfilerStart();
     // warm up
     ite = 1;
-    nvtx::setScope("warmup_time");
+    ft_nvtx::setScope("warmup_time");
     PUSH_RANGE("warmup time")
     for (int i = 0; i < ite; ++i) {
         gpt.forward(&output_tensors, &input_tensors, &gpt_weights);
@@ -394,7 +408,7 @@ void gptneox_example(const INIReader reader)
     mpi::barrier();
 
     POP_RANGE;
-    nvtx::resetScope();
+    ft_nvtx::resetScope();
 
     if (rank == 0) {
 
@@ -439,7 +453,7 @@ void gptneox_example(const INIReader reader)
     cudaDeviceSynchronize();
     gettimeofday(&start, NULL);
 
-    nvtx::setScope("total_time");
+    ft_nvtx::setScope("total_time");
     PUSH_RANGE("total time")
     for (int i = 0; i < ite; ++i) {
         gpt.forward(&output_tensors, &input_tensors, &gpt_weights);
@@ -449,7 +463,7 @@ void gptneox_example(const INIReader reader)
     mpi::barrier();
 
     POP_RANGE;
-    nvtx::resetScope();
+    ft_nvtx::resetScope();
     gettimeofday(&end, NULL);
 
     cudaProfilerStop();

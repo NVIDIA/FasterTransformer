@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,6 +15,7 @@
  */
 
 #include "cublasMMWrapper.h"
+#include "cuda_utils.h"
 
 #ifndef CUDART_VERSION
 #error CUDART_VERSION Undefined!
@@ -69,6 +70,7 @@ cublasMMWrapper::~cublasMMWrapper()
     mu_ = nullptr;
     if (allocator_ != nullptr) {
         allocator_->free((void**)(&cublas_workspace_));
+        allocator_ = nullptr;
     }
 }
 
@@ -83,6 +85,10 @@ cublasMMWrapper::cublasMMWrapper(const cublasMMWrapper& wrapper):
     mu_(wrapper.mu_),
     allocator_(wrapper.allocator_)
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
+    if (allocator_ != nullptr) {
+        cublas_workspace_ = allocator_->reMalloc(cublas_workspace_, CUBLAS_WORKSPACE_SIZE);
+    }
 }
 
 void cublasMMWrapper::Gemm(cublasOperation_t transa,
@@ -104,6 +110,7 @@ void cublasMMWrapper::Gemm(cublasOperation_t transa,
                            cudaDataType_t    computeType,
                            cublasGemmAlgo_t  algo)
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     mu_->lock();
     check_cuda_error(cublasGemmEx(cublas_handle_,
                                   transa,
@@ -140,6 +147,7 @@ void cublasMMWrapper::Gemm(cublasOperation_t transa,
                            void*             C,
                            const int         ldc)
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     Gemm(transa, transb, m, n, k, A, lda, B, ldb, C, ldc, 1.0f, 0.0f);
 }
 
@@ -157,6 +165,7 @@ void cublasMMWrapper::Gemm(cublasOperation_t transa,
                            float             f_alpha,
                            float             f_beta)
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     half h_alpha = (half)(f_alpha);
     half h_beta  = (half)(f_beta);
 
@@ -241,11 +250,30 @@ void cublasMMWrapper::Gemm(cublasOperation_t transa,
                     &algo, CUBLASLT_ALGO_CONFIG_SPLITK_NUM, &(info.splitK_val), sizeof(info.splitK_val));
                 cublasLtMatmulAlgoConfigSetAttribute(
                     &algo, CUBLASLT_ALGO_CONFIG_CTA_SWIZZLING, &(info.swizzle), sizeof(info.swizzle));
-                cublasLtMatmulAlgoConfigSetAttribute(
-                    &algo, CUBLASLT_ALGO_CONFIG_REDUCTION_SCHEME, &(info.reductionScheme), sizeof(int));
+                cublasLtMatmulAlgoConfigSetAttribute(&algo,
+                                                     CUBLASLT_ALGO_CONFIG_REDUCTION_SCHEME,
+                                                     &(info.reductionScheme),
+                                                     sizeof(info.reductionScheme));
+
 #if (CUDART_VERSION >= 11000)
                 cublasLtMatmulAlgoConfigSetAttribute(
                     &algo, CUBLASLT_ALGO_CONFIG_STAGES_ID, &(info.stages), sizeof(info.stages));
+#endif
+
+#if (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH >= 3)
+                cublasLtMatmulAlgoConfigSetAttribute(
+                    &algo, CUBLASLT_ALGO_CONFIG_INNER_SHAPE_ID, &(info.inner_shapeId), sizeof(info.inner_shapeId));
+                cublasLtMatmulAlgoConfigSetAttribute(&algo,
+                                                     CUBLASLT_ALGO_CONFIG_CLUSTER_SHAPE_ID,
+                                                     &(info.cluster_shapeId),
+                                                     sizeof(info.cluster_shapeId));
+#elif (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH < 3)
+                cublasLtMatmulAlgoConfigSetAttribute(
+                    &algo, CUBLASLT_ALGO_CONFIG_MMA_SHAPE_ID, &(info.mma_shapeId), sizeof(info.mma_shapeId));
+                cublasLtMatmulAlgoConfigSetAttribute(
+                    &algo, CUBLASLT_ALGO_CONFIG_CGA_SHAPE_ID, &(info.cga_shapeId), sizeof(info.cga_shapeId));
+                cublasLtMatmulAlgoConfigSetAttribute(
+                    &algo, CUBLASLT_ALGO_CONFIG_SCHEDULING_MODE, &(info.sche_mode), sizeof(info.sche_mode));
 #endif
             }
         }
@@ -368,6 +396,7 @@ void cublasMMWrapper::Gemm(cublasOperation_t transa,
                            void*             C,
                            const int         ldc)
 {
+    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     cudaDataType_t      Atype, Btype, Ctype;
     cublasComputeType_t computeType;
     cudaDataType_t      scaleType;

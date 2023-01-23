@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -213,6 +213,7 @@ void add_bias_residual_layernorm_test(const int m, const int n)
                                              (float*)nullptr,
                                              (float*)nullptr,
                                              (float*)nullptr,
+                                             (float*)nullptr,
                                              0,
                                              stream,
                                              0);
@@ -227,6 +228,7 @@ void add_bias_residual_layernorm_test(const int m, const int n)
                                              layernorm_eps,
                                              m,
                                              n,
+                                             (float*)nullptr,
                                              (float*)nullptr,
                                              (float*)nullptr,
                                              (float*)nullptr,
@@ -268,6 +270,7 @@ void add_bias_residual_layernorm_test(const int m, const int n)
                                                  (float*)nullptr,
                                                  (float*)nullptr,
                                                  (float*)nullptr,
+                                                 (float*)nullptr,
                                                  0,
                                                  stream,
                                                  0);
@@ -281,6 +284,7 @@ void add_bias_residual_layernorm_test(const int m, const int n)
                                                  layernorm_eps,
                                                  m,
                                                  n,
+                                                 (float*)nullptr,
                                                  (float*)nullptr,
                                                  (float*)nullptr,
                                                  (float*)nullptr,
@@ -306,6 +310,7 @@ void add_bias_residual_layernorm_test(const int m, const int n)
                                                  (float*)nullptr,
                                                  (float*)nullptr,
                                                  (float*)nullptr,
+                                                 (float*)nullptr,
                                                  0,
                                                  stream,
                                                  0);
@@ -328,6 +333,7 @@ void add_bias_residual_layernorm_test(const int m, const int n)
                                                  layernorm_eps,
                                                  m,
                                                  n,
+                                                 (float*)nullptr,
                                                  (float*)nullptr,
                                                  (float*)nullptr,
                                                  (float*)nullptr,

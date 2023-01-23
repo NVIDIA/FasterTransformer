@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -80,7 +80,9 @@ void GptJContextDecoder<T>::allocateBuffer(size_t batch_size, size_t seq_len)
         allocator_->reMalloc(ffn_output_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
     decoder_layer_output_ = reinterpret_cast<T*>(
         allocator_->reMalloc(decoder_layer_output_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
-    token_num_ = reinterpret_cast<size_t*>(allocator_->reMalloc(token_num_, sizeof(size_t) * 1, false));
+    if (!is_allocate_buffer_) {
+        check_cuda_error(cudaMallocHost((void**)&h_pinned_token_num_ptr_, sizeof(size_t)));
+    }
     padding_offset_ =
         reinterpret_cast<int*>(allocator_->reMalloc(padding_offset_, sizeof(int) * batch_size * seq_len, false));
     cu_seqlens_ = reinterpret_cast<int*>(allocator_->reMalloc(cu_seqlens_, sizeof(int) * (batch_size + 1), false));
@@ -95,7 +97,7 @@ void GptJContextDecoder<T>::freeBuffer()
         allocator_->free((void**)(&self_attn_output_));
         allocator_->free((void**)(&ffn_output_));
         allocator_->free((void**)(&decoder_layer_output_));
-        allocator_->free((void**)(&token_num_));
+        check_cuda_error(cudaFreeHost(h_pinned_token_num_ptr_));
         allocator_->free((void**)(&padding_offset_));
         allocator_->free((void**)(&cu_seqlens_));
         is_allocate_buffer_ = false;
@@ -274,16 +276,17 @@ void GptJContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*    
         self_v_cache_size.push_back(*t);
     }
 
-    AttentionType attention_type =
-        (d_prefix_prompt_lengths != nullptr || is_qk_buf_float_) ? getUnfusedAttentionType(attention_type_) : attention_type_;
-    const bool is_unpadded_mha = isUnPaddedMHA(attention_type);
+    AttentionType attention_type  = (d_prefix_prompt_lengths != nullptr || is_qk_buf_float_) ?
+                                        getUnfusedAttentionType(attention_type_) :
+                                        attention_type_;
+    const bool    is_unpadded_mha = isUnPaddedMHA(attention_type);
 
     for (int ite = 0; ite < iteration_num; ite++) {
         size_t h_token_num = local_batch_size * seq_len;
         if (is_unpadded_mha) {
             const int* base_input_lengths = input_tensors->at("input_lengths").getPtr<int>();
-            invokeGetPaddingOffsetAndCuSeqLens(&h_token_num,
-                                               token_num_,
+            invokeGetPaddingOffsetAndCuSeqLens(h_pinned_token_num_ptr_,
+                                               &h_token_num,
                                                padding_offset_,
                                                cu_seqlens_,
                                                base_input_lengths + ite * local_batch_size,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -122,8 +122,22 @@ int main(int argc, char* argv[])
                                                     is_append);
     }
 #endif
+#ifdef ENABLE_FP8
+    else if (data_type == ft::FP8_DATATYPE) {
+        ft::generate_gpt_gemm_config<__nv_fp8_e4m3>(batch_size,
+                                                    beam_width,
+                                                    max_input_len,
+                                                    head_num,
+                                                    size_per_head,
+                                                    inter_size,
+                                                    vocab_size,
+                                                    tensor_para_size,
+                                                    gemm_test_buf,
+                                                    false);
+    }
+#endif
     else {
-        printf("[ERROR] data type only supports fp32(0), fp16(1), bf16(2). \n");
+        printf("[ERROR] data type only supports fp32(0), fp16(1), bf16(2), fp8(4). \n");
         return -1;
     }
 

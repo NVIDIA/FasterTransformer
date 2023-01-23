@@ -1,0 +1,3 @@
+SentencePiece~=0.1.96
+transformers~=4.20.1
+numpy

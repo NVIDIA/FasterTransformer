@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  * Copyright (c) 2021, NAVER Corp.  Authored by CLOVA.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -66,7 +66,7 @@ static __global__ void set_topp_runtime_args(int             batch_size,
      *
      */
 
-    int index = blockIdx.x * gridDim.x + threadIdx.x;
+    int index = blockIdx.x * blockDim.x + threadIdx.x;
     for (int i = index; i < batch_size; i += gridDim.x * blockDim.x) {
         uint  k = top_ks_size > 1 ? top_ks[i] : top_k;
         float p = top_ps_size > 1 ? top_ps[i] : top_p;
@@ -223,7 +223,7 @@ void TopPSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
         cudaH2Dcpy(runtime_top_p_buf_, runtime_top_p.getPtr<float>(), batch_size);
     }
 
-    dim3 block(std::min((int)batch_size, 1024));
+    dim3 block(std::min((int)batch_size, 256));
     dim3 grid(div_up((int)batch_size, (int)block.x));
 
     const float*    top_p_decay     = runtime_args->getPtr<float>("top_p_decay", nullptr);

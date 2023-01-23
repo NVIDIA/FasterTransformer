@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  * Copyright (c) 2021, NAVER Corp.  Authored by CLOVA.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -37,6 +37,7 @@ void BaseSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tenso
         reinterpret_cast<float*>(allocator_->reMalloc(temperature_buf_, sizeof(float) * batch_size, false));
     repetition_penalty_buf_ =
         reinterpret_cast<float*>(allocator_->reMalloc(repetition_penalty_buf_, sizeof(float) * batch_size, false));
+    min_lengths_buf_ = reinterpret_cast<int*>(allocator_->reMalloc(min_lengths_buf_, sizeof(int) * batch_size, false));
     runtime_logits_buf_ = reinterpret_cast<T*>(
         allocator_->reMalloc(runtime_logits_buf_, sizeof(T) * batch_size * vocab_size_padded_, false));
     skip_decode_buf_ =
@@ -45,6 +46,7 @@ void BaseSamplingLayer<T>::allocateBuffer(size_t batch_size, Tensor top_k, Tenso
     // host buffers.
     temperature_        = new float[batch_size];
     repetition_penalty_ = new float[batch_size];
+    min_lengths_        = new int[batch_size];
     skip_decode_        = new bool[batch_size];
 
     is_allocate_buffer_ = true;
@@ -59,10 +61,12 @@ void BaseSamplingLayer<T>::freeBuffer()
         allocator_->free((void**)(&random_seeds_buf_));
         allocator_->free((void**)(&temperature_buf_));
         allocator_->free((void**)(&repetition_penalty_buf_));
+        allocator_->free((void**)(&min_lengths_buf_));
         allocator_->free((void**)(&runtime_logits_buf_));
         allocator_->free((void**)(&skip_decode_buf_));
         delete[] temperature_;
         delete[] repetition_penalty_;
+        delete[] min_lengths_;
         delete[] skip_decode_;
         is_allocate_buffer_ = false;
     }
@@ -114,6 +118,9 @@ void BaseSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
     //     runtime_top_p [1] or [batch_size] on cpu, optional
     //     temperature [1] or [batch_size] on cpu, optional
     //     repetition_penalty [1] or [batch_size] on cpu, optional
+    //     presence_penalty [1] or [batch_size] on cpu, optional,
+    //         repetition_penalty and presence_penalty are mutually exclusive.
+    //     min_length [1] or [batch_size] on cpu, optional
 
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     Tensor runtime_top_k = runtime_args->isExist("runtime_top_k") ? runtime_args->at("runtime_top_k") : Tensor();
@@ -161,18 +168,40 @@ void BaseSamplingLayer<T>::setup(const size_t batch_size, const size_t beam_widt
         std::copy_n(temperature.getPtr<float>(), batch_size, temperature_);
     }
 
-    const float default_repetition_penalty = 1.0f;
-    Tensor      repetition_penalty         = runtime_args->isExist("repetition_penalty") ?
-                                                 runtime_args->at("repetition_penalty") :
-                                                 Tensor(MEMORY_CPU, TYPE_FP32, {1}, &default_repetition_penalty);
-    if (repetition_penalty.size() == 1) {
-        float rp = repetition_penalty.getVal<float>();
-        deviceFill(repetition_penalty_buf_, batch_size, rp, stream_);
-        std::fill_n(repetition_penalty_, batch_size, rp);
+    if (runtime_args->isExist("repetition_penalty") || runtime_args->isExist("presence_penalty")) {
+        FT_CHECK_WITH_INFO(
+            !(runtime_args->isExist("repetition_penalty") && runtime_args->isExist("presence_penalty")),
+            "Found ambiguous parameters repetition_penalty and presence_penalty which are mutually exclusive. "
+            "Please provide one of repetition_penalty or presence_penalty.");
+        repetition_penalty_type_ = runtime_args->isExist("repetition_penalty") ? RepetitionPenaltyType::Multiplicative :
+                                                                                 RepetitionPenaltyType::Additive;
+        Tensor repetition_penalty = repetition_penalty_type_ == RepetitionPenaltyType::Multiplicative ?
+                                        runtime_args->at("repetition_penalty") :
+                                        runtime_args->at("presence_penalty");
+        if (repetition_penalty.size() == 1) {
+            float rp = repetition_penalty.getVal<float>();
+            deviceFill(repetition_penalty_buf_, batch_size, rp, stream_);
+            std::fill_n(repetition_penalty_, batch_size, rp);
+        }
+        else {
+            cudaAutoCpy(repetition_penalty_buf_, repetition_penalty.getPtr<float>(), batch_size, stream_);
+            std::copy_n(repetition_penalty.getPtr<float>(), batch_size, repetition_penalty_);
+        }
     }
     else {
-        cudaAutoCpy(repetition_penalty_buf_, repetition_penalty.getPtr<float>(), batch_size, stream_);
-        std::copy_n(repetition_penalty.getPtr<float>(), batch_size, repetition_penalty_);
+        repetition_penalty_type_ = RepetitionPenaltyType::None;
+    }
+
+    const int default_min_length = 0;
+    Tensor    min_lengths = runtime_args->at("min_length", Tensor(MEMORY_CPU, TYPE_INT32, {1}, &default_min_length));
+    if (min_lengths.size() == 1) {
+        int minlen = min_lengths.getVal<int>();
+        deviceFill(min_lengths_buf_, batch_size, minlen, stream_);
+        std::fill_n(min_lengths_, batch_size, minlen);
+    }
+    else {
+        cudaAutoCpy(min_lengths_buf_, min_lengths.getPtr<int>(), batch_size, stream_);
+        std::copy_n(min_lengths.getPtr<int>(), batch_size, min_lengths_);
     }
 }
 
@@ -232,6 +261,7 @@ void BaseSamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_t
     //      max_input_length [1] on cpu
     //      input_lengths [local_batch_size], optional
     //      ite [1] on cpu
+    //      end_id [local_batch_size], optional
 
     // output_tensors:
     //      output_ids [max_seq_len, batch_size]
@@ -249,9 +279,10 @@ void BaseSamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_t
     const int local_batch_size = input_tensors->at("logits").shape[0];
     const int step             = input_tensors->at("step").getVal<int>();
     const int ite              = input_tensors->at("ite").getVal<int>();
+    const int max_input_length = input_tensors->at("max_input_length").getVal<int>();
     T*        logits           = input_tensors->at("logits").getPtr<T>();
 
-#define ALL_OF(p_, sz_, dt_, v_) (std::all_of(p_, p_ + sz_, [](dt_ b) { return b == v_; }))
+#define ALL_OF(p_, sz_, dt_, v_) (std::all_of(p_, p_ + sz_, [&](dt_ b) { return b == v_; }))
 
     bool* skip_decode = skip_decode_ + ite * local_batch_size;
     if (ALL_OF(skip_decode, local_batch_size, bool, true)) {
@@ -281,18 +312,39 @@ void BaseSamplingLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_t
     }
     sync_check_cuda_error();
 
-    if (step > 1 && !ALL_OF(repetition_penalty_ + ite * local_batch_size, local_batch_size, float, 1.0f)) {
-        invokeBatchApplyRepetitionPenalty(
-            logits,
-            repetition_penalty_buf_ + ite * local_batch_size,
-            output_tensors->at("output_ids").getPtrWithOffset<int>(ite * local_batch_size),
-            batch_size,
-            local_batch_size,
-            vocab_size_padded_,
-            input_tensors->at("input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {}, nullptr}).getPtr<int>(),
-            input_tensors->at("max_input_length").getVal<int>(),
-            step,
-            stream_);
+    if (step > 1 && repetition_penalty_type_ != RepetitionPenaltyType::None) {
+        float default_value = getDefaultPenaltyValue(repetition_penalty_type_);
+        if (!ALL_OF(repetition_penalty_ + ite * local_batch_size, local_batch_size, float, default_value)) {
+            invokeBatchApplyRepetitionPenalty(
+                logits,
+                repetition_penalty_buf_ + ite * local_batch_size,
+                output_tensors->at("output_ids").getPtrWithOffset<int>(ite * local_batch_size),
+                batch_size,
+                local_batch_size,
+                vocab_size_padded_,
+                input_tensors->at("input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {}, nullptr}).getPtr<int>(),
+                max_input_length,
+                step,
+                repetition_penalty_type_,
+                stream_);
+            sync_check_cuda_error();
+        }
+    }
+
+    const int  num_generated_tokens      = step - max_input_length;
+    const int* min_lengths               = min_lengths_ + ite * local_batch_size;
+    const bool invoke_min_length_penalty = std::any_of(
+        min_lengths, min_lengths + local_batch_size, [&](int min_length) { return min_length > num_generated_tokens; });
+    if (invoke_min_length_penalty) {
+        FT_CHECK_WITH_INFO(input_tensors->isExist("end_id"), "Need end_id to apply min length penlaty");
+        invokeMinLengthPenalty(logits,
+                               min_lengths_buf_ + ite * local_batch_size,
+                               input_tensors->getPtr<const int>("end_id"),
+                               output_tensors->getPtr<const int>("sequence_length"),
+                               max_input_length,
+                               local_batch_size,
+                               vocab_size_padded_,
+                               stream_);
         sync_check_cuda_error();
     }
 #undef ALL_OF

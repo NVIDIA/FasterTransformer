@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -44,7 +44,8 @@ void T5Decoding<T>::initialize()
                                 activation_type_,
                                 q_scaling_,
                                 custom_all_reduce_comm_,
-                                enable_custom_all_reduce_);
+                                enable_custom_all_reduce_,
+                                adapter_config_);
 
     dynamic_decode_layer_ = new DynamicDecodeLayer<DynamicDecodeType>(vocab_size_,
                                                                       vocab_size_padded_,
@@ -248,7 +249,8 @@ T5Decoding<T>::T5Decoding(size_t                              max_batch_size,
                           ActivationType                      activation_type,
                           bool                                tie_word_embeddings,
                           std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
-                          int                                 enable_custom_all_reduce):
+                          int                                 enable_custom_all_reduce,
+                          LinearAdapterConfig const&          adapter_config):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, cuda_device_prop),
     head_num_(head_num),
     size_per_head_(size_per_head),
@@ -276,10 +278,15 @@ T5Decoding<T>::T5Decoding(size_t                              max_batch_size,
     activation_type_(activation_type),
     tie_word_embeddings_(tie_word_embeddings),
     custom_all_reduce_comm_(custom_all_reduce_comm),
-    enable_custom_all_reduce_(enable_custom_all_reduce)
+    enable_custom_all_reduce_(enable_custom_all_reduce),
+    adapter_config_(adapter_config)
 {
     int local_vacab_size = ceil(vocab_size_ / 1.f / tensor_para_.world_size_);
-    if (std::is_same<half, T>::value) {
+    if (std::is_same<half, T>::value
+#ifdef ENABLE_BF16
+        || std::is_same<__nv_bfloat16, T>::value
+#endif
+    ) {
         local_vacab_size = ceil(local_vacab_size / 8.f) * 8;
     }
     vocab_size_padded_ = (size_t)local_vacab_size * tensor_para_.world_size_;
@@ -316,7 +323,8 @@ T5Decoding<T>::T5Decoding(T5Decoding<T> const& decoding):
     activation_type_(decoding.activation_type_),
     tie_word_embeddings_(decoding.tie_word_embeddings_),
     custom_all_reduce_comm_(decoding.custom_all_reduce_comm_),
-    enable_custom_all_reduce_(decoding.enable_custom_all_reduce_)
+    enable_custom_all_reduce_(decoding.enable_custom_all_reduce_),
+    adapter_config_(decoding.adapter_config_)
 {
     initialize();
 }
@@ -383,6 +391,9 @@ void T5Decoding<T>::forward(TensorMap*                 output_tensors,
     //      temperature [1] or [batch_size] on cpu, optional, float.
     //      len_penalty [1] or [batch_size] on cpu, optional, float.
     //      repetition_penalty [1] or [batch_size] on cpu, optional, float.
+    //      presence_penalty [1] or [batch_size] on cpu, optional, float.
+    //          Only one of repetition and presence penalties is allowed.
+    //      min_length [1] or [batch_size] on cpu, optional, int
     //      random_seed [1] or [batch_size] on cpu, optional, unsigned long long int.
     //      top_p_decay [batch_size] on gpu, float, optional
     //      top_p_min [batch_size] on gpu, float, optional
@@ -868,7 +879,8 @@ void T5Decoding<T>::forward(TensorMap*                 output_tensors,
                 beam_hyps_.output_ids_src       = output_ids_buf_;
                 beam_hyps_.log_probs_src        = output_log_probs_buf_;
                 beam_hyps_.max_seq_len          = max_seq_len;
-                beam_hyps_.length_penalty       = input_tensors->at("len_penalty").getVal<float>();
+                beam_hyps_.length_penalty =
+                    input_tensors->isExist("len_penalty") ? input_tensors->at("len_penalty").getVal<float>() : 0.0f;
 
                 invokeInsertUnfinishedPath(beam_hyps_, finished_buf_, cum_log_probs_, batch_size, beam_width, stream_);
                 sync_check_cuda_error();

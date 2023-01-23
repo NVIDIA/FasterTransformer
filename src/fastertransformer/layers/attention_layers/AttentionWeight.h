@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -20,14 +20,14 @@
 
 namespace fastertransformer {
 
-template<typename T>
+template<typename T1, typename T2 = T1>
 struct AttentionWeight {
-    DenseWeight<T> query_weight;
-    DenseWeight<T> key_weight;
-    DenseWeight<T> value_weight;
-    DenseWeight<T> attention_output_weight;
-    DenseWeight<T> ia3_key_weight;
-    DenseWeight<T> ia3_value_weight;
+    DenseWeight<T1, T2> query_weight;
+    DenseWeight<T1, T2> key_weight;
+    DenseWeight<T1, T2> value_weight;
+    DenseWeight<T1, T2> attention_output_weight;
+    DenseWeight<T1, T2> ia3_key_weight;
+    DenseWeight<T1, T2> ia3_value_weight;
 };
 
 }  // namespace fastertransformer

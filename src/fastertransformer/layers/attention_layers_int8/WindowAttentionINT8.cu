@@ -254,8 +254,8 @@ void WindowAttentionINT8<T>::forward(TensorMap*                output_tensors,
     const int            shift_size                  = additional_params[4];
     const int            sm                          = additional_params[5];
     const int            window_size_in_use          = additional_params[6];
-    const int            basic_layer_id              = additional_params[7];
-    const int            block_id                    = additional_params[8];
+    // const int            basic_layer_id              = additional_params[7]; // not used
+    // const int            block_id                    = additional_params[8]; // not used
 
     int use_ORDER_COL32_2R_4R4 = (sm >= 80 ? 1 : 0);
 

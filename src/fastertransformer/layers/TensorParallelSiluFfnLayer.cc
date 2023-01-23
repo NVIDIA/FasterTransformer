@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -50,37 +50,11 @@ void TensorParallelSiluFfnLayer<T>::forward(TensorMap*          output_tensors,
 
     T* ffn_out = out_tensor.getPtr<T>();
     if (do_all_reduce_ && tensor_para_.world_size_ > 1) {
-        // TODO(mseznec): temporary fix to increase performance. In the future, use fp16 as gemm output directly (with
-        // cutlass)
-        const bool cast_int_fp = SiluFfnLayer<T>::int8_mode_ == 2;
-        if (cast_int_fp) {
-            ffn_output_fp_ = reinterpret_cast<T*>(
-                SiluFfnLayer<T>::allocator_->reMalloc(ffn_output_fp_, sizeof(T) * token_num * hidden_units, false));
-            // We must scale int32 activations as they may overflow float16's range
-            invokeCudaD2DScaleCpyConvert(ffn_output_fp_,
-                                         reinterpret_cast<int32_t*>(ffn_out),
-                                         ffn_weights->output_weight.scale_inter,
-                                         false,
-                                         token_num * hidden_units,
-                                         SiluFfnLayer<T>::stream_);
-        }
         if (!use_custom_all_reduce_kernel) {
-            ftNcclAllReduceSum(cast_int_fp ? ffn_output_fp_ : ffn_out,
-                               cast_int_fp ? ffn_output_fp_ : ffn_out,
-                               token_num * hidden_units,
-                               tensor_para_,
-                               SiluFfnLayer<T>::stream_);
+            ftNcclAllReduceSum(ffn_out, ffn_out, token_num * hidden_units, tensor_para_, SiluFfnLayer<T>::stream_);
         }
         else {
             custom_all_reduce_comm_->customAllReduce(token_num * hidden_units, SiluFfnLayer<T>::stream_);
-        }
-        if (cast_int_fp) {
-            invokeCudaD2DScaleCpyConvert(reinterpret_cast<int32_t*>(ffn_out),
-                                         ffn_output_fp_,
-                                         ffn_weights->output_weight.scale_inter,
-                                         true,
-                                         token_num * hidden_units,
-                                         SiluFfnLayer<T>::stream_);
         }
         sync_check_cuda_error();
     }
@@ -127,12 +101,6 @@ template<typename T>
 TensorParallelSiluFfnLayer<T>::TensorParallelSiluFfnLayer(TensorParallelSiluFfnLayer<T> const& ffn_layer):
     SiluFfnLayer<T>(ffn_layer), tensor_para_(ffn_layer.tensor_para_), do_all_reduce_(ffn_layer.do_all_reduce_)
 {
-}
-
-template<typename T>
-TensorParallelSiluFfnLayer<T>::~TensorParallelSiluFfnLayer()
-{
-    SiluFfnLayer<T>::allocator_->free((void**)&ffn_output_fp_);
 }
 
 template class TensorParallelSiluFfnLayer<float>;

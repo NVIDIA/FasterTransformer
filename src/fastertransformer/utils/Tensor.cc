@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -201,6 +201,7 @@ std::string Tensor::toString() const
         {TYPE_FP64, "FP64"},
         {TYPE_BYTES, "BYTES"},
         {TYPE_INVALID, "INVALID"},
+        {TYPE_FP8_E4M3, "E4M3"},
         {TYPE_VOID, "VOID"},
     };
     return fmtstr("Tensor[where=%s, type=%s, shape=%s, data=%p]",
@@ -242,6 +243,9 @@ size_t Tensor::getTypeSize(DataType type)
                                                                {TYPE_INT64, sizeof(int64_t)},
 #ifdef ENABLE_BF16
                                                                {TYPE_BF16, sizeof(__nv_bfloat16)},
+#endif
+#ifdef ENABLE_FP8
+                                                               {TYPE_FP8_E4M3, sizeof(__nv_fp8_e4m3)},
 #endif
                                                                {TYPE_FP16, sizeof(half)},
                                                                {TYPE_FP32, sizeof(float)},

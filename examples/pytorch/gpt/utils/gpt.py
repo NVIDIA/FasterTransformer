@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -32,13 +32,17 @@ class GPTWeights:
                  inference_data_type: str,
                  has_adapters: bool = False,
                  adapter_inter_size: int = 0,
+                 gpt_with_moe: bool = False,
                  has_positional_encoding: bool = True,
                  has_pre_decoder_layernorm: bool = False,
                  has_post_decoder_layernorm: bool = True,
-                 int8_mode: int = 0):
+                 int8_mode: int = 0,
+                 inter_size: int = 0):
         assert(head_num % tensor_para_size == 0)
 
         if int8_mode == 1:
+            torch_infer_dtype = str_type_map[inference_data_type]
+            assert torch_infer_dtype == torch.float16 or torch_infer_dtype == torch.bfloat16, "Weight only quant only supported for infer type fp16 or bf16."
             quant = torch.ops.fastertransformer.symmetric_quantize_last_axis_of_batched_matrix
             self.weight_transpose_calibrate_quantize = lambda x: quant(x, torch.int8)
         else:
@@ -55,6 +59,7 @@ class GPTWeights:
 
         self.has_adapters = has_adapters
         self.adapter_inter_size = adapter_inter_size
+        self.gpt_with_moe = gpt_with_moe
         self.has_positional_encoding = has_positional_encoding
         self.has_pre_decoder_layernorm = has_pre_decoder_layernorm
         self.has_post_decoder_layernorm = has_post_decoder_layernorm
@@ -64,6 +69,9 @@ class GPTWeights:
         local_hidden_units = local_head_num * size_per_head
         global_hidden_units = global_head_num * size_per_head
         local_inter_size = local_hidden_units * 4
+        if inter_size != 0:
+            assert inter_size % tensor_para_size == 0, f"inter_size({inter_size}) \% tensor_para_size({tensor_para_size}) must be 0"
+            local_inter_size = inter_size // tensor_para_size
         local_adapter_inter_size = self.adapter_inter_size // tensor_para_size
 
         self.local_head_num = local_head_num
@@ -73,6 +81,7 @@ class GPTWeights:
         self.local_inter_size = local_inter_size
 
         self.int8_mode = int8_mode
+        self.share_embed = False
 
         if isinstance(weights_data_type, str):
             try:
@@ -137,11 +146,16 @@ class GPTWeights:
                 self.inference_data_type]))   # position_encoding_table
             optional_adapter_offset += 1
 
+        self.pre_embed_idx = len(self.w)
         self.w.append(torch.zeros(vocab_size, global_hidden_units,
                       dtype=str_type_map[self.inference_data_type]))   # embedding_table
+        self.post_embed_idx = len(self.w)
         self.w.append(torch.zeros(vocab_size, global_hidden_units, dtype=str_type_map[
             self.inference_data_type]))   # post embedding_kernel
         self.adapter_offset = 2 + optional_adapter_offset
+
+        self.w.extend([torch.empty(0)] * layer_num)   # gating_weight
+        self.adapter_offset += layer_num
 
         # adapters
         if self.has_adapters:
@@ -204,12 +218,19 @@ class GPTWeights:
         return len(self.w)
 
     def _map(self, func):
+        assert(self.pre_embed_idx < self.post_embed_idx, "Pre decoder embedding index should be lower than post decoder embedding index.")
         for i in range(len(self.w)):
             if isinstance(self.w[i], list):
                 for j in range(len(self.w[i])):
                     self.w[i][j] = func(self.w[i][j])
             else:
-                self.w[i] = func(self.w[i])
+                if self.share_embed and i == self.post_embed_idx:
+                    # If sharing the pre and post embedding, any mapping to 
+                    # the pre decoder weight will give the same output to the
+                    # post decoder weight, so we just copy here.
+                    self.w[self.post_embed_idx] = self.w[self.pre_embed_idx]
+                else:
+                    self.w[i] = func(self.w[i])
 
     def _map_int8(self, func):
         for i in range(len(self.int8_w)):
@@ -269,13 +290,25 @@ class GPTWeights:
         w.extend([load_to_torch(f"{ckpt_path}/model.layers.{i}.post_attention_layernorm.bias.bin",
                  is_load(i)) for i in range(self.layer_num)])
         w.extend([load_to_torch(
-            f"{ckpt_path}/model.layers.{i}.mlp.dense_h_to_4h.weight.{tp_rank}.bin", is_load(i)) for i in range(self.layer_num)])
-        w.extend([load_to_torch(f"{ckpt_path}/model.layers.{i}.mlp.dense_h_to_4h.bias.{tp_rank}.bin",
-                 is_load(i)) for i in range(self.layer_num)])
+                f"{ckpt_path}/model.layers.{i}.mlp.dense_h_to_4h.weight.{tp_rank}.bin" \
+                    if os.path.isfile(f"{ckpt_path}/model.layers.{i}.mlp.dense_h_to_4h.weight.{tp_rank}.bin") \
+                        else f"{ckpt_path}/model.layers.{i}.mlp.moe.experts.dense_h_to_4h.weight.{tp_rank}.bin",
+                is_load(i)) for i in range(self.layer_num)])
         w.extend([load_to_torch(
-            f"{ckpt_path}/model.layers.{i}.mlp.dense_4h_to_h.weight.{tp_rank}.bin", is_load(i)) for i in range(self.layer_num)])
-        w.extend([load_to_torch(f"{ckpt_path}/model.layers.{i}.mlp.dense_4h_to_h.bias.bin", is_load(i))
-                 for i in range(self.layer_num)])
+                f"{ckpt_path}/model.layers.{i}.mlp.dense_h_to_4h.bias.{tp_rank}.bin" \
+                    if os.path.isfile(f"{ckpt_path}/model.layers.{i}.mlp.dense_h_to_4h.bias.{tp_rank}.bin") \
+                        else f"{ckpt_path}/model.layers.{i}.mlp.moe.experts.dense_h_to_4h.bias.{tp_rank}.bin",
+                is_load(i)) for i in range(self.layer_num)])
+        w.extend([load_to_torch(
+                f"{ckpt_path}/model.layers.{i}.mlp.dense_4h_to_h.weight.{tp_rank}.bin" \
+                    if os.path.isfile(f"{ckpt_path}/model.layers.{i}.mlp.dense_4h_to_h.weight.{tp_rank}.bin") \
+                        else f"{ckpt_path}/model.layers.{i}.mlp.moe.experts.dense_4h_to_h.weight.{tp_rank}.bin",
+                is_load(i)) for i in range(self.layer_num)])
+        w.extend([load_to_torch(
+                f"{ckpt_path}/model.layers.{i}.mlp.dense_4h_to_h.bias.bin" \
+                    if os.path.isfile(f"{ckpt_path}/model.layers.{i}.mlp.dense_4h_to_h.bias.bin") \
+                        else f"{ckpt_path}/model.layers.{i}.mlp.moe.experts.dense_4h_to_h.bias.bin",
+                is_load(i)) for i in range(self.layer_num)])
 
         if self.has_pre_decoder_layernorm:
             w.append(load_to_torch(f"{ckpt_path}/model.pre_decoder_layernorm.weight.bin", True))
@@ -294,32 +327,68 @@ class GPTWeights:
             w.append(wpe)
         w.append(load_to_torch(f"{ckpt_path}/model.wte.bin", True))
         if os.path.isfile(f"{ckpt_path}/model.lm_head.weight.bin"):
+            self.share_embed = False
             w.append(load_to_torch(f"{ckpt_path}/model.lm_head.weight.bin", True))
         else:
-            w.append(load_to_torch(f"{ckpt_path}/model.wte.bin", True))
+            self.share_embed = True
+            w.append(torch.empty(0).to(str_type_map[self.inference_data_type]))
+
+        gate_list = []
+        for i in range(self.layer_num):
+            if (os.path.isfile(f"{ckpt_path}/model.layers.{i}.mlp.moe.gate.wg.weight.bin")):
+                gate_list.append(load_to_torch(f"{ckpt_path}/model.layers.{i}.mlp.moe.gate.wg.weight.bin", True))
+            else:
+                gate_list.append(load_to_torch(f"{ckpt_path}/model.layers.{i}.mlp.moe.gate.wg.weight.bin", False))
+        w.extend(gate_list)
 
         if self.has_adapters:
             w.extend([load_to_torch(
-                f"{ckpt_path}/model.layers.{i}.after_attention_adapter.dense_h_to_4h.weight.{tp_rank}.bin", is_load(i)) for i in range(self.layer_num)])
+                    f"{ckpt_path}/model.layers.{i}.after_attention_adapter.dense_h_to_4h.weight.{tp_rank}.bin" \
+                        if os.path.isfile(f"{ckpt_path}/model.layers.{i}.after_attention_adapter.dense_h_to_4h.weight.{tp_rank}.bin") \
+                            else f"{ckpt_path}/model.layers.{i}.after_attention_adapter.moe.experts.dense_h_to_4h.weight.{tp_rank}.bin",
+                    is_load(i)) for i in range(self.layer_num)])
             w.extend([load_to_torch(
-                f"{ckpt_path}/model.layers.{i}.after_attention_adapter.dense_h_to_4h.bias.{tp_rank}.bin", is_load(i)) for i in range(self.layer_num)])
+                    f"{ckpt_path}/model.layers.{i}.after_attention_adapter.dense_h_to_4h.bias.{tp_rank}.bin" \
+                        if os.path.isfile(f"{ckpt_path}/model.layers.{i}.after_attention_adapter.dense_h_to_4h.bias.{tp_rank}.bin") \
+                            else f"{ckpt_path}/model.layers.{i}.after_attention_adapter.moe.experts.dense_h_to_4h.bias.{tp_rank}.bin",
+                    is_load(i)) for i in range(self.layer_num)])
             w.extend([load_to_torch(
-                f"{ckpt_path}/model.layers.{i}.after_attention_adapter.dense_4h_to_h.weight.{tp_rank}.bin", is_load(i)) for i in range(self.layer_num)])
+                    f"{ckpt_path}/model.layers.{i}.after_attention_adapter.dense_4h_to_h.weight.{tp_rank}.bin" \
+                        if os.path.isfile(f"{ckpt_path}/model.layers.{i}.after_attention_adapter.dense_4h_to_h.weight.{tp_rank}.bin") \
+                            else f"{ckpt_path}/model.layers.{i}.after_attention_adapter.moe.experts.dense_4h_to_h.weight.{tp_rank}.bin",
+                    is_load(i)) for i in range(self.layer_num)])
             w.extend([load_to_torch(
-                f"{ckpt_path}/model.layers.{i}.after_attention_adapter.dense_4h_to_h.bias.bin", is_load(i)) for i in range(self.layer_num)])
+                    f"{ckpt_path}/model.layers.{i}.after_attention_adapter.dense_4h_to_h.bias.bin" \
+                        if os.path.isfile(f"{ckpt_path}/model.layers.{i}.after_attention_adapter.dense_4h_to_h.bias.bin") \
+                            else f"{ckpt_path}/model.layers.{i}.after_attention_adapter.moe.experts.dense_4h_to_h.bias.bin",
+                    is_load(i)) for i in range(self.layer_num)])
             w.extend([load_to_torch(
-                f"{ckpt_path}/model.layers.{i}.after_ffn_adapter.dense_h_to_4h.weight.{tp_rank}.bin", is_load(i)) for i in range(self.layer_num)])
+                    f"{ckpt_path}/model.layers.{i}.after_ffn_adapter.dense_h_to_4h.weight.{tp_rank}.bin" \
+                        if os.path.isfile(f"{ckpt_path}/model.layers.{i}.after_ffn_adapter.dense_h_to_4h.weight.{tp_rank}.bin") \
+                            else f"{ckpt_path}/model.layers.{i}.after_ffn_adapter.moe.experts.dense_h_to_4h.weight.{tp_rank}.bin",
+                    is_load(i)) for i in range(self.layer_num)])
             w.extend([load_to_torch(
-                f"{ckpt_path}/model.layers.{i}.after_ffn_adapter.dense_h_to_4h.bias.{tp_rank}.bin", is_load(i)) for i in range(self.layer_num)])
+                    f"{ckpt_path}/model.layers.{i}.after_ffn_adapter.dense_h_to_4h.bias.{tp_rank}.bin" \
+                        if os.path.isfile(f"{ckpt_path}/model.layers.{i}.after_ffn_adapter.dense_h_to_4h.bias.{tp_rank}.bin") \
+                            else f"{ckpt_path}/model.layers.{i}.after_ffn_adapter.moe.experts.dense_h_to_4h.bias.{tp_rank}.bin",
+                    is_load(i)) for i in range(self.layer_num)])
             w.extend([load_to_torch(
-                f"{ckpt_path}/model.layers.{i}.after_ffn_adapter.dense_4h_to_h.weight.{tp_rank}.bin", is_load(i)) for i in range(self.layer_num)])
+                    f"{ckpt_path}/model.layers.{i}.after_ffn_adapter.dense_4h_to_h.weight.{tp_rank}.bin" \
+                        if os.path.isfile(f"{ckpt_path}/model.layers.{i}.after_ffn_adapter.dense_4h_to_h.weight.{tp_rank}.bin") \
+                            else f"{ckpt_path}/model.layers.{i}.after_ffn_adapter.moe.experts.dense_4h_to_h.weight.{tp_rank}.bin",
+                    is_load(i)) for i in range(self.layer_num)])
             w.extend([load_to_torch(
-                f"{ckpt_path}/model.layers.{i}.after_ffn_adapter.dense_4h_to_h.bias.bin", is_load(i)) for i in range(self.layer_num)])
+                    f"{ckpt_path}/model.layers.{i}.after_ffn_adapter.dense_4h_to_h.bias.bin" \
+                        if os.path.isfile(f"{ckpt_path}/model.layers.{i}.after_ffn_adapter.dense_4h_to_h.bias.bin") \
+                            else f"{ckpt_path}/model.layers.{i}.after_ffn_adapter.moe.experts.dense_4h_to_h.bias.bin",
+                    is_load(i)) for i in range(self.layer_num)])
+
+        assert len(self.w) == len(w)
 
         # Reshape
         try:
             for i in range(len(w)):
-                if w[i].nelement() > 0:
+                if w[i].nelement() == self.w[i].nelement():
                     self.w[i] = w[i].reshape(self.w[i].shape)
                 else:
                     self.w[i] = w[i]
@@ -378,10 +447,15 @@ class GPT(nn.Module):
                  pipeline_para_size: int,
                  lib_path: typing.Union[str, pathlib.Path],
                  inference_data_type: str,
+                 inter_size: int = 0,
                  # gpt_variant_params
                  layernorm_eps: float = 1e-6,
                  layernorm_type: typing.Literal['pre_layernorm', 'post_layernorm'] = "pre_layernorm",
                  activation_type: str = "Gelu",
+                 gpt_with_moe: bool = False,
+                 expert_num: int = 0,
+                 moe_k: int = 0,
+                 moe_layer_index: typing.List = [],
                  has_positional_encoding: bool = True,
                  has_pre_decoder_layernorm: bool = False,
                  has_post_decoder_layernorm: bool = True,
@@ -398,11 +472,16 @@ class GPT(nn.Module):
         self.start_id = start_id
         self.end_id = end_id
         self.layer_num = layer_num
+        self.inter_size = inter_size if inter_size != 0 else 4 * self.head_num * self.size_per_head
 
         # gpt_variant_params
         self.layernorm_eps = layernorm_eps
         self.layernorm_type = layernorm_type
         self.activation_type = activation_type
+        self.gpt_with_moe = gpt_with_moe
+        self.expert_num = expert_num
+        self.moe_k = moe_k
+        self.moe_layer_index = moe_layer_index
         self.has_positional_encoding = has_positional_encoding
         self.has_pre_decoder_layernorm = has_pre_decoder_layernorm
         self.has_post_decoder_layernorm = has_post_decoder_layernorm
@@ -432,12 +511,14 @@ class GPT(nn.Module):
                                   max_seq_len, tensor_para_size, pipeline_para_size,
                                   weights_data_type=weights_data_type,
                                   inference_data_type=inference_data_type,
+                                  gpt_with_moe=self.gpt_with_moe,
                                   has_positional_encoding=self.has_positional_encoding,
                                   has_pre_decoder_layernorm=self.has_pre_decoder_layernorm,
                                   has_post_decoder_layernorm=self.has_post_decoder_layernorm,
                                   has_adapters=self.has_adapters,
                                   adapter_inter_size=self.adapter_inter_size,
-                                  int8_mode=int8_mode)
+                                  int8_mode=int8_mode,
+                                  inter_size=inter_size)
 
         # Prepare for tensor/pipeline parallel
         try:
@@ -476,8 +557,12 @@ class GPT(nn.Module):
             self.build_model = False
 
         self.model = torch.classes.FasterTransformer.GptOp(
-            self.head_num, self.size_per_head, 4 * self.head_num * self.size_per_head,
-            self.layer_num, self.vocab_size, self.start_id, self.end_id,
+            self.head_num, self.size_per_head, self.inter_size,
+            self.layer_num,
+            self.expert_num,
+            self.moe_k,
+            self.moe_layer_index,
+            self.vocab_size, self.start_id, self.end_id,
             self.use_sparse_gemm,
             # gpt_variant_params
             self.layernorm_eps,
@@ -493,19 +578,22 @@ class GPT(nn.Module):
         self.build_model = True
 
     def forward(self,
-                start_ids,
-                start_lengths,
-                output_len,
-                beam_width=1,
-                top_k=None,
-                top_p=None,
-                beam_search_diversity_rate=None,
-                temperature=None,
-                len_penalty=None,
-                repetition_penalty=None,
-                random_seed=None,
-                return_output_length=False,
-                return_cum_log_probs=0):
+                start_ids: torch.IntTensor,
+                start_lengths: torch.IntTensor,
+                output_len: int,
+                beam_width: int = 1,
+                top_k: typing.Optional[torch.IntTensor] = None,
+                top_p: typing.Optional[torch.FloatTensor] = None,
+                beam_search_diversity_rate: typing.Optional[torch.FloatTensor] = None,
+                temperature: typing.Optional[torch.FloatTensor] = None,
+                len_penalty: typing.Optional[torch.FloatTensor] = None,
+                repetition_penalty: typing.Optional[torch.FloatTensor] = None,
+                presence_penalty: typing.Optional[torch.FloatTensor] = None,
+                min_length: typing.Optional[torch.IntTensor] = None,
+                random_seed: typing.Optional[torch.LongTensor] = None,
+                bad_words_list: typing.Optional[torch.IntTensor] = None,
+                return_output_length: bool = False,
+                return_cum_log_probs: int = 0):
         if not self.build_model:
             # for the cases we don't load model
             self.cuda()
@@ -527,7 +615,10 @@ class GPT(nn.Module):
                                      temperature,  # optional, can be None
                                      len_penalty,  # optional, can be None
                                      repetition_penalty,  # optional, can be None
+                                     presence_penalty,  # optional, can be None
+                                     min_length,  # optional, can be None
                                      random_seed,  # optional, can be None
+                                     bad_words_list, # optional, can be None
                                      return_cum_log_probs)  # optional, can be None
         if return_cum_log_probs == 0:
             output_ids, output_lengths = outputs
@@ -577,6 +668,7 @@ class GptInitModelParameters:
     has_pre_decoder_layernorm: bool = False
     has_post_decoder_layernorm: bool = True
     use_attention_linear_bias: bool = False
+    inter_size: int = 0
 
     PREDEFINED_MODELS: typing.ClassVar[dict] = {
         'default': dict(),
@@ -606,9 +698,11 @@ class GptInitModelParameters:
     @classmethod
     def from_args(cls, args, config_reader):
         model_name = args.model_name
+        head_num = config_reader.getint(model_name, "head_num")
+        size_per_head = config_reader.getint(model_name, "size_per_head")
         param = cls(
-            head_num=config_reader.getint(model_name, "head_num"),
-            size_per_head=config_reader.getint(model_name, "size_per_head"),
+            head_num=head_num,
+            size_per_head=size_per_head,
             layer_num=config_reader.getint(model_name, "num_layer"),
             # There is no limitation on the length when no positional encoding,
             # setting by a large enough integer.
@@ -635,6 +729,7 @@ class GptInitModelParameters:
                                   fallback=config_reader.get(model_name, "weight_data_type"))
             ),
             sparse=int(getattr(args, 'sparse', False)),
+            inter_size=config_reader.getint(model_name, "inter_size", fallback=4*head_num*size_per_head)
         )
 
         if config_reader.has_option(model_name, 'model_variant'):
@@ -682,21 +777,21 @@ class GptRuntimeModelParameters:
         if batch_size is not None:
             bs = batch_size
         return cls(
-            beam_width=args.beam_width or config_reader.getint("ft_instance_hyperparameter", "beam_width"),
-            top_k=(args.sampling_top_k or config_reader.getint("ft_instance_hyperparameter", "top_k")) *
+            beam_width=args.beam_width or config_reader.getint("ft_instance_hyperparameter", "beam_width", fallback=1),
+            top_k=(args.sampling_top_k or config_reader.getint("ft_instance_hyperparameter", "top_k", fallback=1)) *
             torch.ones(size=[bs], dtype=torch.int32),
-            top_p=(args.sampling_top_p or config_reader.getfloat("ft_instance_hyperparameter", "top_p")) *
+            top_p=(args.sampling_top_p or config_reader.getfloat("ft_instance_hyperparameter", "top_p", fallback=0.0)) *
             torch.ones(size=[bs], dtype=torch.float32),
             beam_search_diversity_rate=(
                 args.beam_search_diversity_rate
-                or config_reader.getfloat("ft_instance_hyperparameter", "beam_search_diversity_rate")
+                or config_reader.getfloat("ft_instance_hyperparameter", "beam_search_diversity_rate", fallback=0.0)
             ) * torch.ones(size=[bs], dtype=torch.float32),
             temperature=(args.temperature or config_reader.getfloat("ft_instance_hyperparameter",
-                         "temperature")) * torch.ones(size=[bs], dtype=torch.float32),
+                         "temperature", fallback=1.0)) * torch.ones(size=[bs], dtype=torch.float32),
             len_penalty=(args.len_penalty or config_reader.getfloat("ft_instance_hyperparameter",
-                         "len_penalty")) * torch.ones(size=[bs], dtype=torch.float32),
+                         "len_penalty", fallback=0.0)) * torch.ones(size=[bs], dtype=torch.float32),
             repetition_penalty=(
-                args.repetition_penalty or config_reader.getfloat("ft_instance_hyperparameter", "repetition_penalty")
+                args.repetition_penalty or config_reader.getfloat("ft_instance_hyperparameter", "repetition_penalty", fallback=1.0)
             ) * torch.ones(size=[bs], dtype=torch.float32),
         )
 

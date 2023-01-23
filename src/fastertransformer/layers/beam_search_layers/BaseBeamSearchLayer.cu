@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -193,6 +193,9 @@ void BaseBeamSearchLayer<T>::forward(TensorMap* output_tensors, TensorMap* input
     //      temperature [1] on cpu, optional
     //      len_penalty [1] on cpu, optional
     //      repetition_penalty [1] on cpu, optional
+    //      presence_penalty [1] on cpu, optional
+    //          Only one of repetition and presence penalties is allowed.
+    //      min_length [1] on cpu, int, optional
 
     // output_tensors:
     //      output_ids [max_seq_len, batch_size, beam_width]
@@ -214,32 +217,45 @@ void BaseBeamSearchLayer<T>::forward(TensorMap* output_tensors, TensorMap* input
     const int ite              = input_tensors->at("ite").getVal<int>();
     const int local_batch_size = input_tensors->at("logits").shape[0];
 
-    const float temperature =
-        input_tensors->isExist("temperature") ? input_tensors->at("temperature").getVal<float>() : 1.0f;
-    const float repetition_penalty =
-        input_tensors->isExist("repetition_penalty") ? input_tensors->at("repetition_penalty").getVal<float>() : 1.0f;
-    const T* embedding_bias =
-        input_tensors->isExist("embedding_bias") ? input_tensors->at("embedding_bias").getPtr<const T>() : nullptr;
+    const float temperature    = input_tensors->getVal<float>("temperature", 1.0f);
+    const T*    embedding_bias = input_tensors->getPtr<const T>("embedding_bias", nullptr);
+
+    RepetitionPenaltyType repetition_penalty_type = RepetitionPenaltyType::None;
+    float                 repetition_penalty      = getDefaultPenaltyValue(repetition_penalty_type);
+    if (input_tensors->isExist("repetition_penalty") || input_tensors->isExist("presence_penalty")) {
+        FT_CHECK_WITH_INFO(
+            !(input_tensors->isExist("repetition_penalty") && input_tensors->isExist("presence_penalty")),
+            "Found ambiguous parameters repetition_penalty and presence_penalty which are mutually exclusive. "
+            "Please provide one of repetition_penalty or presence_penalty.");
+        repetition_penalty_type = input_tensors->isExist("repetition_penalty") ? RepetitionPenaltyType::Multiplicative :
+                                                                                 RepetitionPenaltyType::Additive;
+        repetition_penalty      = repetition_penalty_type == RepetitionPenaltyType::Multiplicative ?
+                                      input_tensors->getVal<float>("repetition_penalty") :
+                                      input_tensors->getVal<float>("presence_penalty");
+    }
 
     invokeAddBiasApplyPenalties(
         step,
         input_tensors->at("logits").getPtr<T>(),
         output_tensors->at("output_ids")
             .getPtrWithOffset<const int>((step - 1) * batch_size * beam_width + ite * local_batch_size * beam_width),
-        output_tensors->at("output_ids").getPtr<const int>(),
-        output_tensors->at("parent_ids").getPtr<const int>(),
-        input_tensors->at("input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {}, nullptr}).getPtr<const int>(),
+        output_tensors->getPtr<const int>("output_ids"),
+        output_tensors->getPtr<const int>("parent_ids"),
+        input_tensors->getPtr<const int>("input_lengths", nullptr),
+        output_tensors->getPtr<const int>("sequence_length", nullptr),
         embedding_bias,
         ite,
-        input_tensors->at("max_input_length").getVal<int>(),
+        input_tensors->getVal<int>("max_input_length"),
         local_batch_size,
         batch_size,
         beam_width,
         vocab_size_,
         vocab_size_padded_,
-        input_tensors->at("end_id").getPtr<const int>(),
+        input_tensors->getPtr<const int>("end_id", nullptr),
         temperature,
         repetition_penalty,
+        repetition_penalty_type,
+        input_tensors->getVal<const int>("min_length", 0),
         stream_);
     sync_check_cuda_error();
 

@@ -4,10 +4,15 @@
 ./models/
 __pycache__/
 .vscode
+.idea
 ./translation
 .cache
 *.npy
 *.pth
 !tests/data/**/*.npy
 /models
+/notebooks
 **/.ipynb_checkpoints/
+
+/3rdparty/NeMo/
+/3rdparty/apex/

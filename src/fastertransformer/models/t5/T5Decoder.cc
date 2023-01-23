@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -109,6 +109,22 @@ void T5Decoder<T>::initialize()
                                                        use_gated_activation,
                                                        custom_all_reduce_comm_,
                                                        enable_custom_all_reduce_);
+    }
+
+    if (has_adapters()) {
+        adapter_layer_ = new LinearAdapterLayer<T>(adapter_config_,
+                                                   max_batch_size_,
+                                                   1,
+                                                   d_model_,
+                                                   tensor_para_,
+                                                   stream_,
+                                                   cublas_wrapper_,
+                                                   allocator_,
+                                                   is_free_buffer_after_forward_,
+                                                   sparse_,
+                                                   custom_all_reduce_comm_,
+                                                   enable_custom_all_reduce_,
+                                                   layernorm_eps_);
     }
 }
 
@@ -223,7 +239,8 @@ T5Decoder<T>::T5Decoder(size_t                              max_batch_size,
                         ActivationType                      activation_type,
                         float                               q_scaling,
                         std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
-                        int                                 enable_custom_all_reduce):
+                        int                                 enable_custom_all_reduce,
+                        LinearAdapterConfig const&          adapter_config):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     max_batch_size_(max_batch_size),
     head_num_(head_num),
@@ -241,7 +258,8 @@ T5Decoder<T>::T5Decoder(size_t                              max_batch_size,
     activation_type_(activation_type),
     q_scaling_(q_scaling),
     custom_all_reduce_comm_(custom_all_reduce_comm),
-    enable_custom_all_reduce_(enable_custom_all_reduce)
+    enable_custom_all_reduce_(enable_custom_all_reduce),
+    adapter_config_{adapter_config}
 {
     initialize();
 }
@@ -265,7 +283,8 @@ T5Decoder<T>::T5Decoder(T5Decoder<T> const& decoder):
     activation_type_(decoder.activation_type_),
     q_scaling_(decoder.q_scaling_),
     custom_all_reduce_comm_(decoder.custom_all_reduce_comm_),
-    enable_custom_all_reduce_(decoder.enable_custom_all_reduce_)
+    enable_custom_all_reduce_(decoder.enable_custom_all_reduce_),
+    adapter_config_(decoder.adapter_config_)
 {
     initialize();
 }
@@ -276,6 +295,10 @@ T5Decoder<T>::~T5Decoder()
     delete self_attention_layer_;
     delete cross_attention_layer_;
     delete ffn_layer_;
+    if (adapter_layer_ != nullptr) {
+        delete adapter_layer_;
+        adapter_layer_ = nullptr;
+    }
     freeBuffer();
 }
 
@@ -285,6 +308,9 @@ void T5Decoder<T>::setStream(cudaStream_t stream)
     self_attention_layer_->setStream(stream);
     cross_attention_layer_->setStream(stream);
     ffn_layer_->setStream(stream);
+    if (adapter_layer_ != nullptr) {
+        adapter_layer_->setStream(stream);
+    }
     BaseLayer::setStream(stream);
 }
 
@@ -421,10 +447,11 @@ void T5Decoder<T>::forward(std::vector<Tensor>*                         output_t
         }
         mem_cache_offset += ite_cache_offset;
 
+        auto const& layer_weight = decoder_layer_weight->at(l);
         invokeGeneralT5LayerNorm(decoder_normed_input_,
                                  decoder_input,
-                                 decoder_layer_weight->at(l)->pre_layernorm_weights.gamma,
-                                 decoder_layer_weight->at(l)->pre_layernorm_weights.beta,
+                                 layer_weight->pre_layernorm_weights.gamma,
+                                 layer_weight->pre_layernorm_weights.beta,
                                  layernorm_eps_,
                                  local_batch_size,
                                  d_model_,
@@ -449,21 +476,33 @@ void T5Decoder<T>::forward(std::vector<Tensor>*                         output_t
              Tensor{MEMORY_GPU, data_type, self_k_cache_shape, output_tensors->at(1).getPtrWithOffset(cache_offset)}},
             {"value_cache",
              Tensor{MEMORY_GPU, data_type, self_v_cache_shape, output_tensors->at(2).getPtrWithOffset(cache_offset)}}};
-        self_attention_layer_->forward(&self_attention_output_tensors,
-                                       &self_attention_input_tensors,
-                                       &decoder_layer_weight->at(l)->self_attention_weights);
+        self_attention_layer_->forward(
+            &self_attention_output_tensors, &self_attention_input_tensors, &layer_weight->self_attention_weights);
 
-        invokeGeneralAddBiasResidualT5PreLayerNorm(
-            self_attn_output_,
-            normed_self_attn_output_,
-            decoder_input,
-            decoder_layer_weight->at(l)->self_attn_layernorm_weights.gamma,
-            decoder_layer_weight->at(l)->self_attn_layernorm_weights.beta,
-            decoder_layer_weight->at(l)->self_attention_weights.attention_output_weight.bias,
-            layernorm_eps_,
-            local_batch_size,
-            d_model_,
-            stream_);
+        const T* attention_bias = layer_weight->self_attention_weights.attention_output_weight.bias;
+        if (has_adapters() && layer_weight->has_adapters()) {
+            if (attention_bias != nullptr) {
+                invokeAddBias(self_attn_output_, attention_bias, local_batch_size, d_model_, stream_);
+                attention_bias = nullptr;
+            }
+            Tensor input_tensor{
+                MEMORY_GPU, data_type, std::vector<size_t>{local_batch_size, d_model_}, self_attn_output_};
+            Tensor output_tensor{
+                MEMORY_GPU, data_type, std::vector<size_t>{local_batch_size, d_model_}, self_attn_output_};
+            adapter_layer_->forward(
+                &input_tensor, &output_tensor, &layer_weight->adapter_weights_.after_attention_adapter_weights_);
+        }
+
+        invokeGeneralAddBiasResidualT5PreLayerNorm(self_attn_output_,
+                                                   normed_self_attn_output_,
+                                                   decoder_input,
+                                                   layer_weight->self_attn_layernorm_weights.gamma,
+                                                   layer_weight->self_attn_layernorm_weights.beta,
+                                                   attention_bias,
+                                                   layernorm_eps_,
+                                                   local_batch_size,
+                                                   d_model_,
+                                                   stream_);
         sync_check_cuda_error();
 
         TensorMap cross_attention_input_tensors{
@@ -493,21 +532,19 @@ void T5Decoder<T>::forward(std::vector<Tensor>*                         output_t
                        {local_batch_size, head_num_ / tensor_para_.world_size_, max_seq_len, mem_max_seq_len},
                        output_tensors->at(5).getPtrWithOffset<float>(cross_attentions_offset)});
         }
-        cross_attention_layer_->forward(&cross_attention_output_tensors,
-                                        &cross_attention_input_tensors,
-                                        &decoder_layer_weight->at(l)->cross_attention_weights);
+        cross_attention_layer_->forward(
+            &cross_attention_output_tensors, &cross_attention_input_tensors, &layer_weight->cross_attention_weights);
 
-        invokeGeneralAddBiasResidualT5PreLayerNorm(
-            cross_attn_output_,
-            normed_cross_attn_output_,
-            self_attn_output_,
-            decoder_layer_weight->at(l)->cross_attn_layernorm_weights.gamma,
-            decoder_layer_weight->at(l)->cross_attn_layernorm_weights.beta,
-            decoder_layer_weight->at(l)->cross_attention_weights.attention_output_weight.bias,
-            layernorm_eps_,
-            local_batch_size,
-            d_model_,
-            stream_);
+        invokeGeneralAddBiasResidualT5PreLayerNorm(cross_attn_output_,
+                                                   normed_cross_attn_output_,
+                                                   self_attn_output_,
+                                                   layer_weight->cross_attn_layernorm_weights.gamma,
+                                                   layer_weight->cross_attn_layernorm_weights.beta,
+                                                   layer_weight->cross_attention_weights.attention_output_weight.bias,
+                                                   layernorm_eps_,
+                                                   local_batch_size,
+                                                   d_model_,
+                                                   stream_);
         sync_check_cuda_error();
 
         TensorMap ffn_input_tensors(
@@ -538,7 +575,7 @@ void T5Decoder<T>::forward(std::vector<Tensor>*                         output_t
                                       Tensor{MEMORY_GPU, data_type, {local_batch_size, d_model_}, decoder_output});
         }
 
-        ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &decoder_layer_weight->at(l)->ffn_weights);
+        ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &layer_weight->ffn_weights);
 
         if (use_moe) {
             // residual addition for moe, we should pass the unnormed attention output if using pre_layernorm
@@ -546,7 +583,7 @@ void T5Decoder<T>::forward(std::vector<Tensor>*                         output_t
             finalize_moe_routing_kernelLauncher(fc2_result_,
                                                 decoder_output,
                                                 cross_attn_output_,
-                                                decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
+                                                layer_weight->ffn_weights.output_weight.bias,
                                                 expert_scales_,
                                                 expanded_source_row_to_expanded_dest_row_,
                                                 expert_for_source_row_,
@@ -556,12 +593,20 @@ void T5Decoder<T>::forward(std::vector<Tensor>*                         output_t
                                                 stream_);
         }
         else {
-            invokeT5AddBiasResidual(decoder_output,
-                                    cross_attn_output_,
-                                    decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
-                                    local_batch_size,
-                                    d_model_,
-                                    stream_);
+            auto* ffn_bias = layer_weight->ffn_weights.output_weight.bias;
+            if (has_adapters() && layer_weight->has_adapters()) {
+                if (ffn_bias != nullptr) {
+                    invokeAddBias(decoder_output, ffn_bias, local_batch_size, d_model_, stream_);
+                    ffn_bias = nullptr;
+                }
+                Tensor input_tensor{
+                    MEMORY_GPU, data_type, std::vector<size_t>{local_batch_size, d_model_}, decoder_output};
+                Tensor output_tensor{
+                    MEMORY_GPU, data_type, std::vector<size_t>{local_batch_size, d_model_}, decoder_output};
+                adapter_layer_->forward(
+                    &input_tensor, &output_tensor, &layer_weight->adapter_weights_.after_ffn_adapter_weights_);
+            }
+            invokeT5AddBiasResidual(decoder_output, cross_attn_output_, ffn_bias, local_batch_size, d_model_, stream_);
         }
         sync_check_cuda_error();
 

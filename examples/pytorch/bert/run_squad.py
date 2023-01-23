@@ -356,7 +356,7 @@ def main():
     parser.add_argument("--threads", type=int, default=1, help="multiple threads for converting example to features")
     parser.add_argument("--model_type", type=str, help="ori, ths, thsext")
     parser.add_argument("--data_type", type=str, help="fp32, fp16, bf16")
-    parser.add_argument('--ths_path', type=str, default='./lib/libth_bert.so',
+    parser.add_argument('--ths_path', type=str, default='./lib/libth_transformer.so',
                         help='path of the pyt_fastertransformer dynamic lib file')
     parser.add_argument('--int8_mode', type=int, default=0, metavar='NUMBER',
                         help='int8 mode (default: 0)', choices=[0, 1, 2, 3])

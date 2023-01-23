@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -28,8 +28,12 @@ class ParallelGPT(GPT):
             del self.model
             self.build_model = False
         self.model = torch.classes.FasterTransformer.ParallelGptOp(
-            self.head_num, self.size_per_head, 4 * self.head_num * self.size_per_head,
-            self.layer_num, self.vocab_size, self.start_id, self.end_id,
+            self.head_num, self.size_per_head, self.inter_size,
+            self.layer_num,
+            self.expert_num,
+            self.moe_k,
+            self.moe_layer_index,
+            self.vocab_size, self.start_id, self.end_id,
             self.tensor_para_size, self.pipeline_para_size, self.int8_mode,
             # GPT variant parameters
             self.layernorm_eps,

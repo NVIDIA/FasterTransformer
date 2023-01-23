@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -495,7 +495,13 @@ void generate_t5_gemm_config(int   batch_size,
             }
             else {
                 fprintf(fd,
-                        "%d %d %d %d %d ### %d %d %d %d %d -1 -1 -1 -1 -1 -1 -1 %f\n",
+                        "%d %d %d %d %d ### %d %d %d %d %d -1 -1 -1 -1 -1 -1 -1 "
+#if (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH >= 3)
+                        "-1 -1 "
+#elif (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH < 3)
+                        "-1 -1 -1 "
+#endif
+                        "%f\n",
                         batch_size * (i <= 5 || i == 1 ? 1 : beam_width),
                         seq_len,
                         head_num,
@@ -512,7 +518,13 @@ void generate_t5_gemm_config(int   batch_size,
         }
         else {
             fprintf(fd,
-                    "%d %d %d %d %d ### %d %d %d %d %d -1 -1 -1 -1 -1 -1 -1 %f\n",
+                    "%d %d %d %d %d ### %d %d %d %d %d -1 -1 -1 -1 -1 -1 -1 "
+#if (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH >= 3)
+                    "-1 -1 "
+#elif (CUBLAS_VER_MAJOR == 11 && CUBLAS_VER_MINOR == 11 && CUBLAS_VER_PATCH < 3)
+                    "-1 -1 -1 "
+#endif
+                    "%f\n",
                     batch_size * (i <= 5 || i == 1 ? 1 : beam_width),
                     seq_len,
                     head_num,

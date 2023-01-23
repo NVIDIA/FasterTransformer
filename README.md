@@ -9,6 +9,7 @@ This repository provides a script and recipe to run the highly optimized transfo
   - [Model overview](#model-overview)
     - [Support matrix](#support-matrix)
   - [Advanced](#advanced)
+    - [Global Environment](#global-environment)
   - [Performance](#performance)
     - [BERT base performance](#bert-base-performance)
       - [BERT base performances of FasterTransformer new features](#bert-base-performances-of-fastertransformer-new-features)
@@ -30,36 +31,41 @@ FasterTransformer is built on top of CUDA, cuBLAS, cuBLASLt and C++. We provide 
 
 ### Support matrix
 
-| Models           | Framework      | FP16 | INT8 (after Turing) | Sparsity (after Ampere) | Tensor parallel | Pipeline parallel |
-| ---------------- | -------------- | ---- | ------------------- | ----------------------- | --------------- | ----------------- |
-| BERT             | TensorFlow     | Yes  | Yes                 | -                       | -               | -                 |
-| BERT             | PyTorch        | Yes  | Yes                 | Yes                     | Yes             | Yes               |
-| BERT             | Triton backend | Yes  | -                   | -                       | Yes             | Yes               |
-| XLNet            | C++            | Yes  | -                   | -                       | -               | -                 |
-| Encoder          | TensorFlow     | Yes  | Yes                 | -                       | -               | -                 |
-| Encoder          | PyTorch        | Yes  | Yes                 | Yes                     | -               | -                 |
-| Decoder          | TensorFlow     | Yes  | -                   | -                       | -               | -                 |
-| Decoder          | PyTorch        | Yes  | -                   | -                       | -               | -                 |
-| Decoding         | TensorFlow     | Yes  | -                   | -                       | -               | -                 |
-| Decoding         | PyTorch        | Yes  | -                   | -                       | -               | -                 |
-| GPT              | TensorFlow     | Yes  | -                   | -                       | -               | -                 |
-| GPT/OPT          | PyTorch        | Yes  | -                   | -                       | Yes             | Yes               |
-| GPT/OPT          | Triton backend | Yes  | -                   | -                       | Yes             | Yes               |
-| BLOOM            | PyTorch        | Yes  | -                   | -                       | Yes             | Yes               |
-| BLOOM            | Triton backend | Yes  | -                   | -                       | Yes             | Yes               |
-| GPT-J            | Triton backend | Yes  | -                   | -                       | Yes             | Yes               |
-| Longformer       | PyTorch        | Yes  | -                   | -                       | -               | -                 |
-| T5/UL2           | PyTorch        | Yes  | -                   | -                       | Yes             | Yes               |
-| T5               | TensorFlow 2   | Yes  | -                   | -                       | -               | -                 |
-| T5/UL2           | Triton backend | Yes  | -                   | -                       | Yes             | Yes               |
-| T5               | TensorRT       | Yes  | -                   | -                       | Yes             | Yes               |
-| Swin Transformer | PyTorch        | Yes  | Yes                 | -                       | -               | -                 |
-| Swin Transformer | TensorRT       | Yes  | Yes                 | -                       | -               | -                 |
-| ViT              | PyTorch        | Yes  | Yes                 | -                       | -               | -                 |
-| ViT              | TensorRT       | Yes  | Yes                 | -                       | -               | -                 |
-| GPT-NeoX         | Triton backend | Yes  | -                   | -                       | Yes             | Yes               |
-| BART/mBART       | PyTorch        | Yes  | -                   | -                       | Yes             | Yes               |
-| WeNet            | C++            | Yes  | -                   | -                       | -               | -                 |
+| Models           | Framework      | FP16 | INT8 (after Turing) | Sparsity (after Ampere) | Tensor parallel | Pipeline parallel | FP8 (after Hopper) |
+| ---------------- | -------------- | ---- | ------------------- | ----------------------- | --------------- | ----------------- | ------------------ |
+| BERT             | TensorFlow     | Yes  | Yes                 | -                       | -               | -                 | -                  |
+| BERT             | PyTorch        | Yes  | Yes                 | Yes                     | Yes             | Yes               | -                  |
+| BERT             | Triton backend | Yes  | -                   | -                       | Yes             | Yes               | -                  |
+| BERT             | C++            | Yes  | Yes                 | -                       | -               | -                 | Yes                |
+| XLNet            | C++            | Yes  | -                   | -                       | -               | -                 | -                  |
+| Encoder          | TensorFlow     | Yes  | Yes                 | -                       | -               | -                 | -                  |
+| Encoder          | PyTorch        | Yes  | Yes                 | Yes                     | -               | -                 | -                  |
+| Decoder          | TensorFlow     | Yes  | -                   | -                       | -               | -                 | -                  |
+| Decoder          | PyTorch        | Yes  | -                   | -                       | -               | -                 | -                  |
+| Decoding         | TensorFlow     | Yes  | -                   | -                       | -               | -                 | -                  |
+| Decoding         | PyTorch        | Yes  | -                   | -                       | -               | -                 | -                  |
+| GPT              | TensorFlow     | Yes  | -                   | -                       | -               | -                 | -                  |
+| GPT/OPT          | PyTorch        | Yes  | -                   | -                       | Yes             | Yes               | Yes                |
+| GPT/OPT          | Triton backend | Yes  | -                   | -                       | Yes             | Yes               | -                  |
+| GPT-MoE          | PyTorch        | Yes  | -                   | -                       | Yes             | Yes               | -                  |
+| BLOOM            | PyTorch        | Yes  | -                   | -                       | Yes             | Yes               | -                  |
+| BLOOM            | Triton backend | Yes  | -                   | -                       | Yes             | Yes               | -                  |
+| GPT-J            | Triton backend | Yes  | -                   | -                       | Yes             | Yes               | -                  |
+| Longformer       | PyTorch        | Yes  | -                   | -                       | -               | -                 | -                  |
+| T5/UL2           | PyTorch        | Yes  | -                   | -                       | Yes             | Yes               | -                  |
+| T5               | TensorFlow 2   | Yes  | -                   | -                       | -               | -                 | -                  |
+| T5/UL2           | Triton backend | Yes  | -                   | -                       | Yes             | Yes               | -                  |
+| T5               | TensorRT       | Yes  | -                   | -                       | Yes             | Yes               | -                  |
+| T5-MoE           | PyTorch        | Yes  | -                   | -                       | Yes             | Yes               | -                  |
+| Swin Transformer | PyTorch        | Yes  | Yes                 | -                       | -               | -                 | -                  |
+| Swin Transformer | TensorRT       | Yes  | Yes                 | -                       | -               | -                 | -                  |
+| ViT              | PyTorch        | Yes  | Yes                 | -                       | -               | -                 | -                  |
+| ViT              | TensorRT       | Yes  | Yes                 | -                       | -               | -                 | -                  |
+| GPT-NeoX         | Triton backend | Yes  | -                   | -                       | Yes             | Yes               | -                  |
+| BART/mBART       | PyTorch        | Yes  | -                   | -                       | Yes             | Yes               | -                  |
+| WeNet            | C++            | Yes  | -                   | -                       | -               | -                 | -                  |
+| DeBERTa          | TensorFlow 2   | Yes  | -                   | -                       | On-going        | On-going          | -                  |
+| DeBERTa          | PyTorch        | Yes  | -                   | -                       | On-going        | On-going          | -                  |
 
 * Note that the FasterTransformer supports the models above on C++ because all source codes are built on C++.
 
@@ -92,6 +98,15 @@ The following code lists the directory structure of FasterTransformer:
 ```
 
 Note that many folders contains many sub-folders to split different models. Quantization tools are move to `examples`, like `examples/tensorflow/bert/bert-quantization/` and `examples/pytorch/bert/bert-quantization-sparsity/`.
+
+
+### Global Environment
+
+FasterTransformer provides some convenient environment variables for debuging and testing.
+
+1. `FT_LOG_LEVEL`: This environment controls the log level of debug messae. More details are in `src/fastertransformer/utils/logger.h`. Note that the program will print lots of message when the level is lower than `DEBUG` and the program would become very slow.
+2. `FT_NVTX`: If it is set to be `ON` like `FT_NVTX=ON ./bin/gpt_example`, the program will insert tha tag of nvtx to help profiling the program.
+3. `FT_DEBUG_LEVEL`: If it is set to be `DEBUG`, then the program will run `cudaDeviceSynchronize()` after every kernels. Otherwise, the kernel is executued asynchronously by default. It is helpful to locate the error point during debuging. But this flag affects the performance of program significantly. So, it should be used only for debuging.
 
 ## Performance
 
@@ -197,12 +212,23 @@ In the experiments of decoding, we updated the following parameters:
 
 ### Changelog
 
+January 2023
+- Support GPT MoE
+- Support FP8 for Bert and GPT (**Experimental**)
+- Support DeBERTa on TensorFlow 2 and PyTorch
+
+Dec 2022
+- **Release the FasterTransformer 5.2**
+- Support min length penalty
+
 Nov 2022
 - Support T5 Tensorflow 2 custom op.
+- Support T5 MoE
 - Support WeNet
 - Support BART & mBART
 - Support SwinV2
 - Initial support for w8a8 int8 mode with GPT (preview)
+- Support fused mha in GPT
 
 Oct 2022
 - Support BLOOM

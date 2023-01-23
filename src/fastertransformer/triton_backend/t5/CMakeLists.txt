@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ set(t5_triton_backend_files
     T5TritonModelInstance.cc
 )
 
-add_library(T5TritonBackend SHARED ${t5_triton_backend_files})
+add_library(T5TritonBackend STATIC ${t5_triton_backend_files})
+set_property(TARGET T5TritonBackend PROPERTY POSITION_INDEPENDENT_CODE  ON)
 target_link_libraries(T5TritonBackend PRIVATE TransformerTritonBackend T5Encoder T5Decoding -lcublasLt)
 target_compile_features(T5TritonBackend PRIVATE cxx_std_14)

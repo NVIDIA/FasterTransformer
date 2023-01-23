@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -75,7 +75,8 @@ void invokeGeneralAddBiasResidualPreLayerNorm(T*           output,
                                               int          n,
                                               const float* scale_inter,
                                               const float* scale_out,
-                                              const float* scale,
+                                              float*       scale,
+                                              float*       dynamic_scale,
                                               const int    int8_mode,
                                               cudaStream_t stream,
                                               int          opt_version = 2);
@@ -93,7 +94,8 @@ void invokeGeneralAddBiasResidualPreLayerNorm(T*           output,
                                               int          n,
                                               const float* scale_inter,
                                               const float* scale_out,
-                                              const float* scale,
+                                              float*       scale,
+                                              float*       dynamic_scale,
                                               const int    int8_mode,
                                               cudaStream_t stream,
                                               int          opt_version = 2)
@@ -112,6 +114,7 @@ void invokeGeneralAddBiasResidualPreLayerNorm(T*           output,
                                              scale_inter,
                                              scale_out,
                                              scale,
+                                             dynamic_scale,
                                              int8_mode,
                                              stream,
                                              opt_version);
@@ -125,10 +128,28 @@ void invokeGeneralLayerNorm(T*           out,
                             const float  layernorm_eps,
                             const int    m,
                             const int    n,
-                            const float* scale,
+                            float*       scale,
+                            float*       dynamic_scale,
                             const int    int8_mode,
                             cudaStream_t stream,
                             int          opt_version = 2);
+
+template<typename T>
+void invokeGeneralLayerNorm(T*           out,
+                            const T*     input,
+                            const T*     gamma,
+                            const T*     beta,
+                            const float  layernorm_eps,
+                            const int    m,
+                            const int    n,
+                            float*       scale,
+                            const int    int8_mode,
+                            cudaStream_t stream,
+                            int          opt_version = 2)
+{
+    invokeGeneralLayerNorm(
+        out, input, gamma, beta, layernorm_eps, m, n, scale, (float*)nullptr, int8_mode, stream, opt_version = 2);
+}
 
 template<typename T>
 void invokeGeneralT5LayerNorm(T*           out,

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,10 +15,6 @@
  */
 
 #include "src/fastertransformer/th_op/bert/BertOp.h"
-
-#ifdef USE_NVTX
-bool NVTX_ON = true;
-#endif
 
 namespace th = torch;
 namespace torch_ext {

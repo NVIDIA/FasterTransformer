@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -90,6 +90,7 @@ private:
 
     std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm_;
     int                                 enable_custom_all_reduce_;
+    LinearAdapterConfig                 adapter_config_;
 
 protected:
     T*       padded_embedding_kernel_                = nullptr;
@@ -165,7 +166,8 @@ public:
                ActivationType                      activation_type          = ActivationType::Relu,
                bool                                tie_word_embeddings      = true,
                std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
-               int                                 enable_custom_all_reduce = 0);
+               int                                 enable_custom_all_reduce = 0,
+               LinearAdapterConfig const&          adapter_config           = {});
 
     T5Decoding(T5Decoding<T> const& T5Decoding);
 

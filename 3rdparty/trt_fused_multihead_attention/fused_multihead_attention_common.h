@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, NVIDIA CORPORATION. All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -28,7 +28,10 @@ enum Data_type
     DATA_TYPE_FP32,
     DATA_TYPE_INT4,
     DATA_TYPE_INT8,
-    DATA_TYPE_INT32
+    DATA_TYPE_INT32,
+    DATA_TYPE_BF16,
+    DATA_TYPE_E4M3,
+    DATA_TYPE_E5M2
 };
 
 constexpr int32_t kSM_70 = 70;
@@ -37,4 +40,5 @@ constexpr int32_t kSM_75 = 75;
 constexpr int32_t kSM_80 = 80;
 constexpr int32_t kSM_86 = 86;
 constexpr int32_t kSM_89 = 89;
+constexpr int32_t kSM_90 = 90;
 } // namespace fastertransformer

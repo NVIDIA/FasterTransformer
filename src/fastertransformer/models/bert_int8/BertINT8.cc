@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -126,7 +126,7 @@ template<typename T>
 void BertINT8<T>::allocateBuffer()
 {
     if (is_allocate_buffer_ == false) {
-        token_num_ = (size_t*)allocator_->reMalloc(token_num_, sizeof(size_t) * 1, false);
+        check_cuda_error(cudaMallocHost((void**)&h_pinned_token_num_ptr_, sizeof(size_t)));
         padding_offset_ =
             (int*)allocator_->reMalloc(padding_offset_, sizeof(int) * max_batch_size_ * max_seq_len_, false);
         trt_mha_padding_offset_ =
@@ -147,7 +147,7 @@ template<typename T>
 void BertINT8<T>::freeBuffer()
 {
     if (is_allocate_buffer_ == true) {
-        allocator_->free((void**)(&token_num_));
+        check_cuda_error(cudaFreeHost(h_pinned_token_num_ptr_));
         allocator_->free((void**)(&padding_offset_));
         allocator_->free((void**)(&trt_mha_padding_offset_));
 
@@ -187,8 +187,8 @@ void BertINT8<T>::forward(std::vector<Tensor>*                       output_tens
             invokeBuildEncoderAttentionMask(
                 attention_mask_, sequence_lengths, request_batch_size, request_seq_len, stream_);
             sync_check_cuda_error();
-            invokeGetPaddingOffset(&h_token_num,
-                                   token_num_,
+            invokeGetPaddingOffset(h_pinned_token_num_ptr_,
+                                   &h_token_num,
                                    padding_offset_,
                                    sequence_lengths,
                                    request_batch_size,
@@ -220,8 +220,8 @@ void BertINT8<T>::forward(std::vector<Tensor>*                       output_tens
             break;
         }
         case AttentionType::FUSED_MHA: {
-            invokeGetPaddingOffset(&h_token_num,
-                                   token_num_,
+            invokeGetPaddingOffset(h_pinned_token_num_ptr_,
+                                   &h_token_num,
                                    padding_offset_,
                                    sequence_lengths,
                                    request_batch_size,

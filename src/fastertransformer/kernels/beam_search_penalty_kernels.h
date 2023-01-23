@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -17,28 +17,32 @@
 
 #include <cuda_fp16.h>
 
+#include "src/fastertransformer/kernels/penalty_types.h"
 #include "src/fastertransformer/utils/cuda_utils.h"
 
 namespace fastertransformer {
 
 template<typename T>
-void invokeAddBiasApplyPenalties(int          step,
-                                 T*           logits,
-                                 const int*   current_ids,
-                                 const int*   previous_ids,
-                                 const int*   parent_ids,
-                                 const int*   input_lengths,
-                                 const T*     bias,
-                                 const int    ite,
-                                 const int    max_input_length,
-                                 const int    local_batch_size,
-                                 const int    batch_size,
-                                 const int    beam_width,
-                                 const int    vocab_size,
-                                 const int    vocab_size_padded,
-                                 const int*   end_ids,
-                                 const float  temperature,
-                                 const float  repetition_penalty,
-                                 cudaStream_t stream);
+void invokeAddBiasApplyPenalties(int                         step,
+                                 T*                          logits,
+                                 const int*                  current_ids,
+                                 const int*                  previous_ids,
+                                 const int*                  parent_ids,
+                                 const int*                  input_lengths,
+                                 const int*                  sequence_lengths,
+                                 const T*                    bias,
+                                 const int                   ite,
+                                 const int                   max_input_length,
+                                 const int                   local_batch_size,
+                                 const int                   batch_size,
+                                 const int                   beam_width,
+                                 const int                   vocab_size,
+                                 const int                   vocab_size_padded,
+                                 const int*                  end_ids,
+                                 const float                 temperature,
+                                 const float                 repetition_penalty,
+                                 const RepetitionPenaltyType repetition_penalty_type,
+                                 const int                   min_length,
+                                 cudaStream_t                stream);
 
 }  // namespace fastertransformer

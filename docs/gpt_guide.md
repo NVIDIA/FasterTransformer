@@ -22,10 +22,15 @@
       - [Download onnx model and convert](#download-onnx-model-and-convert)
       - [Download huggingface gpt model and convert](#download-huggingface-gpt-model-and-convert)
     - [Run GPT](#run-gpt)
+      - [Set up in interactive mode](#set-up-in-interactive-mode)
+      - [Run on singe-node](#run-on-singe-node)
+      - [Run on multi-node](#run-on-multi-node)
     - [Run GPT with prompts](#run-gpt-with-prompts)
     - [Run Meta OPT](#run-meta-opt)
     - [Run BLOOM](#run-bloom)
     - [gpt with triton backend](#gpt-with-triton-backend)
+    - [GPT with MOE](#gpt-with-moe)
+    - [GPT with FP8 (Experimental)](#gpt-with-fp8-experimental)
     - [Advanced features](#advanced-features)
       - [generate different sentences and enable shared context](#generate-different-sentences-and-enable-shared-context)
       - [Interactive generation](#interactive-generation)
@@ -51,7 +56,7 @@ GPT is a variant of Decoding model, which does not have the encoder module, cros
   * Huggingface
   * Megatron
   * Nemo Megatron
-  * TensorFlow 
+  * TensorFlow
 * Data type
   * FP32
   * FP16
@@ -65,6 +70,8 @@ GPT is a variant of Decoding model, which does not have the encoder module, cros
     * Note:
       * Weights are preprocessed offline based on the current GPU to optimize the weight alignment for consumption by tensorcores. Currently, we directly consume FP32/BF16/FP16 weights and quantize them just before inference. If we want to store quantized weights, they MUST be preprocessed for the GPU intended to be used with inference.
       * When using the torch APIs, int8 mode is only available via the Parallel GPT Op. The Parallel GPT Op can also be used on single GPU.
+  * INT8 with SmoothQuant
+  * FP8 (**Experimental**)
 * Feature
   * Multi-GPU multi-node inference
   * Dynamic random seed
@@ -100,17 +107,19 @@ FasterTransformer splits the whole workflow into 2 parts. The first one is “co
 <br/><br/>
 
 The following examples demonstrating how to run multi-GPU and multi-node GPT model.
+
 1. `examples/cpp/multi_gpu_gpt_example.cc`: It uses MPI to organize all GPUs.
 2. `examples/cpp/multi_gpu_gpt_triton_example.cc`: It uses threading for intra node, and MPI for inter node. This example also demonstrates how to use Triton backend API of FasterTransformer to run the GPT model.
 3. `examples/pytorch/gpt/multi_gpu_gpt_example.py`: This example is similar to `examples/cpp/multi_gpu_gpt_example.cc`, but encapsulate the instance of FasterTransformer by PyTorch OP.
 
 In summary, the workflow to run the GPT model is:
-1.	Initializing the NCCL comm and setting ranks of tensor parallel and pipeline parallel by MPI or threading
-2.	Load weights by the ranks of tensor parallel, pipeline parallel and other model hyper-parameters.
-3.	Create the instance of `ParalelGpt` by the ranks of tensor parallel, pipeline parallel and other model hyper-parameters.
-4.	Receive the request from client and convert the request to the format of input tensors for ParallelGpt.
-5.	Run forward
-6.	Convert the output tensors of ParallelGpt to response of client and return the response.
+
+1. Initializing the NCCL comm and setting ranks of tensor parallel and pipeline parallel by MPI or threading
+2. Load weights by the ranks of tensor parallel, pipeline parallel and other model hyper-parameters.
+3. Create the instance of `ParalelGpt` by the ranks of tensor parallel, pipeline parallel and other model hyper-parameters.
+4. Receive the request from client and convert the request to the format of input tensors for ParallelGpt.
+5. Run forward
+6. Convert the output tensors of ParallelGpt to response of client and return the response.
 In c++ example codes, we skip the step 4 and step 6, loading the request by `examples/cpp/multi_gpu_gpt/start_ids.csv`. In PyTorch example codes, the request comes from the PyTorch side. In Triton example codes, we have a completed examples from step 1 to step 6.
 
 The source codes are put in `src/fastertransformer/models/multi_gpu_gpt/ParallelGpt.cc`. The arguments, input tensors and output tensors of GPT:
@@ -125,18 +134,10 @@ The source codes are put in `src/fastertransformer/models/multi_gpu_gpt/Parallel
 |      [3]       |          beam_width          |       size_t       |                                                                                                                **Deprecated, move to input**                                                                                                                 |
 |      [4]       |           head_num           |       size_t       |                                                                                                             Head number for model configuration                                                                                                              |
 |      [5]       |        size_per_head         |       size_t       |                                                                                                            Size per head for model configuration                                                                                                             |
-|      [6]       |          inter_size          |       size_t       |                                                                                   The inter size of feed forward network. It is often set to 4 * head_num * size_per_head.                                                                                   |
+|      [6]       |          inter_size          |       size_t       |                                                                                  The inter size of feed forward network. It is often set to 4 \* head_num \* size_per_head.                                                                                  |
 |      [7]       |          num_layer           |       size_t       |                                                                                                     Number of transformer layers for model configuration                                                                                                     |
 |      [8]       |          vocab_size          |        int         |                                                                                                           Vocabulary size for model configuration                                                                                                            |
 |      [9]       |           start_id           |        int         |                                                                                                                   Start id for vocabulary                                                                                                                    |
-|      [10]      |            end_id            |        int         |                                                                                                                    End id for vocabulary                                                                                                                     |
-|      [11]      |   prompt_learning_start_id   |        int         |                                                                                                       The start id of virtual token in p/prompt-tuning                                                                                                       |
-|      [12]      |     prompt_learning_type     | PromptLearningType |                                                 The type of prompt learning when we load the prompt embedding in constructor. FT supports `no_prompt`, `soft_prompt`, `prefix_prompt`, `p_prompt_tuning` now                                                 |
-|      [13]      |      gpt_variant_params      |  gptVariantParams  |                                                                            This structure defines some hyper-parameters of gpt layers, including type of layernorm and activation                                                                            |
-|      [14]      |  beam_search_diversity_rate  |       float        |                                                                                                                **Deprecated, move to input**                                                                                                                 |
-|      [15]      |            top_k             |       size_t       |                                                                                                                **Deprecated, move to input**                                                                                                                 |
-|      [16]      |            top_p             |       float        |                                                                                                                **Deprecated, move to input**                                                                                                                 |
-|      [17]      |         random_seed          | unsigned long long |                                                                                                                **Deprecated, move to input**                                                                                                                 |
 |      [18]      |         temperature          |       float        |                                                                                                                **Deprecated, move to input**                                                                                                                 |
 |      [19]      |         len_penalty          |       float        |                                                                                                                **Deprecated, move to input**                                                                                                                 |
 |      [20]      |      repetition_penalty      |       float        |                                                                                                                **Deprecated, move to input**                                                                                                                 |
@@ -144,7 +145,6 @@ The source codes are put in `src/fastertransformer/models/multi_gpu_gpt/Parallel
 |      [22]      |        pipeline_para         |     NcclParam      |                                                                                Pipeline Parallel information, which is declared in `src/fastertransformer/utils/nccl_utils.h`                                                                                |
 |      [23]      |            stream            |    cudaStream_t    |                                                                                                                         CUDA stream                                                                                                                          |
 |      [24]      |        cublas_wrapper        |  cublasMMWrapper*  |                                                                               Pointer of cuBLAS wrapper, which is declared in `src/fastertransformer/utils/cublasMMWrapper.h`                                                                                |
-|      [25]      |          allocator           |    IAllocator*     |                                                                                 Pointer of memory allocator, which is declared in `src/fastertransformer/utils/allocator.h`                                                                                  |
 |      [26]      | is_free_buffer_after_forward |        bool        |              If setting to be `true`, FasterTransformer will allocate buffer before forward, and free buffer after forward. When the allocator is based on memory pool, setting to `true` may help reducing the memory usage during inference.               |
 |      [27]      |       cuda_device_prop       |  cudaDeviceProp*   |                                                                        Pointer of CUDA device properties, which is used to get the properties of hardware like size of shared memory                                                                         |
 |      [28]      |            sparse            |        bool        |                                                                                                         Is using sparsity. **Experimental feature**                                                                                                          |
@@ -164,14 +164,9 @@ The source codes are put in `src/fastertransformer/models/multi_gpu_gpt/Parallel
 |         output_seq_len          |                 [batch_size]                  |   CPU    |        uint32_t        |                                               The largest number of tokens you hope for results. Note that it contains the input length                                                |
 |         stop_words_list         |      [batch_size, 2, stop_words_length]       |   GPU    |          int           |                                        **Optional**. When FT generates words in this list, it will stop the generation. An extension of stop id                                        |
 |         bad_words_list          |       [batch_size, 2, bad_words_length]       |   GPU    |          int           |                                                               **Optional**. The words in the list will never be sampled.                                                               |
-|            start_id             |                 [batch_size]                  |   CPU    |          int           |                                                    **Optional**. If FT receives this input, FT will replace default start id by it                                                     |
-|             end_id              |                 [batch_size]                  |   CPU    |          int           |                                                     **Optional**. If FT receives this input, FT will replace default end id by it                                                      |
-|          runtime_top_k          |              [1] or [batch_size]              |   CPU    |          uint          |                                                                      **Optional**. top_k value for top k sampling                                                                      |
-|          runtime_top_p          |              [1] or [batch_size]              |   CPU    |         float          |                                                                      **Optional**. top_p value for top p sampling                                                                      |
-|   beam_search_diversity_rate    |              [1] or [batch_size]              |   CPU    |         float          |                                       **Optional**. A hyper hyper-parameter for [simple diverse decoding](https://arxiv.org/pdf/1611.08562.pdf)                                        |
-|           temperature           |              [1] or [batch_size]              |   CPU    |         float          |                                                     **Optional**. Temperature applied to logits for both beam search and sampling                                                      |
-|           len_penalty           |              [1] or [batch_size]              |   CPU    |         float          |                                                          **Optional**. Length penalty applied to logits for only beam search                                                           |
-|       repetition_penalty        |              [1] or [batch_size]              |   CPU    |         float          |                                                  **Optional**. Repetition penalty applied to logits for both beam search and sampling                                                  |
+|       repetition_penalty        |              [1] or [batch_size]              |   CPU    |         float          |                                 **Optional**. Repetition penalty applied to logits for both beam search and sampling. Exclusive with presence_penalty.                                 |
+|        presence_penalty         |              [1] or [batch_size]              |   CPU    |         float          |             **Optional**. Presence penalty - additive type of repetition penalty - applied to logits for both beam search and sampling. Exclusive with repetition_penalty.             |
+|           min_length            |              [1] or [batch_size]              |   CPU    |          int           |                                                                   **Optional**. Minimum number of tokens to generate                                                                   |
 |           random_seed           |              [1] or [batch_size]              |   CPU    | unsigned long long int |                                                         **Optional**. Random seed to initialize the random table in sampling.                                                          |
 |     request_prompt_lengths      |                 [batch_size],                 |   GPU    |          int           |                            **Optional**. Length of prefix soft prompt embedding. This describes how many tokens of soft prompt embedding in each sentence.                             |
 |    request_prompt_embedding     | [batch_size, max_prompt_length, hidden_units] |   GPU    |  float/half/bfloat16   | **Optional**. FT will concat them with results of embedding lookup kernel. For prefix soft prompt embedding, the type must be float; for p/prompt tuning, the type is same to weight.  |
@@ -199,14 +194,14 @@ The `beam_width` value is set by the output shape directly. When the `beam_width
 
 ### Optimization
 
-1.	Kernel optimization: many kernels are based on the kernels of decoder and decoding modules, which are already highly optimized. To prevent from recomputing the previous keys and values, we will allocate a buffer to store them at each step. Although it takes some additional memory usage, we can save the cost of recomputing, allocating buffer at each step, and the cost of concatenation.
-2.	Memory optimization: Different to traditional models like BERT, GPT-3 has 175 billion parameters, taking 350 GBs even if we store the model by half precision. Therefore, we must reduce the memory usage for other parts. In FasterTransformer, we will reuse the memory buffer of different decoder layers. Since the number of layers in GPT-3 is 96, we only need 1/96 memory.
-3.	Model parallelism: In GPT model, FasterTransormer provides both tensor parallelism and pipeline parallelism. For tensor parallelism, FasterTransformer follows the idea of [Megatron]( https://arxiv.org/pdf/1909.08053.pdf). For both self-attention block and feed forward network block, we split the weights of first matrix multiplication by row and split the weights of the second matrix multiplication by column. By optimization, we can reduce the reduction operation to 2 times for each transformer block. The workflow is demonstrated in Fig 3. For pipeline parallelism, FasterTransformer splits the whole batch of request into multiple micro batches and hide the bubble of communication. FasterTransformer will adjust the micro batch size automatically for different cases. Users can adjust the model parallelism by modifying the `gpt_config.ini` file. We recommend to use tensor parallel intra node, and use pipeline parallel inter node because tensor parallel requires more NCCL communication.
-4.	Multiple frameworks: Except the source codes on c, FasterTransformer also provide the TensorFlow op, PyTorch op and Triton backend. Currently, TensorFlow op only supports the single GPU, while PyTorch op and Triton backend support multi-GPU and multi-node. To prevent the additional work of splitting model for model parallelism, FasterTransformer also provides a tool to split and convert the model of Megatron to binary files, then FasterTransformer can load the model in binary directly.
+1. Kernel optimization: many kernels are based on the kernels of decoder and decoding modules, which are already highly optimized. To prevent from recomputing the previous keys and values, we will allocate a buffer to store them at each step. Although it takes some additional memory usage, we can save the cost of recomputing, allocating buffer at each step, and the cost of concatenation.
+2. Memory optimization: Different to traditional models like BERT, GPT-3 has 175 billion parameters, taking 350 GBs even if we store the model by half precision. Therefore, we must reduce the memory usage for other parts. In FasterTransformer, we will reuse the memory buffer of different decoder layers. Since the number of layers in GPT-3 is 96, we only need 1/96 memory.
+3. Model parallelism: In GPT model, FasterTransormer provides both tensor parallelism and pipeline parallelism. For tensor parallelism, FasterTransformer follows the idea of [Megatron]( https://arxiv.org/pdf/1909.08053.pdf). For both self-attention block and feed forward network block, we split the weights of first matrix multiplication by row and split the weights of the second matrix multiplication by column. By optimization, we can reduce the reduction operation to 2 times for each transformer block. The workflow is demonstrated in Fig 3. For pipeline parallelism, FasterTransformer splits the whole batch of request into multiple micro batches and hide the bubble of communication. FasterTransformer will adjust the micro batch size automatically for different cases. Users can adjust the model parallelism by modifying the `gpt_config.ini` file. We recommend to use tensor parallel intra node, and use pipeline parallel inter node because tensor parallel requires more NCCL communication.
+4. Multiple frameworks: Except the source codes on c, FasterTransformer also provide the TensorFlow op, PyTorch op and Triton backend. Currently, TensorFlow op only supports the single GPU, while PyTorch op and Triton backend support multi-GPU and multi-node. To prevent the additional work of splitting model for model parallelism, FasterTransformer also provides a tool to split and convert the model of Megatron to binary files, then FasterTransformer can load the model in binary directly.
 
 ### Note
 
-- `is_context_qk_buf_float_` (whether use float accumulation for GPT-Neox context QK GEMM or not) is set to `false` by default. If you meet accuracy issues releated to GPT-NeoX Context attention blocks, please try to enable it in the `GptNeoX.h`.
+* `is_context_qk_buf_float_` (whether use float accumulation for GPT context QK GEMM or not) is set to `false` by default. If you meet accuracy issues related to GPT Context attention blocks, please try to enable it in the `ParallelGpt.h`.
 
 ## Setup
 
@@ -214,30 +209,30 @@ The following guide demonstrates how to run the examples of c++, PyTorch and Tri
 
 ### Requirements
 
-- CMake >= 3.8 for Tensorflow, CMake >= 3.13 for PyTorch
-- CUDA 11.0 or newer version
-- NCCL 2.10 or newer version
-- Python: Only verify on python 3
-- Tensorflow: Verify on 1.15, 1.13 and 1.14 should work.
-- PyTorch: Verify on 1.8.0, >= 1.5.0 should work.
+* CMake >= 3.8 for Tensorflow, CMake >= 3.13 for PyTorch
+* CUDA 11.0 or newer version
+* NCCL 2.10 or newer version
+* Python: Only verify on python 3
+* Tensorflow: Verify on 1.15, 1.13 and 1.14 should work.
+* PyTorch: Verify on 1.8.0, >= 1.5.0 should work.
 
 Recommend use nvcr image like `nvcr.io/nvidia/tensorflow:22.09-tf1-py3` or `nvcr.io/nvidia/pytorch:22.09-py3`.
 
 These components are readily available within the NGC TensorFlow Docker image below.
 
 Ensure you have the following components:
-- [NVIDIA Docker](https://github.com/NVIDIA/nvidia-docker) and NGC container are recommended
-- [NVIDIA Pascal](https://www.nvidia.com/en-us/data-center/pascal-gpu-architecture/) or [Volta](https://www.nvidia.com/en-us/data-center/volta-gpu-architecture/) or [Turing](https://www.nvidia.com/en-us/geforce/turing/) or [Ampere](https://www.nvidia.com/en-us/data-center/nvidia-ampere-gpu-architecture/) based GPU
+
+* [NVIDIA Docker](https://github.com/NVIDIA/nvidia-docker) and NGC container are recommended
+* [NVIDIA Pascal](https://www.nvidia.com/en-us/data-center/pascal-gpu-architecture/) or [Volta](https://www.nvidia.com/en-us/data-center/volta-gpu-architecture/) or [Turing](https://www.nvidia.com/en-us/geforce/turing/) or [Ampere](https://www.nvidia.com/en-us/data-center/nvidia-ampere-gpu-architecture/) based GPU
 
 For more information about how to get started with NGC containers, see the following sections from the NVIDIA GPU Cloud Documentation and the Deep Learning Documentation:
 
-- [Getting Started Using NVIDIA GPU Cloud](https://docs.nvidia.com/ngc/ngc-getting-started-guide/index.html)
-- [Accessing And Pulling From The NGC Container Registry](https://docs.nvidia.com/deeplearning/frameworks/user-guide/index.html#accessing_registry)
-- [Running TensorFlow](https://docs.nvidia.com/deeplearning/frameworks/tensorflow-release-notes/running.html#running)
-- [Running PyTorch](https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/index.html)
+* [Getting Started Using NVIDIA GPU Cloud](https://docs.nvidia.com/ngc/ngc-getting-started-guide/index.html)
+* [Accessing And Pulling From The NGC Container Registry](https://docs.nvidia.com/deeplearning/frameworks/user-guide/index.html#accessing_registry)
+* [Running TensorFlow](https://docs.nvidia.com/deeplearning/frameworks/tensorflow-release-notes/running.html#running)
+* [Running PyTorch](https://docs.nvidia.com/deeplearning/frameworks/pytorch-release-notes/index.html)
 
 For those unable to use the NGC container, to set up the required environment or create your own container, see the versioned [NVIDIA Container Support Matrix](https://docs.nvidia.com/deeplearning/frameworks/support-matrix/index.html).
-
 
 ### Build the FasterTransformer
 
@@ -463,14 +458,16 @@ python ../examples/pytorch/gpt/utils/huggingface_gpt_convert.py -i gpt2-xl/ -o .
     For generating outputs based on context inputs, create a text file including the context inputs (line by line) and set `--sample_file_input` to the text file path. (By default, the script will generate outputs without context inputs.) Set `--sample_file_output` to write the outputs to a file. Use `--data_type fp16/bf16` to run in FP16 or BF16.
 
     Run with `-h` to see more settings.
+
     ```bash
-    python ../examples/pytorch/gpt/gpt_example.py -h
+    python ../examples/pytorch/gpt/multi_gpu_gpt_example.py -h
     ```
 
     2.1 Run GPT with TP and PP on single node (NVIDIA DGX A100). Note that the number of processes must equal to `tensor_para_size * pipeline_para_size`.
+
     ```bash
     # No parallelism (tensor_para_size=1, pipeline_para_size=1)
-    python ../examples/pytorch/gpt/gpt_example.py
+    python ../examples/pytorch/gpt/multi_gpu_gpt_example.py
 
     # TP (tensor_para_size=8, pipeline_para_size=1)
     mpirun -n 8 --allow-run-as-root python ../examples/pytorch/gpt/multi_gpu_gpt_example.py --tensor_para_size=8 --pipeline_para_size=1 --ckpt_path="/workspace/fastertransformer/models/megatron-models/c-model/345m/8-gpu"
@@ -483,7 +480,8 @@ python ../examples/pytorch/gpt/utils/huggingface_gpt_convert.py -i gpt2-xl/ -o .
     ```
 
     2.2 Run GPT with TP and PP on single-node/multi-node (NVIDIA SuperPOD)
-    #### Set up in interactive mode
+
+#### Set up in interactive mode
 
     ```bash
     srun -A devtech -J devtech-gpt:gpt -p luna -N1 --mpi=pmix --ntasks-per-node=8 --container-image nvcr.io/nvidia/pytorch:22.09-py3 --container-mounts /lustre/fsw/devtech/hpc-devtech/dahn/FasterTransformer:/workspace/fastertransformer --container-workdir /workspace/fastertransformer --pty bash
@@ -492,14 +490,16 @@ python ../examples/pytorch/gpt/utils/huggingface_gpt_convert.py -i gpt2-xl/ -o .
     cmake -DSM=80 -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON .. && make -j12
     ```
 
-    #### Run on singe-node
+#### Run on singe-node
+
     * tensor_para_size=8, pipeline_para_size=1
 
     ```bash
     srun -A devtech -p luna -N1 --mpi=pmix --ntasks-per-node=8 --container-image nvcr.io/nvidia/pytorch:22.09-py3 --container-mounts /lustre/fsw/devtech/hpc-devtech/dahn/FasterTransformer:/workspace/fastertransformer --container-workdir /workspace/fastertransformer/build python ../examples/pytorch/gpt/multi_gpu_gpt_example.py --tensor_para_size=8 --pipeline_para_size=1 --ckpt_path="/workspace/fastertransformer/models/megatron-models/c-model/345m/8-gpu"
     ```
 
-    #### Run on multi-node
+#### Run on multi-node
+
     * tensor_para_size=8, pipeline_para_size=2
 
     ```bash
@@ -526,7 +526,7 @@ python ../examples/pytorch/gpt/utils/huggingface_gpt_convert.py -i gpt2-xl/ -o .
     python ../examples/pytorch/gpt/lambada_task_example.py \
            --batch-size 64 \
            --checkpoint-path ../models/megatron-models/c-model/345m/1-gpu/ \
-           --lib-path lib/libth_parallel_gpt.so \
+           --lib-path lib/libth_transformer.so \
            --lambada-path ../models/megatron-models/lambada_test.jsonl
     ```
 
@@ -550,14 +550,14 @@ python ../examples/pytorch/gpt/utils/huggingface_gpt_convert.py -i gpt2-xl/ -o .
 
 GPT now supports p/prompt-tuning. It works with [nemo checkpoint and prompt learning](https://docs.nvidia.com/deeplearning/nemo/user-guide/docs/en/main/nlp/prompt_learning.html).
 
-1.  Convert the prompt weights
+1. Convert the prompt weights
 
     Use the `examples/pytorch/gpt/utils/nemo_ckpt_convert.py` to convert the NeMo Megatron Prompt Weights.
     It will automatically generate configuration needed for triton backend inference.
 
     Note that you need to specify `start_id`, `end_id` by yourself in order to make sure that it is consistent with the tokenizer.
 
-2.  Run GPT with C++ example
+2. Run GPT with C++ example
 
     You need to specify the example gpt_config.ini like below to enable the p/prompt_tuning feature.
 
@@ -589,10 +589,10 @@ GPT now supports p/prompt-tuning. It works with [nemo checkpoint and prompt lear
 
     **prompt_learning_type**:
 
-    - no prompt: 0
-    - soft_prompt: 1
-    - prefix_prompt: 2
-    - p/prompt_tuning: 3
+    * no prompt: 0
+    * soft_prompt: 1
+    * prefix_prompt: 2
+    * p/prompt_tuning: 3
 
 ### Run Meta OPT
 
@@ -605,6 +605,7 @@ You need to convert the Huggingface Meta Opt models to fastertransformer format 
     In order to run with Meta Opt models, you need to add additional configuraitons: `model_variant`, which controls the `layernorm_eps, layernorm_type, activation_type, has_post_decoder_layernorm`.
 
     For example, the opt 125m model configuraitons would be like:
+
     ```ini
     [opt_125M]
     head_num=12
@@ -616,18 +617,18 @@ You need to convert the Huggingface Meta Opt models to fastertransformer format 
     inter_size=3072
     model_variant=opt-pre ;define variant structure
     ```
+
     There are two model types: opt-pre = [pre_layernorm](https://github.com/huggingface/transformers/blob/main/src/transformers/models/opt/modeling_opt.py#L332), opt_post = [post_layernorm](https://github.com/huggingface/transformers/blob/main/src/transformers/models/opt/modeling_opt.py#L323)\
     **Note that:** [the model has post decoder layernorm when layernorm_type is pre_layernorm](https://github.com/huggingface/transformers/blob/main/src/transformers/models/opt/modeling_opt.py#L498).
 
     1.1 Support for w8a8 int8 mode with OPT (preview)
 
-    FasterTransformer supports having certain operations with both weights and activations in int8. To keep high accuracy with your model, we recommend [SmoothQuant](https://arxiv.org/pdf/2211.10438.pdf) models. Fig 4 shows the workflow, except that the batched gemm of multi-head attention is under half. You can convert a regular OPT model to a SmoothQuant one with this [repo](https://github.com/mit-han-lab/smoothquant). You must also generate activation records for calibrating the scaling factors. With these, you can convert the SmoothQuant model for w8a8 inference in FT:
-    
+    FasterTransformer supports having certain operations with both weights and activations in int8. To keep high accuracy with your model, we recommend [SmoothQuant](https://arxiv.org/pdf/2211.10438.pdf) models. Fig 4 presents the data flow. You can convert a regular OPT model to a SmoothQuant one with this [repo](https://github.com/mit-han-lab/smoothquant). You must also generate activation records for calibrating the scaling factors. With these, you can convert the SmoothQuant model for w8a8 inference in FT:
     ```
     python3 examples/pytorch/gpt/utils/huggingface_opt_convert.py -i ../smoothquant/opt-1.3b-smooth/ -o ../nlp-models/ft/test/opt-1.3b-int8/ -i_g 1 -act_scale ../smoothquant/opt-1.3b-smooth.scales.pt
     ```
 
-    Then, set the `int8_mode` to `2` in `examples/cpp/gpt/gpt_config.ini` and run `bin/multi_gpu_gpt_example`. Note that this optimization only supports OPT with per-layernorm (`opt-pre`).
+    Then, set the `int8_mode` to `2` in `examples/cpp/gpt/gpt_config.ini` and run `bin/multi_gpu_gpt_example`. Note that this optimization only supports OPT with pre-layernorm (`opt-pre`).
 
     <div align=center>
     <img width=600 src ="images/gpt/SmoothQuant_workflow.png "/> &ensp;&ensp;&ensp;&ensp;&ensp;
@@ -739,6 +740,7 @@ You need to convert the Huggingface Meta Opt models to fastertransformer format 
     Model configurations have been automatically generated when converting the [meta opt models](https://huggingface.co/docs/transformers/model_doc/opt).\
     Then, you can use the converted weights and configuration file to serve the model by triton servers.
     Example of the `config.ini` when converting the model:
+
     ```ini
     [gpt]
     model_name = opt-350m/
@@ -805,7 +807,9 @@ Users can convert a pretrained Huggingface BLOOM model into fastertransformer fo
         --dataset-path ../datasets/lambada/lambada_test.jsonl \
         --show-progress
     ```
+
     The result accuracy will be around 35.3% in both cases.
+
     ```
     (HF) Accuracy: 35.3775% (1823/5153) (elapsed time: 23.3663 sec)
     (FT) Accuracy: 35.3386% (1821/5153) (elapsed time: 10.8444 sec)
@@ -831,10 +835,138 @@ Users can convert a pretrained Huggingface BLOOM model into fastertransformer fo
       end_id=2
     ```
 
-
 ### gpt with triton backend
 
 Details are in [transformer_backend](https://github.com/triton-inference-server/fastertransformer_backend)
+
+### GPT with MOE
+
+We choose the [checkpoint](https://www.modelscope.cn/models/PAI/nlp_gpt3_text-generation_0.35B_MoE-64/summary) provided by modelscope. This checkpoint is trained by chinese dataset. So, we will test by some chinese texts. Besides, we need some modification on Megatron-DeepSpeed to load the MOE checkpoint. We have put the modified Megtron-DeepSpeed codes in `moe_ft` branch of https://github.com/byshiue/Megatron-DeepSpeed/.
+
+```bash
+pip install git+https://github.com/microsoft/DeepSpeed.git
+git clone https://github.com/byshiue/Megatron-DeepSpeed/ -b moe_ft
+pip install Megatron-DeepSpeed/
+pip install jieba
+pip install -r ../examples/pytorch/gpt/requirement.txt
+
+git lfs clone https://www.modelscope.cn/PAI/nlp_gpt3_text-generation_0.35B_MoE-64.git
+mv nlp_gpt3_text-generation_0.35B_MoE-64 ../models
+PYTHONPATH=$PWD/../ python ../examples/pytorch/gpt/utils/megatron_gpt_moe_ckpt_convert.py \
+                    --input-dir ../models/nlp_gpt3_text-generation_0.35B_MoE-64/model \
+                    --saved-dir ../models/nlp_gpt3_text-generation_0.35B_MoE-64/model/c-models \
+                    --infer-gpu-num 1 \
+                    --vocab-path ../models/gpt2-vocab.json \
+                    --merges-path ../models/gpt2-merges.txt
+
+echo \
+'据悉,自驾
+“首金”花落谁家,无疑' > sample_input_file.txt
+
+python3 ../examples/pytorch/gpt/multi_gpu_gpt_example.py \
+        --tensor_para_size=1 \
+        --pipeline_para_size=1 \
+        --ckpt_path=../models/nlp_gpt3_text-generation_0.35B_MoE-64/model/c-models/1-gpu/ \
+        --data_type=fp16 \
+        --vocab_file=../models/nlp_gpt3_text-generation_0.35B_MoE-64/tokenizer.json \
+        --vocab_size=51200 \
+        --start_id=7 \
+        --end_id=7 \
+        --sample_input_file=sample_input_file.txt \
+        --use_jieba_tokenizer
+```
+
+The output should be like
+
+```bash
+[INFO] batch 0, beam 0:
+[Context]
+据悉,自驾
+
+[Output]
+游的人数正在逐年增加,而且越来越多的人选择自驾游,而且越来越多的人选择自驾
+
+[INFO] batch 1, beam 0:
+[Context]
+“首金”花落谁家,无疑
+
+[Output]
+是一场精彩的“战役”。 “首金”花落谁家,是一场精彩的“战役”。
+```
+
+modelscope also provides [27B checkpoint](https://modelscope.cn/models/PAI/nlp_gpt3_text-generation_1.3B_MoE-64/summary), which can be put in single A100-80GB under FP16 and have higher qualities. 
+
+
+FT also supports GPT-MOE with model parallelism.
+
+```bash
+PYTHONPATH=$PWD/../ python ../examples/pytorch/gpt/utils/megatron_gpt_moe_ckpt_convert.py \
+                    --input-dir ../models/nlp_gpt3_text-generation_0.35B_MoE-64/model \
+                    --saved-dir ../models/nlp_gpt3_text-generation_0.35B_MoE-64/model/c-models \
+                    --infer-gpu-num 2 \
+                    --vocab-path ../models/gpt2-vocab.json \
+                    --merges-path ../models/gpt2-merges.txt
+
+mpirun -n 2 python3 ../examples/pytorch/gpt/multi_gpu_gpt_example.py \
+        --tensor_para_size=2 \
+        --pipeline_para_size=1 \
+        --ckpt_path=../models/nlp_gpt3_text-generation_0.35B_MoE-64/model/c-models/2-gpu/ \
+        --data_type=fp16 \
+        --vocab_file=../models/nlp_gpt3_text-generation_0.35B_MoE-64/tokenizer.json \
+        --vocab_size=51200 \
+        --start_id=7 \
+        --end_id=7 \
+        --sample_input_file=sample_input_file.txt \
+        --use_jieba_tokenizer
+
+mpirun -n 2 python3 ../examples/pytorch/gpt/multi_gpu_gpt_example.py \
+        --tensor_para_size=1 \
+        --pipeline_para_size=2 \
+        --ckpt_path=../models/nlp_gpt3_text-generation_0.35B_MoE-64/model/c-models/1-gpu/ \
+        --data_type=fp16 \
+        --vocab_file=../models/nlp_gpt3_text-generation_0.35B_MoE-64/tokenizer.json \
+        --vocab_size=51200 \
+        --start_id=7 \
+        --end_id=7 \
+        --sample_input_file=sample_input_file.txt \
+        --use_jieba_tokenizer
+```
+
+### GPT with FP8 (Experimental)
+
+Note that FP8 is supported since Hopper and CUDA 11.8. Here, we use docker image `nvcr.io/nvidia/pytorch:22.10-py3` to demonstrate
+
+```bash
+mkdir build
+cmake -DSM=90 -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON -DBUILD_MULTI_GPU=ON -DENABLE_FP8=ON ..
+make -j12
+wget --content-disposition https://api.ngc.nvidia.com/v2/models/nvidia/megatron_lm_345m/versions/v0.0/zip -O megatron_lm_345m_v0.0.zip
+mkdir models/345m/ -p
+unzip megatron_lm_345m_v0.0.zip -d ./models/345m
+
+export PYTHONPATH=$PWD/..:${PYTHONPATH}
+python3 ../examples/pytorch/gpt/utils/megatron_fp8_ckpt_convert.py \
+      -i ./models/345m/release \
+      -o ./models/345m/c-model/ \
+      -i_g 1 \
+      -head_num 16 \
+      -trained_tensor_parallel_size 1
+
+python3 ../examples/pytorch/gpt/gpt_summarization.py \
+        --data_type fp8 \
+        --lib_path ./lib/libth_transformer.so \
+        --summarize \
+         --ft_model_location ./models/345m/c-model/
+```
+
+The checkpoint does not have quantization. FT will initialize them by identity scales directly. However, the accuracy is still good like following:
+
+```bash
+rouge1 : 23.264943073521202
+rouge2 : 6.43987431806994
+rougeL : 16.517620811297537
+rougeLsum : 21.24054457217973
+```
 
 ### Advanced features
 

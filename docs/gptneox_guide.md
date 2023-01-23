@@ -25,7 +25,7 @@ Optimization in gpt-neox are similar to optimization in GPT, describing in the [
 
 ### Note
 
-- `is_context_qk_buf_float_` (whether use float accumulation for GPT-Neox context QK GEMM or not) is set to `false` by default. If you meet accuracy issues releated to GPT-NeoX Context attention blocks, please try to enable it in the `GptNeoX.h`.
+- `is_context_qk_buf_float_` (whether use float accumulation for GPT-Neox context QK GEMM or not) is set to `false` by default. If you meet accuracy issues related to GPT-NeoX Context attention blocks, please try to enable it in the `GptNeoX.h`.
 
 ### Supported features
 

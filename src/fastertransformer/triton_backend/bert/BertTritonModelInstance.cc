@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -100,15 +100,13 @@ BertTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::stri
                                                               std::vector<size_t>{batch_size, seq_len, hidden_units},
                                                               d_output_hidden_state_}}});
 
-    bert_->forward(&output_tensors, &ft_input_tensors, bert_weight_.get());
-
-    if (d_input_hidden_state_ != nullptr) {
-        ft::check_cuda_error(cudaFree(d_input_hidden_state_));
-        d_input_hidden_state_ = nullptr;
+    try {
+        bert_->forward(&output_tensors, &ft_input_tensors, bert_weight_.get());
+        cudaStreamSynchronize(bert_->getStream());
     }
-    if (d_sequence_lengths_ != nullptr) {
-        ft::check_cuda_error(cudaFree(d_sequence_lengths_));
-        d_sequence_lengths_ = nullptr;
+    catch (...) {
+        h_exception_ = std::current_exception();
+        output_tensors.insert({"error_message", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_BYTES, {1}, &h_exception_}});
     }
 
     return convert_outputs(output_tensors);
@@ -134,6 +132,12 @@ void BertTritonModelInstance<T>::freeBuffer()
 {
     if (d_output_hidden_state_ != nullptr) {
         allocator_->free((void**)(&d_output_hidden_state_));
+    }
+    if (d_input_hidden_state_ != nullptr) {
+        allocator_->free((void**)(&d_input_hidden_state_));
+    }
+    if (d_sequence_lengths_ != nullptr) {
+        allocator_->free((void**)(&d_sequence_lengths_));
     }
 }
 

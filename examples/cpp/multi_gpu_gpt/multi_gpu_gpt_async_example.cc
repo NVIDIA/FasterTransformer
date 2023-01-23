@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -38,10 +38,6 @@
 static bool USE_ASYNC      = true;
 const int   START_TOKEN_ID = 50256;
 const int   END_TOKEN_ID   = 50256;
-
-#ifdef USE_NVTX
-bool NVTX_ON = true;
-#endif
 
 using namespace fastertransformer;
 
@@ -689,6 +685,9 @@ void multi_gpu_gpt_example(const INIReader reader)
                                         size_per_head,
                                         inter_size,
                                         decoder_layers,
+                                        0,   // expert_num
+                                        0,   // moe_k
+                                        {},  // moe_layer_index
                                         vocab_size,
                                         start_id,
                                         end_id,
@@ -784,7 +783,7 @@ void multi_gpu_gpt_example(const INIReader reader)
 
     cudaProfilerStart();
     // warm up
-    nvtx::setScope("warmup_time");
+    ft_nvtx::setScope("warmup_time");
     PUSH_RANGE("warmup time")
     if (USE_ASYNC) {
         gpt_streamer.run(&gpt, &output_tensors, &input_tensors, &gpt_weights);
@@ -795,7 +794,7 @@ void multi_gpu_gpt_example(const INIReader reader)
     cudaDeviceSynchronize();
     mpi::barrier();
     POP_RANGE;
-    nvtx::resetScope();
+    ft_nvtx::resetScope();
 
     if (rank == 0) {
         printf("[INFO] Profiling\n");
@@ -810,7 +809,7 @@ void multi_gpu_gpt_example(const INIReader reader)
     mpi::barrier();
     gettimeofday(&start, NULL);
 
-    nvtx::setScope("total_time");
+    ft_nvtx::setScope("total_time");
     PUSH_RANGE("total time")
     int ite = 1;
     for (int i = 0; i < ite; ++i) {
@@ -825,7 +824,7 @@ void multi_gpu_gpt_example(const INIReader reader)
     cudaDeviceSynchronize();
     mpi::barrier();
     POP_RANGE;
-    nvtx::resetScope();
+    ft_nvtx::resetScope();
     gettimeofday(&end, NULL);
 
     cudaProfilerStop();

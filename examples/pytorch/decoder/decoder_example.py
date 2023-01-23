@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -43,11 +43,11 @@ def main():
                         help='size per head')
     parser.add_argument('--step', type=int, default=0,
                         help='decoding step number')
-    parser.add_argument('--decoder_ths_path', type=str, default='./lib/libth_decoder.so',
+    parser.add_argument('--decoder_ths_path', type=str, default='./lib/libth_transformer.so',
                         help='path of the pyt_fastertransformer dynamic lib file')
     parser.add_argument('--time', action='store_true',
                         help='test the time or not.')
-    parser.add_argument('--ths_path', type=str, default='./lib/libpyt_fastertransformer.so',
+    parser.add_argument('--ths_path', type=str, default='./lib/libth_transformer.so',
                         help='path of the pyt_fastertransformer dynamic lib file')
     parser.add_argument('-d', '--data_type', type=str, default="fp32", metavar='STRING',
                         help='data type (default: fp32)', choices=['fp32', 'fp16', 'bf16'])

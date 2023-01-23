@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -25,6 +25,9 @@ ParallelGptOp::ParallelGptOp(const int64_t                 head_num,
                              const int64_t                 size_per_head,
                              const int64_t                 inter_size,
                              const int64_t                 layer_num,
+                             const int64_t                 expert_num,
+                             const int64_t                 moe_k,
+                             const std::vector<int64_t>    moe_layer_index,
                              const int64_t                 vocab_size,
                              const int64_t                 start_id,
                              const int64_t                 end_id,
@@ -62,11 +65,14 @@ ParallelGptOp::ParallelGptOp(const int64_t                 head_num,
 
     switch (st_) {
         case at::ScalarType::Float:
-            ftgpt = new FTGpt<float>((size_t)head_num,
-                                     (size_t)size_per_head,
-                                     (size_t)inter_size,
-                                     (size_t)layer_num,
-                                     (size_t)vocab_size,
+            ftgpt = new FTGpt<float>(head_num,
+                                     size_per_head,
+                                     inter_size,
+                                     layer_num,
+                                     expert_num,
+                                     moe_k,
+                                     moe_layer_index,
+                                     vocab_size,
                                      gpt_variant_params,
                                      start_id,
                                      end_id,
@@ -79,11 +85,14 @@ ParallelGptOp::ParallelGptOp(const int64_t                 head_num,
                                      shared_contexts_ratio);
             break;
         case at::ScalarType::Half:
-            ftgpt = new FTGpt<half>((size_t)head_num,
-                                    (size_t)size_per_head,
-                                    (size_t)inter_size,
-                                    (size_t)layer_num,
-                                    (size_t)vocab_size,
+            ftgpt = new FTGpt<half>(head_num,
+                                    size_per_head,
+                                    inter_size,
+                                    layer_num,
+                                    expert_num,
+                                    moe_k,
+                                    moe_layer_index,
+                                    vocab_size,
                                     gpt_variant_params,
                                     start_id,
                                     end_id,
@@ -97,11 +106,14 @@ ParallelGptOp::ParallelGptOp(const int64_t                 head_num,
             break;
 #ifdef ENABLE_BF16
         case at::ScalarType::BFloat16:
-            ftgpt = new FTGpt<__nv_bfloat16>((size_t)head_num,
-                                             (size_t)size_per_head,
-                                             (size_t)inter_size,
-                                             (size_t)layer_num,
-                                             (size_t)vocab_size,
+            ftgpt = new FTGpt<__nv_bfloat16>(head_num,
+                                             size_per_head,
+                                             inter_size,
+                                             layer_num,
+                                             expert_num,
+                                             moe_k,
+                                             moe_layer_index,
+                                             vocab_size,
                                              gpt_variant_params,
                                              start_id,
                                              end_id,
@@ -134,7 +146,10 @@ std::vector<th::Tensor> ParallelGptOp::forward(th::Tensor               input_id
                                                th::optional<th::Tensor> temperature_opt,
                                                th::optional<th::Tensor> len_penalty_opt,
                                                th::optional<th::Tensor> repetition_penalty_opt,
+                                               th::optional<th::Tensor> presence_penalty_opt,
+                                               th::optional<th::Tensor> min_length_opt,
                                                th::optional<th::Tensor> random_seed_opt,
+                                               th::optional<th::Tensor> bad_words_list_opt,
                                                th::optional<int64_t>    return_cum_log_probs_opt)
 {
     CHECK_TH_CUDA(input_ids);
@@ -177,7 +192,10 @@ std::vector<th::Tensor> ParallelGptOp::forward(th::Tensor               input_id
                    temperature_opt,
                    len_penalty_opt,
                    repetition_penalty_opt,
+                   presence_penalty_opt,
+                   min_length_opt,
                    random_seed_opt,
+                   bad_words_list_opt,
                    return_cum_log_probs_opt);
     if (return_cum_log_probs > 0) {
         return std::vector<th::Tensor>{output_ids, sequence_lengths, cum_log_probs};
@@ -197,6 +215,9 @@ static auto fasterTransformerGptTHS =
                               int64_t,
                               int64_t,
                               int64_t,
+                              int64_t,
+                              int64_t,
+                              std::vector<int64_t>,
                               int64_t,
                               int64_t,
                               int64_t,

@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -27,3 +27,8 @@ add_subdirectory(wenet)
 add_subdirectory(gptj)
 add_subdirectory(gptneox)
 add_subdirectory(multi_gpu_gpt)
+
+if(ENABLE_FP8)
+    add_subdirectory(gpt_fp8)
+    add_subdirectory(bert_fp8)
+endif()

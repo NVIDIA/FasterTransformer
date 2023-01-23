@@ -1,4 +1,4 @@
-# Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -72,7 +72,7 @@ def main():
     parser.add_argument('--weight_path', type=str,
                         default=None,
                         help='path containing the pretrained weights')
-    parser.add_argument('--ths_path', type=str, default='./lib/libth_bert.so',
+    parser.add_argument('--ths_path', type=str, default='./lib/libth_transformer.so',
                         help='path of the pyt_fastertransformer dynamic lib file')
     parser.add_argument('-thread_num', '--thread_num', type=int, default=1, metavar='int',
                         help='Testing multithread if thread_num > 1.')

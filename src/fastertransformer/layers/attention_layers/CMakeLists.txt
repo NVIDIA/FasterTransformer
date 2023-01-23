@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -37,17 +37,22 @@ target_link_libraries(LongformerAttentionLayer PUBLIC -lcublas -lcudart cublasMM
 add_library(DecoderSelfAttentionLayer STATIC DecoderSelfAttentionLayer.cc)
 set_property(TARGET DecoderSelfAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET DecoderSelfAttentionLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(DecoderSelfAttentionLayer PUBLIC -lcublas -lcudart cublasMMWrapper memory_utils decoder_masked_multihead_attention fpA_intB_gemm tensor)
+target_link_libraries(DecoderSelfAttentionLayer PUBLIC -lcublas -lcudart cublasMMWrapper memory_utils decoder_masked_multihead_attention fpA_intB_gemm int8_gemm tensor nvtx_utils)
 
 add_library(GptContextAttentionLayer STATIC GptContextAttentionLayer.cc)
 set_property(TARGET GptContextAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET GptContextAttentionLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(GptContextAttentionLayer PUBLIC -lcublas -lcudart cublasMMWrapper memory_utils unfused_attention_kernels trt_fused_multi_head_attention fpA_intB_gemm)
+target_link_libraries(GptContextAttentionLayer PUBLIC -lcublas -lcudart cublasMMWrapper memory_utils unfused_attention_kernels trt_fused_multi_head_attention fpA_intB_gemm int8_gemm nvtx_utils)
+
+add_library(DisentangledAttentionLayer STATIC DisentangledAttentionLayer.cc)
+set_property(TARGET DisentangledAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET DisentangledAttentionLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+target_link_libraries(DisentangledAttentionLayer PUBLIC -lcublas -lcudart cublasMMWrapper memory_utils disentangled_attention_kernels unfused_attention_kernels)
 
 add_library(TensorParallelDecoderSelfAttentionLayer STATIC TensorParallelDecoderSelfAttentionLayer.cc)
 set_property(TARGET TensorParallelDecoderSelfAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET TensorParallelDecoderSelfAttentionLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(TensorParallelDecoderSelfAttentionLayer PUBLIC -lcudart DecoderSelfAttentionLayer nccl_utils custom_ar_kernels)
+target_link_libraries(TensorParallelDecoderSelfAttentionLayer PUBLIC -lcudart DecoderSelfAttentionLayer nccl_utils custom_ar_kernels nvtx_utils)
 
 add_library(TensorParallelDecoderCrossAttentionLayer STATIC TensorParallelDecoderCrossAttentionLayer.cc)
 set_property(TARGET TensorParallelDecoderCrossAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
@@ -57,12 +62,17 @@ target_link_libraries(TensorParallelDecoderCrossAttentionLayer PUBLIC -lcudart D
 add_library(TensorParallelGptContextAttentionLayer STATIC TensorParallelGptContextAttentionLayer.cc)
 set_property(TARGET TensorParallelGptContextAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET TensorParallelGptContextAttentionLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(TensorParallelGptContextAttentionLayer PUBLIC -lcudart GptContextAttentionLayer nccl_utils custom_ar_kernels)
+target_link_libraries(TensorParallelGptContextAttentionLayer PUBLIC -lcudart GptContextAttentionLayer nccl_utils custom_ar_kernels nvtx_utils)
 
 add_library(TensorParallelUnfusedAttentionLayer STATIC TensorParallelUnfusedAttentionLayer.cc)
 set_property(TARGET TensorParallelUnfusedAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET TensorParallelUnfusedAttentionLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(TensorParallelUnfusedAttentionLayer PUBLIC -lcudart UnfusedAttentionLayer nccl_utils)
+
+add_library(TensorParallelDisentangledAttentionLayer STATIC TensorParallelDisentangledAttentionLayer.cc)
+set_property(TARGET TensorParallelDisentangledAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET TensorParallelDisentangledAttentionLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+target_link_libraries(TensorParallelDisentangledAttentionLayer PUBLIC -lcudart DisentangledAttentionLayer nccl_utils)
 
 add_library(WindowAttention STATIC WindowAttention.cc)
 set_property(TARGET WindowAttention PROPERTY POSITION_INDEPENDENT_CODE  ON)

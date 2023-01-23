@@ -26,6 +26,7 @@
 
 #include "src/fastertransformer/utils/cuda_utils.h"
 #include "fused_multihead_attention_v2.h"
+#include "../trt_fp8_fmha/fused_multihead_attention.h"
 #pragma once
 
 namespace fastertransformer
@@ -79,15 +80,16 @@ public:
     {
         setup(S, B);
     }
+    virtual void setup_flags(const bool interleaved, const bool ignore_b1opt, const bool force_unroll, const bool use_int8_scale_max, const bool use_tma) {return;};
 
-    virtual void run(const void* input, const void* mask, void* workspace, void* output, cudaStream_t stream) = 0; 
-    virtual void run(const void* input, const void* mask, const void* seqlen, void* workspace, void* output, cudaStream_t stream) = 0; 
+    virtual void run(const void* input, const void* mask, void* workspace, void* output, cudaStream_t stream) = 0;
+    virtual void run(const void* input, const void* mask, const void* seqlen, void* workspace, void* output, cudaStream_t stream) = 0;
+    virtual void run(const void* input, const void* mask, const void* relative_position_bias, const int actual_seqlen, void* workspace, void* output, cudaStream_t stream) = 0;
     virtual void run_causal_masked_fmha(const void* input, const void* cu_seqlens, void* output, bool causal_mask, cudaStream_t stream)
     {
         // unimplemented
         ;
     }
-    virtual void run(const void* input, const void* mask, const void* relative_position_bias, const int actual_seqlen, void* workspace, void* output, cudaStream_t stream) = 0;
 
     virtual void setScaleList(const float scaleQkv, const float dqProbs, const float scaleCtx) = 0;
 
@@ -171,5 +173,36 @@ private:
     class mhaImpl;
     std::unique_ptr<mhaImpl> pimpl;
 };
+
+#ifdef ENABLE_FP8
+class FusedMHARunnerFP8v2 : public MHARunner
+{
+public:
+    FusedMHARunnerFP8v2(const int numHeads, const int headSize, const int sm, const float q_scaling);
+    ~FusedMHARunnerFP8v2() = default; // for pimpl
+
+    virtual void setup(const int S, const int B) override;
+    virtual void setup(const int S, const int B, const int window_num) override;
+    virtual void setup_flags(const bool interleaved, const bool ignore_b1opt, const bool force_unroll, const bool use_int8_scale_max, const bool use_tma) override;
+
+    void run(const void* input, const void* mask, void* workspace, void* output, cudaStream_t stream);
+    void run(const void* input, const void* mask, const void* seqlen, void* workspace, void* output, cudaStream_t stream) override;
+    void run(const void* input, const void* mask, const void* relatice_position_bias, const int actual_seqlen, void* workspace, void* output, cudaStream_t stream) override;
+
+    void setScaleList(const float scaleQkv, const float dqProbs, const float scaleCtx) override;
+
+    size_t getWorkspaceSize() const override;
+
+    bool isValid(int s, const bool withRelativePositionBias) const override;
+
+    int getSFromMaxSeqLen(const int max_seq_len, const bool withRelativePositionBias = false) override;
+
+private:
+    float mDqProbs, mScaleQkv, mScaleCtx;
+    int mSm;
+    class mhaImpl;
+    std::unique_ptr<mhaImpl> pimpl;
+};
+#endif // ENABLE_FP8
 
 } // namespace fastertransformer

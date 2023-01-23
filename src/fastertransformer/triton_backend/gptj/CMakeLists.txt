@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -19,6 +19,7 @@ set(parallel_gpt_triton_backend_files
     GptJTritonModelInstance.cc
 )
 
-add_library(GptJTritonBackend SHARED ${parallel_gpt_triton_backend_files})
+add_library(GptJTritonBackend STATIC ${parallel_gpt_triton_backend_files})
+set_property(TARGET GptJTritonBackend PROPERTY POSITION_INDEPENDENT_CODE  ON)
 target_link_libraries(GptJTritonBackend PRIVATE TransformerTritonBackend GptJ -lcublasLt)
 target_compile_features(GptJTritonBackend PRIVATE cxx_std_14)

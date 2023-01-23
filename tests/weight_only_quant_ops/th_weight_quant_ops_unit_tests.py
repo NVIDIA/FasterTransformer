@@ -1,4 +1,4 @@
-# Copyright (c) 2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -18,7 +18,7 @@ import unittest
 class TestQuantize(unittest.TestCase):
 
     def setUp(self) -> None:
-        torch.classes.load_library("lib/libth_weight_only_quant_ops.so")
+        torch.classes.load_library("lib/libth_transformer.so")
         self.add_bias_and_interleave_int4s = torch.ops.fastertransformer._add_bias_and_interleave_int4s
         self.add_bias_and_interleave_int8s = torch.ops.fastertransformer._add_bias_and_interleave_int8s
         self.unpack_packed_int4s = torch.ops.fastertransformer.unpack_int4_packed_tensor_to_int8

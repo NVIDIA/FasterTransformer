@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2021-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -288,6 +288,7 @@ struct AbstractTransformerModelInstance {
 
 struct AbstractTransformerModel {
     static std::shared_ptr<AbstractTransformerModel> createGptModel(std::string inifile);
+    static std::shared_ptr<AbstractTransformerModel> createGptFP8Model(std::string inifile);
     static std::shared_ptr<AbstractTransformerModel> createGptJModel(std::string inifile);
     static std::shared_ptr<AbstractTransformerModel> createGptNeoXModel(std::string inifile);
     static std::shared_ptr<AbstractTransformerModel> createT5Model(std::string model_dir);

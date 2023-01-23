@@ -1,4 +1,4 @@
-# Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -17,8 +17,8 @@ target_link_libraries(cnpy PUBLIC -lz)
 set_property(TARGET cnpy PROPERTY POSITION_INDEPENDENT_CODE ON)
 
 add_executable(xlnet_example xlnet_example.cc)
-target_link_libraries(xlnet_example PUBLIC -lcublas -lcublasLt -lcudart -lz cnpy Xlnet)
+target_link_libraries(xlnet_example PUBLIC -lcublas -lcublasLt -lcudart -lz cnpy nvtx_utils Xlnet)
 
 add_executable(xlnet_correctness_example xlnet_correctness_example.cc)
-target_link_libraries(xlnet_correctness_example PUBLIC -lcublas -lcublasLt -lcudart -lz cnpy Xlnet)
+target_link_libraries(xlnet_correctness_example PUBLIC -lcublas -lcublasLt -lcudart -lz cnpy nvtx_utils Xlnet)
 

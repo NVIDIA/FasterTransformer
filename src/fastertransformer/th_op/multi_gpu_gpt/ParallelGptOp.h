@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2020-2023, NVIDIA CORPORATION.  All rights reserved.
  * Copyright (c) 2021, NAVER Corp.  Authored by CLOVA.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
@@ -42,32 +42,41 @@ public:
                          th::optional<th::Tensor> temperature_opt,
                          th::optional<th::Tensor> len_penalty_opt,
                          th::optional<th::Tensor> repetition_penalty_opt,
+                         th::optional<th::Tensor> presence_penalty_opt,
+                         th::optional<th::Tensor> min_length_opt,
                          th::optional<th::Tensor> random_seed_opt,
+                         th::optional<th::Tensor> bad_words_list_opt,
                          th::optional<int64_t>    return_cum_log_probs_opt) = 0;
 };
 
 template<typename T>
 class FTGpt: public IFGpt {
 public:
-    FTGpt(const size_t               head_num,
-          const size_t               size_per_head,
-          const size_t               inter_size,
-          const size_t               layer_num,
-          const size_t               vocab_size,
+    FTGpt(const int64_t              head_num,
+          const int64_t              size_per_head,
+          const int64_t              inter_size,
+          const int64_t              layer_num,
+          const int64_t              expert_num,
+          const int64_t              moe_k,
+          const std::vector<int64_t> moe_layer_index,
+          const int64_t              vocab_size,
           const ft::gptVariantParams gpt_variant_params,
-          const int                  start_id,
-          const int                  end_id,
-          const int                  tensor_para_size,
-          const int                  pipeline_para_size,
-          const int                  int8_mode,
+          const int64_t              start_id,
+          const int64_t              end_id,
+          const int64_t              tensor_para_size,
+          const int64_t              pipeline_para_size,
+          const int64_t              int8_mode,
           const vector<th::Tensor>   weights,
           const vector<th::Tensor>   int8_weights,
           const vector<th::Tensor>   scale,
-          const float                shared_contexts_ratio):
+          const double               shared_contexts_ratio):
         head_num_(head_num),
         size_per_head_(size_per_head),
         inter_size_(inter_size),
         layer_num_(layer_num),
+        expert_num_(expert_num),
+        moe_k_(moe_k),
+        moe_layer_index_(moe_layer_index),
         gpt_variant_params_(gpt_variant_params),
         vocab_size_(vocab_size),
         start_id_(start_id),
@@ -174,6 +183,15 @@ public:
 
         weight_offset = 7 - weight_offset;
 
+        for (int i = 0; i < (int)layer_num_; i++) {
+            if (std::find(moe_layer_index.begin(), moe_layer_index.end(), i) != moe_layer_index.end()) {
+                gpt_weights_.decoder_layer_weights[i]->ffn_weights.gating_weight.kernel =
+                    get_ptr<T>(weights_[12 * layer_num_ + weight_offset + i]);
+            }
+        }
+
+        weight_offset += layer_num_;
+
         if (gpt_variant_params_.has_adapters) {
             for (int i = 0; i < (int)layer_num_; i++) {
                 gpt_weights_.decoder_layer_weights[i]->after_attention_adapter_weights.intermediate_weight.kernel =
@@ -261,7 +279,10 @@ public:
                  th::optional<th::Tensor> temperature_opt,
                  th::optional<th::Tensor> len_penalty_opt,
                  th::optional<th::Tensor> repetition_penalty_opt,
+                 th::optional<th::Tensor> presence_penalty_opt,
+                 th::optional<th::Tensor> min_length_opt,
                  th::optional<th::Tensor> random_seed_opt,
+                 th::optional<th::Tensor> bad_words_list_opt,
                  th::optional<int64_t>    return_cum_log_probs_opt) override
     {
         int  return_cum_log_probs   = return_cum_log_probs_opt.has_value() ? (int)return_cum_log_probs_opt.value() : 0;
@@ -297,7 +318,7 @@ public:
                                     false,             // with_relative_position_bias
                                     true);             // causal_mask
 
-        ft::ParallelGpt<T>    gpt = ft::ParallelGpt<T>(request_batch_size,
+        ft::ParallelGpt<T> gpt = ft::ParallelGpt<T>(request_batch_size,
                                                     total_output_len,
                                                     max_input_length,
                                                     beam_width,
@@ -305,6 +326,9 @@ public:
                                                     size_per_head_,
                                                     inter_size_,
                                                     layer_num_,
+                                                    expert_num_,
+                                                    moe_k_,
+                                                    moe_layer_index_,
                                                     vocab_size_,
                                                     start_id_,
                                                     end_id_,
@@ -331,6 +355,7 @@ public:
                                                     nullptr,
                                                     0,
                                                     shared_contexts_ratio_);
+
         std::vector<uint32_t> output_seq_len(request_batch_size, total_output_len);
 
         std::unordered_map<std::string, ft::Tensor> input_tensors = std::unordered_map<std::string, ft::Tensor>{
@@ -370,10 +395,23 @@ public:
             input_tensors.insert({"repetition_penalty",
                                   convert_tensor<float>(repetition_penalty_opt.value(), ft::MemoryType::MEMORY_CPU)});
         }
+        if (presence_penalty_opt.has_value()) {
+            input_tensors.insert(
+                {"presence_penalty", convert_tensor<float>(presence_penalty_opt.value(), ft::MemoryType::MEMORY_CPU)});
+        }
+        if (min_length_opt.has_value()) {
+            input_tensors.insert(
+                {"min_length", convert_tensor<int>(min_length_opt.value(), ft::MemoryType::MEMORY_CPU)});
+        }
         if (random_seed_opt.has_value()) {
             input_tensors.insert(
                 {"random_seed",
                  convert_tensor<unsigned long long int>(random_seed_opt.value(), ft::MemoryType::MEMORY_CPU)});
+        }
+
+        if (bad_words_list_opt.has_value()) {
+            CHECK_INPUT(bad_words_list_opt.value(), torch::kInt32);
+            input_tensors.insert({"bad_words_list", convert_tensor<int>(bad_words_list_opt.value())});
         }
 
         bool return_context_cum_log_probs = false;
@@ -422,19 +460,22 @@ public:
     }
 
 private:
-    const size_t head_num_;
-    const size_t size_per_head_;
-    const size_t inter_size_;
-    const size_t layer_num_;
-    const size_t vocab_size_;
-    const int    start_id_;
-    const int    end_id_;
-    const float  shared_contexts_ratio_;
+    const int64_t        head_num_;
+    const int64_t        size_per_head_;
+    const int64_t        inter_size_;
+    const int64_t        layer_num_;
+    const int64_t        expert_num_;
+    const int64_t        moe_k_;
+    std::vector<int64_t> moe_layer_index_;
+    const int64_t        vocab_size_;
+    const int64_t        start_id_;
+    const int64_t        end_id_;
+    const double         shared_contexts_ratio_;
 
-    const int int8_mode_ = 0;
+    const int64_t int8_mode_ = 0;
 
-    size_t tensor_para_size_;
-    size_t pipeline_para_size_;
+    int64_t tensor_para_size_;
+    int64_t pipeline_para_size_;
 
     ft::gptVariantParams gpt_variant_params_;
 
@@ -456,29 +497,32 @@ private:
 
 class ParallelGptOp: public th::jit::CustomClassHolder {
 public:
-    ParallelGptOp(const int64_t            head_num,
-                  const int64_t            size_per_head,
-                  const int64_t            inter_size,
-                  const int64_t            layer_num,
-                  const int64_t            vocab_size,
-                  const int64_t            start_id,
-                  const int64_t            end_id,
-                  const int64_t            tensor_para_size,
-                  const int64_t            pipeline_para_size,
-                  const int64_t            int8_mode,
-                  const double             layernorm_eps,
-                  const std::string        layernorm_type,
-                  const std::string        activation_type,
-                  const bool               has_positional_encoding,
-                  const bool               has_pre_decoder_layernorm,
-                  const bool               has_post_decoder_layernorm,
-                  const bool               has_adapters,
-                  const int64_t            adapter_inter_size,
-                  const bool               use_attention_linear_bias,
-                  const vector<th::Tensor> weights,
-                  const vector<th::Tensor> int8_weights,
-                  const vector<th::Tensor> scale,
-                  const double             shared_contexts_ratio);
+    ParallelGptOp(const int64_t              head_num,
+                  const int64_t              size_per_head,
+                  const int64_t              inter_size,
+                  const int64_t              layer_num,
+                  const int64_t              expert_num,
+                  const int64_t              moe_k,
+                  const std::vector<int64_t> moe_layer_index,
+                  const int64_t              vocab_size,
+                  const int64_t              start_id,
+                  const int64_t              end_id,
+                  const int64_t              tensor_para_size,
+                  const int64_t              pipeline_para_size,
+                  const int64_t              int8_mode,
+                  const double               layernorm_eps,
+                  const std::string          layernorm_type,
+                  const std::string          activation_type,
+                  const bool                 has_positional_encoding,
+                  const bool                 has_pre_decoder_layernorm,
+                  const bool                 has_post_decoder_layernorm,
+                  const bool                 has_adapters,
+                  const int64_t              adapter_inter_size,
+                  const bool                 use_attention_linear_bias,
+                  const vector<th::Tensor>   weights,
+                  const vector<th::Tensor>   int8_weights,
+                  const vector<th::Tensor>   scale,
+                  const double               shared_contexts_ratio);
 
     ~ParallelGptOp();
 
@@ -492,7 +536,10 @@ public:
                                th::optional<th::Tensor> temperature_opt,
                                th::optional<th::Tensor> len_penalty_opt,
                                th::optional<th::Tensor> repetition_penalty_opt,
+                               th::optional<th::Tensor> presence_penalty_opt,
+                               th::optional<th::Tensor> min_length_opt,
                                th::optional<th::Tensor> random_seed_opt,
+                               th::optional<th::Tensor> bad_words_list_opt,
                                th::optional<int64_t>    return_cum_log_probs_opt);
 
 private:

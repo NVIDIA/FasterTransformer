@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -77,13 +77,13 @@ private:
     void initialize();
 
 protected:
-    T*      decoder_normed_input_ = nullptr;
-    T*      self_attn_output_     = nullptr;
-    T*      ffn_output_           = nullptr;
-    T*      decoder_layer_output_ = nullptr;
-    size_t* token_num_            = nullptr;
-    int*    padding_offset_       = nullptr;
-    int*    cu_seqlens_           = nullptr;
+    T*      decoder_normed_input_   = nullptr;
+    T*      self_attn_output_       = nullptr;
+    T*      ffn_output_             = nullptr;
+    T*      decoder_layer_output_   = nullptr;
+    size_t* h_pinned_token_num_ptr_ = nullptr;
+    int*    padding_offset_         = nullptr;
+    int*    cu_seqlens_             = nullptr;
 
 public:
     GptJContextDecoder(size_t                              max_batch_size,

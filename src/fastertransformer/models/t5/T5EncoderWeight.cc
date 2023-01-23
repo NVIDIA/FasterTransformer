@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -36,7 +36,8 @@ T5EncoderWeight<T>::T5EncoderWeight(const size_t                               h
                                     const PositionEmbeddingType                pe_type,
                                     PromptLearningType                         prompt_learning_type,
                                     std::map<std::string, std::pair<int, int>> prompt_learning_pair,
-                                    const size_t                               ia3_num_tasks):
+                                    const size_t                               ia3_num_tasks,
+                                    const size_t                               adapter_inter_size):
     head_num_(head_num),
     size_per_head_(size_per_head),
     d_model_(d_model),
@@ -54,7 +55,8 @@ T5EncoderWeight<T>::T5EncoderWeight(const size_t                               h
     prompt_learning_type_(prompt_learning_type),
     prompt_learning_pair_(prompt_learning_pair),
     real_weights_num_(t5_with_bias ? 4 : 3),
-    ia3_num_tasks_(ia3_num_tasks)
+    ia3_num_tasks_(ia3_num_tasks),
+    adapter_inter_size_{adapter_inter_size}
 {
     FT_LOG_DEBUG("T5EncoderWeight " + std::string(__func__) + " start");
     FT_CHECK(num_layer_ % pipeline_para_size_ == 0);
@@ -73,7 +75,8 @@ T5EncoderWeight<T>::T5EncoderWeight(const size_t                               h
                                                                            tensor_para_rank_,
                                                                            t5_with_bias,
                                                                            use_gated_activation,
-                                                                           ia3_num_tasks_));
+                                                                           ia3_num_tasks_,
+                                                                           adapter_inter_size_));
         }
         else {
             // Don't malloc and load these layers since we don't use them.
@@ -174,7 +177,8 @@ T5EncoderWeight<T>::T5EncoderWeight(const T5EncoderWeight& other):
     prompt_learning_type_(other.prompt_learning_type_),
     prompt_learning_pair_(other.prompt_learning_pair_),
     real_weights_num_(other.real_weights_num_),
-    ia3_num_tasks_(other.ia3_num_tasks_)
+    ia3_num_tasks_(other.ia3_num_tasks_),
+    adapter_inter_size_(other.adapter_inter_size_)
 {
     FT_LOG_DEBUG("T5EncoderWeight " + std::string(__func__) + " start");
     initialize();
@@ -227,6 +231,7 @@ T5EncoderWeight<T>& T5EncoderWeight<T>::operator=(const T5EncoderWeight& other)
     prompt_learning_pair_      = other.prompt_learning_pair_;
     real_weights_num_          = other.real_weights_num_;
     ia3_num_tasks_             = other.ia3_num_tasks_;
+    adapter_inter_size_        = other.adapter_inter_size_;
     initialize();
     mallocWeights();
     for (int i = 0; i < real_weights_num_; i++) {

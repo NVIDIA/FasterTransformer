@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -180,7 +180,13 @@ void UnfusedAttentionLayer<T>::forward(TensorMap*                output_tensors,
                                           stream_);
         sync_check_cuda_error();
     }
-
+    // print_abs_mean(q_buf_2_, m * hidden_units_, stream_, "q_buf_2_");
+    // print_to_screen(q_buf_2_, 3);
+    // print_abs_mean(k_buf_2_, m * hidden_units_, stream_, "k_buf_2_");
+    // print_to_screen(k_buf_2_, 3);
+    // print_abs_mean(v_buf_2_, m * hidden_units_, stream_, "v_buf_2_");
+    // print_to_screen(v_buf_2_, 3);
+    // exit(0);
     float scalar = 1 / (sqrtf(size_per_head_ * 1.0f) * q_scaling_);
 
     cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_T,

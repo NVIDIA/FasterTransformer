@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2019-2022, NVIDIA CORPORATION.  All rights reserved.
+ * Copyright (c) 2019-2023, NVIDIA CORPORATION.  All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,10 +15,13 @@
  */
 
 #include "bert_preprocess_kernels.h"
+#include "src/fastertransformer/utils/cuda_bf16_fallbacks.cuh"
+#include "src/fastertransformer/utils/cuda_fp8_utils.h"
+#include "src/fastertransformer/utils/cuda_type_utils.cuh"
 
 namespace fastertransformer {
 
-__global__ void getPaddingOffsetAndCuSeqLensKernel(size_t*    valid_word_num,
+__global__ void getPaddingOffsetAndCuSeqLensKernel(size_t*    h_valid_word_num,
                                                    int*       tmp_mask_offset,
                                                    int*       cu_seqlens,
                                                    const int* sequence_length,
@@ -45,11 +48,11 @@ __global__ void getPaddingOffsetAndCuSeqLensKernel(size_t*    valid_word_num,
     if (calculate_cu_seqlens) {
         cu_seqlens[batch_size] = total_seq_len;
     }
-    valid_word_num[0] = (size_t)total_seq_len;
+    h_valid_word_num[0] = (size_t)total_seq_len;
 }
 
-void invokeGetPaddingOffsetAndCuSeqLens(size_t*      h_token_num,
-                                        size_t*      d_token_num,
+void invokeGetPaddingOffsetAndCuSeqLens(size_t*      h_pinned_token_num,
+                                        size_t*      h_token_num,
                                         int*         tmp_mask_offset,
                                         int*         cu_seqlens,
                                         const int*   sequence_lengths,
@@ -57,10 +60,11 @@ void invokeGetPaddingOffsetAndCuSeqLens(size_t*      h_token_num,
                                         const int    max_seq_len,
                                         cudaStream_t stream)
 {
+    h_pinned_token_num[0] = 0;
     getPaddingOffsetAndCuSeqLensKernel<<<1, 1, 0, stream>>>(
-        d_token_num, tmp_mask_offset, cu_seqlens, sequence_lengths, batch_size, max_seq_len);
-    sync_check_cuda_error();
-    check_cuda_error(cudaMemcpyAsync(h_token_num, d_token_num, sizeof(size_t), cudaMemcpyDeviceToHost, stream));
+        h_pinned_token_num, tmp_mask_offset, cu_seqlens, sequence_lengths, batch_size, max_seq_len);
+    while (((volatile size_t*)h_pinned_token_num)[0] == 0) {};
+    h_token_num[0] = h_pinned_token_num[0];
     sync_check_cuda_error();
 }
 
@@ -102,6 +106,13 @@ template void invokeBuildEncoderAttentionMask(half*        attention_mask,
                                               const int    batch_size,
                                               const int    max_seq_len,
                                               cudaStream_t stream);
+#ifdef ENABLE_FP8
+template void invokeBuildEncoderAttentionMask(__nv_fp8_e4m3* attention_mask,
+                                              const int*     sequence_lengths,
+                                              const int      batch_size,
+                                              const int      max_seq_len,
+                                              cudaStream_t   stream);
+#endif  // ENABLE_FP8
 #ifdef ENABLE_BF16
 template void invokeBuildEncoderAttentionMask(__nv_bfloat16* attention_mask,
                                               const int*     sequence_lengths,
@@ -186,11 +197,11 @@ __global__ void rebuild_sequence_length_padding(const T* src, T* dst, const int*
 
 template<typename T>
 void invokeRebuildPadding(
-    T* dst, const T* src, const int* padding_offset, const int m, const int n, cudaStream_t stream)
+    T* dst, const T* src, const int* padding_offset, const int token_num, const int hidden_dim, cudaStream_t stream)
 {
     // src: [token_num, hidden_dim]
     // dst: [batch_size*max_seq_len, hidden_dim]
-    rebuild_sequence_length_padding<<<m, 256, 0, stream>>>(src, dst, padding_offset, n);
+    rebuild_sequence_length_padding<<<token_num, 256, 0, stream>>>(src, dst, padding_offset, hidden_dim);
 }
 
 template<typename T>
@@ -215,7 +226,16 @@ template void invokeRebuildPadding(__nv_bfloat16*       dst,
                                    const int            token_num,
                                    const int            hidden_dim,
                                    cudaStream_t         stream);
-#endif
+#endif  // ENABLE_BF16
+
+#ifdef ENABLE_FP8
+template void invokeRebuildPadding(__nv_fp8_e4m3*       dst,
+                                   const __nv_fp8_e4m3* src,
+                                   const int*           padding_offset,
+                                   const int            token_num,
+                                   const int            hidden_dim,
+                                   cudaStream_t         stream);
+#endif  // ENABLE_FP8
 
 template<typename T>
 __global__ void remove_padding(T* tgt, const T* src, const int* padding_offset, const int n)
@@ -250,7 +270,14 @@ template void invokeRemovePadding(half*        dst,
                                   const int    token_num,
                                   const int    hidden_dim,
                                   cudaStream_t stream);
-
+#ifdef ENABLE_FP8
+template void invokeRemovePadding(__nv_fp8_e4m3*       dst,
+                                  const __nv_fp8_e4m3* src,
+                                  const int*           padding_offset,
+                                  const int            token_num,
+                                  const int            hidden_dim,
+                                  cudaStream_t         stream);
+#endif  // ENABLE_FP8
 #ifdef ENABLE_BF16
 template void invokeRemovePadding(__nv_bfloat16*       dst,
                                   const __nv_bfloat16* src,
@@ -364,6 +391,80 @@ template void invokeBuildRelativeAttentionBias(__nv_bfloat16*              relat
                                                const int                   max_distance,
                                                const PositionEmbeddingType position_embedding_type,
                                                cudaStream_t                stream);
+#endif
+
+#ifdef ENABLE_FP8
+
+template<typename T_OUT, typename T_IN>
+__global__ void getLastTokenDequantize(getLastTokenDequantizeParam<T_OUT, T_IN> param)
+{
+    param.output[blockIdx.x * param.d_model + threadIdx.x] =
+        (T_OUT)((float)param.input[blockIdx.x * param.max_seq_len * param.d_model + threadIdx.x]
+                * __ldg(param.input_scale));
+}
+
+template<typename T_OUT, typename T_IN>
+void invokeGetLastTokenDequantize(getLastTokenDequantizeParam<T_OUT, T_IN> param)
+{
+    FT_CHECK(param.d_model <= 1024);
+    getLastTokenDequantize<T_OUT, T_IN><<<param.batch_size, param.d_model, 0, param.stream>>>(param);
+}
+
+template void invokeGetLastTokenDequantize<__nv_bfloat16, __nv_fp8_e4m3>(
+    getLastTokenDequantizeParam<__nv_bfloat16, __nv_fp8_e4m3> param);
+
+template<typename T_OUT, typename T_IN, QUANTIZE_MODE quantize_mode>
+__global__ void quantizeMatrixRebuildPadding(QuantizeMatrixRebuildPaddingParam<T_OUT, T_IN, quantize_mode> param)
+{
+    for (int i = threadIdx.x; i < param.d_model; i += blockDim.x) {
+        int padded_row_id = blockIdx.x + (param.padding_offset == nullptr ? 0 : param.padding_offset[blockIdx.x]);
+        if (quantize_mode == QUANTIZE_MODE::PER_TENSOR) {
+            param.dst[padded_row_id * param.d_model + i] =
+                (T_OUT)((float)param.src[blockIdx.x * param.d_model + i] * __ldg(param.scale));
+        }
+        else if (quantize_mode == QUANTIZE_MODE::PER_CHANNEL) {
+            param.dst[padded_row_id * param.d_model + i] =
+                (T_OUT)((float)param.src[blockIdx.x * param.d_model + i] * __ldg(param.scale + i));
+        }
+    }
+}
+
+template<>
+__global__ void
+quantizeMatrixRebuildPadding(QuantizeMatrixRebuildPaddingParam<half, __nv_fp8_e4m3, QUANTIZE_MODE::PER_TENSOR> param)
+{
+    int padded_row_id = blockIdx.x + (param.padding_offset == nullptr ? 0 : __ldg(&param.padding_offset[blockIdx.x]));
+    __nv_fp8x4_e4m3* src_ptr = ((__nv_fp8x4_e4m3*)param.src) + blockIdx.x * (param.d_model / 4);
+    half2*           dst_ptr = ((half2*)param.dst) + padded_row_id * (param.d_model / 2);
+    half2            scale   = cuda_cast<half2>(__ldg(param.scale));
+    for (int i = threadIdx.x; i < param.d_model / 4; i += blockDim.x) {
+        half2 val_0;
+        half2 val_1;
+        fp8x4_e4m3_to_half2(&val_0, &val_1, src_ptr + i);
+
+        val_0 = hmul2(val_0, scale);
+        val_1 = hmul2(val_1, scale);
+
+        dst_ptr[2 * i + 0] = val_0;
+        dst_ptr[2 * i + 1] = val_1;
+    }
+}
+
+template<typename T_OUT, typename T_IN, QUANTIZE_MODE quantize_mode>
+void invokeQuantizeMatrixRebuildPadding(QuantizeMatrixRebuildPaddingParam<T_OUT, T_IN, quantize_mode> param)
+{
+    dim3 grid(param.token_num);
+    dim3 block(param.d_model);
+    FT_CHECK(block.x <= 1024);
+    if (block.x % 4 == 0) {
+        block.x /= 4;
+    }
+    quantizeMatrixRebuildPadding<<<grid, block, 0, param.stream>>>(param);
+}
+
+template void invokeQuantizeMatrixRebuildPadding<half, __nv_fp8_e4m3, QUANTIZE_MODE::PER_TENSOR>(
+    QuantizeMatrixRebuildPaddingParam<half, __nv_fp8_e4m3, QUANTIZE_MODE::PER_TENSOR> param);
+
 #endif
 
 }  // namespace fastertransformer
