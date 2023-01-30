@@ -154,7 +154,7 @@ class GPTWeights:
             self.inference_data_type]))   # post embedding_kernel
         self.adapter_offset = 2 + optional_adapter_offset
 
-        self.w.extend([torch.empty(0)] * layer_num)   # gating_weight
+        self.w.extend([torch.empty(0, dtype=str_type_map[self.inference_data_type])] * layer_num)   # gating_weight
         self.adapter_offset += layer_num
 
         # adapters
