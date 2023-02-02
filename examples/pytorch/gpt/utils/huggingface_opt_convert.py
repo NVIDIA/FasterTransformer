@@ -169,7 +169,7 @@ def split_and_convert(args):
     factor = (int)(i_gpu_num / t_gpu_num)
 
     # load position_embedding from rank 0
-    model = AutoModelForCausalLM.from_pretrained(args.in_file, device_map="auto")
+    model = AutoModelForCausalLM.from_pretrained(args.in_file)
 
     capture_dict = None
     if args.act_scale is not None:
