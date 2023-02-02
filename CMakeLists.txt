@@ -29,6 +29,9 @@ if((${CUDA_VERSION_MAJOR} VERSION_GREATER_EQUAL "11" AND ${CUDA_VERSION_MINOR} V
   endif()
 endif()
 
+set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake/Modules)
+find_package(CUDNN)
+
 option(BUILD_CUTLASS_MOE "Builds CUTLASS kernels supporting MoE GEMM" ON)
 if(BUILD_CUTLASS_MOE)
   message(STATUS "Add DBUILD_CUTLASS_MOE, requires CUTLASS. Increases compilation time")
