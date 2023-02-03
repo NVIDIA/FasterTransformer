@@ -45,7 +45,7 @@
     printf("\tnum_layer=%ld\n", m_.num_layer);                                                                         \
     printf("\tsm=%d\n", m_.sm);                                                                                        \
     printf("\tq_scaling=%f\n", m_.q_scaling);
-    printf("\tuse_layernorm_in_cnn_module=%d\n", m_.use_layernorm_in_cnn_module);                                                                           \
+    printf("\tuse_layernorm_in_cnn_module=%d\n", m_.use_layernorm_in_cnn_module);                                      \
     printf("\tuseFP16=%d\n", m_.useFP16);                                                                              \
     printf("\tweightFilePath=%s\n", m_.weightFilePath);                                                                \
     printf("\tvocab_size=%ld\n", m_.vocab_size);                                                                       \
