@@ -44,23 +44,23 @@ WenetEncoderPlugin::WenetEncoderPlugin(const std::string& name,
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     WHERE_AM_I();
-    m_.max_batch_size          = max_batch_size;
-    m_.max_seq_len             = max_seq_len;
-    m_.head_num                = head_num;
-    m_.size_per_head           = size_per_head;
-    m_.feature_size            = feature_size;
-    m_.max_len                 = max_len;
-    m_.inter_size              = inter_size;
-    m_.d_model                 = d_model;
-    m_.num_layer               = num_layer;
-    m_.vocab_size              = vocab_size;
-    m_.conv_module_kernel_size = conv_module_kernel_size;
-    m_.sm                      = sm;
-    m_.q_scaling               = q_scaling;
+    m_.max_batch_size               = max_batch_size;
+    m_.max_seq_len                  = max_seq_len;
+    m_.head_num                     = head_num;
+    m_.size_per_head                = size_per_head;
+    m_.feature_size                 = feature_size;
+    m_.max_len                      = max_len;
+    m_.inter_size                   = inter_size;
+    m_.d_model                      = d_model;
+    m_.num_layer                    = num_layer;
+    m_.vocab_size                   = vocab_size;
+    m_.conv_module_kernel_size      = conv_module_kernel_size;
+    m_.sm                           = sm;
+    m_.q_scaling                    = q_scaling;
     m_.use_layernorm_in_conv_module = (bool)use_layernorm_in_conv_module;
-    m_.useFP16                 = (bool)useFP16;
-    m_.batch_size              = m_.max_batch_size;
-    m_.seq_len                 = m_.max_seq_len;
+    m_.useFP16                      = (bool)useFP16;
+    m_.batch_size                   = m_.max_batch_size;
+    m_.seq_len                      = m_.max_seq_len;
     strcpy(m_.weightFilePath, weightFilePath.c_str());
 
     CreateFT();
@@ -76,8 +76,7 @@ void WenetEncoderPlugin::CreateFT()
     cudnnCreate(&cudnn_handle_);
 
     // Wenet EncoderWeight
-    std::string weightFilePath = "/weight/enc/";
-    // std::string weightFilePath = m_.weightFilePath;
+    std::string weightFilePath = m_.weightFilePath;
     FT_LOG_WARNING("The default weight file path is %s. Change it accordingly, otherwise model will fail to load! \n",
                    weightFilePath.c_str());
     if (m_.useFP16) {
@@ -508,22 +507,22 @@ IPluginV2* WenetEncoderPluginCreator::createPlugin(const char* name, const Plugi
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     WHERE_AM_I();
-    int         max_batch_size          = 128;
-    int         max_seq_len             = 384;
-    int         head_num                = 8;
-    int         size_per_head           = 32;
-    int         feature_size            = 80;
-    int         max_len                 = 5000;
-    int         d_model                 = head_num * size_per_head;
-    int         inter_size              = d_model * 4;
-    int         num_layer               = 12;
-    int         vocab_size              = 4233;
-    int         conv_module_kernel_size = 15;
-    int         sm                      = -1;
-    float       q_scaling               = 1.0f / (sqrt(size_per_head) * 1.0f);
-    std::string weightFilePath          = "";
+    int         max_batch_size               = 128;
+    int         max_seq_len                  = 384;
+    int         head_num                     = 8;
+    int         size_per_head                = 32;
+    int         feature_size                 = 80;
+    int         max_len                      = 5000;
+    int         d_model                      = head_num * size_per_head;
+    int         inter_size                   = d_model * 4;
+    int         num_layer                    = 12;
+    int         vocab_size                   = 4233;
+    int         conv_module_kernel_size      = 15;
+    int         sm                           = -1;
+    float       q_scaling                    = 1.0f / (sqrt(size_per_head) * 1.0f);
+    std::string weightFilePath               = "";
     int         use_layernorm_in_conv_module = 0;
-    int         useFP16                 = 0;
+    int         useFP16                      = 0;
 
     struct cudaDeviceProp prop;
     cudaGetDeviceProperties(&prop, 0);

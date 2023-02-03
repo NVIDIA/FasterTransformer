@@ -99,21 +99,21 @@ private:
     WenetEncoder<float>*            pWenetEncoderFloat_       = nullptr;
     struct {
         // constructor parameter
-        size_t max_batch_size          = 16;
-        size_t max_seq_len             = 256;
-        size_t head_num                = 8;
-        size_t size_per_head           = 32;
-        size_t feature_size            = 80;
-        size_t max_len                 = 5000;
-        size_t inter_size              = head_num * size_per_head * 4;
-        size_t d_model                 = head_num * size_per_head;
-        size_t num_layer               = 12;
-        size_t vocab_size              = 4233;
-        size_t conv_module_kernel_size = 15;
-        int    sm                      = -1;  // assign later
-        float  q_scaling               = 1.0f / (1.0f * sqrt(size_per_head));
+        size_t max_batch_size               = 16;
+        size_t max_seq_len                  = 256;
+        size_t head_num                     = 8;
+        size_t size_per_head                = 32;
+        size_t feature_size                 = 80;
+        size_t max_len                      = 5000;
+        size_t inter_size                   = head_num * size_per_head * 4;
+        size_t d_model                      = head_num * size_per_head;
+        size_t num_layer                    = 12;
+        size_t vocab_size                   = 4233;
+        size_t conv_module_kernel_size      = 15;
+        int    sm                           = -1;  // assign later
+        float  q_scaling                    = 1.0f / (1.0f * sqrt(size_per_head));
         bool   use_layernorm_in_conv_module = false;
-        bool   useFP16                 = false;
+        bool   useFP16                      = false;
         // internal parameter
         bool                              is_remove_padding            = false;
         bool                              is_free_buffer_after_forward = false;
