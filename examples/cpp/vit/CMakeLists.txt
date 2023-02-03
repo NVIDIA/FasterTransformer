@@ -15,4 +15,4 @@ cmake_minimum_required(VERSION 3.8)
 
 add_executable(vit_example vit_example.cc)
 target_link_libraries(vit_example PUBLIC ViT trt_fused_multi_head_attention vit_kernels
-  cublasMMWrapper -lcublas -lcublasLt -lcudart -lcudnn -lm nvtx_utils)
+  cublasMMWrapper -lcublas -lcublasLt -lcudart "${CUDNN_LIBRARY_PATH}" -lm nvtx_utils)

@@ -30,5 +30,5 @@ if(BUILD_PYT)
   target_link_libraries(${LIB_NAME} "${TORCH_LIBRARIES}" Swin SwinINT8 
     cublasINT8MMWrapper cublasAlgoMap trt_fused_multi_head_attention 
     gen_relative_pos_bias quantize_weight transform_mask_kernels
-    -lcudnn -lcublas -lcudart)
+    "${CUDNN_LIBRARY_PATH}" -lcublas -lcudart)
 endif()

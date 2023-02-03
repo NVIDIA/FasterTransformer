@@ -27,5 +27,5 @@ if(BUILD_PYT)
   set_property(TARGET ${LIB_NAME} PROPERTY POSITION_INDEPENDENT_CODE  ON)
   set_target_properties(${LIB_NAME} PROPERTIES CUDA_RESOLVE_DEVICE_SYMBOLS ON)
   target_link_libraries(${LIB_NAME} ViT ViTINT8 quantize_weight cublasMMWrapper trt_fused_multi_head_attention 
-    -lcudnn -lcublas -lcudart "${TORCH_LIBRARIES}")
+    "${CUDNN_LIBRARY_PATH}" -lcublas -lcudart "${TORCH_LIBRARIES}")
 endif()

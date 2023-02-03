@@ -13,13 +13,13 @@
 # limitations under the License.
 
 add_executable(wenet_encoder_example wenet_encoder_example.cc)
-target_link_libraries(wenet_encoder_example PUBLIC -lcublas -lcublasLt -lcudart -lcudnn WenetEncoder)
+target_link_libraries(wenet_encoder_example PUBLIC -lcublas -lcublasLt -lcudart "${CUDNN_LIBRARY_PATH}" WenetEncoder)
 if (SPARSITY_SUPPORT)
 target_link_libraries(wenet_encoder_example PUBLIC -lcusparse -lcusparseLt)
 endif()
 
 add_executable(wenet_decoder_example wenet_decoder_example.cc)
-target_link_libraries(wenet_decoder_example PUBLIC -lcublas -lcublasLt -lcudart -lcudnn WenetDecoder)
+target_link_libraries(wenet_decoder_example PUBLIC -lcublas -lcublasLt -lcudart "${CUDNN_LIBRARY_PATH}" WenetDecoder)
 if(SPARSITY_SUPPORT)
     target_link_libraries(wenet_decoder_example PUBLIC -lcublas -lcusparse -lcusparseLt)
 endif()

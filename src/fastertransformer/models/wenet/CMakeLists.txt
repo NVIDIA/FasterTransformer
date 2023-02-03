@@ -23,7 +23,7 @@ add_library(WenetEncoder STATIC WenetEncoder.cc
                                 )
 set_property(TARGET WenetEncoder PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET WenetEncoder PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(WenetEncoder PUBLIC -lcudart -lcudnn
+target_link_libraries(WenetEncoder PUBLIC -lcudart "${CUDNN_LIBRARY_PATH}"
     bert_preprocess_kernels
     cublasMMWrapper
     FfnLayer
