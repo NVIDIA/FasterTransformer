@@ -90,7 +90,8 @@ void WenetEncoderPlugin::CreateFT()
                                                                 m_.conv_module_kernel_size,
                                                                 m_.feature_size,
                                                                 m_.max_len,
-                                                                m_.num_layer);
+                                                                m_.num_layer,
+                                                                m_.use_layernorm_in_conv_module);
         pWenetEncoderWeightHalf_->loadModel(weightFilePath);
     }
     else {
@@ -103,7 +104,8 @@ void WenetEncoderPlugin::CreateFT()
                                                                   m_.conv_module_kernel_size,
                                                                   m_.feature_size,
                                                                   m_.max_len,
-                                                                  m_.num_layer);
+                                                                  m_.num_layer,
+                                                                  m_.use_layernorm_in_conv_module);
         pWenetEncoderWeightFloat_->loadModel(weightFilePath);
     }
 
