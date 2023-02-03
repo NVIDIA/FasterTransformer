@@ -428,7 +428,7 @@ add_library(transformer-shared SHARED
 if (BUILD_MULTI_GPU)
 target_link_libraries(transformer-shared PUBLIC
   -lmpi
-  -lnccl
+  ${NCCL_LIBRARIES}
 )
 endif()
 
