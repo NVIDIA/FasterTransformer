@@ -196,7 +196,7 @@ void ViTTransformer<T>::allocateBuffer()
             (T*)allocator_->reMalloc(mask_buf_, sizeof(T) * max_batch_size_ * max_seq_len_ * max_seq_len_, false);
         padding_offset_ =
             (int*)allocator_->reMalloc(padding_offset_, sizeof(int) * max_batch_size_ * max_seq_len_, false);
-        check_cuda_error(cudaMallocHost((void**)&h_pinned_token_num_ptr_, sizeof(size_t)));
+        h_pinned_token_num_ptr_ = (size_t*)allocator_->reMalloc(h_pinned_token_num_ptr_, sizeof(size_t), true, true);
 
         trt_mha_padding_offset_ =
             (int*)allocator_->reMalloc(trt_mha_padding_offset_, sizeof(int) * (2 * max_batch_size_ + 1), false);
@@ -229,9 +229,7 @@ void ViTTransformer<T>::allocateBuffer(size_t batch_size)
     REMALLOC(embed_buf_3_, sizeof(T) * batch_size * max_seq_len_ * embed_dim_);
     REMALLOC(mask_buf_, sizeof(T) * batch_size * max_seq_len_ * max_seq_len_);
     REMALLOC(padding_offset_, sizeof(int) * batch_size * max_seq_len_);
-    if (!is_allocate_buffer_) {
-        check_cuda_error(cudaMallocHost((void**)&h_pinned_token_num_ptr_, sizeof(size_t)));
-    }
+    h_pinned_token_num_ptr_ = (size_t*)allocator_->reMalloc(h_pinned_token_num_ptr_, sizeof(size_t), true, true);
     REMALLOC(trt_mha_padding_offset_, sizeof(int) * (2 * batch_size + 1));
     REMALLOC(seq_len_vec_, sizeof(int) * batch_size);
     resetBatch(batch_size);
@@ -253,7 +251,7 @@ void ViTTransformer<T>::freeBuffer()
         allocator_->free((void**)(&trt_mha_padding_offset_));
         allocator_->free((void**)(&seq_len_vec_));
         allocator_->free((void**)(&padding_offset_));
-        check_cuda_error(cudaFreeHost(h_pinned_token_num_ptr_));
+        allocator_->free((void**)(&h_pinned_token_num_ptr_), true);
         is_allocate_buffer_ = false;
     }
 }

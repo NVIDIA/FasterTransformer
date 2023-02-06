@@ -126,7 +126,7 @@ template<typename T>
 void BertINT8<T>::allocateBuffer()
 {
     if (is_allocate_buffer_ == false) {
-        check_cuda_error(cudaMallocHost((void**)&h_pinned_token_num_ptr_, sizeof(size_t)));
+        h_pinned_token_num_ptr_ = (size_t*)allocator_->reMalloc(h_pinned_token_num_ptr_, sizeof(size_t), true, true);
         padding_offset_ =
             (int*)allocator_->reMalloc(padding_offset_, sizeof(int) * max_batch_size_ * max_seq_len_, false);
         trt_mha_padding_offset_ =
@@ -147,7 +147,7 @@ template<typename T>
 void BertINT8<T>::freeBuffer()
 {
     if (is_allocate_buffer_ == true) {
-        check_cuda_error(cudaFreeHost(h_pinned_token_num_ptr_));
+        allocator_->free((void**)(&h_pinned_token_num_ptr_), true);
         allocator_->free((void**)(&padding_offset_));
         allocator_->free((void**)(&trt_mha_padding_offset_));
 

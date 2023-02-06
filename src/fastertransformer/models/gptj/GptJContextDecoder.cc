@@ -80,9 +80,7 @@ void GptJContextDecoder<T>::allocateBuffer(size_t batch_size, size_t seq_len)
         allocator_->reMalloc(ffn_output_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
     decoder_layer_output_ = reinterpret_cast<T*>(
         allocator_->reMalloc(decoder_layer_output_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
-    if (!is_allocate_buffer_) {
-        check_cuda_error(cudaMallocHost((void**)&h_pinned_token_num_ptr_, sizeof(size_t)));
-    }
+    h_pinned_token_num_ptr_ = (size_t*)allocator_->reMalloc(h_pinned_token_num_ptr_, sizeof(size_t), true, true);
     padding_offset_ =
         reinterpret_cast<int*>(allocator_->reMalloc(padding_offset_, sizeof(int) * batch_size * seq_len, false));
     cu_seqlens_ = reinterpret_cast<int*>(allocator_->reMalloc(cu_seqlens_, sizeof(int) * (batch_size + 1), false));
@@ -97,7 +95,7 @@ void GptJContextDecoder<T>::freeBuffer()
         allocator_->free((void**)(&self_attn_output_));
         allocator_->free((void**)(&ffn_output_));
         allocator_->free((void**)(&decoder_layer_output_));
-        check_cuda_error(cudaFreeHost(h_pinned_token_num_ptr_));
+        allocator_->free((void**)(&h_pinned_token_num_ptr_), true);
         allocator_->free((void**)(&padding_offset_));
         allocator_->free((void**)(&cu_seqlens_));
         is_allocate_buffer_ = false;

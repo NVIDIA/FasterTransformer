@@ -113,9 +113,7 @@ void ParallelGptContextDecoder<T>::allocateBuffer(size_t batch_size, size_t seq_
         ffn_intermediate_dynamic_scale_ = reinterpret_cast<float*>(
             allocator_->reMalloc(ffn_intermediate_dynamic_scale_, sizeof(float) * batch_size * seq_len, true));
     }
-    if (!is_allocate_buffer_) {
-        check_cuda_error(cudaMallocHost((void**)&h_pinned_token_num_ptr_, sizeof(size_t)));
-    }
+    h_pinned_token_num_ptr_ = (size_t*)allocator_->reMalloc(h_pinned_token_num_ptr_, sizeof(size_t), true, true);
     padding_offset_ =
         reinterpret_cast<int*>(allocator_->reMalloc(padding_offset_, sizeof(int) * batch_size * seq_len, false));
     cu_seqlens_ = reinterpret_cast<int*>(allocator_->reMalloc(cu_seqlens_, sizeof(int) * (batch_size + 1), false));
@@ -160,7 +158,7 @@ void ParallelGptContextDecoder<T>::freeBuffer()
             allocator_->free((void**)(&adapter_fc2_result_));
         }
         allocator_->free((void**)(&decoder_layer_output_));
-        check_cuda_error(cudaFreeHost(h_pinned_token_num_ptr_));
+        allocator_->free((void**)(&h_pinned_token_num_ptr_), true);
         allocator_->free((void**)(&padding_offset_));
         allocator_->free((void**)(&cu_seqlens_));
 

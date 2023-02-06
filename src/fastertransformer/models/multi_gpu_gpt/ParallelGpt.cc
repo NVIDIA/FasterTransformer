@@ -189,10 +189,7 @@ void ParallelGpt<T>::allocateBuffer(size_t batch_size,
         compact_idx_          = shared_contexts_idx_ + 2 * batch_size;
         compact_size_         = (int*)allocator_->reMalloc(compact_size_, sizeof(int), false);
     }
-
-    if (generation_should_stop_ == nullptr) {
-        cudaMallocHost(&generation_should_stop_, 1 * sizeof(bool));
-    }
+    generation_should_stop_ = (bool*)allocator_->reMalloc(generation_should_stop_, sizeof(bool), true, true);
     tiled_total_padding_count_ =
         (int*)allocator_->reMalloc(tiled_total_padding_count_, batchxbeam * sizeof(int), false);
 
@@ -257,7 +254,7 @@ void ParallelGpt<T>::freeBuffer()
         allocator_->free((void**)(&lp_nccl_logits_buf_));
         allocator_->free((void**)(&lp_logprob_buf_));
 
-        cudaFreeHost(generation_should_stop_);
+        allocator_->free((void**)(&generation_should_stop_), true);
 
         if (shared_contexts_ratio_ > 0.0f) {
             allocator_->free((void**)(&shared_contexts_idx_));

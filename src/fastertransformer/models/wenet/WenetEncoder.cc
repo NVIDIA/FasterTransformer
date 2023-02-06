@@ -28,7 +28,7 @@ void WenetEncoder<T>::initialize()
     check_cuda_error(cudaStreamCreate(&stream2_));
     check_cuda_error(cudaEventCreate(&stream_finished_));
     check_cuda_error(cudaEventCreate(&stream2_finished_));
-    check_cuda_error(cudaMallocHost((void**)&h_var_token_num_, sizeof(size_t)));
+    h_var_token_num_ = (size_t*)allocator_->reMalloc(h_var_token_num_, sizeof(size_t), true, true);
 
     attention_layer_ = new RelPositionAttentionLayer<T>(0,
                                                         0,
@@ -170,7 +170,7 @@ WenetEncoder<T>::~WenetEncoder()
     delete ffn_layer_;
     delete conformer_conv_layer_;
 
-    check_cuda_error(cudaFreeHost(h_var_token_num_));
+    allocator_->free((void**)(&h_var_token_num_), true);
     check_cuda_error(cudaEventDestroy(stream2_finished_));
     check_cuda_error(cudaEventDestroy(stream_finished_));
     check_cuda_error(cudaStreamDestroy(stream2_));

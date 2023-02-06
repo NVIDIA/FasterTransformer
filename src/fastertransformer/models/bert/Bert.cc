@@ -217,10 +217,8 @@ template<typename T>
 void Bert<T>::allocateBuffer(size_t batch_size, size_t seq_len)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    if (!is_allocate_buffer_) {
-        check_cuda_error(cudaMallocHost((void**)&h_pinned_token_num_ptr_, sizeof(size_t)));
-    }
-    padding_offset_ = (int*)allocator_->reMalloc(padding_offset_, sizeof(int) * batch_size * seq_len, false);
+    h_pinned_token_num_ptr_ = (size_t*)allocator_->reMalloc(h_pinned_token_num_ptr_, sizeof(size_t), true, true);
+    padding_offset_         = (int*)allocator_->reMalloc(padding_offset_, sizeof(int) * batch_size * seq_len, false);
     trt_mha_padding_offset_ =
         (int*)allocator_->reMalloc(trt_mha_padding_offset_, sizeof(int) * (2 * batch_size + 1), false);
 
@@ -250,7 +248,7 @@ void Bert<T>::freeBuffer()
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (is_allocate_buffer_) {
-        check_cuda_error(cudaFreeHost(h_pinned_token_num_ptr_));
+        allocator_->free((void**)(&h_pinned_token_num_ptr_), true);
         allocator_->free((void**)(&padding_offset_));
         allocator_->free((void**)(&trt_mha_padding_offset_));
 
