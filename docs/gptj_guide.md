@@ -5,7 +5,7 @@
 - [GPT-J](#gpt-j)
   - [Table Of Contents](#table-of-contents)
   - [Introduction](#introduction)
-    - [Note](#note)
+    - [Inference Options](#inference-options)
     - [Supported features](#supported-features)
   - [Setup](#setup)
     - [Requirements](#requirements)
@@ -98,9 +98,14 @@ Optimization in GPT-j are similar to optimization in GPT, describing in the [gpt
 
 The `beam_width` value is set by the output shape directly. When the `beam_width` of `output_ids` is larger than 1, FT will use beam search to generate tokens; otherwise, FT will use topk or topp sampling. When the inputs of beam search and sampling is invalid, like beam width 1, top k 0, top p 0.0, FT will run greedy search automatically.
 
-### Note
+### Inference Options
 
-- `is_context_qk_buf_float_` (whether use float accumulation for GPT-J context QK GEMM or not) is set to `false` by default. If you meet accuracy issues related to GPT-J Context attention blocks, please try to enable it in the `GptJ.h`.
+We provide the environment variables to tune for specific usage.
+
+|        Name        |             Description                         |              Default                         |              Values accepted                         |
+| :----------------: | :----------------------------------------------: | :----------------------------------------------: | :----------------------------------------------: |
+|  `FMHA_ENABLE`     |   enable the fused multi-head attention kernels (fp16 accumulation)   | disabled | `ON` = enable fmha, otherwise disabled |
+|  `CONTEXT_ATTENTION_BMM1_HALF_ACCUM`     |   use fp16 accumulation for the qk gemm, and only make a difference to unfused multi-head attention kernels | fp32 accumulation | `ON` = fp32 accumulation, otherwise fp16 accumulation |
 
 ### Supported features
 

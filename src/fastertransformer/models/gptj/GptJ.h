@@ -55,7 +55,9 @@ private:
     AttentionType attention_type_;
 
     size_t     vocab_size_padded_;
-    const bool is_context_qk_buf_float_ = false;
+    const bool is_context_qk_buf_float_ =
+        (std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM") == nullptr ||
+         std::string(std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM")) != "ON");
 
     // Prompt Learning Parameters
     PromptLearningType prompt_learning_type_;

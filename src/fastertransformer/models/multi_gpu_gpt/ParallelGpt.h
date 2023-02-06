@@ -65,7 +65,9 @@ private:
     std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm_;
     int                                 enable_custom_all_reduce_;
 
-    const bool    is_context_qk_buf_float_ = false;
+    const bool is_context_qk_buf_float_ =
+        (std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM") == nullptr ||
+         std::string(std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM")) != "ON");
     size_t        vocab_size_padded_;
     const int     int8_mode_      = 0;
     AttentionType attention_type_ = AttentionType::UNFUSED_MHA;

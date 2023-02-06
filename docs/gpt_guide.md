@@ -9,7 +9,7 @@
   - [Model architecture](#model-architecture)
     - [Workflow](#workflow)
     - [Optimization](#optimization)
-    - [Note](#note)
+    - [Inference Options](#inference-options)
   - [Setup](#setup)
     - [Requirements](#requirements)
     - [Build the FasterTransformer](#build-the-fastertransformer)
@@ -199,9 +199,14 @@ The `beam_width` value is set by the output shape directly. When the `beam_width
 3. Model parallelism: In GPT model, FasterTransormer provides both tensor parallelism and pipeline parallelism. For tensor parallelism, FasterTransformer follows the idea of [Megatron]( https://arxiv.org/pdf/1909.08053.pdf). For both self-attention block and feed forward network block, we split the weights of first matrix multiplication by row and split the weights of the second matrix multiplication by column. By optimization, we can reduce the reduction operation to 2 times for each transformer block. The workflow is demonstrated in Fig 3. For pipeline parallelism, FasterTransformer splits the whole batch of request into multiple micro batches and hide the bubble of communication. FasterTransformer will adjust the micro batch size automatically for different cases. Users can adjust the model parallelism by modifying the `gpt_config.ini` file. We recommend to use tensor parallel intra node, and use pipeline parallel inter node because tensor parallel requires more NCCL communication.
 4. Multiple frameworks: Except the source codes on c, FasterTransformer also provide the TensorFlow op, PyTorch op and Triton backend. Currently, TensorFlow op only supports the single GPU, while PyTorch op and Triton backend support multi-GPU and multi-node. To prevent the additional work of splitting model for model parallelism, FasterTransformer also provides a tool to split and convert the model of Megatron to binary files, then FasterTransformer can load the model in binary directly.
 
-### Note
+### Inference Options
 
-* `is_context_qk_buf_float_` (whether use float accumulation for GPT context QK GEMM or not) is set to `false` by default. If you meet accuracy issues related to GPT Context attention blocks, please try to enable it in the `ParallelGpt.h`.
+We provide the environment variables to tune for specific usage.
+
+|        Name        |             Description                         |              Default                         |              Values accepted                         |
+| :----------------: | :----------------------------------------------: | :----------------------------------------------: | :----------------------------------------------: |
+|  `FMHA_ENABLE`     |   enable the fused multi-head attention kernels (fp16 accumulation)   | disabled | `ON` = enable fmha, otherwise disabled |
+|  `CONTEXT_ATTENTION_BMM1_HALF_ACCUM`     |   use fp16 accumulation for the qk gemm, and only make a difference to unfused multi-head attention kernels | fp32 accumulation | `ON` = fp32 accumulation, otherwise fp16 accumulation |
 
 ## Setup
 

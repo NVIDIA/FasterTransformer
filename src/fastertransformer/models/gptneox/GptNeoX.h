@@ -56,7 +56,9 @@ private:
     AttentionType attention_type_;
 
     size_t     vocab_size_padded_;
-    const bool is_context_qk_buf_float_ = true;
+    const bool is_context_qk_buf_float_ =
+        (std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM") == nullptr ||
+         std::string(std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM")) != "ON");
 
     // Residual Type
     const bool use_gptj_residual_ = true;

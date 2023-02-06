@@ -397,7 +397,7 @@ void ParallelGptContextDecoder<T>::forward(
     }
 
     AttentionType attention_type =
-        (input_tensors->isExist("linear_bias_slopes") || is_qk_buf_float_ || int8_mode_ == 2) ?
+        (input_tensors->isExist("linear_bias_slopes") || int8_mode_ == 2) ?
             getUnfusedAttentionType(attention_type_) :
             attention_type_;
     const bool is_unpadded_mha = isUnPaddedMHA(attention_type);

@@ -272,7 +272,7 @@ void GptNeoXContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>* 
         self_v_cache_size.push_back(*t);
     }
 
-    AttentionType attention_type  = (d_prefix_prompt_lengths != nullptr || is_qk_buf_float_) ?
+    AttentionType attention_type  = (d_prefix_prompt_lengths != nullptr) ?
                                         getUnfusedAttentionType(attention_type_) :
                                         attention_type_;
     const bool    is_unpadded_mha = isUnPaddedMHA(attention_type);
