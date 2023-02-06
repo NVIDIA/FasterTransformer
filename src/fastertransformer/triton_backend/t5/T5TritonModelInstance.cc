@@ -187,11 +187,11 @@ T5TritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::string
 
     if (has_ia3_tasks) {
         const auto num_ia3_tasks = t5_encoder_weight_->getNumIA3Tasks();
-        ft::FT_CHECK_WITH_INFO(num_ia3_tasks > 0, "Cannot request ia3_tasks, model has no IA3 adapters");
+        FT_CHECK_WITH_INFO(num_ia3_tasks > 0, "Cannot request ia3_tasks, model has no IA3 adapters");
         const bool is_within_range = ft::invokeCheckRange<int>(
             d_input_ia3_tasks_, request_batch_size, 0, num_ia3_tasks - 1, d_within_range_, t5_encoder_->getStream());
-        ft::FT_CHECK_WITH_INFO(is_within_range,
-                               ft::fmtstr("Requested IA3 tasks aren't in the range [0, %d).", num_ia3_tasks));
+        FT_CHECK_WITH_INFO(is_within_range,
+                           ft::fmtstr("Requested IA3 tasks aren't in the range [0, %d).", num_ia3_tasks));
 
         decoding_input_tensors.insert({"ia3_tasks", as_GPU_tensor(input_tensors->at("ia3_tasks"), d_input_ia3_tasks_)});
     }

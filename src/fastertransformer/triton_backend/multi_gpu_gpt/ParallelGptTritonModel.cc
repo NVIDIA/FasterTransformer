@@ -179,7 +179,7 @@ ParallelGptTritonModel<T>::ParallelGptTritonModel(size_t      tensor_para_size,
 {
     INIReader reader = INIReader(model_dir + "/config.ini");
     if (reader.ParseError() < 0) {
-        ft::FT_CHECK_WITH_INFO(false, ft::fmtstr("Can't load %s/config.ini", model_dir.c_str()));
+        FT_CHECK_WITH_INFO(false, ft::fmtstr("Can't load %s/config.ini", model_dir.c_str()));
     }
 
     /* GPT Configuration File Example

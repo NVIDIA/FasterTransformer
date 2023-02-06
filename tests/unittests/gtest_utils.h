@@ -239,7 +239,7 @@ protected:
 
     void copyTensor(ft::Tensor& dst, ft::Tensor& src)
     {
-        ft::FT_CHECK_WITH_INFO(
+        FT_CHECK_WITH_INFO(
             src.sizeBytes() == dst.sizeBytes(),
             ft::fmtstr("src and dst has different size (%ld != %ld)", src.sizeBytes(), dst.sizeBytes()));
         ft::cudaAutoCpy(dst.getPtr<char>(), src.getPtr<char>(), src.sizeBytes(), stream);

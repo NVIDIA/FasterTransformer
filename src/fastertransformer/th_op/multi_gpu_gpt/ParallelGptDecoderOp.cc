@@ -226,7 +226,7 @@ void FtGptDecoder<T>::forward(const int64_t            max_input_length,
         {"ite", ft::Tensor(ft::MEMORY_CPU, ft::TYPE_INT32, {1}, &_ite)},
         {"masked_tokens", convert_tensor<bool>(masked_tokens)}};
     if (cache_indirection_opt.has_value()) {
-        ft::FT_CHECK_WITH_INFO(
+        FT_CHECK_WITH_INFO(
             cache_indirection_opt.value().dim() == 3,
             ft::fmtstr("cache_indirection assumes to be of shape (batch_size, beam_width, memory_length), "
                        "but got %s",

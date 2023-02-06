@@ -161,7 +161,7 @@ struct Tensor {
                 ft_data_type = ft::DataType::TYPE_BYTES;
                 break;
             default:
-                ft::FT_CHECK_WITH_INFO(false, "Unknown data type with type id: " + std::to_string(tmp_type));
+                FT_CHECK_WITH_INFO(false, "Unknown data type with type id: " + std::to_string(tmp_type));
                 break;
         }
         return ft_data_type;
@@ -237,7 +237,7 @@ struct Tensor {
                 triton_data_type = TYPE_BYTES;
                 break;
             default:
-                ft::FT_CHECK_WITH_INFO(false, "Unknown data type with type id: " + std::to_string(ft_tensor.type));
+                FT_CHECK_WITH_INFO(false, "Unknown data type with type id: " + std::to_string(ft_tensor.type));
                 break;
         }
         MemoryType triton_memory_type;

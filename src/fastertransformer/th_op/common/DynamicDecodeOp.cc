@@ -28,7 +28,7 @@ FtDynamicDecode<T>::FtDynamicDecode(const size_t vocab_size,
                                     const int    pipeline_para_size):
     vocab_size_(vocab_size), vocab_size_padded_(vocab_size_padded)
 {
-    ft::FT_CHECK_WITH_INFO(
+    FT_CHECK_WITH_INFO(
         vocab_size_padded_ % tensor_para_size == 0,
         ft::fmtstr("vocab_size (%ld) is not multiple of tensor_para_size (%d).", vocab_size_padded_, tensor_para_size));
     ft::ftNcclInitialize(tensor_para_, pipeline_para_, tensor_para_size, pipeline_para_size);
@@ -353,13 +353,13 @@ th::Tensor DynamicDecodeOp::forward(th::Tensor               logits,
     //     tgt_cache_indirection: [local_batch_size, beam_width, memory_length], float, optional
 
     CHECK_INPUT(logits, scalar_type_);
-    ft::FT_CHECK_WITH_INFO(logits.dim() == 3,
-                           ft::fmtstr("logits is of shape (batch_size, beam_width, vocab_size_padded), "
-                                      "but got dim=%d shape=%s",
-                                      (int)logits.dim(),
-                                      ft::vec2str(convert_shape(logits)).c_str())
-                               .c_str());
-    ft::FT_CHECK_WITH_INFO(
+    FT_CHECK_WITH_INFO(logits.dim() == 3,
+                       ft::fmtstr("logits is of shape (batch_size, beam_width, vocab_size_padded), "
+                                  "but got dim=%d shape=%s",
+                                  (int)logits.dim(),
+                                  ft::vec2str(convert_shape(logits)).c_str())
+                           .c_str());
+    FT_CHECK_WITH_INFO(
         static_cast<size_t>(logits.size(2)) == vocab_size_padded_,
         ft::fmtstr("logits is of shape (batch_size, beam_width, vocab_size(%ld)), but got the last dim=%d.",
                    vocab_size_padded_,

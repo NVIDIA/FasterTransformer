@@ -38,8 +38,8 @@ BertTritonModel<T>::BertTritonModel(size_t      tensor_para_size,
     is_sparse_(is_sparse),
     is_remove_padding_(is_remove_padding)
 {
-    ft::FT_CHECK_WITH_INFO(int8_mode_ == 0, "still not support int8 in bert backend");
-    ft::FT_CHECK_WITH_INFO(is_sparse == false, "still not support sparse in bert backend");
+    FT_CHECK_WITH_INFO(int8_mode_ == 0, "still not support int8 in bert backend");
+    FT_CHECK_WITH_INFO(is_sparse == false, "still not support sparse in bert backend");
 
     INIReader reader = INIReader(model_dir + "/config.ini");
     if (reader.ParseError() < 0) {

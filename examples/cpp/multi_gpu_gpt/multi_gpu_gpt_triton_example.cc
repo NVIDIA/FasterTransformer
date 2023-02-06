@@ -323,11 +323,11 @@ int main(int argc, char* argv[])
     std::shared_ptr<AbstractTransformerModel> model              = AbstractTransformerModel::createGptModel(ini_name);
     int                                       tensor_para_size   = model->getTensorParaSize();
     int                                       pipeline_para_size = model->getPipelineParaSize();
-    ft::FT_CHECK_WITH_INFO(world_size == (tensor_para_size * pipeline_para_size),
-                           ft::fmtstr("World Size (%d) != Tensor Parallel Size (%d) * Pipeline Parallel Size (%d).",
-                                      world_size,
-                                      tensor_para_size,
-                                      pipeline_para_size));
+    FT_CHECK_WITH_INFO(world_size == (tensor_para_size * pipeline_para_size),
+                       ft::fmtstr("World Size (%d) != Tensor Parallel Size (%d) * Pipeline Parallel Size (%d).",
+                                  world_size,
+                                  tensor_para_size,
+                                  pipeline_para_size));
 
     std::cout << model->toString();
 

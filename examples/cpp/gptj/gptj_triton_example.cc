@@ -323,8 +323,8 @@ int main(int argc, char* argv[])
     std::shared_ptr<AbstractTransformerModel> model              = AbstractTransformerModel::createGptJModel(ini_name);
     int                                       tensor_para_size   = model->getTensorParaSize();
     int                                       pipeline_para_size = model->getPipelineParaSize();
-    ft::FT_CHECK_WITH_INFO(world_size == (tensor_para_size * pipeline_para_size),
-                           "World Size != Tensor Parallel Size * Pipeline Parallel Size !");
+    FT_CHECK_WITH_INFO(world_size == (tensor_para_size * pipeline_para_size),
+                       "World Size != Tensor Parallel Size * Pipeline Parallel Size !");
 
     std::cout << model->toString();
 

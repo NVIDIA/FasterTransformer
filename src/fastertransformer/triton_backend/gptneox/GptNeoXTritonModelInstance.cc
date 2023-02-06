@@ -161,10 +161,10 @@ std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>
 GptNeoXTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    ft::FT_CHECK_WITH_INFO(input_tensors->at("input_ids").shape.size() == 2,
-                           "input_tensors->at(\"input_ids\").shape.size() == 2");
-    ft::FT_CHECK_WITH_INFO(input_tensors->at("input_lengths").shape.size() == 1,
-                           "input_tensors->at(\"input_lengths\").shape.size() == 1");
+    FT_CHECK_WITH_INFO(input_tensors->at("input_ids").shape.size() == 2,
+                       "input_tensors->at(\"input_ids\").shape.size() == 2");
+    FT_CHECK_WITH_INFO(input_tensors->at("input_lengths").shape.size() == 1,
+                       "input_tensors->at(\"input_lengths\").shape.size() == 1");
 
     const uint32_t request_batch_size     = input_tensors->at("input_ids").shape[0];
     const uint32_t max_request_output_len = (size_t)*std::max_element(

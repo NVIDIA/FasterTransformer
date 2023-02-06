@@ -162,10 +162,10 @@ template<typename T>
 std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> ParallelGptTritonModelInstance<T>::forward(
     std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors)
 {
-    ft::FT_CHECK_WITH_INFO(input_tensors->at("input_ids").shape.size() == 2,
-                           "input_tensors->at(\"input_ids\").shape.size() == 2");
-    ft::FT_CHECK_WITH_INFO(input_tensors->at("input_lengths").shape.size() == 1,
-                           "input_tensors->at(\"input_lengths\").shape.size() == 1");
+    FT_CHECK_WITH_INFO(input_tensors->at("input_ids").shape.size() == 2,
+                       "input_tensors->at(\"input_ids\").shape.size() == 2");
+    FT_CHECK_WITH_INFO(input_tensors->at("input_lengths").shape.size() == 1,
+                       "input_tensors->at(\"input_lengths\").shape.size() == 1");
     const size_t request_batch_size     = input_tensors->at("input_ids").shape[0];
     size_t       max_request_output_len = (size_t)*std::max_element((int*)input_tensors->at("request_output_len").data,
                                                               (int*)input_tensors->at("request_output_len").data
