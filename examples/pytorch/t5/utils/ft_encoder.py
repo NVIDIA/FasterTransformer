@@ -104,11 +104,19 @@ class FTT5EncoderWeight(object):
         t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.1.layer_norm.weight".format(i)]
                         for i in range(start_layer, end_layer)], 0).contiguous().cuda()
         self.w.append(t)
-        t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.1.DenseReluDense.wi.weight".format(i)]
-                        for i in range(start_layer, end_layer)], 0).contiguous().cuda()
-        self.w.append(t.split(t.shape[-1] // self.tensor_para_size, dim=-1)[self.tensor_para_rank].contiguous())
-        # add empty wi2
-        self.w.append(torch.empty((1, 1), dtype=torch_weight_dtype).contiguous().cuda())
+        if self.use_gated_activation:
+            t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.1.DenseReluDense.wi_0.weight".format(i)]
+                            for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+            self.w.append(t.split(t.shape[-1] // self.tensor_para_size, dim=-1)[self.tensor_para_rank].contiguous())
+            t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.1.DenseReluDense.wi_1.weight".format(i)]
+                             for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+            self.w.append(t.split(t.shape[-1] // self.tensor_para_size, dim=-1)[self.tensor_para_rank].contiguous())
+        else:
+            t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.1.DenseReluDense.wi.weight".format(i)]
+                            for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+            self.w.append(t.split(t.shape[-1] // self.tensor_para_size, dim=-1)[self.tensor_para_rank].contiguous())
+            # add empty wi2
+            self.w.append(torch.empty((1, 1), dtype=torch_weight_dtype).contiguous().cuda())
         t = torch.stack([encoder_weight_dict["encoder.block.{}.layer.1.DenseReluDense.wo.weight".format(i)]
                         for i in range(start_layer, end_layer)], 0).contiguous().cuda()
         self.w.append(t.split(t.shape[1] // self.tensor_para_size, dim=1)[self.tensor_para_rank].contiguous())
