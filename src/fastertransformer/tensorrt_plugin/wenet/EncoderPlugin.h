@@ -45,6 +45,7 @@
     printf("\tnum_layer=%ld\n", m_.num_layer);                                                                         \
     printf("\tsm=%d\n", m_.sm);                                                                                        \
     printf("\tq_scaling=%f\n", m_.q_scaling);                                                                          \
+    printf("\tuse_layernorm_in_cnn_module=%d\n", m_.use_layernorm_in_cnn_module);                                      \
     printf("\tuseFP16=%d\n", m_.useFP16);                                                                              \
     printf("\tweightFilePath=%s\n", m_.weightFilePath);                                                                \
     printf("\tvocab_size=%ld\n", m_.vocab_size);                                                                       \
@@ -98,20 +99,21 @@ private:
     WenetEncoder<float>*            pWenetEncoderFloat_       = nullptr;
     struct {
         // constructor parameter
-        size_t max_batch_size          = 16;
-        size_t max_seq_len             = 256;
-        size_t head_num                = 8;
-        size_t size_per_head           = 32;
-        size_t feature_size            = 80;
-        size_t max_len                 = 5000;
-        size_t inter_size              = head_num * size_per_head * 4;
-        size_t d_model                 = head_num * size_per_head;
-        size_t num_layer               = 12;
-        size_t vocab_size              = 4233;
-        size_t conv_module_kernel_size = 15;
-        int    sm                      = -1;  // assign later
-        float  q_scaling               = 1.0f / (1.0f * sqrt(size_per_head));
-        bool   useFP16                 = false;
+        size_t max_batch_size               = 16;
+        size_t max_seq_len                  = 256;
+        size_t head_num                     = 8;
+        size_t size_per_head                = 32;
+        size_t feature_size                 = 80;
+        size_t max_len                      = 5000;
+        size_t inter_size                   = head_num * size_per_head * 4;
+        size_t d_model                      = head_num * size_per_head;
+        size_t num_layer                    = 12;
+        size_t vocab_size                   = 4233;
+        size_t conv_module_kernel_size      = 15;
+        int    sm                           = -1;  // assign later
+        float  q_scaling                    = 1.0f / (1.0f * sqrt(size_per_head));
+        bool   use_layernorm_in_conv_module = false;
+        bool   useFP16                      = false;
         // internal parameter
         bool                              is_remove_padding            = false;
         bool                              is_free_buffer_after_forward = false;
@@ -144,6 +146,7 @@ public:
                        int                sm,
                        float              q_scaling,
                        const std::string& weightFilePath,
+                       int                use_layernorm_in_conv_module,
                        int                useFP16);
     WenetEncoderPlugin(const std::string& name, const void* buffer, size_t length);
     ~WenetEncoderPlugin();

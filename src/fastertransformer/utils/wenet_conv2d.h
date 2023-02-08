@@ -156,8 +156,8 @@ void conv2d(T*             output,
                                                        &ws_size));
     FT_LOG_DEBUG("Convolution algorithm: %d with workspace size: %d \n", convolution_algorithm_, ws_size);
     FT_CHECK_WITH_INFO(
-        ws_size <= (1 << 27),
-        "Current workspace used for CuDNN Convolution is fixed as 1 << 27, please increase it in WenetEncoder::allocateBuffer!");
+        ws_size <= (1 << 29),
+        "Current workspace used for CuDNN Convolution is fixed as 1 << 29, please increase it in WenetEncoder::allocateBuffer!");
     // void *ws_data;
     // if (ws_size > 0) {
     //     check_cuda_error(cudaMalloc(&ws_data, ws_size));
