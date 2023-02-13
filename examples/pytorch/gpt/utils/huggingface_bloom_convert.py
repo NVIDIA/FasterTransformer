@@ -209,9 +209,8 @@ def handle_exceptions(model_config: PretrainedConfig,
     return param
 
 
-def convert_and_save_parameter(config: PretrainedConfig,
-                               name: str,
-                               param: torch.nn.Parameter,
+def convert_and_save_parameter(param_name: str,
+                               param,
                                tensor_para_size: Optional[int],
                                save_dir: PathLike):
     """ Convert and save to FT parameter
@@ -228,12 +227,6 @@ def convert_and_save_parameter(config: PretrainedConfig,
         save_dir: str or Path, a base directory of binary files.
     """
 
-    # Preprocess
-    param_name = convert_parameter_name(name)
-    param = safe_transpose(param)
-    param = handle_exceptions(config, param_name, param)
-
-    param = param.detach().cpu().numpy()
     save_dir = Path(save_dir)
 
     if not is_split_param(param_name):
@@ -325,15 +318,23 @@ def main():
                 f'{len(list(model.parameters()))} params')
     if args.processes > 1:
         pool = multiprocessing.Pool(args.processes)
-        pool.starmap_async(
-            convert_and_save_parameter,
-            [(model.config, name, param, tp_size, save_dir)
-            for name, param in model.named_parameters()])
+        star_args = []
+        for name, param in model.named_parameters():
+            # Preprocess
+            param_name = convert_parameter_name(name)
+            param = safe_transpose(param)
+            param = handle_exceptions(model.config, param_name, param)
+            star_args.append((param_name, param.detach().cpu().numpy(), tp_size, save_dir))
+        pool.starmap_async(convert_and_save_parameter, star_args)
         pool.close()
         pool.join()
     else:
         for name, param in model.named_parameters():
-            convert_and_save_parameter(model.config, name, param, tp_size, save_dir)
+            # Preprocess
+            param_name = convert_parameter_name(name)
+            param = safe_transpose(param)
+            param = handle_exceptions(model.config, param_name, param)
+            convert_and_save_parameter(param_name, param.detach().cpu().numpy(), tp_size, save_dir)
     elapsed_time = time.time() - start_time
     logger.info(f'Checkpoint conversion (HF >> FT) has done '
                 f'(elapsed time: {elapsed_time:.2f} sec)')
