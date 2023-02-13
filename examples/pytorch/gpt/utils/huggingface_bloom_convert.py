@@ -330,7 +330,11 @@ def main():
         pool.join()
     else:
         for name, param in model.named_parameters():
-            convert_and_save_parameter(model.config, name, param, tp_size, save_dir)
+            # Preprocess
+            param_name = convert_parameter_name(name)
+            param = safe_transpose(param)
+            param = handle_exceptions(model.config, param_name, param)
+            convert_and_save_parameter(param_name, param.detach().cpu().numpy(), tp_size, save_dir)
     elapsed_time = time.time() - start_time
     logger.info(f'Checkpoint conversion (HF >> FT) has done '
                 f'(elapsed time: {elapsed_time:.2f} sec)')
