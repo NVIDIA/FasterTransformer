@@ -189,6 +189,8 @@ def translate(args_dict):
     decoder_config.update({"moe_layer_index": []})
     if model_type != "Megatron":
         activation_type = encoder_config.feed_forward_proj
+        if activation_type == "gated-gelu" or activation_type == "gated-relu":
+            use_gated_activation = True
     # https://github.com/huggingface/transformers/blob/main/src/transformers/models/t5/modeling_t5.py#L1660
     # if tie_word_embeddings == True, scale the decoder output by sequence_output = sequence_output * (self.model_dim**-0.5)
     tie_word_embeddings = decoder_config.tie_word_embeddings
