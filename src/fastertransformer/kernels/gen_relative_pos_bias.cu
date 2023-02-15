@@ -197,14 +197,14 @@ template void invokeGenRelativePosBias(half*          relative_position_bias,
                                        const int      head_num,
                                        cudaStream_t   stream);
 
-__host__ __device__ uint32_t pow2_roundup(uint32_t x)
+__host__ __device__ uint32_t pow2_rounddown(uint32_t x)
 {
-    --x;
     x |= x >> 1;
     x |= x >> 2;
     x |= x >> 4;
     x |= x >> 8;
     x |= x >> 16;
+    x >>= 1;
     return x + 1;
 }
 
@@ -213,11 +213,16 @@ __global__ void generate_alibi_slopes(T* alibi_slopes, const size_t num_heads)
 {
     if (threadIdx.x < num_heads) {
         // The nearest power of 2 greater than num_heads followed by HF's implementation.
-        int num_heads_pow2 = pow2_roundup(num_heads);
+        int num_heads_pow2 = pow2_rounddown(num_heads);
         // Loop over the attention head.
         for (int h = threadIdx.x; h < num_heads; h += blockDim.x) {
-            // The slope of linear bias of the attention head: 2^(- 8 / num_heads * (h + 1)) where h=0...(num_heads-1)
-            alibi_slopes[h] = static_cast<T>(powf(0.5f, 8.0f / num_heads_pow2 * (h + 1)));
+            if (h < num_heads_pow2) {
+                alibi_slopes[h] = static_cast<T>(powf(powf(0.5f, powf(0.5f, log2f(num_heads_pow2) - 3.f)), h + 1));
+            }
+            else {
+                alibi_slopes[h] = static_cast<T>(
+                    powf(powf(0.5f, powf(0.5f, log2f(num_heads_pow2 << 1) - 3.f)), (h - num_heads_pow2) * 2 + 1));
+            }
         }
     }
 }
@@ -234,11 +239,8 @@ void invokeBuildAlibiSlopes(T* alibi_slopes, const size_t num_heads, cudaStream_
     //   https://github.com/ofirpress/attention_with_linear_biases/blob/02aa87e7a29e9340efd28d6d169018eafb3aa57a/fairseq/models/transformer.py#L760
     //
     // alibi_slopes: [num_heads],
-    //     The slopes of the linear position bias. A position bias will be
-    //          position_bias[h, i, j] = 2^(-8/H * h) * (i - j) if i < j otherwise 0.
-    //     according to what the paper expalined. This is not matched with neither HF's
-    //     nor author's implementation, but it will be mathematically equivalent due to
-    //     the invariance of softmax function to translation unless masked.
+    //     strictly follows how HF implements. which treats power-of-2 heads, and non-power-of-2 heads differently.
+    //     what paper generates differs with HF's when number of heads is not a power of 2.
     // num_heads: the number of attention heads.
     // stream: a cuda stream.
 
