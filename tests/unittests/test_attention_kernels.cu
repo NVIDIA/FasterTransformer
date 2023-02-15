@@ -107,14 +107,14 @@ void normal(curandGenerator_t curng, Tensor& tensor, float mean = 0.0f, float st
     }
 }
 
-__host__ uint32_t pow2_roundup(uint32_t x)
+__host__ uint32_t pow2_rounddown(uint32_t x)
 {
-    --x;
     x |= x >> 1;
     x |= x >> 2;
     x |= x >> 4;
     x |= x >> 8;
     x |= x >> 16;
+    x >>= 1;
     return x + 1;
 }
 
@@ -357,12 +357,17 @@ public:
         Tensor h_alibi_slopes = createTensor(MEMORY_CPU, dtype, {param.head_num});
         Tensor h_alibi_bias   = is_benchmark ? Tensor() :
             createTensor(MEMORY_CPU, dtype, {param.head_num, param.q_length, param.k_length});
+        // The nearest power of 2 equal to / smaller than num_heads followed by HF's implementation.
         T* alibi_slope_ptr = h_alibi_slopes.getPtr<T>();
+        int num_heads_pow2 = utils::pow2_rounddown(param.head_num);
         for (size_t h = 0; h < param.head_num; ++h) {
-            // The nearest power of 2 greater than num_heads followed by HF's implementation.
-            int num_heads_pow2 = utils::pow2_roundup(param.head_num);
-            // The slope of linear bias of the attention head: 2^(-8/num_heads*(h+1)).
-            alibi_slope_ptr[h] = static_cast<T>(powf(0.5f, 8.0f / num_heads_pow2 * (h + 1)));
+            // The slope of linear bias of the attention head
+            if (h < num_heads_pow2) {
+                alibi_slope_ptr[h] = static_cast<T>(powf(powf(0.5f, powf(0.5f, log2f(num_heads_pow2) - 3.f)), h + 1));
+            } else {
+                alibi_slope_ptr[h] = static_cast<T>(
+                    powf(powf(0.5f, powf(0.5f, log2f(num_heads_pow2 << 1) - 3.f)), (h - num_heads_pow2) * 2 + 1));
+            }
             if (h_alibi_bias.size() > 0) {
                 T* alibi_bias_ptr = h_alibi_bias.getPtr<T>();
                 for (size_t qi = 0; qi < param.q_length; ++qi) {

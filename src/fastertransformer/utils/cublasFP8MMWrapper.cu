@@ -878,6 +878,11 @@ void cublasFP8MMWrapper::Gemm_Bias_Act(__nv_fp8_e4m3*       res,
     check_cuda_error(cublasLtMatmulPreferenceCreate(&preference));
     check_cuda_error(cublasLtMatmulPreferenceSetAttribute(
         preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &wsSizeBytes, sizeof(wsSizeBytes)));
+#if (CUBLAS_VERSION) <= 12000
+    uint32_t pointer_mode_mask = 0;
+    check_cuda_error(cublasLtMatmulPreferenceSetAttribute(
+        preference, CUBLASLT_MATMUL_PREF_EPILOGUE_MASK, &pointer_mode_mask, sizeof(pointer_mode_mask)));
+#endif
 
     check_cuda_error(cublasLtMatmulAlgoGetHeuristic(cublaslt_handle_,
                                                     matmulDesc,
@@ -994,5 +999,22 @@ template void cublasFP8MMWrapper::Gemm_Bias_Act<true, false>(__nv_fp8_e4m3*     
                                                              const __nv_bfloat16* bias,
                                                              const float*         output_scale,
                                                              cudaStream_t         stream);
+template void cublasFP8MMWrapper::Gemm_Bias_Act<false, false>(__nv_fp8_e4m3*       res,
+                                                              int                  batchCount,
+                                                              int                  m,
+                                                              int                  n,
+                                                              int                  k,
+                                                              int64_t              strideA,
+                                                              int64_t              strideB,
+                                                              int64_t              strideD,
+                                                              const float*         alpha,
+                                                              const float*         beta,
+                                                              const __nv_fp8_e4m3* input,
+                                                              const __nv_fp8_e4m3* kernel,
+                                                              const float*         input_scale,
+                                                              const float*         kernel_scale,
+                                                              const __nv_bfloat16* bias,
+                                                              const float*         output_scale,
+                                                              cudaStream_t         stream);
 
 }  // namespace fastertransformer

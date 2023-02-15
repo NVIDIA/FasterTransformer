@@ -813,11 +813,13 @@ std::pair<bool, cublasLtMatmulAlgo_t> cublasMMWrapper::findBestAlgo(cublasLtHand
     check_cuda_error(cublasLtMatmulPreferenceCreate(&preference));
     check_cuda_error(cublasLtMatmulPreferenceInit(preference));
     uint64_t workspace_size = CUBLAS_WORKSPACE_SIZE;
-    uint32_t pointer_mode_mask = 0;
     check_cuda_error(cublasLtMatmulPreferenceSetAttribute(
         preference, CUBLASLT_MATMUL_PREF_MAX_WORKSPACE_BYTES, &workspace_size, sizeof(workspace_size)));
+#if (CUBLAS_VERSION) <= 12000
+    uint32_t pointer_mode_mask = 0;
     check_cuda_error(cublasLtMatmulPreferenceSetAttribute(
         preference, CUBLASLT_MATMUL_PREF_EPILOGUE_MASK, &pointer_mode_mask, sizeof(pointer_mode_mask)));
+#endif
 
     int return_count = 0;
     auto ret = cublasLtMatmulAlgoGetHeuristic(lightHandle,

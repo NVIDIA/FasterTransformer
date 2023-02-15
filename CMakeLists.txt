@@ -44,18 +44,6 @@ if(BUILD_CUTLASS_MIXED_GEMM)
   add_definitions("-DBUILD_CUTLASS_MIXED_GEMM")
 endif()
 
-option(BUILD_CUTLASS_MOE "Builds CUTLASS kernels supporting MoE GEMM" ON)
-if(BUILD_CUTLASS_MOE)
-  message(STATUS "Add DBUILD_CUTLASS_MOE, requires CUTLASS. Increases compilation time")
-  add_definitions("-DBUILD_CUTLASS_MOE")
-endif()
-
-option(BUILD_CUTLASS_MIXED_GEMM "Builds CUTLASS kernels supporting mixed gemm" ON)
-if(BUILD_CUTLASS_MIXED_GEMM)
-  message(STATUS "Add DBUILD_CUTLASS_MIXED_GEMM, requires CUTLASS. Increases compilation time")
-  add_definitions("-DBUILD_CUTLASS_MIXED_GEMM")
-endif()
-
 option(BUILD_TF "Build in TensorFlow mode" OFF)
 option(BUILD_TF2 "Build in TensorFlow2 mode" OFF)
 option(BUILD_PYT "Build in PyTorch TorchScript class mode" OFF)
@@ -138,7 +126,7 @@ set(CMAKE_C_FLAGS    "${CMAKE_C_FLAGS}")
 set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -std=c++17")
 set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -Xcompiler -Wall -ldl") # -Xptxas -v
 
-set(SM_SETS 52 60 61 70 75 80 86 90)
+set(SM_SETS 52 60 61 70 75 80 86 89 90)
 set(USING_WMMA False)
 set(FIND_SM False)
 
@@ -151,7 +139,7 @@ foreach(SM_NUM IN LISTS SM_SETS)
     set(FIND_SM True)
     set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -gencode=arch=compute_${SM_NUM},code=\\\"sm_${SM_NUM},compute_${SM_NUM}\\\"")
 
-    if (SM_NUM STREQUAL 70 OR SM_NUM STREQUAL 75 OR SM_NUM STREQUAL 80 OR SM_NUM STREQUAL 86 OR SM_NUM STREQUAL 90)
+    if (SM_NUM STREQUAL 70 OR SM_NUM STREQUAL 75 OR SM_NUM STREQUAL 80 OR SM_NUM STREQUAL 86 OR SM_NUM STREQUAL 89 OR SM_NUM STREQUAL 90)
       set(USING_WMMA True)
     endif()
 
