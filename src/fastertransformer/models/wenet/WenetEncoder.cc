@@ -213,8 +213,8 @@ void WenetEncoder<T>::allocateBuffer(
         inter_conv2_output_buf_, sizeof(T) * batch_size * d_model_ * seq_len2 * feature_size2, false);
     inter_fc_input_buf_ = (T*)allocator_->reMalloc(
         inter_fc_input_buf_, sizeof(T) * batch_size * seq_len2 * d_model_ * feature_size2, false);
-    // Current workspace used for CuDNN Convolution is 1 << 27
-    conv_workspace_ = (T*)allocator_->reMalloc(conv_workspace_, 1 << 27, false);
+    // Current workspace used for CuDNN Convolution is 1 << 29
+    conv_workspace_ = (T*)allocator_->reMalloc(conv_workspace_, 1 << 29, false);
     // Position Embed
 
     input_hidden_state_ =

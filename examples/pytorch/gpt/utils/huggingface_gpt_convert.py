@@ -158,9 +158,7 @@ def split_and_convert(args):
         "mlp.dense_4h_to_h.bias",
         "mlp.dense_4h_to_h.weight",
     ]
-    
-    torch.multiprocessing.set_start_method("spawn")
-    torch.multiprocessing.set_sharing_strategy("file_system")
+
     pool = multiprocessing.Pool(args.processes)
     for name, param in model.named_parameters():
         if name.find("weight") == -1 and name.find("bias") == -1:
@@ -201,4 +199,6 @@ if __name__ == "__main__":
         print("{}: {}".format(key, vars(args)[key]))
     print("========================================")
 
+    torch.multiprocessing.set_start_method("spawn")
+    torch.multiprocessing.set_sharing_strategy("file_system")
     split_and_convert(args)

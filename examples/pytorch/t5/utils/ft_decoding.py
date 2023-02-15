@@ -134,7 +134,7 @@ class FTT5DecodingWeight(object):
         self.w.append(t)
         if self.use_gated_activation:
             t = torch.stack([weight_dict["decoder.block.{}.layer.2.DenseReluDense.wi_0.weight".format(i)]
-                            for i in range(start_layer, end_layer)], 0).contiguous().cuda()
+                             for i in range(start_layer, end_layer)], 0).contiguous().cuda()
             t = t.split(t.shape[-1] // self.tensor_para_size, dim=-1)[self.tensor_para_rank].contiguous()
             self.w.append(t)
             t = torch.stack([weight_dict["decoder.block.{}.layer.2.DenseReluDense.wi_1.weight".format(i)]
