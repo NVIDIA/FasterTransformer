@@ -195,7 +195,7 @@ By default, `-DSM` is set by 70, 75, 80 and 86. When users set more kinds of `-D
 * Download the mystic public model and convert
 
     ```bash
-    wget https://mystic.the-eye.eu/public/AI/GPT-J-6B/step_383500_slim.tar.zstd
+    wget https://the-eye.eu/public/AI/GPT-J-6B/step_383500_slim.tar.zstd
     unzstd step_383500_slim.tar.zstd
     tar -axf step_383500_slim.tar
     python3 ../examples/pytorch/gptj/utils/gptj_ckpt_convert.py --output-dir ../models/j6b_ckpt --ckpt-dir ./step_383500/
