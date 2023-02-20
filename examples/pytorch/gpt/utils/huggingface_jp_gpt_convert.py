@@ -12,6 +12,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+'''
+Important: You should try converting models with `huggingface_gpt_convert.py` first before running this file.
+
+This file is intended for converting old versions of Japanese GPT models from https://huggingface.co/rinna.
+'''
+
 import argparse
 import configparser
 import multiprocessing
@@ -21,7 +27,7 @@ import torch
 
 import os
 import sys
-from transformers import GPT2Model # transformers-4.10.0-py3
+from transformers import GPT2LMHeadModel # transformers-4.10.0-py3
 dir_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(dir_path + "/../../../..")
 sys.path.append(dir_path)
@@ -34,7 +40,7 @@ def get_weight_data_type(data_type):
     else:
         assert False, f"Invalid weight data type {data_type}"
 
-def split_and_convert_process(i, saved_dir,factor,key,args, val):
+def split_and_convert_process(i, saved_dir, factor, key, args, val):
 
     if key.find("input_layernorm.weight") != -1 or key.find("input_layernorm.bias") != -1 or \
         key.find("attention.dense.bias") != -1 or key.find("post_attention_layernorm.weight") != -1 or \
@@ -98,7 +104,7 @@ def split_and_convert(args):
 
     # load position_embedding from rank 0 
     # model = torch.load(ckpt_name)
-    model = GPT2Model.from_pretrained(args.in_file).to(torch.device('cuda:0'))
+    model = GPT2LMHeadModel.from_pretrained(args.in_file).to(torch.device('cuda:0'))
 
     hf_config = vars(model.config)
     config = configparser.ConfigParser()
@@ -153,7 +159,7 @@ def split_and_convert(args):
     torch.multiprocessing.set_start_method("spawn")
     torch.multiprocessing.set_sharing_strategy("file_system")
     pool = multiprocessing.Pool(args.processes)
-    for name, param in model.named_parameters():
+    for name, param in model.state_dict().items():
         if name.find("weight") == -1 and name.find("bias") == -1:
             continue
         print(name)
