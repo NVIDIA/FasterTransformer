@@ -104,7 +104,8 @@ def split_and_convert(args):
 
     # load position_embedding from rank 0 
     # model = torch.load(ckpt_name)
-    model = GPT2LMHeadModel.from_pretrained(args.in_file).to(torch.device('cuda:0'))
+    torch_device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = GPT2LMHeadModel.from_pretrained(args.in_file).to(torch_device)
 
     hf_config = vars(model.config)
     config = configparser.ConfigParser()
