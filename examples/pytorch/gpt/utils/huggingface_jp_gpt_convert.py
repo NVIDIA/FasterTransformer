@@ -101,6 +101,8 @@ def split_and_convert(args):
     model = GPT2Model.from_pretrained(args.in_file).to(torch.device('cuda:0'))
 
     hf_config = vars(model.config)
+    config = configparser.ConfigParser()
+    config["gpt"] = {}
 
     config["gpt"]["model_name"] = "gpt" if hf_config["_name_or_path"] == '' else hf_config["_name_or_path"]
     config["gpt"]["head_num"] = str(hf_config["n_head"])
@@ -113,7 +115,7 @@ def split_and_convert(args):
     config["gpt"]["start_id"] = str(hf_config["bos_token_id"])
     config["gpt"]["end_id"] = str(hf_config["eos_token_id"])
     config['gpt']['weight_data_type'] = args.weight_data_type
-    with open(output_dir + "/config.ini", 'w') as configfile:
+    with open(saved_dir + "/config.ini", 'w') as configfile:
         config.write(configfile)
     
     np_weight_data_type = get_weight_data_type(args.weight_data_type)
