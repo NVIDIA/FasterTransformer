@@ -173,7 +173,11 @@ private:
 
     inline uint64_t hashID(int32_t sm) const
     {
-        return (uint64_t)sm;
+        // Concatenate sm with deviceID to support Multi-GPU cubin loading
+        // Bottom 32 bits are for SM, top 32 bits for deviceID
+        int32_t deviceID{0};
+        cudaGetDevice(&deviceID);
+        return (uint64_t) deviceID << 32 | (uint64_t)sm;
     }
 
     std::unordered_map<uint64_t, std::unique_ptr<TKernelList> const> mKernels;
