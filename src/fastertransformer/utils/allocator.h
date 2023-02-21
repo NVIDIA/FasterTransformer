@@ -75,9 +75,9 @@ public:
     void* reMalloc(T* ptr, size_t size, const bool is_set_zero = true, bool is_host = false)
     {
         FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-        size                    = ((size + 31) / 32) * 32;  // make the buffer align with 32 bytes
-        void*       void_ptr    = (void*)ptr;
-        std::string ptr_address = getAddress(void_ptr);
+        size              = ((size + 31) / 32) * 32;  // make the buffer align with 32 bytes
+        void* void_ptr    = (void*)ptr;
+        void* ptr_address = getAddress(void_ptr);
         if (isExist(ptr_address)) {
             ReallocType realloc_type = isReMalloc(ptr_address, size);
             if (realloc_type == ReallocType::INCREASE) {
@@ -107,15 +107,12 @@ public:
     }
 
 protected:
-    virtual bool        isExist(std::string address) const                 = 0;
-    virtual ReallocType isReMalloc(std::string address, size_t size) const = 0;
+    virtual bool        isExist(void* address) const                 = 0;
+    virtual ReallocType isReMalloc(void* address, size_t size) const = 0;
 
-    std::string getAddress(void* ptr) const
+    void* getAddress(void* ptr) const
     {
-        FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-        char address[256];
-        sprintf(address, "%p", ptr);
-        return std::string(address);
+        return ptr;
     }
 };
 
@@ -125,21 +122,21 @@ class Allocator;
 template<>
 class Allocator<AllocatorType::CUDA>: public IAllocator {
 private:
-    const int                                                  device_id_;
-    cudaStream_t                                               stream_ = 0;  // initialize as default stream
-    std::unordered_map<std::string, std::pair<void*, size_t>>* pointer_mapping_;
+    const int                          device_id_;
+    cudaStream_t                       stream_ = 0;  // initialize as default stream
+    std::unordered_map<void*, size_t>* pointer_mapping_;
 
-    bool isExist(std::string address) const
+    bool isExist(void* address) const
     {
         return pointer_mapping_->count(address) > 0;
     }
-    ReallocType isReMalloc(std::string address, size_t size) const
+    ReallocType isReMalloc(void* address, size_t size) const
     {
         FT_CHECK(isExist(address));
-        if (pointer_mapping_->at(address).second < size) {
+        if (pointer_mapping_->at(address) < size) {
             return ReallocType::INCREASE;
         }
-        else if (pointer_mapping_->at(address).second == size) {
+        else if (pointer_mapping_->at(address) == size) {
             return ReallocType::REUSE;
         }
         else {
@@ -151,7 +148,7 @@ public:
     Allocator(int device_id): device_id_(device_id)
     {
         FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-        pointer_mapping_ = new std::unordered_map<std::string, std::pair<void*, size_t>>();
+        pointer_mapping_ = new std::unordered_map<void*, size_t>();
 #if defined(CUDA_MEMORY_POOL_DISABLED)
         FT_LOG_WARNING(
             "Async cudaMalloc/Free is not supported before CUDA 11.2. Using Sync cudaMalloc/Free."
@@ -188,7 +185,7 @@ public:
     {
         FT_LOG_DEBUG(__PRETTY_FUNCTION__);
         while (!pointer_mapping_->empty()) {
-            free((void**)(&pointer_mapping_->begin()->second.first));
+            free((void**)(&pointer_mapping_->begin()->first));
         }
         delete pointer_mapping_;
     }
@@ -229,7 +226,7 @@ public:
         check_cuda_error(getSetDevice(o_device));
         FT_LOG_DEBUG("malloc buffer %p with size %ld", ptr, size);
 
-        pointer_mapping_->insert({getAddress(ptr), {ptr, size}});
+        pointer_mapping_->insert({getAddress(ptr), size});
 
         return ptr;
     }
@@ -237,11 +234,11 @@ public:
     void free(void** ptr, bool is_host = false) const
     {
         FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-        std::string address = getAddress(*ptr);
+        void* address = getAddress(*ptr);
         if (*ptr != nullptr) {
             int o_device = 0;
             if (pointer_mapping_->count(address)) {
-                FT_LOG_DEBUG("Free buffer %s", address.c_str());
+                FT_LOG_DEBUG("Free buffer %p", address);
                 check_cuda_error(getSetDevice(device_id_, &o_device));
                 if (is_host) {
                     check_cuda_error(cudaFreeHost(*ptr));
@@ -258,7 +255,7 @@ public:
                 pointer_mapping_->erase(address);
             }
             else {
-                FT_LOG_WARNING("pointer_mapping_ does not have information of ptr at %s.", address.c_str());
+                FT_LOG_WARNING("pointer_mapping_ does not have information of ptr at %p.", address);
             }
         }
         *ptr = nullptr;
@@ -275,15 +272,15 @@ public:
 using namespace tensorflow;
 template<>
 class Allocator<AllocatorType::TF>: public IAllocator {
-    OpKernelContext*                                     context_;
-    std::unordered_map<std::string, tensorflow::Tensor>* pointer_mapping_;
-    cudaStream_t                                         stream_;
+    OpKernelContext*                               context_;
+    std::unordered_map<void*, tensorflow::Tensor>* pointer_mapping_;
+    cudaStream_t                                   stream_;
 
-    bool isExist(std::string address) const
+    bool isExist(void* address) const
     {
         return pointer_mapping_->count(address) > 0;
     }
-    ReallocType isReMalloc(std::string address, size_t size) const
+    ReallocType isReMalloc(void* address, size_t size) const
     {
         FT_CHECK(isExist(address));
         size_t current_buffer_size = 1;
@@ -305,7 +302,7 @@ class Allocator<AllocatorType::TF>: public IAllocator {
 public:
     Allocator(OpKernelContext* context, cudaStream_t stream): context_(context), stream_(stream)
     {
-        pointer_mapping_ = new std::unordered_map<std::string, tensorflow::Tensor>();
+        pointer_mapping_ = new std::unordered_map<void*, tensorflow::Tensor>();
     }
 
     void setStream(cudaStream_t stream)
@@ -351,7 +348,7 @@ public:
     void free(void** ptr, bool is_host = false) const
     {
         FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-        std::string address = getAddress(*ptr);
+        void* address = getAddress(*ptr);
         pointer_mapping_->erase(address);
         *ptr = nullptr;
         return;
@@ -377,13 +374,13 @@ public:
 #ifdef TORCH_CUDA
 template<>
 class Allocator<AllocatorType::TH>: public IAllocator {
-    std::unordered_map<std::string, torch::Tensor>* pointer_mapping_;
+    std::unordered_map<void*, torch::Tensor>* pointer_mapping_;
 
-    bool isExist(std::string address) const
+    bool isExist(void* address) const
     {
         return pointer_mapping_->count(address) > 0;
     }
-    ReallocType isReMalloc(std::string address, size_t size) const
+    ReallocType isReMalloc(void* address, size_t size) const
     {
         FT_CHECK(isExist(address));
         size_t current_buffer_size = 1;
@@ -406,7 +403,7 @@ class Allocator<AllocatorType::TH>: public IAllocator {
 public:
     Allocator()
     {
-        pointer_mapping_ = new std::unordered_map<std::string, torch::Tensor>();
+        pointer_mapping_ = new std::unordered_map<void*, torch::Tensor>();
     }
 
     void setStream(cudaStream_t stream)
@@ -443,7 +440,7 @@ public:
     void free(void** ptr, bool is_host = false) const
     {
         FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-        std::string address = getAddress(*ptr);
+        void* address = getAddress(*ptr);
         pointer_mapping_->erase(address);
         *ptr = nullptr;
         return;

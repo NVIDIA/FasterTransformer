@@ -97,9 +97,7 @@ void cublasAlgoMap::loadGemmConfig()
             printf("[WARNING][readAlgoFromConfig] wrong dataType %d!\n", dataType);
             continue;
         }
-        char mark[256];
-        sprintf(mark, "%d_%d_%d_%d_%d", batchCount2, m2, n2, k2, dataType);
-        std::string markStr(mark);
+        cublasAlgoConfig_t markStr{batchCount2, m2, n2, k2, static_cast<CublasDataType>(dataType)};
         // workspaceSize should be zero
         if (algo_map_.find(markStr) == algo_map_.end()) {
             algo_map_[markStr].algoId          = algoId;
@@ -127,16 +125,14 @@ void cublasAlgoMap::loadGemmConfig()
 bool cublasAlgoMap::isExist(
     const int batch_count, const int m, const int n, const int k, const CublasDataType data_type)
 {
-    char mark[256];
-    sprintf(mark, "%d_%d_%d_%d_%d", batch_count, n, m, k, data_type);
+    cublasAlgoConfig_t mark{batch_count, n, m, k, data_type};
     return algo_map_.find(mark) != algo_map_.end();
 }
 
 cublasLtMatmulAlgo_info
 cublasAlgoMap::getAlgo(const int batch_count, const int m, const int n, const int k, const CublasDataType data_type)
 {
-    char mark[256];
-    sprintf(mark, "%d_%d_%d_%d_%d", batch_count, n, m, k, data_type);
+    cublasAlgoConfig_t mark{batch_count, n, m, k, data_type};
     if (algo_map_.find(mark) != algo_map_.end()) {
         return algo_map_[mark];
     }

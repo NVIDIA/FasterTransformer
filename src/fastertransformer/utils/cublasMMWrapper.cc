@@ -37,7 +37,7 @@ cublasMMWrapper::cublasMMWrapper(cublasHandle_t   cublas_handle,
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (allocator_ != nullptr) {
-        cublas_workspace_ = allocator_->reMalloc(cublas_workspace_, CUBLAS_WORKSPACE_SIZE);
+        cublas_workspace_ = allocator_->reMalloc(cublas_workspace_, CUBLAS_WORKSPACE_SIZE, false);
     }
 }
 
@@ -59,7 +59,7 @@ cublasMMWrapper::cublasMMWrapper(cublasHandle_t     cublas_handle,
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (allocator_ != nullptr) {
-        cublas_workspace_ = allocator_->reMalloc(cublas_workspace_, CUBLAS_WORKSPACE_SIZE);
+        cublas_workspace_ = allocator_->reMalloc(cublas_workspace_, CUBLAS_WORKSPACE_SIZE, false);
     }
 }
 #endif
@@ -87,7 +87,7 @@ cublasMMWrapper::cublasMMWrapper(const cublasMMWrapper& wrapper):
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (allocator_ != nullptr) {
-        cublas_workspace_ = allocator_->reMalloc(cublas_workspace_, CUBLAS_WORKSPACE_SIZE);
+        cublas_workspace_ = allocator_->reMalloc(cublas_workspace_, CUBLAS_WORKSPACE_SIZE, false);
     }
 }
 

@@ -71,9 +71,14 @@ public:
         log(INFO, "Set logger level by %s", getLevelName(level).c_str());
     }
 
+    int getLevel() const
+    {
+        return level_;
+    }
+
 private:
-    const std::string            PREFIX      = "[FT]";
-    std::map<Level, std::string> level_name_ = {
+    const std::string                              PREFIX      = "[FT]";
+    const std::map<const Level, const std::string> level_name_ = {
         {TRACE, "TRACE"}, {DEBUG, "DEBUG"}, {INFO, "INFO"}, {WARNING, "WARNING"}, {ERROR, "ERROR"}};
 
 #ifndef NDEBUG
@@ -85,23 +90,29 @@ private:
 
     Logger();
 
-    inline std::string getLevelName(const Level level)
+    inline const std::string getLevelName(const Level level)
     {
-        return level_name_[level];
+        return level_name_.at(level);
     }
 
-    inline std::string getPrefix(const Level level)
+    inline const std::string getPrefix(const Level level)
     {
         return PREFIX + "[" + getLevelName(level) + "] ";
     }
 
-    inline std::string getPrefix(const Level level, const int rank)
+    inline const std::string getPrefix(const Level level, const int rank)
     {
         return PREFIX + "[" + getLevelName(level) + "][" + std::to_string(rank) + "] ";
     }
 };
 
-#define FT_LOG(level, ...) fastertransformer::Logger::getLogger().log(level, __VA_ARGS__)
+#define FT_LOG(level, ...)                                                                                             \
+    do {                                                                                                               \
+        if (fastertransformer::Logger::getLogger().getLevel() <= level) {                                              \
+            fastertransformer::Logger::getLogger().log(level, __VA_ARGS__);                                            \
+        }                                                                                                              \
+    } while (0)
+
 #define FT_LOG_TRACE(...) FT_LOG(fastertransformer::Logger::TRACE, __VA_ARGS__)
 #define FT_LOG_DEBUG(...) FT_LOG(fastertransformer::Logger::DEBUG, __VA_ARGS__)
 #define FT_LOG_INFO(...) FT_LOG(fastertransformer::Logger::INFO, __VA_ARGS__)

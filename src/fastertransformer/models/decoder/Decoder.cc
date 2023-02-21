@@ -188,6 +188,21 @@ void Decoder<T>::forward(std::vector<Tensor>*                      output_tensor
     const size_t   mem_max_seq_len = (size_t)input_tensors->at(1).shape[1];
     const DataType data_type       = getTensorType<T>();
 
+    TensorMap cross_attention_input_tensors{
+        {"input_query", Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, normed_self_attn_output_}},
+        {"encoder_output", input_tensors->at(1)},
+        {"encoder_sequence_length", input_tensors->at(2)},
+        {"finished", input_tensors->at(3)},
+        {"step", input_tensors->at(4)}};
+    TensorMap self_attention_input_tensors{
+        {"input_query", Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, decoder_normed_input_}},
+        {"finished", input_tensors->at(3)},
+        {"sequence_lengths", input_tensors->at(5)},
+        {"step", input_tensors->at(4)}};
+
+    TensorMap ffn_input_tensors(
+        {{"ffn_input", Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, normed_cross_attn_output_}}});
+
     for (uint l = 0; l < num_layer_; l++) {
         const T* decoder_input = (const T*)((l == 0) ? input_tensors->at(0).getPtr<const T>() : decoder_layer_output_);
         T* decoder_output = (T*)((l == num_layer_ - 1) ? output_tensors->at(0).getPtr<T>() : decoder_layer_output_);
@@ -216,11 +231,6 @@ void Decoder<T>::forward(std::vector<Tensor>*                      output_tensor
 
         int tmp_0 = 0;
 
-        TensorMap self_attention_input_tensors{
-            {"input_query", Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, decoder_normed_input_}},
-            {"finished", input_tensors->at(3)},
-            {"sequence_lengths", input_tensors->at(5)},
-            {"step", input_tensors->at(4)}};
         self_attention_input_tensors.insertIfValid("cache_indirection", input_tensors->at(6));
         TensorMap self_attention_output_tensors{
             {"hidden_features", Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, self_attn_output_}},
@@ -257,12 +267,6 @@ void Decoder<T>::forward(std::vector<Tensor>*                      output_tensor
             stream_);
         sync_check_cuda_error();
 
-        TensorMap cross_attention_input_tensors{
-            {"input_query", Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, normed_self_attn_output_}},
-            {"encoder_output", input_tensors->at(1)},
-            {"encoder_sequence_length", input_tensors->at(2)},
-            {"finished", input_tensors->at(3)},
-            {"step", input_tensors->at(4)}};
         TensorMap cross_attention_output_tensors{
             {"hidden_features", Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, cross_attn_output_}},
             {"key_cache",
@@ -298,8 +302,6 @@ void Decoder<T>::forward(std::vector<Tensor>*                      output_tensor
             stream_);
         sync_check_cuda_error();
 
-        TensorMap ffn_input_tensors(
-            {{"ffn_input", Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, normed_cross_attn_output_}}});
         TensorMap ffn_output_tensors(
             {{"ffn_output", Tensor{MEMORY_GPU, data_type, {batch_size, hidden_units_}, decoder_output}}});
         ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &decoder_layer_weight->at(l).ffn_weights);
