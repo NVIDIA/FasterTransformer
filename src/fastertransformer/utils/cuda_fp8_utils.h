@@ -22,7 +22,9 @@
 #include <stdint.h>
 
 // #define FP8_MHA
+#if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 900
 #define FUSE_GEMM_ACT
+#endif
 #define FP8_GEMM_OUTPUT_QUANT_DISABLE
 
 #ifdef FUSE_GEMM_ACT

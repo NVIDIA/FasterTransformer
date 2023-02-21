@@ -349,7 +349,7 @@ SelfAttentionFP8Layer<T1, T2>::SelfAttentionFP8Layer(size_t           head_num,
     q_scaling_(q_scaling)
 {
     FT_CHECK_WITH_INFO(sparse_ == false, fmtstr("%s not support sparse gemm yet.", __PRETTY_FUNCTION__));
-    if (sm_ == kSM_90 && size_per_head_ == 64) {
+    if ((sm_ == kSM_90 || sm_ == kSM_89) && size_per_head_ == 64) {
         dispatcher_fp8.reset(new FusedMHARunnerFP8v2(head_num_, size_per_head_, sm_, q_scaling_));
     }
 }

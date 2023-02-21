@@ -20,6 +20,7 @@
 #include <cuda_runtime.h>
 #include <map>
 #include <string>
+#include <unordered_map>
 #include <utility>
 
 #pragma once
@@ -56,12 +57,34 @@ typedef struct {
     float                     wavesCount;
 } customMatmulPerf_t;
 
+struct cublasAlgoConfig_t {
+    int            batch_count;
+    int            m;
+    int            n;
+    int            k;
+    CublasDataType data_type;
+    bool           operator==(cublasAlgoConfig_t const& config) const
+    {
+        return (batch_count == config.batch_count) && (m == config.m) && (n == config.n) && (k == config.k)
+               && (data_type == config.data_type);
+    }
+};
+
+class cublasAlgoConfig_hasher {
+public:
+    std::size_t operator()(cublasAlgoConfig_t const& config) const
+    {
+        return config.batch_count * 98317ull ^ config.m * 49157ull ^ config.n * 24593ull ^ config.k * 196613ull
+               ^ static_cast<int>(config.data_type) * 6151ull;
+    }
+};
+
 class cublasAlgoMap {
 private:
-    std::map<std::string, cublasLtMatmulAlgo_info> algo_map_;
-    std::string                                    config_filename_;
-    std::string                                    sp_config_filename_;
-    std::map<std::string, int>                     sp_algo_map_;
+    std::unordered_map<cublasAlgoConfig_t, cublasLtMatmulAlgo_info, cublasAlgoConfig_hasher> algo_map_;
+    std::string                                                                              config_filename_;
+    std::string                                                                              sp_config_filename_;
+    std::map<std::string, int>                                                               sp_algo_map_;
 
 public:
     cublasAlgoMap(){};
