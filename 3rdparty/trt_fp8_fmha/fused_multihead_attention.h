@@ -109,12 +109,22 @@ extern unsigned char cubin_fmha_v2_e4m3_192_64_ldgsts_sm90_cu_cubin[];
 extern unsigned char cubin_fmha_v2_e4m3_256_64_ldgsts_sm90_cu_cubin[];
 extern unsigned char cubin_fmha_v2_e4m3_384_64_ldgsts_sm90_cu_cubin[];
 extern unsigned char cubin_fmha_v2_e4m3_512_64_ldgsts_sm90_cu_cubin[];
+extern unsigned char cubin_fmha_v2_e4m3_fp32_128_64_sm89_cu_cubin[];
+extern unsigned char cubin_fmha_v2_e4m3_fp32_192_64_sm89_cu_cubin[];
+extern unsigned char cubin_fmha_v2_e4m3_fp32_256_64_sm89_cu_cubin[];
+extern unsigned char cubin_fmha_v2_e4m3_fp32_384_64_sm89_cu_cubin[];
+extern unsigned char cubin_fmha_v2_e4m3_fp32_512_64_sm89_cu_cubin[];
 
 extern unsigned int cubin_fmha_v2_e4m3_128_64_ldgsts_sm90_cu_cubin_len;
 extern unsigned int cubin_fmha_v2_e4m3_192_64_ldgsts_sm90_cu_cubin_len;
 extern unsigned int cubin_fmha_v2_e4m3_256_64_ldgsts_sm90_cu_cubin_len;
 extern unsigned int cubin_fmha_v2_e4m3_384_64_ldgsts_sm90_cu_cubin_len;
 extern unsigned int cubin_fmha_v2_e4m3_512_64_ldgsts_sm90_cu_cubin_len;
+extern uint32_t cubin_fmha_v2_e4m3_fp32_128_64_sm89_cu_cubin_len;
+extern uint32_t cubin_fmha_v2_e4m3_fp32_192_64_sm89_cu_cubin_len;
+extern uint32_t cubin_fmha_v2_e4m3_fp32_256_64_sm89_cu_cubin_len;
+extern uint32_t cubin_fmha_v2_e4m3_fp32_384_64_sm89_cu_cubin_len;
+extern uint32_t cubin_fmha_v2_e4m3_fp32_512_64_sm89_cu_cubin_len;
 
 static const struct FusedMultiHeadAttentionKernelMetaInfoFP8V2
 {
@@ -131,6 +141,37 @@ static const struct FusedMultiHeadAttentionKernelMetaInfoFP8V2
     bool mInterleaved;
 } sMhaKernelMetaInfosFP8V2[] = {
 #if CUDA_VERSION >= 11080
+    // Ada
+    {DATA_TYPE_E4M3, 128, 64, kSM_89, cubin_fmha_v2_e4m3_fp32_128_64_sm89_cu_cubin,
+     cubin_fmha_v2_e4m3_fp32_128_64_sm89_cu_cubin_len,
+     "fmha_v2_e4m3_fp32_128_64_sm89_kernel", 32768, 128, 0, false},
+    {DATA_TYPE_E4M3, 128, 64, kSM_89, cubin_fmha_v2_e4m3_fp32_128_64_sm89_cu_cubin,
+     cubin_fmha_v2_e4m3_fp32_128_64_sm89_cu_cubin_len,
+     "fmha_v2_e4m3_fp32_128_64_sm89_kernel_nl", 20480, 128, 16, false},
+    {DATA_TYPE_E4M3, 192, 64, kSM_89, cubin_fmha_v2_e4m3_fp32_192_64_sm89_cu_cubin,
+     cubin_fmha_v2_e4m3_fp32_192_64_sm89_cu_cubin_len,
+     "fmha_v2_e4m3_fp32_192_64_sm89_kernel", 36864, 128, 0, false},
+    {DATA_TYPE_E4M3, 192, 64, kSM_89, cubin_fmha_v2_e4m3_fp32_192_64_sm89_cu_cubin,
+     cubin_fmha_v2_e4m3_fp32_192_64_sm89_cu_cubin_len,
+     "fmha_v2_e4m3_fp32_192_64_sm89_kernel_nl", 36864, 128, 32, false},
+    {DATA_TYPE_E4M3, 256, 64, kSM_89, cubin_fmha_v2_e4m3_fp32_256_64_sm89_cu_cubin,
+     cubin_fmha_v2_e4m3_fp32_256_64_sm89_cu_cubin_len,
+     "fmha_v2_e4m3_fp32_256_64_sm89_kernel", 36864, 128, 0, false},
+    {DATA_TYPE_E4M3, 256, 64, kSM_89, cubin_fmha_v2_e4m3_fp32_256_64_sm89_cu_cubin,
+     cubin_fmha_v2_e4m3_fp32_256_64_sm89_cu_cubin_len,
+     "fmha_v2_e4m3_fp32_256_64_sm89_kernel_nl", 36864, 128, 32, false},
+    {DATA_TYPE_E4M3, 384, 64, kSM_89, cubin_fmha_v2_e4m3_fp32_384_64_sm89_cu_cubin,
+     cubin_fmha_v2_e4m3_fp32_384_64_sm89_cu_cubin_len,
+     "fmha_v2_e4m3_fp32_384_64_sm89_kernel", 53248, 128, 0, false},
+    {DATA_TYPE_E4M3, 384, 64, kSM_89, cubin_fmha_v2_e4m3_fp32_384_64_sm89_cu_cubin,
+     cubin_fmha_v2_e4m3_fp32_384_64_sm89_cu_cubin_len,
+     "fmha_v2_e4m3_fp32_384_64_sm89_kernel_nl", 53248, 128, 32, false},
+    {DATA_TYPE_E4M3, 512, 64, kSM_89, cubin_fmha_v2_e4m3_fp32_512_64_sm89_cu_cubin,
+     cubin_fmha_v2_e4m3_fp32_512_64_sm89_cu_cubin_len,
+     "fmha_v2_e4m3_fp32_512_64_sm89_kernel", 73728, 256, 0, false},
+    {DATA_TYPE_E4M3, 512, 64, kSM_89, cubin_fmha_v2_e4m3_fp32_512_64_sm89_cu_cubin,
+     cubin_fmha_v2_e4m3_fp32_512_64_sm89_cu_cubin_len,
+     "fmha_v2_e4m3_fp32_512_64_sm89_kernel_nl", 73728, 256, 32, false},
     // Hopper
     {DATA_TYPE_E4M3, 128, 64, kSM_90, cubin_fmha_v2_e4m3_128_64_ldgsts_sm90_cu_cubin,
      cubin_fmha_v2_e4m3_128_64_ldgsts_sm90_cu_cubin_len,

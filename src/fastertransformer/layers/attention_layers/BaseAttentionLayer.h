@@ -82,7 +82,7 @@ AttentionType getAttentionType(size_t     size_per_head,
 #ifdef ENABLE_FP8
     else if (std::is_same<T, __nv_fp8_e4m3>::value && is_fuse) {
         if (!causal_mask) {
-            if (sm == kSM_90 && max_seq_len < 512 && is_fuse && size_per_head == 64) {
+            if ((sm == kSM_89 || sm == kSM_90) && max_seq_len < 512 && is_fuse && size_per_head == 64) {
                 return remove_padding ? AttentionType::FUSED_MHA : AttentionType::FUSED_PADDED_MHA;
             }
             else {

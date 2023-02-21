@@ -80,8 +80,9 @@ void cublasFP8MMWrapper::cublasVersionCheck()
     cublasGetProperty(PATCH_LEVEL, &version_patch_);
     size_t cublasVersion = (version_major_ * 10000 + version_minor_ * 100 + version_patch_);
 #if defined(FP8_MHA) || !defined(FP8_GEMM_OUTPUT_QUANT_DISABLE)
-    FT_CHECK_WITH_INFO(version_major_ == 11 && version_minor_ == 11 && version_patch_ >= 4,
+    FT_CHECK_WITH_INFO((version_major_ > 11) || (version_major_ == 11 && version_minor_ == 11 && version_patch_ >= 4),
                        "FP8 MHA needs d-scale, which is only supported after cublas 11.11.4 !");
+
 #endif
 }
 

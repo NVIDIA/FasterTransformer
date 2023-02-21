@@ -761,7 +761,7 @@ public:
         , sm(interface->mSm)
         , xmmaKernel(getXMMAKernelsFP8V2(DATA_TYPE_E4M3, sm))
     {
-        assert((sm == kSM_90) && "Unsupported architecture");
+        assert((sm == kSM_90 || sm == kSM_89) && "Unsupported architecture");
         memset(&params, 0, sizeof(params));
     }
 

@@ -50,6 +50,11 @@ BertFP8Weight<T1, T2>::BertFP8Weight(const size_t d_model,
     mallocWeights();
     setWeightPtr();
 
+    bool use_qgmma = false;
+#ifdef USE_QGMMA
+    use_qgmma = true;
+#endif
+
     bert_layer_weights.clear();
     for (int i = 0; i < num_layer_; i++) {
         bert_layer_weights.push_back(BertFP8LayerWeight<T1, T2>(d_model_,
@@ -60,7 +65,7 @@ BertFP8Weight<T1, T2>::BertFP8Weight(const size_t d_model,
                                                                 pipeline_para_size_,
                                                                 fp8_mode_,
                                                                 is_load_model,
-                                                                is_fused_qkv_gemm));
+                                                                (is_fused_qkv_gemm && use_qgmma)));
     }
 }
 
