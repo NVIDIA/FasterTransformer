@@ -23,6 +23,15 @@
 namespace ft = fastertransformer;
 
 template<typename T>
+void triton_stream_callback(ft::TensorMap* output_tensors, void* ctx)
+{
+    auto* const model  = reinterpret_cast<T5TritonModelInstance<T>*>(ctx);
+    auto const  result = T5TritonModelInstance<T>::convert_outputs(*output_tensors);
+
+    model->stream_cb_(result, model->stream_ctx_);
+}
+
+template<typename T>
 T5TritonModelInstance<T>::T5TritonModelInstance(std::unique_ptr<ft::T5Encoder<T>>        t5_encoder,
                                                 std::unique_ptr<ft::T5Decoding<T>>       t5_decoding,
                                                 std::shared_ptr<ft::T5EncoderWeight<T>>  t5_encoder_weight,
@@ -197,8 +206,16 @@ T5TritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::string
     }
 
     try {
+        if (stream_cb_ != nullptr) {
+            t5_decoding_->registerCallback(triton_stream_callback<T>, this);
+        }
+
         t5_encoder_->forward(&encoder_output_tensors, &encoder_input_tensors, t5_encoder_weight_.get());
         t5_decoding_->forward(&decoding_output_tensors, &decoding_input_tensors, t5_decoding_weight_.get());
+
+        if (stream_cb_ != nullptr) {
+            t5_decoding_->unRegisterCallback();
+        }
     }
     catch (...) {
         h_exception_ = std::current_exception();
