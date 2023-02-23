@@ -26,28 +26,28 @@ template<typename T>
 void deviceMalloc(T** ptr, size_t size, bool is_random_initialize = true);
 
 template<typename T>
-void deviceMemSetZero(T* ptr, int size);
+void deviceMemSetZero(T* ptr, size_t size);
 
 template<typename T>
 void deviceFree(T*& ptr);
 
 template<typename T>
-void deviceFill(T* devptr, int size, T value, cudaStream_t stream = 0);
+void deviceFill(T* devptr, size_t size, T value, cudaStream_t stream = 0);
 
 template<typename T>
-void cudaD2Hcpy(T* tgt, const T* src, const int size);
+void cudaD2Hcpy(T* tgt, const T* src, const size_t size);
 
 template<typename T>
-void cudaH2Dcpy(T* tgt, const T* src, const int size);
+void cudaH2Dcpy(T* tgt, const T* src, const size_t size);
 
 template<typename T>
-void cudaD2Dcpy(T* tgt, const T* src, const int size);
+void cudaD2Dcpy(T* tgt, const T* src, const size_t size);
 
 template<typename T>
-void cudaAutoCpy(T* tgt, const T* src, const int size, cudaStream_t stream = NULL);
+void cudaAutoCpy(T* tgt, const T* src, const size_t size, cudaStream_t stream = NULL);
 
 template<typename T>
-void cudaRandomUniform(T* buffer, const int size);
+void cudaRandomUniform(T* buffer, const size_t size);
 
 template<typename T>
 int loadWeightFromBin(T*                  ptr,
@@ -62,21 +62,21 @@ int loadWeightFromBinAndQuantizeForWeightOnly(int8_t*             quantized_weig
                                               std::string         filename,
                                               FtCudaDataType      model_file_type = FtCudaDataType::FP32);
 
-void invokeCudaD2DcpyHalf2Float(float* dst, half* src, const int size, cudaStream_t stream);
-void invokeCudaD2DcpyFloat2Half(half* dst, float* src, const int size, cudaStream_t stream);
+void invokeCudaD2DcpyHalf2Float(float* dst, half* src, const size_t size, cudaStream_t stream);
+void invokeCudaD2DcpyFloat2Half(half* dst, float* src, const size_t size, cudaStream_t stream);
 #ifdef ENABLE_FP8
-void invokeCudaD2Dcpyfp82Float(float* dst, __nv_fp8_e4m3* src, const int size, cudaStream_t stream);
-void invokeCudaD2Dcpyfp82Half(half* dst, __nv_fp8_e4m3* src, const int size, cudaStream_t stream);
-void invokeCudaD2DcpyFloat2fp8(__nv_fp8_e4m3* dst, float* src, const int size, cudaStream_t stream);
-void invokeCudaD2DcpyHalf2fp8(__nv_fp8_e4m3* dst, half* src, const int size, cudaStream_t stream);
-void invokeCudaD2DcpyBfloat2fp8(__nv_fp8_e4m3* dst, __nv_bfloat16* src, const int size, cudaStream_t stream);
+void invokeCudaD2Dcpyfp82Float(float* dst, __nv_fp8_e4m3* src, const size_t size, cudaStream_t stream);
+void invokeCudaD2Dcpyfp82Half(half* dst, __nv_fp8_e4m3* src, const size_t size, cudaStream_t stream);
+void invokeCudaD2DcpyFloat2fp8(__nv_fp8_e4m3* dst, float* src, const size_t size, cudaStream_t stream);
+void invokeCudaD2DcpyHalf2fp8(__nv_fp8_e4m3* dst, half* src, const size_t size, cudaStream_t stream);
+void invokeCudaD2DcpyBfloat2fp8(__nv_fp8_e4m3* dst, __nv_bfloat16* src, const size_t size, cudaStream_t stream);
 #endif  // ENABLE_FP8
 #ifdef ENABLE_BF16
-void invokeCudaD2DcpyBfloat2Float(float* dst, __nv_bfloat16* src, const int size, cudaStream_t stream);
+void invokeCudaD2DcpyBfloat2Float(float* dst, __nv_bfloat16* src, const size_t size, cudaStream_t stream);
 #endif  // ENABLE_BF16
 
 template<typename T_OUT, typename T_IN>
-void invokeCudaCast(T_OUT* dst, T_IN const* const src, const int size, cudaStream_t stream);
+void invokeCudaCast(T_OUT* dst, T_IN const* const src, const size_t size, cudaStream_t stream);
 
 template<typename T, size_t n_dims>
 __inline__ __host__ __device__ size_t dim2flat(const T (&idx)[n_dims], const T (&dims)[n_dims])
@@ -115,11 +115,11 @@ template<typename T>
 void invokeDivideScale(T* tensor, float scale, const size_t size, cudaStream_t stream);
 
 template<typename T_IN, typename T_OUT>
-void invokeCudaD2DcpyConvert(T_OUT* tgt, const T_IN* src, const int size, cudaStream_t stream = 0);
+void invokeCudaD2DcpyConvert(T_OUT* tgt, const T_IN* src, const size_t size, cudaStream_t stream = 0);
 
 template<typename T_IN, typename T_OUT>
 void invokeCudaD2DScaleCpyConvert(
-    T_OUT* tgt, const T_IN* src, const float* scale, bool invert_scale, const int size, cudaStream_t stream = 0);
+    T_OUT* tgt, const T_IN* src, const float* scale, bool invert_scale, const size_t size, cudaStream_t stream = 0);
 
 inline bool checkIfFileExist(const std::string& file_path)
 {
@@ -132,7 +132,7 @@ inline bool checkIfFileExist(const std::string& file_path)
 }
 
 template<typename T>
-void saveToBinary(const T* ptr, const int size, std::string filename);
+void saveToBinary(const T* ptr, const size_t size, std::string filename);
 
 template<typename T_IN, typename T_fake_type>
 void invokeFakeCast(T_IN* input_ptr, const size_t size, cudaStream_t stream);
