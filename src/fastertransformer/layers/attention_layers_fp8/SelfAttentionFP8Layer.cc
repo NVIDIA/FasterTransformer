@@ -139,7 +139,7 @@ void SelfAttentionFP8Layer<T1, T2>::forward(TensorMap*                        ou
             float attn_scale_2 =
                 attention_weights->query_weight.output_h_scale[0]
                 * attention_weights->attention_output_weight.input_h_scale_inv[0];  // v and output scale
-            dispatcher_fp8->setScaleList(attn_scale_1, 0.0f, attn_scale_2);
+            dispatcher_fp8->setScaleList(attn_scale_1, 1.0f, attn_scale_2);
             // For example, if a query is like
             // [[S_0, P_0], [S_1, P_1]], where S_i is real tokens and P_i is padded tokens.
             // In zero pad case, we remove the padding and the input looks like [S_0, S_1].
