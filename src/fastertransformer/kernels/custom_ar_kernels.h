@@ -29,7 +29,7 @@
 #define RANKS_PER_NODE 8
 #define WARP_SIZE 32
 #define DEFAULT_BLOCK_SIZE 1024
-#define DEFALUT_ALGO_AR_SIZE_THRESHOLD 196608
+#define DEFALUT_ALGO_AR_SIZE_THRESHOLD 393216
 
 namespace fastertransformer {
 

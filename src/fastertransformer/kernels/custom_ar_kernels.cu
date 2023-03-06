@@ -369,7 +369,7 @@ void invokeOneOrTwoShotAllReduceKernel(AllReduceParams<T>& param, cudaStream_t s
     size_t elts_total      = param.elts_total;
     int    blocks_per_grid = 1, threads_per_block = DEFAULT_BLOCK_SIZE;
     int    kernel_algo = 1;
-    if (elts_total <= DEFALUT_ALGO_AR_SIZE_THRESHOLD) {
+    if (elts_total * sizeof(T) <= DEFALUT_ALGO_AR_SIZE_THRESHOLD) {
         kernel_algo = 0;
     }
 
