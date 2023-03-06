@@ -78,13 +78,13 @@ __global__ void generalAddBiasResidualLayerNormOpt(T* normed_output,
         if (IS_OUTPUT) {
             T in_val;
             if (scale_input) {
-                in_val = input[index];
-            }
-            else {
                 in_val = cuda_cast<T>(cuda_cast<Float_Packed_T>(reinterpret_cast<const Int32_Packed_T*>(input)[index])
                                       * scale_from_int);
             }
-            val = hadd2(val, input[index]);
+            else {
+                in_val = input[index];
+            }
+            val = hadd2(val, in_val);
         }
         shmem[i]      = val;
         output[index] = val;
