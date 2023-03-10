@@ -804,10 +804,10 @@ __global__ void insertUnfinishedPath(BeamHypotheses beam_hyps,
             const int length = beam_hyps.sequence_lengths_src[src_beam_idx];
 
             beam_hyps.output_ids_tgt[(tgt_beam_idx) * (beam_hyps.max_seq_len + 1) + length] =
-                beam_hyps.output_ids_src[length * batch_size * beam_width + bid * beam_width + src_beam_idx];
+                beam_hyps.output_ids_src[length * batch_size * beam_width + src_beam_idx];
             if (beam_hyps.log_probs != nullptr && beam_hyps.log_probs_src != nullptr) {
                 beam_hyps.log_probs[(tgt_beam_idx) * (beam_hyps.max_seq_len + 1) + length] =
-                    beam_hyps.log_probs_src[length * batch_size * beam_width + bid * beam_width + src_beam_idx];
+                    beam_hyps.log_probs_src[length * batch_size * beam_width + src_beam_idx];
             }
             int prev_id = beam_hyps.parent_ids_src[length * batch_size * beam_width + src_beam_idx];
             for (int j = length - 1; j >= 0; j--) {
