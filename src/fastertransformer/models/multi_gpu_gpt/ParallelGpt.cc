@@ -1195,6 +1195,15 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
         const size_t iteration_num = batch_size / local_batch_size;
         *generation_should_stop_   = !fill_caches_only;
 
+        cudaD2Hcpy(h_finished_buf_, finished_buf_, batch_size * beam_width);
+        uint sum = 0;
+        for (uint i = 0; i < batch_size * beam_width; i++) {
+            sum += (int)h_finished_buf_[i];
+        }
+        if (sum == batch_size * beam_width) {
+            break;
+        }
+
         PUSH_RANGE(fmtstr("token_%d", step_ - step_start));
         for (uint ite = 0; ite < iteration_num; ++ite) {
             const int id_offset               = ite * local_batch_size * beam_width;
