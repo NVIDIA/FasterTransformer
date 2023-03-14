@@ -98,19 +98,19 @@ template void invokeDecodingInitialize(bool*          finished,
 
 // PROMPT_SRC: 0 --> no prompts, 1 --> from loaded prompts, 2 --> from request prompts
 template<typename T>
-__global__ void embeddingLookupPosEncoding(T*         from_tensor,
-                                           const T*   embedding_table,
-                                           const T*   position_encoding,
-                                           const int* all_ids,
-                                           const int* padding_count,
-                                           const int* input_lengths,
-                                           const int  local_token_num,
-                                           const int  hidden_units,
-                                           const int  step,
-                                           const int  max_input_length,
-                                           const int  token_num,
-                                           const int  ite,
-                                           const T    scale)
+__global__ void embeddingLookupPosEncoding(T*             from_tensor,
+                                           const T*       embedding_table,
+                                           const T*       position_encoding,
+                                           const int*     all_ids,
+                                           const int*     padding_count,
+                                           const int*     input_lengths,
+                                           const int      local_token_num,
+                                           const int64_t  hidden_units,
+                                           const int      step,
+                                           const int      max_input_length,
+                                           const int      token_num,
+                                           const int      ite,
+                                           const T        scale)
 {
     // 1. lookup from embedding table
     // 2. multiply scale
@@ -120,7 +120,7 @@ __global__ void embeddingLookupPosEncoding(T*         from_tensor,
     const bool use_padding_count = padding_count != nullptr;
     const bool use_input_len     = input_lengths != nullptr;
 
-    for (int index = blockIdx.x * blockDim.x + threadIdx.x; index < local_token_num * hidden_units;
+    for (int64_t index = blockIdx.x * blockDim.x + threadIdx.x; index < local_token_num * hidden_units;
          index += blockDim.x * gridDim.x) {
         const int row_index   = index / hidden_units;
         const int col_index   = index % hidden_units;
@@ -148,7 +148,7 @@ __global__ void embeddingLookup(T*                    from_tensor,
                                 const int*            all_ids,
                                 pPromptTuningParam<T> prompt_param,
                                 const int             local_token_num,
-                                const int             hidden_units,
+                                const int64_t         hidden_units,
                                 const int             step,
                                 const int             token_num,
                                 const int             ite,
@@ -159,7 +159,7 @@ __global__ void embeddingLookup(T*                    from_tensor,
     // 2. multiply scale
     const int id_offset = step * token_num + ite * local_token_num;
 
-    for (int index = blockIdx.x * blockDim.x + threadIdx.x; index < local_token_num * hidden_units;
+    for (int64_t index = blockIdx.x * blockDim.x + threadIdx.x; index < local_token_num * hidden_units;
          index += blockDim.x * gridDim.x) {
 
         const int word_index     = index / hidden_units;
@@ -313,15 +313,15 @@ INSTANTIATE_LOOKUP_POS_ENCODING_PAD_COUNT(__nv_bfloat16);
 #undef INSTANTIATE_LOOKUP_POS_ENCODING_PAD_COUNT
 
 template<typename T>
-__global__ void paddingEmbedding(T*        padded_embedding_kernel,
-                                 T*        padded_embedding_bias,
-                                 const T*  embedding_kernel,
-                                 const T*  embedding_bias,
-                                 const int hidden_unit,
-                                 const int vocab_size,
-                                 const int vocab_size_padded)
+__global__ void paddingEmbedding(T*            padded_embedding_kernel,
+                                 T*            padded_embedding_bias,
+                                 const T*      embedding_kernel,
+                                 const T*      embedding_bias,
+                                 const int64_t hidden_unit,
+                                 const int64_t vocab_size,
+                                 const int64_t vocab_size_padded)
 {
-    for (int id = threadIdx.x + blockIdx.x * blockDim.x; id < hidden_unit * vocab_size_padded;
+    for (int64_t id = threadIdx.x + blockIdx.x * blockDim.x; id < hidden_unit * vocab_size_padded;
          id += blockDim.x * gridDim.x) {
         int row_id = id / vocab_size_padded;
         int col_id = id % vocab_size_padded;
