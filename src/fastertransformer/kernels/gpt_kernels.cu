@@ -39,7 +39,7 @@ __global__ void start_id_embedding_position_lookups_kernel(T*                   
                                                            const int             length,
                                                            const int             max_length,
                                                            const int             batch_size,
-                                                           const int             hidden_units)
+                                                           const int64_t         hidden_units)
 {
     for (int index = blockIdx.x * blockDim.x + threadIdx.x; index < batch_size * length * hidden_units;
          index += blockDim.x * gridDim.x) {
@@ -250,20 +250,20 @@ __global__ void inputIdsEmbeddingLookupPosEncodingSoftPrompt(inputIdsEmbeddingLo
         const int beam_id   = tmp_index % param.beam_width;
         tmp_index           = (tmp_index - beam_id) / param.beam_width;
         const int batch_id  = tmp_index % param.batch_size;
+        const int64_t hidden_units = param.hidden_units;
         T         embedding =
             (seq_id < param.prefix_soft_prompt_lengths[batch_id]) ?
-                        (T)param
-                    .prefix_soft_prompt_embedding[batch_id * param.max_prefix_soft_prompt_length * param.hidden_units
-                                                  + seq_id * param.hidden_units + hidden_id] :
-                        param.embedding_table[param.input_ids[batch_id * param.beam_width * param.max_input_length
+                        (T)param.prefix_soft_prompt_embedding[batch_id * param.max_prefix_soft_prompt_length * hidden_units
+                                                      + seq_id * hidden_units + hidden_id] :
+                            param.embedding_table[param.input_ids[batch_id * param.beam_width * param.max_input_length
                                                       + beam_id * param.max_input_length
                                                       + (seq_id - param.prefix_soft_prompt_lengths[batch_id])]
-                                          * param.hidden_units
+                                          * hidden_units
                                       + hidden_id];
 
         T pos_embed              = param.pos_table == nullptr ?
                                        (T)0.0f :
-                                       param.pos_table[(param.start_step + seq_id - 1) * param.hidden_units + hidden_id];
+                                       param.pos_table[(param.start_step + seq_id - 1) * hidden_units + hidden_id];
         param.from_tensor[index] = embedding + pos_embed;
 
         if (seq_id == 0 && hidden_id == 0) {
