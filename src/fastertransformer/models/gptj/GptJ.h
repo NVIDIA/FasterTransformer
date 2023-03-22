@@ -59,6 +59,8 @@ private:
         (std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM") == nullptr ||
          std::string(std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM")) != "ON");
 
+    float shared_contexts_ratio_;
+
     // Prompt Learning Parameters
     PromptLearningType prompt_learning_type_;
     int                prompt_learning_start_id_;  // start_id for prompt_learning (only needed by prefix prompts)
@@ -117,6 +119,11 @@ protected:
 
     bool* generation_should_stop_ = nullptr;
 
+    int* shared_contexts_idx_  = nullptr;
+    int* compact_idx_          = nullptr;
+    int* batch_to_compact_idx_ = nullptr;
+    int* compact_size_         = nullptr;
+
     T*     context_decoder_input_buf_;
     T*     context_decoder_output_buf_;
     float* output_log_probs_buf_;
@@ -162,7 +169,8 @@ public:
          cudaDeviceProp*                     cuda_device_prop         = nullptr,
          AttentionType                       attention_type           = AttentionType::UNFUSED_MHA,
          std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
-         int                                 enable_custom_all_reduce = 0);
+         int                                 enable_custom_all_reduce = 0,
+         float                               shared_contexts_ratio    = 1.0f);
 
     GptJ(size_t                              max_batch_size,
          size_t                              max_seq_len,
@@ -194,7 +202,8 @@ public:
          cudaDeviceProp*                     cuda_device_prop         = nullptr,
          AttentionType                       attention_type           = AttentionType::UNFUSED_MHA,
          std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
-         int                                 enable_custom_all_reduce = 0);
+         int                                 enable_custom_all_reduce = 0,
+         float                               shared_contexts_ratio    = 1.0f);
 
     GptJ(GptJ<T> const& GptJ);
 

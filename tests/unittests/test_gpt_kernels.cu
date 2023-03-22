@@ -80,12 +80,13 @@ int test_find_context_dups()
     cudaH2Dcpy(d_compact_to_batch, compact_idx_to_batch_idx_test.data(), batch_size);
 
     invokeFindContextDups(d_shared_contexts_test,
-            d_batch_idx_to_compact_idx,
-            d_compact_to_batch,
-            d_compact_size,
-            d_input_ids,
-            batch_size,
-            vec_size);
+                          d_batch_idx_to_compact_idx,
+                          d_compact_to_batch,
+                          d_compact_size,
+                          d_input_ids,
+                          batch_size,
+                          1,
+                          vec_size);
 
     int compact_size;
     cudaD2Hcpy(shared_contexts_test.data(), d_shared_contexts_test, batch_size);

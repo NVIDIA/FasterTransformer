@@ -66,7 +66,7 @@ private:
     FfnLayer<T>*           ffn_layer_;
 
     void allocateBuffer() override;
-    void allocateBuffer(size_t batch_size, size_t seq_len);
+    void allocateBuffer(size_t batch_size, size_t seq_len, bool use_shared_contexts);
     void freeBuffer() override;
 
     bool isValidLayerParallelId(uint l);
@@ -84,6 +84,12 @@ protected:
     size_t* h_pinned_token_num_ptr_ = nullptr;
     int*    padding_offset_         = nullptr;
     int*    cu_seqlens_             = nullptr;
+
+    T*   compact_decoder_features_ = nullptr;
+    T*   compact_attention_mask_   = nullptr;
+    int* compact_input_lengths_    = nullptr;
+    T*   k_cache_layer_            = nullptr;
+    T*   v_cache_layer_            = nullptr;
 
 public:
     GptJContextDecoder(size_t                              max_batch_size,
