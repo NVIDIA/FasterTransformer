@@ -458,7 +458,7 @@ python ../examples/pytorch/gpt/utils/huggingface_gpt_convert.py -i gpt2-xl/ -o .
 
 2. Run GPT on PyTorch
 
-    Basically, `gpt_example.py` includes the example how to declare a model, load a ckeckpoint, and forward context inputs and get generated outputs in Pytorch.
+    Basically, `gpt_example.py` includes the example how to declare a model, load a checkpoint, and forward context inputs and get generated outputs in Pytorch.
 
     For generating outputs based on context inputs, create a text file including the context inputs (line by line) and set `--sample_file_input` to the text file path. (By default, the script will generate outputs without context inputs.) Set `--sample_file_output` to write the outputs to a file. Use `--data_type fp16/bf16` to run in FP16 or BF16.
 
