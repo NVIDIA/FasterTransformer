@@ -1534,6 +1534,10 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
             POP_RANGE;
         }
 
+        if (*generation_should_stop_) {
+            break;
+        }
+
         if (token_generated_cb_ && step_ + 1 < (int)gen_len) {
             setOutputTensors(
                 output_tensors, input_tensors, gen_len, session_len, max_context_len, max_input_without_prompt_length);
