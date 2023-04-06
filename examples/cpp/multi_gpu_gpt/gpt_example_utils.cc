@@ -430,7 +430,7 @@ void populate_request(std::unordered_map<std::string, Tensor>& input_tensors,
     }
 
     if (request_config.is_return_context_embeddings) {
-        deviceMalloc(&output_context_embeddings, request_batch_size * model_config.hidden_units);
+        deviceMalloc(&output_context_embeddings, request_batch_size * beam_width * model_config.hidden_units);
         output_tensors.insert({"context_embeddings",
                                {MEMORY_GPU,
                                 TYPE_FP32,

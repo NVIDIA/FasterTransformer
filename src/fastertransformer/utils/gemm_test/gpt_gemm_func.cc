@@ -751,14 +751,14 @@ template void generate_gpt_gemm_config<__nv_fp8_e4m3>(int   batch_size,
                                                       bool  isAppend);
 #endif
 
-size_t calGptGemmTestBufSizeInByte(int            batch_size,
-                                   int            beam_width,
-                                   int            max_input_len,
-                                   int            head_num,
-                                   int            size_per_head,
-                                   int            inter_size,
-                                   int            vocab_size,
-                                   int            tensor_para_size,
+size_t calGptGemmTestBufSizeInByte(size_t         batch_size,
+                                   size_t         beam_width,
+                                   size_t         max_input_len,
+                                   size_t         head_num,
+                                   size_t         size_per_head,
+                                   size_t         inter_size,
+                                   size_t         vocab_size,
+                                   size_t         tensor_para_size,
                                    CublasDataType data_type)
 {
     size_t       buf_size_in_byte   = 0;
