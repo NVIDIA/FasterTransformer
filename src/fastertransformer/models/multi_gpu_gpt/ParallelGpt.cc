@@ -887,7 +887,7 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
                                 batch_to_compact_idx_,
                                 compact_idx_,
                                 compact_size_,
-                                tiled_input_ids_buf_,
+                                input_tensors->at("input_ids").getPtr<int>(),
                                 batch_size,
                                 beam_width,
                                 max_input_length,
