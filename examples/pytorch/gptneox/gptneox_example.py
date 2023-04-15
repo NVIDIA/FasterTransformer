@@ -106,6 +106,8 @@ def main():
         print("{}: {}".format(arg, getattr(args, arg)))
     print("=========================================\n")
 
+    if tensor_para_size * pipeline_para_size > 1:
+        dist.init_process_group(backend=dist.Backend.MPI)
     rank = dist.get_rank() if dist.is_initialized() else 0
     device_count = dist.get_world_size() if dist.is_initialized() else 1
     device = rank % device_count
