@@ -165,7 +165,7 @@ def main():
             random_seed=random_seed_tensor,
             return_output_length=False,
             return_cum_log_probs=0)
-        if tokens_batch is not None:
+        if tokens_batch is not None and rank == 0:
             tokens_batch = tokens_batch.cpu().numpy()
             for i, (context, tokens) in enumerate(zip(contexts, tokens_batch)):
                 for beam_id in range(beam_width):
