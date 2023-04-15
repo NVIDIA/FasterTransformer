@@ -26,7 +26,7 @@ import torch.nn as nn
 import numpy as np
 import torch.distributed as dist
 
-str_type_map = {"fp32": torch.float32, "fp16": torch.float16, "bf16": torch.bfloat16}
+str_type_map = {"fp32": torch.float32, "fp16": torch.float16}
 
 class GptNeoXWeights(object):
     def __init__(   self, 
@@ -181,8 +181,6 @@ class ParallelGptNeoX(nn.Module):
                  tensor_para_size, pipeline_para_size,
                  use_gptj_residual,
                  lib_path,
-                 layernorm_eps = 1e-6, layernorm_type = "pre_layernorm", # gpt_variant_params
-                 activation_type = "Gelu", 
                  inference_data_type: str = "fp16",
                  weights_data_type: np.dtype = np.float32):
         super().__init__()
@@ -196,10 +194,6 @@ class ParallelGptNeoX(nn.Module):
         self.max_seq_len = max_seq_len
         self.layer_num = layer_num
         self.use_gptj_residual = use_gptj_residual
-
-        self.layernorm_eps = layernorm_eps
-        self.layernorm_type = layernorm_type
-        self.activation_type = activation_type
 
         self.tensor_para_size = tensor_para_size
         self.pipeline_para_size = pipeline_para_size
@@ -250,10 +244,6 @@ class ParallelGptNeoX(nn.Module):
         self.weights._map(lambda w: w.half())
         self.cuda()
 
-    def bfloat16(self):
-        self.weights._map(lambda w: w.bfloat16())
-        self.cuda()
-
     def cuda(self):
         self.weights._map(lambda w: w.cuda(self.device))
 
@@ -265,7 +255,6 @@ class ParallelGptNeoX(nn.Module):
                                                                         self.layer_num, self.vocab_size, self.rotary_embedding_dim, 
                                                                         self.start_id, self.end_id, self.tensor_para_size, self.pipeline_para_size,
                                                                         self.max_seq_len, self.use_gptj_residual,
-                                                                        self.layernorm_eps, self.layernorm_type, self.activation_type,
                                                                         self.weights.w)
 
         self.build_model = True

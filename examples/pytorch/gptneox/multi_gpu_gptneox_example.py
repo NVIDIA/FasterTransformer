@@ -23,10 +23,12 @@ import argparse
 import configparser
 import timeit
 import torch
+import torch.distributed as dist
 import numpy as np
+from transformers import AutoTokenizer
 dir_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(dir_path + "/../../..")
-from examples.pytorch.gptneox.utils.parallel_gptneox import ParallelGptNeoX, GptNeoXWeights
+from examples.pytorch.gptneox.utils.parallel_gptneox import ParallelGptNeoX
 
 def main():
     parser = argparse.ArgumentParser()
@@ -48,10 +50,14 @@ def main():
                         help='tensor parallel size')
     parser.add_argument('--pipeline_para_size', type=int, default=1,
                         help='pipeline parallel size')
-    parser.add_argument('--ckpt_path', type=str, default='../models/gptneox/1-gpu',
+    parser.add_argument('--ckpt_path', type=str, default='../models/gptneox/c-model/NeoX-1.3B/1-gpu',
                         help='path to the checkpoint file.')
+    parser.add_argument('--tokenizer_path', type=str, default='../models/gptneox/model/NeoX-1.3B',
+                        help='directory where the tokenizer file is located.')
     parser.add_argument('--lib_path', type=str, default='./lib/libth_transformer.so',
                         help='path to the pyt_fastertransformer dynamic lib file.')
+    parser.add_argument('--sample_input_file', type=str,
+                        help='path to the sample input file.')
     parser.add_argument('--max_batch_size', type=int, default=8,
                         help='max batch size.')
     parser.add_argument('--repetition_penalty', type=float, default=1.,
@@ -79,6 +85,7 @@ def main():
     weight_data_type = config.get('gptneox', 'weight_data_type')
 
     ckpt_path = args.ckpt_path
+    tokenizer_path = args.tokenizer_path
     lib_path = args.lib_path
     output_len = args.output_len
     beam_width = args.beam_width
@@ -99,8 +106,27 @@ def main():
         print("{}: {}".format(arg, getattr(args, arg)))
     print("=========================================\n")
 
-    batch_size = max_batch_size
-    start_ids = [torch.IntTensor([end_id])] * batch_size
+    rank = dist.get_rank() if dist.is_initialized() else 0
+    device_count = dist.get_world_size() if dist.is_initialized() else 1
+    device = rank % device_count
+    torch.cuda.set_device(device)
+    device = torch.cuda.current_device()
+
+    # sentencepiece needed
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_path)
+
+    # Inputs
+    contexts = []
+    if args.sample_input_file:  # conditional case
+        with open(args.sample_input_file, "r") as f:
+            contexts = f.read().splitlines()
+            batch_size = min(len(contexts), max_batch_size)
+        contexts = contexts[:batch_size]
+        start_ids = [torch.tensor(tokenizer.encode(c), dtype=torch.int32, device=device) for c in contexts]
+    else:  # unconditional case
+        batch_size = max_batch_size
+        contexts = ['<|endoftext|>'] * batch_size
+        start_ids = [torch.IntTensor([end_id])] * batch_size
 
     print("[INFO] batch size: {}".format(batch_size))
 
@@ -141,11 +167,11 @@ def main():
             return_cum_log_probs=0)
         if tokens_batch is not None:
             tokens_batch = tokens_batch.cpu().numpy()
-            for i, tokens in enumerate(tokens_batch):
+            for i, (context, tokens) in enumerate(zip(contexts, tokens_batch)):
                 for beam_id in range(beam_width):
                     token = tokens[beam_id][start_lengths[i]:]  # exclude context input from the output
-                    token_str = " ".join([str(t_id) for t_id in token])
-                    print(f"[INFO] batch {i}, beam {beam_id}: \n[Output]\n{token_str}\n")
+                    output = tokenizer.decode(token)
+                    print(f'[INFO] batch {i}, beam {beam_id}:\n[Context]\n{context}\n\n[Output]\n{output}\n')
 
         # Measure inference time.
         if args.time:

@@ -32,9 +32,6 @@ ParallelGptNeoXOp::ParallelGptNeoXOp(   const int64_t            head_num,
                                         const int64_t            pipeline_para_size,
                                         const int64_t            max_seq_len,
                                         const bool               use_gptj_residual,
-                                        const double             layernorm_eps,
-                                        const std::string        layernorm_type,
-                                        const std::string        activation_type,
                                         const vector<th::Tensor> weights):
     st_(weights[0].scalar_type())
 {
@@ -104,11 +101,10 @@ std::vector<th::Tensor> ParallelGptNeoXOp::forward( th::Tensor               inp
     TORCH_CHECK(input_lengths.dtype() == torch::kInt32, "input_lengths dtype should be int32");
     int64_t return_cum_log_probs = return_cum_log_probs_opt.has_value() ? (int64_t)return_cum_log_probs_opt.value() : 0;
     if (return_cum_log_probs_opt.has_value()) {
-        TORCH_CHECK(return_cum_log_probs == 0 || return_cum_log_probs == 1 || return_cum_log_probs == 2,
+        TORCH_CHECK(return_cum_log_probs == 0 || return_cum_log_probs == 1,
                     "return_cum_log_probs should be"
                     " 0 (no return cum_log_probs), "
-                    " 1 (the cumulative log probs of generated sequences), or"
-                    " 2 (the cumulative log probs of sequences).")
+                    " 1 (the cumulative log probs of generated sequences)")
     }
 
     const int beam_width = beam_width_opt.has_value() ? (int)beam_width_opt.value() : 1;
@@ -164,8 +160,5 @@ static auto fasterTransformerGptTHS =
                               int64_t,
                               int64_t,
                               bool,
-                              double,
-                              std::string,
-                              std::string,
                               std::vector<th::Tensor>>())
         .def("forward", &torch_ext::ParallelGptNeoXOp::forward);

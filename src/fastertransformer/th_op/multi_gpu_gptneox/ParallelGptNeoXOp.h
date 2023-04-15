@@ -250,14 +250,6 @@ public:
                  convert_tensor<unsigned long long int>(random_seed_opt.value(), ft::MemoryType::MEMORY_CPU)});
         }
 
-        bool return_context_cum_log_probs = false;
-        if (return_cum_log_probs == 2) {
-            return_context_cum_log_probs = true;
-            input_tensors.insert(
-                {"is_return_context_cum_log_probs",
-                 ft::Tensor{ft::MEMORY_CPU, ft::TYPE_BOOL, std::vector<size_t>{1}, &return_context_cum_log_probs}});
-        }
-
         std::unordered_map<std::string, ft::Tensor> output_tensors = std::unordered_map<std::string, ft::Tensor>{
             {"output_ids",
              ft::Tensor{ft::MEMORY_GPU,
@@ -332,9 +324,6 @@ public:
                         const int64_t               pipeline_para_size,
                         const int64_t               max_seq_len,
                         const bool                  use_gptj_residual,
-                        const double                layernorm_eps,
-                        const std::string           layernorm_type,
-                        const std::string           activation_type,
                         const vector<th::Tensor>    weights);
 
     ~ParallelGptNeoXOp();
