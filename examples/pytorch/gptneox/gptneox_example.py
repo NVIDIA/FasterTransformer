@@ -28,7 +28,7 @@ import numpy as np
 from transformers import AutoTokenizer
 dir_path = os.path.dirname(os.path.realpath(__file__))
 sys.path.append(dir_path + "/../../..")
-from examples.pytorch.gptneox.utils.parallel_gptneox import ParallelGptNeoX
+from examples.pytorch.gptneox.utils.gptneox import GptNeoX
 
 def main():
     parser = argparse.ArgumentParser()
@@ -141,12 +141,12 @@ def main():
         random_seed_tensor = torch.zeros([batch_size], dtype=torch.int64)
 
     # Prepare model.
-    gpt = ParallelGptNeoX(head_num, size_per_head, vocab_size, rotary_embedding,
-                          start_id, end_id, layer_num, max_seq_len, 
-                          tensor_para_size, pipeline_para_size, 
-                          use_gptj_residual, lib_path, 
-                          inference_data_type=inference_data_type, 
-                          weights_data_type=weight_data_type)
+    gpt = GptNeoX(head_num, size_per_head, vocab_size, rotary_embedding,
+                  start_id, end_id, layer_num, max_seq_len, 
+                  tensor_para_size, pipeline_para_size, 
+                  use_gptj_residual, lib_path, 
+                  inference_data_type=inference_data_type, 
+                  weights_data_type=weight_data_type)
     if not gpt.load(ckpt_path=ckpt_path):
         print("[WARNING] Checkpoint file not found. Model loading is skipped.")
 

@@ -310,9 +310,9 @@ private:
     int64_t pipeline_para_size_;
 };
 
-class ParallelGptNeoXOp: public th::jit::CustomClassHolder {
+class GptNeoXOp: public th::jit::CustomClassHolder {
 public:
-    ParallelGptNeoXOp(  const int64_t               head_num,
+    GptNeoXOp(  const int64_t               head_num,
                         const int64_t               size_per_head,
                         const int64_t               inter_size,
                         const int64_t               layer_num,
@@ -326,7 +326,7 @@ public:
                         const bool                  use_gptj_residual,
                         const vector<th::Tensor>    weights);
 
-    ~ParallelGptNeoXOp();
+    ~GptNeoXOp();
 
     vector<th::Tensor> forward(th::Tensor               input_ids,
                                th::Tensor               input_lengths,

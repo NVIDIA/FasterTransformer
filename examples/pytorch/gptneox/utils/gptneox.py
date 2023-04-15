@@ -172,7 +172,7 @@ class GptNeoXWeights(object):
         return True
 
 
-class ParallelGptNeoX(nn.Module):
+class GptNeoX(nn.Module):
     def __init__(self,
                  head_num, size_per_head,
                  vocab_size, rotary_embedding_dim, 
@@ -251,11 +251,10 @@ class ParallelGptNeoX(nn.Module):
             del self.model
             self.build_model = False
         
-        self.model = torch.classes.FasterTransformer.ParallelGptNeoXOp( self.head_num, self.size_per_head, self.inter_size,
-                                                                        self.layer_num, self.vocab_size, self.rotary_embedding_dim, 
-                                                                        self.start_id, self.end_id, self.tensor_para_size, self.pipeline_para_size,
-                                                                        self.max_seq_len, self.use_gptj_residual,
-                                                                        self.weights.w)
+        self.model = torch.classes.FasterTransformer.GptNeoXOp(self.head_num, self.size_per_head, self.inter_size,
+                                                               self.layer_num, self.vocab_size, self.rotary_embedding_dim, 
+                                                               self.start_id, self.end_id, self.tensor_para_size, self.pipeline_para_size,
+                                                               self.max_seq_len, self.use_gptj_residual, self.weights.w)
 
         self.build_model = True
 

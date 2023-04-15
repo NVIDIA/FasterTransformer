@@ -27,7 +27,7 @@ add_subdirectory(longformer)
 add_subdirectory(swin)
 add_subdirectory(vit)
 add_subdirectory(multi_gpu_gpt)
-add_subdirectory(multi_gpu_gptneox)
+add_subdirectory(gptneox)
 add_subdirectory(t5)
 add_subdirectory(bart)
 add_subdirectory(bert)
@@ -44,7 +44,7 @@ add_library(th_transformer SHARED
             $<TARGET_OBJECTS:th_gather_tree>
             $<TARGET_OBJECTS:th_longformer>
             $<TARGET_OBJECTS:th_parallel_gpt>
-            $<TARGET_OBJECTS:th_parallel_gptneox>
+            $<TARGET_OBJECTS:th_gptneox>
             $<TARGET_OBJECTS:th_swintransformer>
             $<TARGET_OBJECTS:th_t5>
             $<TARGET_OBJECTS:th_utils>
@@ -61,7 +61,7 @@ target_link_libraries(th_transformer PUBLIC "${TORCH_LIBRARIES}"
                       th_gather_tree
                       th_longformer
                       th_parallel_gpt
-                      th_parallel_gptneox
+                      th_gptneox
                       th_swintransformer
                       th_t5
                       th_utils

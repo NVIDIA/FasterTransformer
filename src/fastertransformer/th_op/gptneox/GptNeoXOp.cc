@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/th_op/multi_gpu_gptneox/ParallelGptNeoXOp.h"
+#include "src/fastertransformer/th_op/gptneox/GptNeoXOp.h"
 
 namespace th = torch;
 namespace ft = fastertransformer;
 namespace torch_ext {
 
-ParallelGptNeoXOp::ParallelGptNeoXOp(   const int64_t            head_num,
+GptNeoXOp::GptNeoXOp(   const int64_t            head_num,
                                         const int64_t            size_per_head,
                                         const int64_t            inter_size,
                                         const int64_t            layer_num,
@@ -75,12 +75,12 @@ ParallelGptNeoXOp::ParallelGptNeoXOp(   const int64_t            head_num,
     }
 }
 
-ParallelGptNeoXOp::~ParallelGptNeoXOp()
+GptNeoXOp::~GptNeoXOp()
 {
     delete ftgpt;
 }
 
-std::vector<th::Tensor> ParallelGptNeoXOp::forward( th::Tensor               input_ids,
+std::vector<th::Tensor> GptNeoXOp::forward( th::Tensor               input_ids,
                                                     th::Tensor               input_lengths,
                                                     const int64_t            output_len,
                                                     th::optional<int64_t>    beam_width_opt,
@@ -144,9 +144,9 @@ std::vector<th::Tensor> ParallelGptNeoXOp::forward( th::Tensor               inp
 
 static auto fasterTransformerGptTHS =
 #ifdef LEGACY_THS
-    torch::jit::class_<torch_ext::ParallelGptNeoXOp>("FasterTransformerParallelGptNeoXOp")
+    torch::jit::class_<torch_ext::GptNeoXOp>("FasterTransformerGptNeoXOp")
 #else
-    torch::jit::class_<torch_ext::ParallelGptNeoXOp>("FasterTransformer", "ParallelGptNeoXOp")
+    torch::jit::class_<torch_ext::GptNeoXOp>("FasterTransformer", "GptNeoXOp")
 #endif
         .def(torch::jit::init<int64_t,
                               int64_t,
@@ -161,4 +161,4 @@ static auto fasterTransformerGptTHS =
                               int64_t,
                               bool,
                               std::vector<th::Tensor>>())
-        .def("forward", &torch_ext::ParallelGptNeoXOp::forward);
+        .def("forward", &torch_ext::GptNeoXOp::forward);

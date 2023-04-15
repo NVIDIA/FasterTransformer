@@ -12,6 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-add_library(th_parallel_gptneox STATIC ParallelGptNeoXOp.cc)
-set_property(TARGET th_parallel_gptneox PROPERTY POSITION_INDEPENDENT_CODE  ON)
-target_link_libraries(th_parallel_gptneox PRIVATE "${TORCH_LIBRARIES}" GptNeoX th_utils nccl_utils)
+add_library(th_gptneox STATIC GptNeoXOp.cc)
+set_property(TARGET th_gptneox PROPERTY POSITION_INDEPENDENT_CODE  ON)
+target_link_libraries(th_gptneox PRIVATE "${TORCH_LIBRARIES}" GptNeoX th_utils nccl_utils)
