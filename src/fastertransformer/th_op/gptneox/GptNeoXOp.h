@@ -49,19 +49,19 @@ public:
 template<typename T>
 class FTGptNeoX: public IFGptNeoX {
 public:
-    FTGptNeoX(  const size_t               head_num,
-                const size_t               size_per_head,
-                const size_t               inter_size,
-                const size_t               layer_num,
-                const size_t               vocab_size,
-                const size_t               rotary_embedding_dim,
-                const int                  start_id,
-                const int                  end_id,
-                const int64_t              tensor_para_size,
-                const int64_t              pipeline_para_size,
-                const size_t               max_seq_len,
-                const bool                 use_gptj_residual,
-                const vector<th::Tensor>   weights):
+    FTGptNeoX(const size_t             head_num,
+              const size_t             size_per_head,
+              const size_t             inter_size,
+              const size_t             layer_num,
+              const size_t             vocab_size,
+              const size_t             rotary_embedding_dim,
+              const int                start_id,
+              const int                end_id,
+              const int64_t            tensor_para_size,
+              const int64_t            pipeline_para_size,
+              const size_t             max_seq_len,
+              const bool               use_gptj_residual,
+              const vector<th::Tensor> weights):
         head_num_(head_num),
         size_per_head_(size_per_head),
         inter_size_(inter_size),
@@ -76,8 +76,8 @@ public:
         pipeline_para_size_(pipeline_para_size)
     {
         ft::check_cuda_error(cublasLtCreate(&cublasltHandle_));
-        cublas_algo_map_            = new ft::cublasAlgoMap(GEMM_CONFIG, "");
-        cublas_wrapper_mutex_       = new std::mutex();
+        cublas_algo_map_      = new ft::cublasAlgoMap(GEMM_CONFIG, "");
+        cublas_wrapper_mutex_ = new std::mutex();
 
         ftNcclInitialize(tensor_para_, pipeline_para_, tensor_para_size, pipeline_para_size);
 
@@ -109,10 +109,10 @@ public:
                 get_ptr<T>(weights_[i + 11 * layer_num_]);
         }
 
-        gpt_weights_.pre_decoder_embedding_table    = get_ptr<T>(weights_[12 * layer_num_ + 0]);
-        gpt_weights_.post_decoder_layernorm.gamma   = get_ptr<T>(weights_[12 * layer_num_ + 1]);
-        gpt_weights_.post_decoder_layernorm.beta    = get_ptr<T>(weights_[12 * layer_num_ + 2]);
-        gpt_weights_.post_decoder_embedding.kernel  = get_ptr<T>(weights_[12 * layer_num_ + 3]);
+        gpt_weights_.pre_decoder_embedding_table   = get_ptr<T>(weights_[12 * layer_num_ + 0]);
+        gpt_weights_.post_decoder_layernorm.gamma  = get_ptr<T>(weights_[12 * layer_num_ + 1]);
+        gpt_weights_.post_decoder_layernorm.beta   = get_ptr<T>(weights_[12 * layer_num_ + 2]);
+        gpt_weights_.post_decoder_embedding.kernel = get_ptr<T>(weights_[12 * layer_num_ + 3]);
 
         gpt_weights_.setMaxSeqLen(max_seq_len);
 
@@ -150,12 +150,8 @@ public:
         cublasHandle_t cublasHandle = at::cuda::getCurrentCUDABlasHandle();
         cublasSetStream(cublasHandle, stream);
         ft::Allocator<ft::AllocatorType::TH> allocator      = ft::Allocator<ft::AllocatorType::TH>();
-        ft::cublasMMWrapper                  cublas_wrapper = ft::cublasMMWrapper(cublasHandle,
-                                                                 cublasltHandle_,
-                                                                 stream,
-                                                                 cublas_algo_map_,
-                                                                 cublas_wrapper_mutex_,
-                                                                 &allocator);
+        ft::cublasMMWrapper                  cublas_wrapper = ft::cublasMMWrapper(
+            cublasHandle, cublasltHandle_, stream, cublas_algo_map_, cublas_wrapper_mutex_, &allocator);
 
         if (std::is_same<T, half>::value) {
             cublas_wrapper.setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
@@ -168,43 +164,43 @@ public:
         const size_t max_input_length   = (size_t)input_ids.size(1);
         const int    total_output_len   = (int)(max_input_length + request_output_len);
 
-        ft::AttentionType attention_type = ft::getAttentionType<T>( size_per_head_,
-                                                                    ft::getSMVersion(),
-                                                                    true,   // remove_padding
-                                                                    0,      // gpt supports any-seq-length fmha
-                                                                    true,   // is_fuse
-                                                                    false,  // with_relative_position_bias
-                                                                    true);  // causal_mask
+        ft::AttentionType attention_type = ft::getAttentionType<T>(size_per_head_,
+                                                                   ft::getSMVersion(),
+                                                                   true,   // remove_padding
+                                                                   0,      // gpt supports any-seq-length fmha
+                                                                   true,   // is_fuse
+                                                                   false,  // with_relative_position_bias
+                                                                   true);  // causal_mask
 
-        ft::GptNeoX<T>    gpt = ft::GptNeoX<T>( head_num_,
-                                                size_per_head_,
-                                                inter_size_,
-                                                layer_num_,
-                                                vocab_size_,
-                                                rotary_embedding_dim_,
-                                                start_id_,
-                                                end_id_,
-                                                end_id_ + 1,  // p/prompt tuning virtual token start id
-                                                ft::PromptLearningType::no_prompt,
-                                                use_gptj_residual_,
-                                                0.0f,                   // beam_search_diversity_rate,
-                                                1,                      // top_k,
-                                                0.0,                    // top_p,
-                                                0,                      // random_seed,
-                                                1.0f,                   // temperature,
-                                                1.0f,                   // len_penalty,
-                                                1.0f,                   // repetition_penalty,
-                                                tensor_para_,
-                                                pipeline_para_,
-                                                stream,
-                                                &cublas_wrapper,
-                                                &allocator,
-                                                false,                  // is_free_buffer_after_forward
-                                                &prop_,                 // cuda_device_prop
-                                                attention_type,         // attention_type
-                                                nullptr,                // custom_all_reduce_comm
-                                                0                       // enable_custom_all_reduce
-                                                );
+        ft::GptNeoX<T> gpt = ft::GptNeoX<T>(head_num_,
+                                            size_per_head_,
+                                            inter_size_,
+                                            layer_num_,
+                                            vocab_size_,
+                                            rotary_embedding_dim_,
+                                            start_id_,
+                                            end_id_,
+                                            end_id_ + 1,  // p/prompt tuning virtual token start id
+                                            ft::PromptLearningType::no_prompt,
+                                            use_gptj_residual_,
+                                            0.0f,  // beam_search_diversity_rate,
+                                            1,     // top_k,
+                                            0.0,   // top_p,
+                                            0,     // random_seed,
+                                            1.0f,  // temperature,
+                                            1.0f,  // len_penalty,
+                                            1.0f,  // repetition_penalty,
+                                            tensor_para_,
+                                            pipeline_para_,
+                                            stream,
+                                            &cublas_wrapper,
+                                            &allocator,
+                                            false,           // is_free_buffer_after_forward
+                                            &prop_,          // cuda_device_prop
+                                            attention_type,  // attention_type
+                                            nullptr,         // custom_all_reduce_comm
+                                            0);              // enable_custom_all_reduce
+
         std::vector<uint32_t> output_seq_len(request_batch_size, total_output_len);
 
         std::unordered_map<std::string, ft::Tensor> input_tensors = std::unordered_map<std::string, ft::Tensor>{
@@ -298,10 +294,10 @@ private:
 
     std::vector<th::Tensor> weights_;
     cublasLtHandle_t        cublasltHandle_;
-    std::mutex*              cublas_wrapper_mutex_;
-    ft::cublasAlgoMap*       cublas_algo_map_;
-    struct cudaDeviceProp    prop_;
-    ft::GptNeoXWeight<T> gpt_weights_;
+    std::mutex*             cublas_wrapper_mutex_;
+    ft::cublasAlgoMap*      cublas_algo_map_;
+    struct cudaDeviceProp   prop_;
+    ft::GptNeoXWeight<T>    gpt_weights_;
 
     ft::NcclParam tensor_para_;
     ft::NcclParam pipeline_para_;
@@ -312,19 +308,19 @@ private:
 
 class GptNeoXOp: public th::jit::CustomClassHolder {
 public:
-    GptNeoXOp(  const int64_t               head_num,
-                        const int64_t               size_per_head,
-                        const int64_t               inter_size,
-                        const int64_t               layer_num,
-                        const int64_t               vocab_size,
-                        const int64_t               rotary_embedding_dim,
-                        const int64_t               start_id,
-                        const int64_t               end_id,
-                        const int64_t               tensor_para_size,
-                        const int64_t               pipeline_para_size,
-                        const int64_t               max_seq_len,
-                        const bool                  use_gptj_residual,
-                        const vector<th::Tensor>    weights);
+    GptNeoXOp(const int64_t            head_num,
+              const int64_t            size_per_head,
+              const int64_t            inter_size,
+              const int64_t            layer_num,
+              const int64_t            vocab_size,
+              const int64_t            rotary_embedding_dim,
+              const int64_t            start_id,
+              const int64_t            end_id,
+              const int64_t            tensor_para_size,
+              const int64_t            pipeline_para_size,
+              const int64_t            max_seq_len,
+              const bool               use_gptj_residual,
+              const vector<th::Tensor> weights);
 
     ~GptNeoXOp();
 
@@ -343,7 +339,7 @@ public:
 
 private:
     const at::ScalarType    st_;
-    IFGptNeoX*                  ftgpt;
+    IFGptNeoX*              ftgpt;
     std::vector<th::Tensor> weights;
 };
 

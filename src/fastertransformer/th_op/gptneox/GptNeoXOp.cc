@@ -20,19 +20,19 @@ namespace th = torch;
 namespace ft = fastertransformer;
 namespace torch_ext {
 
-GptNeoXOp::GptNeoXOp(   const int64_t            head_num,
-                                        const int64_t            size_per_head,
-                                        const int64_t            inter_size,
-                                        const int64_t            layer_num,
-                                        const int64_t            vocab_size,
-                                        const int64_t            rotary_embedding_dim,
-                                        const int64_t            start_id,
-                                        const int64_t            end_id,
-                                        const int64_t            tensor_para_size,
-                                        const int64_t            pipeline_para_size,
-                                        const int64_t            max_seq_len,
-                                        const bool               use_gptj_residual,
-                                        const vector<th::Tensor> weights):
+GptNeoXOp::GptNeoXOp(const int64_t            head_num,
+                     const int64_t            size_per_head,
+                     const int64_t            inter_size,
+                     const int64_t            layer_num,
+                     const int64_t            vocab_size,
+                     const int64_t            rotary_embedding_dim,
+                     const int64_t            start_id,
+                     const int64_t            end_id,
+                     const int64_t            tensor_para_size,
+                     const int64_t            pipeline_para_size,
+                     const int64_t            max_seq_len,
+                     const bool               use_gptj_residual,
+                     const vector<th::Tensor> weights):
     st_(weights[0].scalar_type())
 {
     for (auto t : weights) {
@@ -41,19 +41,19 @@ GptNeoXOp::GptNeoXOp(   const int64_t            head_num,
 
     switch (st_) {
         case at::ScalarType::Float:
-            ftgpt = new FTGptNeoX<float>(   (size_t)head_num,
-                                            (size_t)size_per_head,
-                                            (size_t)inter_size,
-                                            (size_t)layer_num,
-                                            (size_t)vocab_size,
-                                            (size_t)rotary_embedding_dim,
-                                            start_id,
-                                            end_id,
-                                            tensor_para_size,
-                                            pipeline_para_size,
-                                            (size_t)max_seq_len,
-                                            use_gptj_residual,
-                                            weights);
+            ftgpt = new FTGptNeoX<float>((size_t)head_num,
+                                         (size_t)size_per_head,
+                                         (size_t)inter_size,
+                                         (size_t)layer_num,
+                                         (size_t)vocab_size,
+                                         (size_t)rotary_embedding_dim,
+                                         start_id,
+                                         end_id,
+                                         tensor_para_size,
+                                         pipeline_para_size,
+                                         (size_t)max_seq_len,
+                                         use_gptj_residual,
+                                         weights);
             break;
         case at::ScalarType::Half:
             ftgpt = new FTGptNeoX<half>((size_t)head_num,
@@ -80,18 +80,18 @@ GptNeoXOp::~GptNeoXOp()
     delete ftgpt;
 }
 
-std::vector<th::Tensor> GptNeoXOp::forward( th::Tensor               input_ids,
-                                                    th::Tensor               input_lengths,
-                                                    const int64_t            output_len,
-                                                    th::optional<int64_t>    beam_width_opt,
-                                                    th::optional<th::Tensor> top_k_opt,
-                                                    th::optional<th::Tensor> top_p_opt,
-                                                    th::optional<th::Tensor> beam_search_diversity_rate_opt,
-                                                    th::optional<th::Tensor> temperature_opt,
-                                                    th::optional<th::Tensor> len_penalty_opt,
-                                                    th::optional<th::Tensor> repetition_penalty_opt,
-                                                    th::optional<th::Tensor> random_seed_opt,
-                                                    th::optional<int64_t>    return_cum_log_probs_opt)
+std::vector<th::Tensor> GptNeoXOp::forward(th::Tensor               input_ids,
+                                           th::Tensor               input_lengths,
+                                           const int64_t            output_len,
+                                           th::optional<int64_t>    beam_width_opt,
+                                           th::optional<th::Tensor> top_k_opt,
+                                           th::optional<th::Tensor> top_p_opt,
+                                           th::optional<th::Tensor> beam_search_diversity_rate_opt,
+                                           th::optional<th::Tensor> temperature_opt,
+                                           th::optional<th::Tensor> len_penalty_opt,
+                                           th::optional<th::Tensor> repetition_penalty_opt,
+                                           th::optional<th::Tensor> random_seed_opt,
+                                           th::optional<int64_t>    return_cum_log_probs_opt)
 {
     CHECK_TH_CUDA(input_ids);
     CHECK_CONTIGUOUS(input_ids);

@@ -29,11 +29,11 @@ import torch.distributed as dist
 str_type_map = {"fp32": torch.float32, "fp16": torch.float16}
 
 class GptNeoXWeights(object):
-    def __init__(   self, 
-                    head_num, size_per_head, layer_num, vocab_size, 
-                    max_seq_len, tensor_para_size, pipeline_para_size, use_gptj_residual, 
-                    inference_data_type: str = "fp16",
-                    weights_data_type: np.dtype = np.float32):
+    def __init__(self, 
+                 head_num, size_per_head, layer_num, vocab_size, 
+                 max_seq_len, tensor_para_size, pipeline_para_size, use_gptj_residual, 
+                 inference_data_type: str = "fp16",
+                 weights_data_type: np.dtype = np.float32):
         assert(head_num % tensor_para_size == 0)
 
         self.head_num = head_num
@@ -129,18 +129,18 @@ class GptNeoXWeights(object):
         def is_load(i):
             return i >= self.layers_per_device * pipeline_para_rank and i < self.layers_per_device * (pipeline_para_rank + 1)
 
-        file_names = [  "input_layernorm.bias", 
-                        "input_layernorm.weight", 
-                        "attention.query_key_value.weight.%d" % tensor_para_rank,
-                        "attention.query_key_value.bias.%d" % tensor_para_rank,
-                        "attention.dense.weight.%d" % tensor_para_rank,
-                        "attention.dense.bias" if not self.use_gptj_residual else None,
-                        "mlp.dense_h_to_4h.weight.%d" % tensor_para_rank,
-                        "mlp.dense_h_to_4h.bias.%d" % tensor_para_rank,
-                        "mlp.dense_4h_to_h.weight.%d" % tensor_para_rank,
-                        "mlp.attention.bias.sum" if self.use_gptj_residual else "mlp.dense_4h_to_h.bias",
-                        "post_attention_layernorm.bias",
-                        "post_attention_layernorm.weight"]
+        file_names = ["input_layernorm.bias", 
+                      "input_layernorm.weight", 
+                      "attention.query_key_value.weight.%d" % tensor_para_rank,
+                      "attention.query_key_value.bias.%d" % tensor_para_rank,
+                      "attention.dense.weight.%d" % tensor_para_rank,
+                      "attention.dense.bias" if not self.use_gptj_residual else None,
+                      "mlp.dense_h_to_4h.weight.%d" % tensor_para_rank,
+                      "mlp.dense_h_to_4h.bias.%d" % tensor_para_rank,
+                      "mlp.dense_4h_to_h.weight.%d" % tensor_para_rank,
+                      "mlp.attention.bias.sum" if self.use_gptj_residual else "mlp.dense_4h_to_h.bias",
+                      "post_attention_layernorm.bias",
+                      "post_attention_layernorm.weight"]
 
         for file_name in file_names:
             for i in range(self.layer_num):
