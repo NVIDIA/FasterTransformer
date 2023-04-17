@@ -61,6 +61,7 @@ FasterTransformer is built on top of CUDA, cuBLAS, cuBLASLt and C++. We provide 
 | Swin Transformer | TensorRT       | Yes  | Yes                 | -                       | -               | -                 | -                  |
 | ViT              | PyTorch        | Yes  | Yes                 | -                       | -               | -                 | -                  |
 | ViT              | TensorRT       | Yes  | Yes                 | -                       | -               | -                 | -                  |
+| GPT-NeoX         | PyTorch        | Yes  | -                   | -                       | Yes             | Yes               | -                  |
 | GPT-NeoX         | Triton backend | Yes  | -                   | -                       | Yes             | Yes               | -                  |
 | BART/mBART       | PyTorch        | Yes  | -                   | -                       | Yes             | Yes               | -                  |
 | WeNet            | C++            | Yes  | -                   | -                       | -               | -                 | -                  |
