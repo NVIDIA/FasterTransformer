@@ -279,6 +279,16 @@ void GptNeoXWeight<T>::loadModel(std::string dir_path)
 }
 
 template<typename T>
+void GptNeoXWeight<T>::resizeLayer(const int num_layer)
+{
+    num_layer_ = num_layer;
+    decoder_layer_weights.reserve(num_layer_);
+    for (int l = 0; l < num_layer_; l++) {
+        decoder_layer_weights.push_back(new GptNeoXDecoderLayerWeight<T>());
+    }
+}
+
+template<typename T>
 bool GptNeoXWeight<T>::isValidLayerParallelId(int l)
 {
     int local_num_layer = (int)(ceil(num_layer_ * 1.0f / layer_para_size_));

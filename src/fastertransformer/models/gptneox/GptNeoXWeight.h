@@ -47,6 +47,8 @@ struct GptNeoXWeight {
 
     void loadModel(std::string dir_path);
 
+    void resizeLayer(const int num_layer);
+
     std::vector<GptNeoXDecoderLayerWeight<T>*> decoder_layer_weights;
     const T*                                   pre_decoder_embedding_table = nullptr;
     // GPT-J does not use embedding table, but we leave the ptr such that
@@ -64,6 +66,11 @@ struct GptNeoXWeight {
 
     LayerNormWeight<T> post_decoder_layernorm;
     DenseWeight<T>     post_decoder_embedding;
+
+    inline void setMaxSeqLen(size_t max_seq_len)
+    {
+        max_seq_len_ = max_seq_len;
+    }
 
 private:
     void setWeightPtr();

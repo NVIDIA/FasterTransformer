@@ -28,7 +28,7 @@ namespace fastertransformer {
 template<typename T>
 struct GptNeoXDecoderLayerWeight {
 public:
-    GptNeoXDecoderLayerWeight() = delete;
+    GptNeoXDecoderLayerWeight() = default;
     GptNeoXDecoderLayerWeight(const int  hidden_units,
                               const int  inter_size,
                               const int  tensor_para_size  = 1,
