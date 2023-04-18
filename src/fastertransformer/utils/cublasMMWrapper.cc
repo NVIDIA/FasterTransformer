@@ -799,7 +799,7 @@ std::pair<bool, cublasLtMatmulAlgo_t> cublasMMWrapper::findBestAlgo(cublasLtHand
                                                                     cublasLtMatrixLayout_t Ddesc,
                                                                     cudaStream_t           stream)
 {
-#if (CUBLAS_VERSION) <= 11402
+#if (CUBLAS_VERSION) < 11601
     FT_CHECK_WITH_INFO(false, "CUBLAS version too low.");
     return {false, cublasLtMatmulAlgo_t{}};
 #else
