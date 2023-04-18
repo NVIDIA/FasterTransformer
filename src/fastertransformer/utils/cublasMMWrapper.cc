@@ -984,7 +984,7 @@ void cublasMMWrapper::_Int8Gemm(const int     m,
      *  - 0: int8 * int8 -> int32 -> int8
      *  - 1: int8 * int8 -> int32 -> int32
      */
-#if (CUBLAS_VERSION) <= 11402
+#if (CUBLAS_VERSION) < 11601
     FT_CHECK_WITH_INFO(false, "CUBLAS version too low.");
 #else
 
