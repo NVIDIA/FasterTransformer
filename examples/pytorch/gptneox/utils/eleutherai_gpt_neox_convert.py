@@ -63,21 +63,28 @@ weights_skip_tensor_split = ["input_layernorm.bias",
                              "post_attention_layernorm.bias",
                              "post_attention_layernorm.weight"]
 
-def write_config_file(save_dir):
+def write_config_file(config_file_path, save_dir, vocab_size, rotary_embedding, start_id, end_id):
+    with open(config_file_path) as f:
+        model_args = yaml.safe_load(f)
+    head_num = model_args["num-attention-heads"]
+    size_per_head = model_args["hidden-size"] // model_args["num-attention-heads"]
+    num_layer = model_args["num-layers"]
+    inter_size = model_args["hidden-size"] * 4
+    use_gptj_residual = 1 if model_args["gpt_j_residual"] else 0
+
     file_template = """
 [gptneox]
-model_name=gptneox_20B
-head_num=64
-size_per_head=96
-vocab_size=50432
-num_layer=44
-rotary_embedding=24
-start_id=0
-end_id=2
-inter_size=24576
-use_gptj_residual=1
-weight_data_type=fp32
-    """
+model_name=gptneox
+head_num=%d
+size_per_head=%d
+vocab_size=%d
+num_layer=%d
+rotary_embedding=%s
+start_id=%d
+end_id=%d
+inter_size=%d
+use_gptj_residual=%d
+weight_data_type=fp32""" % (head_num, size_per_head, vocab_size, num_layer, str(rotary_embedding), start_id, end_id, inter_size, use_gptj_residual)
 
     with open(Path(save_dir) / "config.ini", "w") as f:
         f.write(file_template)
@@ -173,7 +180,7 @@ def convert_checkpoint(args):
         chkpt_dir = f.readline().rstrip()
     chkpt_dir = base_dir / chkpt_dir
 
-    with open(base_dir / "configs/20B.yml") as f:
+    with open(args.config_file_path) as f:
         model_args = yaml.safe_load(f)
 
     hidden_dim = model_args["hidden-size"]
@@ -199,7 +206,7 @@ def convert_checkpoint(args):
     ))
     handle_layer_args.append((
             chkpt_dir,
-            "layer_47-model_{:02d}-model_states.pt",
+            "layer_%02d-model_{:02d}-model_states.pt" % (n_layers + 3),
             {
                 "norm.weight": KeyHandler("final_layernorm.weight", "mean"),
                 "norm.bias":   KeyHandler("final_layernorm.bias", "mean"),
@@ -210,7 +217,7 @@ def convert_checkpoint(args):
     ))
     handle_layer_args.append((
             chkpt_dir,
-            "layer_48-model_{:02d}-model_states.pt",
+            "layer_%02d-model_{:02d}-model_states.pt" % (n_layers + 4),
             {
                 "final_linear.weight": KeyHandler("lm_head.weight", "join_0"),
             },
@@ -295,6 +302,16 @@ if __name__ == "__main__":
             help="directory where resides the source model. Must contain a \"latest\" file.")
     parser.add_argument("save_dir", metavar="save-dir",
             help="where to store the FT model")
+    parser.add_argument("--config-file-path", "-c", metavar="config-file-path",
+            help="path of gptneox yml config file")
+    parser.add_argument("--vocab-size", "-v", type=int, metavar="vocab-size", default=50432,
+            help="vocab size")
+    parser.add_argument("--rotary-embedding", "-r", type=int, metavar="rotary-embedding", default=24,
+            help="apply RoPE only to the first `rotary_embedding` of embedding vector dimensions.")
+    parser.add_argument("--start-id", "-s", type=int, metavar="start-id", default=0,
+            help="start id")
+    parser.add_argument("--end-id", "-e", type=int, metavar="end-id", default=2,
+            help="end id")
     parser.add_argument("--tensor-parallelism", "-t", type=int, default=1,
             help="level of tensor parallelism used for inference")
     parser.add_argument("--jobs", "-j", type=int, default=None,
@@ -303,7 +320,7 @@ if __name__ == "__main__":
 
     start_time = datetime.now()
     convert_checkpoint(args)
-    write_config_file(args.save_dir + f"/{args.tensor_parallelism}-gpu")
+    write_config_file(args.config_file_path, args.save_dir + f"/{args.tensor_parallelism}-gpu", args.vocab_size, args.rotary_embedding, args.start_id, args.end_id)
     stop_time = datetime.now()
     run_time = (stop_time - start_time)
     print("[INFO] Spend {} (h:m:s) to convert the model".format(run_time))
