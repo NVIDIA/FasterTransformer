@@ -138,8 +138,16 @@ def split_and_convert(args):
         "mlp.dense_4h_to_h.weight",
     ]
 
-    torch.multiprocessing.set_start_method("spawn")
-    pool = multiprocessing.Pool(args.processes)
+    huggingface_model_file_list = [__fn for __fn in os.listdir(args.in_file) if __fn.endswith(".bin")]
+    if len(huggingface_model_file_list) > 1:
+        multiprocessing_context = multiprocessing.get_context()
+        pool_fn = multiprocessing_context.Pool
+    else:
+        torch.multiprocessing.set_start_method("spawn")
+        pool_fn = multiprocessing.Pool
+
+    pool = pool_fn(args.processes)
+
     for name, param in model.named_parameters():
         array = param.detach().cpu().numpy().astype(np_weight_data_type)
         # print("input shape", name, array.shape)
