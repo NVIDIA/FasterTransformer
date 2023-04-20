@@ -602,6 +602,7 @@ __global__ void softmax_kernel_h2_v2(T*        attn_score,
 
 #define LAUNCH_MAKSED_SOFTMAX_(T_, ITEMS_PER_THREAD)                                                                   \
     block.x /= ITEMS_PER_THREAD;                                                                                       \
+    block.x = (block.x + 31) / 32 * 32;                                                                                \
     assert(block.x <= 1024);                                                                                           \
     if (is_half2) {                                                                                                    \
         if (grid.x % 4 == 0) {                                                                                         \
