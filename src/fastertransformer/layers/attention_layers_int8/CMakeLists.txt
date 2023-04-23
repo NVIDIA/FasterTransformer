@@ -32,3 +32,4 @@ set_property(TARGET WindowAttentionINT8 PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON
 target_link_libraries(WindowAttentionINT8 PUBLIC -lcublasLt -lcublas -lcudart cublasINT8MMWrapper reverse_roll_kernels 
     trt_fused_multi_head_attention layout_transformer_int8_kernels transpose_int8_kernels unfused_attention_int8_kernels
     layernorm_int8_kernels softmax_int8_kernels layernorm_kernels transform_mask_kernels normalize_kernels)
+target_include_directories(WindowAttentionINT8 PUBLIC ${CUDNN_INCLUDE_PATH})

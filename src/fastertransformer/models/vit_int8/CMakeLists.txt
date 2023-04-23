@@ -21,3 +21,4 @@ target_link_libraries(ViTINT8 PUBLIC -lcudart -lcublasLt -lcublas cublasINT8MMWr
                       UnfusedAttentionLayerINT8 FusedAttentionLayerINT8 FfnLayerINT8 layernorm_kernels
                       layernorm_int8_kernels add_residual_kernels activation_kernels layout_transformer_int8_kernels
                       vit_kernels bert_preprocess_kernels tensor cuda_utils logger)
+target_include_directories(ViTINT8 PUBLIC ${CUDNN_INCLUDE_PATH})

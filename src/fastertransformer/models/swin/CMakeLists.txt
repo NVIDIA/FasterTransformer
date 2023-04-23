@@ -29,6 +29,7 @@ add_library(Swin STATIC Swin.cc)
 set_property(TARGET Swin PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET Swin PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(Swin PUBLIC -lcudart SwinBasicLayer memory_utils cuda_utils logger)
+target_include_directories(Swin PUBLIC ${CUDNN_INCLUDE_PATH})
 
 add_executable(swin_gemm swin_gemm.cc)
 target_link_libraries(swin_gemm PUBLIC -lcublas -lcublasLt -lcudart swin_igemm_func
