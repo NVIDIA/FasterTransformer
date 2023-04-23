@@ -26,3 +26,5 @@ if (ENABLE_FP8)
     add_subdirectory(multi_gpu_gpt_fp8)
 endif()
 add_subdirectory(bert)
+
+# add_subdirectory(llama)
