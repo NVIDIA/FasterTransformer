@@ -36,6 +36,7 @@ We provide the environment variables to tune for specific usage.
 
 * Checkpoint converter
   * EleutherAI
+  * HuggingFace
 * Data type
   * FP32
   * FP16
@@ -46,7 +47,7 @@ We provide the environment variables to tune for specific usage.
   * Bad words list
   * Beam search and sampling are both supported
 
-## Setup
+## Setup from EleutherAI checkpoint
 
 ### Requirements
 
@@ -71,6 +72,22 @@ python ../examples/pytorch/gptneox/utils/eleutherai_gpt_neox_convert.py 20B_chec
 You may download the tokenizer config [here](https://mystic.the-eye.eu/public/AI/models/GPT-NeoX-20B/slim_weights/20B_tokenizer.json).
 
 To tokenize/detokenize files, use the script found in `examples/pytorch/gptneox/utils/hftokenizer.py`. You may need to pass the path to the tokenizer config with the `--tokenizer` flag.
+
+## Setup from HuggingFace checkpoint
+
+> Please checkout https://huggingface.co/docs to learn more about the usage of the huggingface models and tokenizers.
+
+First download a huggingface checkpoint:
+
+```bash
+git lfs clone https://huggingface.co/<MODEL_GROUP>/<MODEL_NAME>
+```
+
+Then use the script provided by FasterTransformer to convert the checkpoint to raw weights, understood by FT. You can change `-i_g` to specify the tensor parallelism size.
+
+```bash
+python ../examples/pytorch/gptneox/utils/huggingface_gptneox_convert.py -i ../path/to/your/model -o ../../path/to/fastertransformer/model -i_g 1 -m_n gptneox
+```
 
 ### Run GPT-NeoX
 
