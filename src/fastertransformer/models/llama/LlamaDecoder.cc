@@ -15,7 +15,7 @@
  */
 
 #include "src/fastertransformer/models/llama/LlamaDecoder.h"
-#include "src/fastertransformer/layers/TensorParallelGeluFfnLayer.h"
+#include "src/fastertransformer/layers/TensorParallelSiluFfnLayer.h"
 #include "src/fastertransformer/layers/attention_layers/TensorParallelDecoderSelfAttentionLayer.h"
 
 namespace fastertransformer {
@@ -39,7 +39,7 @@ void LlamaDecoder<T>::initialize()
                                                                            custom_all_reduce_comm_,
                                                                            enable_custom_all_reduce_);
 
-    ffn_layer_ = new TensorParallelGeluFfnLayer<T>(0,  // max_batch_size
+    ffn_layer_ = new TensorParallelSiluFfnLayer<T>(0,  // max_batch_size
                                                    1,
                                                    head_num_,
                                                    size_per_head_,
@@ -52,7 +52,6 @@ void LlamaDecoder<T>::initialize()
                                                    !use_gptj_residual_,
                                                    is_free_buffer_after_forward_,
                                                    false,
-                                                   0,
                                                    true,  // use_gated_activation = true;
                                                    custom_all_reduce_comm_,
                                                    enable_custom_all_reduce_);
@@ -264,7 +263,7 @@ void LlamaDecoder<T>::forward(std::unordered_map<std::string, Tensor>*          
         invokeGeneralT5LayerNorm(decoder_normed_input_,
                                  layer_input,
                                  gpt_decoder_layer_weight->at(l)->pre_layernorm_weights.gamma,
-                                 gpt_decoder_layer_weight->at(l)->pre_layernorm_weights.beta,
+                                 (const T*)nullptr,
                                  layernorm_eps_,
                                  local_batch_size,
                                  hidden_units_,

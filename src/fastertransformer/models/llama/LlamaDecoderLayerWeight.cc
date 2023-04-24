@@ -154,13 +154,13 @@ void LlamaDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType 
     // FIXME(sunpeng17): check if the weights are correct
     loadWeightFromBin<T>(weights_ptr[6],
                          {(size_t)hidden_units_, (size_t)(inter_size_ / tensor_para_size_)},
-                         dir_path + ".mlp.up_proj.weight." + rank_spec + ".bin",
+                         dir_path + ".mlp.gate_proj.weight." + rank_spec + ".bin",
                          model_file_type);
     deviceFill(weights_ptr[7], (size_t)(inter_size_ / tensor_para_size_), (T)0.0);
 
     loadWeightFromBin<T>(weights_ptr[8],
                          {(size_t)hidden_units_, (size_t)(inter_size_ / tensor_para_size_)},
-                         dir_path + ".mlp.gate_proj.weight." + rank_spec + ".bin",
+                         dir_path + ".mlp.up_proj.weight." + rank_spec + ".bin",
                          model_file_type);
     deviceFill(weights_ptr[9], (size_t)(inter_size_ / tensor_para_size_), (T)0.0);
 

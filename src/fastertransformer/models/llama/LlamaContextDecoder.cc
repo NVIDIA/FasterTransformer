@@ -18,7 +18,7 @@
 #include "src/fastertransformer/kernels/bert_preprocess_kernels.h"
 #include "src/fastertransformer/kernels/gpt_kernels.h"
 
-#include "src/fastertransformer/layers/TensorParallelGeluFfnLayer.h"
+#include "src/fastertransformer/layers/TensorParallelSiluFfnLayer.h"
 #include "src/fastertransformer/layers/attention_layers/TensorParallelGptContextAttentionLayer.h"
 
 namespace fastertransformer {
@@ -44,7 +44,7 @@ void LlamaContextDecoder<T>::initialize()
                                                                           custom_all_reduce_comm_,
                                                                           enable_custom_all_reduce_);
 
-    ffn_layer_ = new TensorParallelGeluFfnLayer<T>(0,  // max_batch_size
+    ffn_layer_ = new TensorParallelSiluFfnLayer<T>(0,  // max_batch_size
                                                    0,  // max_seq_len
                                                    head_num_,
                                                    size_per_head_,
@@ -57,7 +57,6 @@ void LlamaContextDecoder<T>::initialize()
                                                    !use_gptj_residual_,
                                                    is_free_buffer_after_forward_,
                                                    false,
-                                                   0,
                                                    true,  // use_gated_activation = true;
                                                    custom_all_reduce_comm_,
                                                    enable_custom_all_reduce_);
@@ -333,7 +332,7 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
             invokeGeneralT5LayerNorm(decoder_normed_input_,
                                    layer_input,
                                    gpt_decoder_layer_weight->at(l)->pre_layernorm_weights.gamma,
-                                   gpt_decoder_layer_weight->at(l)->pre_layernorm_weights.beta,
+                                   (const T*)nullptr,
                                    layernorm_eps_,
                                    h_token_num,
                                    hidden_units_,

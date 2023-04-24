@@ -263,7 +263,7 @@ void llama_example(const INIReader reader)
         cublas_wrapper.setFP32GemmConfig();
     }
 
-    const bool                          use_gptj_residual = (bool)reader.GetInteger(model_name, "use_gptj_residual", 1);
+    const bool                          use_gptj_residual = false;
     fastertransformer::LlamaWeight<T> gpt_weights(hidden_units,
                                                   inter_size,
                                                   vocab_size,

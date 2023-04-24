@@ -119,31 +119,31 @@ def split_and_convert(args):
         print(f"converting layer {l}")
         # first merge QKV into a single weight
         # concat direct to FT shape: [hidden_size, 3, head_num, head_size]
-        qkv_weights = np.empty((hidden_size, 3, head_num, head_size), dtype=np_weight_data_type)
-        q_weight = param_to_weights(model.state_dict()[f'model.layers.{l}.self_attn.q_proj.weight'])
-        k_weight = param_to_weights(model.state_dict()[f'model.layers.{l}.self_attn.k_proj.weight'])
-        v_weight = param_to_weights(model.state_dict()[f'model.layers.{l}.self_attn.v_proj.weight'])
-        qkv_weights[:, 0, :, :] = q_weight.reshape(hidden_size, head_num, head_size)
-        qkv_weights[:, 1, :, :] = k_weight.reshape(hidden_size, head_num, head_size)
-        qkv_weights[:, 2, :, :] = v_weight.reshape(hidden_size, head_num, head_size)
+        # copied from huggingface_gptj_ckpt_convert.py
+        qkv_weights = np.stack([
+            param_to_weights(model.state_dict()[f'model.layers.{l}.self_attn.q_proj.weight']),
+            param_to_weights(model.state_dict()[f'model.layers.{l}.self_attn.k_proj.weight']),
+            param_to_weights(model.state_dict()[f'model.layers.{l}.self_attn.v_proj.weight']),
+        ])
+        qkv_weights = np.transpose(qkv_weights, (2, 0, 1))
         qkv_weights_base_name = f'model.layers.{l}.attention.query_key_value.weight'
         split_and_convert_process(saved_dir, factor, qkv_weights_base_name, qkv_weights)
 
         # attention dense
-        o_weight = param_to_weights(model.state_dict()[f'model.layers.{l}.self_attn.o_proj.weight'])
+        o_weight = param_to_weights(model.state_dict()[f'model.layers.{l}.self_attn.o_proj.weight']).T
         o_weight_base_name = f'model.layers.{l}.attention.dense.weight'
         split_and_convert_process(saved_dir, factor, o_weight_base_name, o_weight)
 
         # MLP
-        mlp_down_weight = param_to_weights(model.state_dict()[f'model.layers.{l}.mlp.down_proj.weight'])
+        mlp_down_weight = param_to_weights(model.state_dict()[f'model.layers.{l}.mlp.down_proj.weight']).T
         mlp_down_base_name = f'model.layers.{l}.mlp.down_proj.weight'
         split_and_convert_process(saved_dir, factor, mlp_down_base_name, mlp_down_weight)
 
-        mlp_gate_weight = param_to_weights(model.state_dict()[f'model.layers.{l}.mlp.gate_proj.weight'])
+        mlp_gate_weight = param_to_weights(model.state_dict()[f'model.layers.{l}.mlp.gate_proj.weight']).T
         mlp_gate_base_name = f'model.layers.{l}.mlp.gate_proj.weight'
         split_and_convert_process(saved_dir, factor, mlp_gate_base_name, mlp_gate_weight)
 
-        mlp_up_weight = param_to_weights(model.state_dict()[f'model.layers.{l}.mlp.up_proj.weight'])
+        mlp_up_weight = param_to_weights(model.state_dict()[f'model.layers.{l}.mlp.up_proj.weight']).T
         mlp_up_base_name = f'model.layers.{l}.mlp.up_proj.weight'
         split_and_convert_process(saved_dir, factor, mlp_up_base_name, mlp_up_weight)
 

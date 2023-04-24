@@ -1,15 +1,16 @@
 import transformers
-import torch
 
 from transformers import LlamaForCausalLM, LlamaTokenizer
 
 tokenizer = LlamaTokenizer.from_pretrained('/data/llama-7b-hf')
-prompt = "Hey"
-inputs = tokenizer(prompt, return_tensors='pt')
-print(inputs)
 
+prompt = "Hey, are you consciours? Can you talk to me?"
+inputs = tokenizer(prompt, return_tensors='pt')
 model = LlamaForCausalLM.from_pretrained("/data/llama-7b-hf")
-generated_ids = model.generate(inputs.input_ids, max_length=10)
+hf_config = vars(model.config)
+print(hf_config)
+generated_ids = model.forward(inputs.input_ids, output_hidden_states=True)
 print(generated_ids)
-output = tokenizer.batch_decode(generated_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
-print(output)
+
+tokens = [0,18637,29892,526,366,1136,455,2470,29973,1815,366,5193,304,592,29973,18637,29892,526,366,1136,455,2470,29973,1815,366,5193,304,592,29973,18637,29892,526,366,1136,455,2470,29973,1815,366,5193,304,592,29973,18637,29892,526,366]
+print(tokenizer.decode(tokens))

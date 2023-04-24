@@ -24,7 +24,7 @@ set_property(TARGET LlamaDecoder PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET LlamaDecoder PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(LlamaDecoder PUBLIC -lcudart cublasMMWrapper
                       TensorParallelDecoderSelfAttentionLayer
-                      TensorParallelGeluFfnLayer
+                      TensorParallelSiluFfnLayer
                       layernorm_kernels
                       add_residual_kernels
                       LlamaDecoderLayerWeight
@@ -38,7 +38,7 @@ set_property(TARGET LlamaContextDecoder PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET LlamaContextDecoder PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(LlamaContextDecoder PUBLIC -lcudart cublasMMWrapper
                       TensorParallelGptContextAttentionLayer
-                      TensorParallelGeluFfnLayer
+                      TensorParallelSiluFfnLayer
                       layernorm_kernels
                       add_residual_kernels
                       gpt_kernels

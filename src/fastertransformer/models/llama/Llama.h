@@ -40,7 +40,7 @@ private:
     size_t rotary_embedding_dim_;
 
     static constexpr bool  neox_rotary_style_ = true;
-    static constexpr float layernorm_eps_     = 1e-5f;
+    static constexpr float layernorm_eps_     = 1e-6f;
 
     int    start_id_;
     int    end_id_;
@@ -61,7 +61,7 @@ private:
          std::string(std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM")) != "ON");
 
     // Residual Type
-    const bool use_gptj_residual_ = true;
+    const bool use_gptj_residual_ = false;
 
     // Prompt Learning Parameters
     PromptLearningType prompt_learning_type_;

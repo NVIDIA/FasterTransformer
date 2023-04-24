@@ -37,7 +37,7 @@ struct LlamaWeight {
         const int                                  tensor_para_rank     = 0,
         const int                                  layer_para_size      = 1,
         const int                                  layer_para_rank      = 0,
-        const bool                                 use_gptj_residual_   = true,
+        const bool                                 use_gptj_residual_   = false,
         PromptLearningType                         prompt_learning_type = PromptLearningType::no_prompt,
         std::map<std::string, std::pair<int, int>> prompt_learning_pair = std::map<std::string, std::pair<int, int>>{});
 
