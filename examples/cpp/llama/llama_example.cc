@@ -60,11 +60,6 @@ int main(int argc, char* argv[])
     else if (data_type == "fp16") {
         llama_example<half>(reader);
     }
-#ifdef ENABLE_BF16
-    else if (data_type == "bf16") {
-        llama_example<__nv_bfloat16>(reader);
-    }
-#endif
     else {
         FT_LOG_ERROR("is_fp16 should be 0 (use float) or 1 (use half).");
         return -1;
