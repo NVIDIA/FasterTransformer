@@ -118,7 +118,7 @@ broadCastRequest(const std::vector<int>& v_start_ids,
         pointer_record->push_back(start_ids_ptr);
         pointer_record->push_back(end_ids_ptr);
 
-        std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors(
+        request_list.push_back(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>(
             new std::unordered_map<std::string, triton::Tensor>{
                 {"input_ids",
                  triton::Tensor{triton::MEMORY_GPU,
@@ -130,25 +130,18 @@ broadCastRequest(const std::vector<int>& v_start_ids,
                                 triton::TYPE_INT32,
                                 std::vector<size_t>{(size_t)request_batch_size},
                                 d_input_lengths}},
-                // NOTE: add prefix prompt task ids here if you need
-                // {"prefix_prompt_task_ids", triton::Tensor{triton::MEMORY_CPU, triton::TYPE_INT32,
-                // std::vector<size_t>{request_batch_size}, task_name_ids}},
                 {"request_output_len",
                  triton::Tensor{triton::MEMORY_CPU,
-                                triton::TYPE_UINT32,
+                                triton::TYPE_INT32,
                                 std::vector<size_t>{(size_t)request_batch_size},
                                 request_output_len_ptr}},
+                {"bad_words_list",
+                 triton::Tensor{
+                     triton::MEMORY_GPU, triton::TYPE_INT32, {2, v_input_bad_words.size() / 2}, d_input_bad_words}},
                 {"start_id",
                  triton::Tensor{triton::MEMORY_CPU, triton::TYPE_INT32, {(size_t)request_batch_size}, start_ids_ptr}},
                 {"end_id",
-                 triton::Tensor{triton::MEMORY_CPU, triton::TYPE_INT32, {(size_t)request_batch_size}, end_ids_ptr}}});
-        if (!v_input_bad_words.empty()) {
-            input_tensors->insert(
-                {"bad_words_list",
-                 triton::Tensor{
-                     triton::MEMORY_GPU, triton::TYPE_INT32, {2, v_input_bad_words.size() / 2}, d_input_bad_words}});
-        }
-        request_list.push_back(input_tensors);
+                 triton::Tensor{triton::MEMORY_CPU, triton::TYPE_INT32, {(size_t)request_batch_size}, end_ids_ptr}}}));
 
         int* beam_width_ptr = new int(param.beam_width);
         pointer_record->push_back(beam_width_ptr);
@@ -234,10 +227,10 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
         ft::FT_CHECK(false);
     }
 
-    const size_t      request_batch_size = reader.GetInteger("request", "request_batch_size");
-    const std::string model_name         = reader.Get("ft_instance_hyperparameter", "model_name");
-    const int         start_id           = reader.GetInteger(model_name, "start_id");
-    const int         end_id             = reader.GetInteger(model_name, "end_id");
+    const size_t request_batch_size = reader.GetInteger("request", "request_batch_size");
+
+    const int start_id = reader.GetInteger("llama_7b", "start_id");
+    const int end_id   = reader.GetInteger("llama_7b", "end_id");
 
     std::vector<int> v_start_ids;
     std::vector<int> v_start_lengths;
@@ -249,22 +242,22 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
                        max_input_len,
                        end_id,
                        1,
-                       "../examples/cpp/gptj/start_ids.csv");
+                       "../examples/cpp/llama/start_ids.csv");
 
     std::vector<int> v_bad_words;
-    ft::read_word_list("../examples/cpp/gptj/bad_words.csv", v_bad_words);
+    ft::read_word_list("../examples/cpp/llama/bad_words.csv", v_bad_words);
 
     RequestParam param;
-    param.beam_width                 = reader.GetInteger("ft_instance_hyperparameter", "beam_width");
+    param.beam_width                 = reader.GetInteger("request", "beam_width");
     param.request_output_len         = reader.GetInteger("request", "request_output_len");
-    param.beam_search_diversity_rate = reader.GetFloat("ft_instance_hyperparameter", "beam_search_diversity_rate");
-    param.runtime_top_k              = (uint)reader.GetInteger("ft_instance_hyperparameter", "top_k");
-    param.runtime_top_p              = reader.GetFloat("ft_instance_hyperparameter", "top_p");
-    param.temperature                = reader.GetFloat("ft_instance_hyperparameter", "temperature");
-    param.len_penalty                = reader.GetFloat("ft_instance_hyperparameter", "len_penalty");
-    param.repetition_penalty         = reader.GetFloat("ft_instance_hyperparameter", "repetition_penalty", 1.0f);
-    param.presence_penalty           = reader.GetFloat("ft_instance_hyperparameter", "presence_penalty", 0.0f);
-    param.min_length                 = reader.GetInteger("ft_instance_hyperparameter", "min_length", 0);
+    param.beam_search_diversity_rate = reader.GetFloat("request", "beam_search_diversity_rate");
+    param.runtime_top_k              = reader.GetInteger("request", "top_k");
+    param.runtime_top_p              = reader.GetFloat("request", "top_p");
+    param.temperature                = reader.GetFloat("request", "temperature");
+    param.len_penalty                = reader.GetFloat("request", "len_penalty");
+    param.repetition_penalty         = reader.GetFloat("request", "repetition_penalty", 1.0f);
+    param.presence_penalty           = reader.GetFloat("request", "presence_penalty", 0.0f);
+    param.min_length                 = reader.GetInteger("request", "min_length", 0);
     param.random_seed                = (unsigned long long int)0;
     param.start_id                   = start_id;
     param.end_id                     = end_id;
@@ -310,18 +303,20 @@ int main(int argc, char* argv[])
         by MPI or triton
     */
 
+    MPICHECK(MPI_Init(&argc, &argv));
     ft::mpi::initialize(&argc, &argv);
     int node_id  = ft::mpi::getCommWorldRank();
     int node_num = ft::mpi::getCommWorldSize();
+    std::cout << "node_id: " << node_id << ", node_num: " << node_num << std::endl;
 
     // Note: Only supports that all nodes have same gpu count
     const int   gpu_count  = ft::getDeviceCount();
     const int   world_size = node_num * gpu_count;
-    std::string ini_name   = argc >= 2 ? std::string(argv[1]) : "../examples/cpp/gptj/gptj_config.ini";
+    std::string ini_name   = argc >= 2 ? std::string(argv[1]) : "../examples/cpp/llama/llama_config.ini";
 
     // step 1: Create model
-    std::shared_ptr<AbstractTransformerModel> model              = AbstractTransformerModel::createGptJModel(ini_name);
-    int                                       tensor_para_size   = model->getTensorParaSize();
+    std::shared_ptr<AbstractTransformerModel> model            = AbstractTransformerModel::createLlamaModel(ini_name);
+    int                                       tensor_para_size = model->getTensorParaSize();
     int                                       pipeline_para_size = model->getPipelineParaSize();
     FT_CHECK_WITH_INFO(world_size == (tensor_para_size * pipeline_para_size),
                        "World Size != Tensor Parallel Size * Pipeline Parallel Size !");
@@ -329,7 +324,7 @@ int main(int argc, char* argv[])
     std::cout << model->toString();
 
     // step 2: Initialize the NCCL
-    std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_params = model->createNcclParams(node_id);
+    std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>> nccl_comms = model->createNcclParams(node_id);
     cudaDeviceSynchronize();
 
     // Optional Step: create custom all reduce comm
@@ -346,7 +341,7 @@ int main(int argc, char* argv[])
                                       &model_instances,
                                       device_id,
                                       rank,
-                                      nccl_params,
+                                      nccl_comms,
                                       custom_all_reduce_comms[rank]));
     }
     for (auto& t : threads) {
@@ -398,20 +393,16 @@ int main(int argc, char* argv[])
                 std::cout << "Writing " << outCount << " elements\n";
                 int zeroCount = 0;
                 for (size_t i = 0; i < outCount; i++) {
-                    if (hBuf[i] == int(0)) {
+                    if (hBuf[i] == int(0))
                         zeroCount++;
-                    }
                     outFile << hBuf[i] << " ";
-                    if ((i + 1) % (seq_len) == 0) {
+                    if ((i + 1) % (seq_len) == 0)
                         outFile << std::endl;
-                    }
 
-                    if (i < 10) {
+                    if (i < 10)
                         printf("%5d ", hBuf[i]);
-                    }
-                    if ((i + 1) % (seq_len) == 0 && i < 10) {
+                    if ((i + 1) % (seq_len) == 0 && i < 10)
                         std::cout << std::endl;
-                    }
                 }
                 std::cout << std::endl << "zeroCount = " << zeroCount << std::endl;
             }

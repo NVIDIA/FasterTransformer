@@ -16,7 +16,7 @@ add_executable(llama_example llama_example.cc)
 target_link_libraries(llama_example PUBLIC -lcublas -lcublasLt -lcudart
                       Llama nvtx_utils gpt_example_utils word_list mpi_utils nccl_utils)
 
-# add_executable(llama_triton_example llama_triton_example.cc)
-# target_link_libraries(llama_triton_example PUBLIC -lcublas -lcublasLt -lcudart -lpthread
-#                       LlamaTritonBackend TransformerTritonBackend custom_ar_comm
-#                       gpt_example_utils word_list mpi_utils nccl_utils nvtx_utils)
+add_executable(llama_triton_example llama_triton_example.cc)
+target_link_libraries(llama_triton_example PUBLIC -lcublas -lcublasLt -lcudart -lpthread
+                      LlamaTritonBackend TransformerTritonBackend custom_ar_comm
+                      gpt_example_utils word_list mpi_utils nccl_utils nvtx_utils)

@@ -1,4 +1,4 @@
-# Copyright (c) 2021-2023, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2022-2023, NVIDIA CORPORATION.  All rights reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,17 +14,12 @@
 
 cmake_minimum_required(VERSION 3.8)
 
-add_library(TransformerTritonBackend SHARED transformer_triton_backend.cpp)
-target_link_libraries(TransformerTritonBackend PRIVATE nccl_utils mpi_utils)
+set(parallel_gpt_triton_backend_files
+    LlamaTritonModel.cc
+    LlamaTritonModelInstance.cc
+)
 
-add_subdirectory(gptj)
-add_subdirectory(gptneox)
-add_subdirectory(t5)
-add_subdirectory(t5-encoder)
-add_subdirectory(multi_gpu_gpt)
-if (ENABLE_FP8)
-    add_subdirectory(multi_gpu_gpt_fp8)
-endif()
-add_subdirectory(bert)
-
-add_subdirectory(llama)
+add_library(LlamaTritonBackend STATIC ${parallel_gpt_triton_backend_files})
+set_property(TARGET LlamaTritonBackend PROPERTY POSITION_INDEPENDENT_CODE  ON)
+target_link_libraries(LlamaTritonBackend PRIVATE TransformerTritonBackend Llama tensor memory_utils -lcublasLt)
+target_compile_features(LlamaTritonBackend PRIVATE cxx_std_14)
