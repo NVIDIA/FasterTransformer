@@ -41,13 +41,6 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createLlamaM
             reader.GetInteger("ft_instance_hyperparameter", "enable_custom_all_reduce", 0),
             model_dir);
     }
-    if (data_type == "bf16") {
-        return std::make_shared<LlamaTritonModel<__nv_bfloat16>>(
-            reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size"),
-            reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size"),
-            reader.GetInteger("ft_instance_hyperparameter", "enable_custom_all_reduce", 0),
-            model_dir);
-    }
     else {
         return std::make_shared<LlamaTritonModel<float>>(
             reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size"),
@@ -248,6 +241,3 @@ int LlamaTritonModel<T>::getPipelineParaSize()
 template struct LlamaTritonModel<float>;
 template struct LlamaTritonModel<half>;
 
-#ifdef ENABLE_BF16
-template struct LlamaTritonModel<__nv_bfloat16>;
-#endif

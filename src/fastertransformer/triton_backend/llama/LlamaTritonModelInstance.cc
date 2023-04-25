@@ -260,6 +260,3 @@ void LlamaTritonModelInstance<T>::freeBuffer()
 template struct LlamaTritonModelInstance<float>;
 template struct LlamaTritonModelInstance<half>;
 
-#ifdef ENABLE_BF16
-template struct LlamaTritonModelInstance<__nv_bfloat16>;
-#endif
