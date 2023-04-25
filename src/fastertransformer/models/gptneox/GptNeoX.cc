@@ -756,13 +756,13 @@ void GptNeoX<T>::forward(std::unordered_map<std::string, Tensor>*       output_t
     }
 
     invokeMaskPaddingTokens(masked_tokens_,
-                            input_tensors->at("input_lengths").getPtr<const int>(),  // not_tiled
+                            tiled_input_lengths_buf_,
                             tiled_prompt_lengths_buf_,
                             max_cache_seq_len,
                             max_input_length + max_prefix_prompt_length,
                             0,
-                            batch_size,
-                            beam_width,
+                            batch_size * beam_width,
+                            1,
                             stream_);
 
     for (int step = max_input_length; step < (int)max_output_seq_len; step++) {
@@ -1030,12 +1030,12 @@ void GptNeoX<T>::forward(std::unordered_map<std::string, Tensor>*       output_t
              * if has prefix prompts, += (max_prefix_prompt_length - prompt_length)
              */
             invokeUpdatePaddingCount(tiled_total_padding_count_,
-                                     input_tensors->at("input_lengths").getPtr<const int>(),  // not_tiled
+                                     tiled_input_lengths_buf_,
                                      has_prefix_prompt_ ? tiled_prompt_lengths_buf_ : (const int*)nullptr,
                                      max_input_length,
                                      has_prefix_prompt_ ? max_prefix_prompt_length : 0,
-                                     batch_size,
-                                     beam_width,
+                                     batch_size * beam_width,
+                                     1,
                                      stream_);
         }
     }
