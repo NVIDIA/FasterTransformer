@@ -222,8 +222,4 @@ void LlamaDecoderLayerWeight<T>::mallocWeights()
 template struct LlamaDecoderLayerWeight<float>;
 template struct LlamaDecoderLayerWeight<half>;
 
-#ifdef ENABLE_BF16
-template class LlamaDecoderLayerWeight<__nv_bfloat16>;
-#endif
-
 }  // namespace fastertransformer

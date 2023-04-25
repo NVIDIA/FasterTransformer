@@ -1206,8 +1206,4 @@ bool* Llama<T>::getFinishBuffer()
 template class Llama<float>;
 template class Llama<half>;
 
-#ifdef ENABLE_BF16
-template class Llama<__nv_bfloat16>;
-#endif
-
 }  // namespace fastertransformer
