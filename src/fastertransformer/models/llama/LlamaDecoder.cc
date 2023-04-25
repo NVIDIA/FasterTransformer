@@ -377,4 +377,8 @@ void LlamaDecoder<T>::forward(std::unordered_map<std::string, Tensor>*          
 template class LlamaDecoder<float>;
 template class LlamaDecoder<half>;
 
+#ifdef ENABLE_BF16
+template class LlamaDecoder<__nv_bfloat16>;
+#endif
+
 }  // namespace fastertransformer
