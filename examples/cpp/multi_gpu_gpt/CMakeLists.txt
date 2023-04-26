@@ -20,6 +20,10 @@ add_executable(multi_gpu_gpt_example multi_gpu_gpt_example.cc)
 target_link_libraries(multi_gpu_gpt_example PUBLIC -lcublas -lcublasLt -lcudart
                       ParallelGpt nvtx_utils mpi_utils nccl_utils gpt_example_utils)
 
+add_executable(multi_gpu_multi_thread_gpt_example multi_gpu_multi_thread_gpt_example.cc)
+target_link_libraries(multi_gpu_multi_thread_gpt_example PUBLIC -lcublas -lcublasLt -lcudart
+                      ParallelGpt nvtx_utils mpi_utils nccl_utils gpt_example_utils)
+
 add_executable(multi_gpu_gpt_async_example multi_gpu_gpt_async_example.cc)
 target_link_libraries(multi_gpu_gpt_async_example PUBLIC -lcublas -lcublasLt -lcudart
                             ParallelGpt nvtx_utils mpi_utils nccl_utils gpt_example_utils)
