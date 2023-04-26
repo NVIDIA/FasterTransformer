@@ -263,18 +263,18 @@ struct FastInterleavedAndBiasedNumericArrayConverter<half_t, uint4b_t, 8> {
         static constexpr uint32_t FP16_TOP_MAGIC_NUM = 0x64086408;
         // This is the half2 {1 / 16, 1 / 16} represented as an integer.
         static constexpr uint32_t ONE_SIXTEENTH = 0x2c002c00;
-        // This is the half2 {-72, -72} represented as an integer.
-        static constexpr uint32_t NEG_72 = 0xd480d480;
+        // This is the half2 {-64.5, -64.5} represented as an integer.
+        static constexpr uint32_t NEG_64_AND_HALF = 0xd408d408;
 
         // Finally, we construct the output numbers.
         // Convert elt_01
         asm volatile("sub.f16x2 %0, %1, %2;\n" : "=r"(h[0]) : "r"(h[0]), "r"(FP16_TOP_MAGIC_NUM));
         // Convert elt_23
-        asm volatile("fma.rn.f16x2 %0, %1, %2, %3;\n" : "=r"(h[1]) : "r"(h[1]), "r"(ONE_SIXTEENTH), "r"(NEG_72));
+        asm volatile("fma.rn.f16x2 %0, %1, %2, %3;\n" : "=r"(h[1]) : "r"(h[1]), "r"(ONE_SIXTEENTH), "r"(NEG_64_AND_HALF));
         // Convert elt_45
         asm volatile("sub.f16x2 %0, %1, %2;\n" : "=r"(h[2]) : "r"(h[2]), "r"(FP16_TOP_MAGIC_NUM));
         // Convert elt_67
-        asm volatile("fma.rn.f16x2 %0, %1, %2, %3;\n" : "=r"(h[3]) : "r"(h[3]), "r"(ONE_SIXTEENTH), "r"(NEG_72));
+        asm volatile("fma.rn.f16x2 %0, %1, %2, %3;\n" : "=r"(h[3]) : "r"(h[3]), "r"(ONE_SIXTEENTH), "r"(NEG_64_AND_HALF));
 
         return result;
     }
