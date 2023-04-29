@@ -70,6 +70,21 @@ void Llama<T>::initialize()
                                                           allocator_,
                                                           is_free_buffer_after_forward_,
                                                           cuda_device_prop_);
+
+    // parse env overrides
+    if (std::getenv("LLAMA_STREAM_CB_STEP") != nullptr) {
+        try {
+            int callback_step_from_env = stoi(
+                std::string(std::getenv("LLAMA_STREAM_CB_STEP"))
+                );
+            token_generated_cb_step_ = callback_step_from_env;
+            FT_LOG_INFO("Override stream callback step to %d from LLAMA_STREAM_CB_STEP",
+                token_generated_cb_step_);
+        } catch (...) {
+            FT_LOG_WARNING("convert LLAMA_STREAM_CB_STEP err, use default value %d",
+                token_generated_cb_step_);
+        }
+    }
 }
 
 template<typename T>
@@ -1014,7 +1029,7 @@ void Llama<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         if (*generation_should_stop_) {
             break;
         }
-        if (token_generated_cb_ && step + 1 < (int)max_output_seq_len) {
+        if (token_generated_cb_ && (step + 1) % token_generated_cb_step_ == 0  && step + 1 < (int)max_output_seq_len) {
             setOutputTensors(output_tensors, input_tensors, max_input_length, max_output_seq_len);
             sendTensorsToFirstPipelineNode(output_tensors, input_tensors);
 

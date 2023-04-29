@@ -129,6 +129,9 @@ protected:
     callback_sig* token_generated_cb_  = nullptr;
     void*         token_generated_ctx_ = nullptr;
 
+    // callback step
+    size_t token_generated_cb_step_ = 50; // default 50, override by env LLAMA_STREAM_CB_STEP
+
     void setOutputTensors(std::unordered_map<std::string, Tensor>*       output_tensors,
                           const std::unordered_map<std::string, Tensor>* input_tensors,
                           const size_t                                   max_input_length,
