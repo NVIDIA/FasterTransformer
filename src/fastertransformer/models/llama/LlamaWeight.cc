@@ -297,5 +297,8 @@ bool LlamaWeight<T>::isValidLayerParallelId(int l)
 
 template struct LlamaWeight<float>;
 template struct LlamaWeight<half>;
+#ifdef ENABLE_BF16
+template class LlamaWeight<__nv_bfloat16>;
+#endif
 
 }  // namespace fastertransformer
