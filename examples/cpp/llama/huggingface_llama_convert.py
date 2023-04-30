@@ -20,11 +20,17 @@ from pathlib import Path
 import os
 from transformers import LlamaForCausalLM
 
+# using numpy extension: https://github.com/GreenWaves-Technologies/bfloat16
+# install the library with `pip install bfloat16`
+from bfloat16 import bfloat16
+
 def get_weight_data_type(data_type):
     if data_type == "fp32":
         return np.float32
     elif data_type == "fp16":
         return np.float16
+    elif data_type == "bf16":
+        return bfloat16
     else:
         assert False, f"Invalid weight data type {data_type}"
 
@@ -175,7 +181,7 @@ if __name__ == "__main__":
     parser.add_argument('-in_file', '-i', type=str, help='file name of input checkpoint file', required=True)
     parser.add_argument('-trained_gpu_num', '-t_g', type=int, help='How many gpus for inference', default=1)
     parser.add_argument('-infer_gpu_num', '-i_g', type=int, help='How many gpus for inference', required=True)
-    parser.add_argument("-weight_data_type", type=str, default="fp32", choices=["fp32", "fp16"])
+    parser.add_argument("-weight_data_type", type=str, default="fp32", choices=["fp32", "fp16", "bf16"])
     parser.add_argument('-model_name', '-m_n', type=str, help='model name', required=True)
 
     args = parser.parse_args()
