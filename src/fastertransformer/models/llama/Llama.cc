@@ -70,6 +70,21 @@ void Llama<T>::initialize()
                                                           allocator_,
                                                           is_free_buffer_after_forward_,
                                                           cuda_device_prop_);
+
+    // parse env overrides
+    if (std::getenv("LLAMA_STREAM_CB_STEP") != nullptr) {
+        try {
+            int callback_step_from_env = stoi(
+                std::string(std::getenv("LLAMA_STREAM_CB_STEP"))
+                );
+            token_generated_cb_step_ = callback_step_from_env;
+            FT_LOG_INFO("Override stream callback step to %d from LLAMA_STREAM_CB_STEP",
+                token_generated_cb_step_);
+        } catch (...) {
+            FT_LOG_WARNING("convert LLAMA_STREAM_CB_STEP err, use default value %d",
+                token_generated_cb_step_);
+        }
+    }
 }
 
 template<typename T>
@@ -254,7 +269,11 @@ Llama<T>::Llama(size_t                              head_num,
     pipeline_para_.rank_       = 0;
 
     int local_vacab_size = ceil(vocab_size_ / 1.f / tensor_para_.world_size_);
-    if (std::is_same<half, T>::value) {
+    if (std::is_same<half, T>::value
+#ifdef ENABLE_BF16
+        || std::is_same<__nv_bfloat16, T>::value
+#endif
+    ) {
         local_vacab_size = ceil(local_vacab_size / 8.f) * 8;
     }
     vocab_size_padded_ = (size_t)local_vacab_size * tensor_para_.world_size_;
@@ -1014,7 +1033,7 @@ void Llama<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         if (*generation_should_stop_) {
             break;
         }
-        if (token_generated_cb_ && step + 1 < (int)max_output_seq_len) {
+        if (token_generated_cb_ && (step + 1) % token_generated_cb_step_ == 0  && step + 1 < (int)max_output_seq_len) {
             setOutputTensors(output_tensors, input_tensors, max_input_length, max_output_seq_len);
             sendTensorsToFirstPipelineNode(output_tensors, input_tensors);
 
@@ -1205,5 +1224,8 @@ bool* Llama<T>::getFinishBuffer()
 
 template class Llama<float>;
 template class Llama<half>;
+#ifdef ENABLE_BF16
+template class Llama<__nv_bfloat16>;
+#endif
 
 }  // namespace fastertransformer

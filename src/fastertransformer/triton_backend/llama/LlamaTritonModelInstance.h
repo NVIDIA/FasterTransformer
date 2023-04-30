@@ -45,9 +45,9 @@ struct LlamaTritonModelInstance: AbstractTransformerModelInstance {
     convert_outputs(const std::unordered_map<std::string, ft::Tensor>& output_tensors);
 
 private:
+    const std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator_;
     const std::unique_ptr<ft::Llama<T>>                           gpt_;
     const std::shared_ptr<ft::LlamaWeight<T>>                     gpt_weight_;
-    const std::unique_ptr<ft::Allocator<ft::AllocatorType::CUDA>> allocator_;
     const std::unique_ptr<ft::cublasAlgoMap>                      cublas_algo_map_;
     const std::unique_ptr<std::mutex>                             cublas_wrapper_mutex_;
     const std::unique_ptr<ft::cublasMMWrapper>                    cublas_wrapper_;

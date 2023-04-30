@@ -60,6 +60,11 @@ int main(int argc, char* argv[])
     else if (data_type == "fp16") {
         llama_example<half>(reader);
     }
+#ifdef ENABLE_BF16
+    else if (data_type == "bf16") {
+        llama_example<__nv_bfloat16>(reader);
+    }
+#endif
     else {
         FT_LOG_ERROR("is_fp16 should be 0 (use float) or 1 (use half).");
         return -1;
@@ -259,6 +264,11 @@ void llama_example(const INIReader reader)
     if (std::is_same<T, half>::value) {
         cublas_wrapper.setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
     }
+#ifdef ENABLE_BF16
+    else if (std::is_same<T, __nv_bfloat16>::value) {
+        cublas_wrapper.setBF16GemmConfig();
+    }
+#endif
     else if (std::is_same<T, float>::value) {
         cublas_wrapper.setFP32GemmConfig();
     }
