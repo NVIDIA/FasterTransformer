@@ -84,6 +84,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     num_layer_            = reader.GetInteger("llama", "num_layer");
     vocab_size_           = reader.GetInteger("llama", "vocab_size");
     rotary_embedding_dim_ = reader.GetInteger("llama", "rotary_embedding");
+    layernorm_eps_        = reader.GetFloat("llama", "layernorm_eps");
     start_id_             = reader.GetInteger("llama", "start_id");
     end_id_               = reader.GetInteger("llama", "end_id");
     use_gptj_residual_    = false;
@@ -162,6 +163,7 @@ std::unique_ptr<AbstractTransformerModelInstance> LlamaTritonModel<T>::createMod
                      num_layer_,
                      vocab_size_,
                      rotary_embedding_dim_,
+                     layernorm_eps_,
                      start_id_,
                      end_id_,
                      prompt_learning_start_id_,  // p/prompt tuning virtual token start id
@@ -223,8 +225,8 @@ std::string LlamaTritonModel<T>::toString()
     std::stringstream ss;
     ss << "Model: "
        << "\nhead_num: " << head_num_ << "\nsize_per_head: " << size_per_head_ << "\ninter_size: " << inter_size_
-       << "\nnum_layer: " << num_layer_ << "\nvocab_size: " << vocab_size_ << "\nstart_id: " << start_id_
-       << "\nend_id: " << end_id_ << "\nuse_gptj_residual: " << use_gptj_residual_
+       << "\nnum_layer: " << num_layer_ << "\nvocab_size: " << vocab_size_ << "\nlayernorm_eps: " << layernorm_eps_
+       << "\nstart_id: " << start_id_ << "\nend_id: " << end_id_ << "\nuse_gptj_residual: " << use_gptj_residual_
        << "\nprompt_learning_type_: " << static_cast<int>(prompt_learning_type_)
        << "\nprompt_learning_start_id_: " << prompt_learning_start_id_ << "\ntensor_para_size: " << tensor_para_size_
        << "\npipeline_para_size: " << pipeline_para_size_ << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_

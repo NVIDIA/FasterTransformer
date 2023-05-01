@@ -38,9 +38,9 @@ private:
     size_t num_layer_;
     size_t vocab_size_;
     size_t rotary_embedding_dim_;
+    float layernorm_eps_;
 
     static constexpr bool  neox_rotary_style_ = true;
-    static constexpr float layernorm_eps_     = 1e-6f;
 
     int    start_id_;
     int    end_id_;
@@ -130,7 +130,7 @@ protected:
     void*         token_generated_ctx_ = nullptr;
 
     // callback step
-    size_t token_generated_cb_step_ = 50; // default 50, override by env LLAMA_STREAM_CB_STEP
+    size_t token_generated_cb_step_ = 5; // default 5, override by env LLAMA_STREAM_CB_STEP
 
     void setOutputTensors(std::unordered_map<std::string, Tensor>*       output_tensors,
                           const std::unordered_map<std::string, Tensor>* input_tensors,
@@ -146,6 +146,7 @@ public:
           size_t                              num_layer,
           size_t                              vocab_size,
           size_t                              rotary_embedding_dim,
+          float                               layernorm_eps,
           int                                 start_id,
           int                                 end_id,
           int                                 prompt_learning_start_id,  // only needed by p/prompt-tuning
@@ -173,6 +174,7 @@ public:
           size_t                              num_layer,
           size_t                              vocab_size,
           size_t                              rotary_embedding_dim,
+          float                               layernorm_eps,
           int                                 start_id,
           int                                 end_id,
           int                                 prompt_learning_start_id,  // only needed by p/prompt-tuning

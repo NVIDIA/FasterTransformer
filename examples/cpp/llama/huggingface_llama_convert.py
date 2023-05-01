@@ -92,6 +92,7 @@ def split_and_convert(args):
         config['llama']["inter_size"] = str(hf_config["intermediate_size"])
         config['llama']["num_layer"] = str(num_layers)
         config['llama']["rotary_embedding"] = str(head_size)
+        config['llama']['layernorm_eps'] = str(hf_config["rms_norm_eps"])
         config['llama']["vocab_size"] = str(hf_config["vocab_size"])
         config['llama']["start_id"] = str(hf_config["bos_token_id"])
         config['llama']["end_id"] = str(hf_config["eos_token_id"])
