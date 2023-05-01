@@ -116,7 +116,7 @@ protected:
     T*       padded_embedding_kernel_;
     const T* padded_embedding_kernel_ptr_;
 
-    T* input_attention_mask_;
+    T* tiled_input_attention_mask_;
 
     T*        decoder_input_buf_;
     T*        decoder_normed_input_buf_ = nullptr;
@@ -126,7 +126,6 @@ protected:
     float*    nccl_logits_buf_;
     float*    cum_log_probs_;
     bool*     finished_buf_;
-    bool*     h_finished_buf_;
     int*      sequence_lengths_       = nullptr;
     uint32_t* seq_limit_len_          = nullptr;
     bool*     microbatch_should_stop_ = nullptr;
@@ -154,7 +153,7 @@ protected:
     int*  transposed_output_ids_buf_;
     int*  output_ids_buf_;
     int*  parent_ids_buf_;
-    bool* masked_tokens_ = nullptr;
+    bool* tiled_masked_tokens_ = nullptr;
 
     T*     context_decoder_input_buf_;
     T*     context_decoder_normed_input_buf_;
