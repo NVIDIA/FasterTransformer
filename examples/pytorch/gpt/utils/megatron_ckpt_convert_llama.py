@@ -206,7 +206,6 @@ def preprocess_h_to_4h(val, training_tp_size, np_weight_data_type):
 def split_and_convert_process(i, pipeline_para_rank, saved_dir, factor, key, model_training_args, transformer_model_list, ckpt_ver, np_weight_data_type):
     val = safe_transpose(transformer_model_list[0][key])
     val = torch2np(val, np_weight_data_type)
-    print(f"key: {key}, shape: {val.shape}")
     if key.find("layers.") != -1:
         layer_index = (int)(key[7 : key.find(".", 7)])
         saved_key = key.replace(
@@ -235,25 +234,24 @@ def split_and_convert_process(i, pipeline_para_rank, saved_dir, factor, key, mod
         or key.find("mlp.dense_4h_to_h.weight") != -1):
         split_vals = np.split(val, factor, axis=0)
         for j in range(factor):
-            print(f'saving {saved_key}, shape: {split_vals[j].shape}')
             saved_path = saved_dir / f"model.{saved_key}.{i * factor + j:d}.bin"
             split_vals[j].tofile(saved_path.as_posix())
 
     elif (key.find("mlp.dense_h_to_4h.weight") != -1):
+        val = preprocess_h_to_4h(transformer_model_list[0][key],
+            model_training_args.tensor_model_parallel_size,
+            np_weight_data_type)
         gate_weight, up_weight = np.split(val, 2, axis=-1)
-        print(f'dense_h_to_4h shape: {val.shape}, gate shape: {gate_weight.shape}, up shape: {up_weight.shape}')
 
         split_gate_weight = np.split(gate_weight, factor, axis=-1)
         proj_key = saved_key.replace('mlp.dense_h_to_4h.weight','mlp.gate_proj.weight')
         for j in range(factor):
-            print(f'saving {proj_key}, shape: {split_gate_weight[j].shape}')
             saved_path = saved_dir / f"model.{proj_key}.{i * factor + j:d}.bin"
             split_gate_weight[j].tofile(saved_path.as_posix())
 
         split_up_weight = np.split(up_weight, factor, axis=-1)
         proj_key = saved_key.replace('mlp.dense_h_to_4h.weight','mlp.up_proj.weight')
         for j in range(factor):
-            print(f'saving {proj_key}, shape: {split_up_weight[j].shape}')
             saved_path = saved_dir / f"model.{proj_key}.{i * factor + j:d}.bin"
             split_up_weight[j].tofile(saved_path.as_posix())
 
@@ -274,7 +272,6 @@ def split_and_convert_process(i, pipeline_para_rank, saved_dir, factor, key, mod
         split_vals = np.split(val, factor, axis=-1)
 
         for j in range(factor):
-            print(f'saving {saved_key}, shape: {split_vals[j].shape}')
             saved_path = saved_dir / f"model.{saved_key}.{i * factor + j:d}.bin"
             split_vals[j].tofile(saved_path.as_posix())
 
