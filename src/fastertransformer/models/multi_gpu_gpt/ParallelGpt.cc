@@ -580,7 +580,6 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
     //      input_lengths [batch_size]
     //      input_lengths_h [batch_size] on cpu, optional
     //      prompt_learning_task_name_ids [batch_size] on cpu
-    //      prompt_learning_start_ids [batch_size] on cpu, optional
     //      output_seq_len [batch_size] on cpu
     //      stop_words_list [batch_size, 2, stop_words_length], optional
     //      bad_words_list [2, bad_words_length] or [batch_size, 2, bad_words_length], optional
