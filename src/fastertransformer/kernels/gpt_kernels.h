@@ -127,6 +127,7 @@ void invokeFindContextDups(int*         shared_contexts,
                            int*         compact_size,
                            const int*   input_ids,
                            const size_t batch_size,
+                           const size_t beam_width,
                            const size_t input_seq_len,
                            cudaStream_t stream = 0);
 
