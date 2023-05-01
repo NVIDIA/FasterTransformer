@@ -101,7 +101,11 @@ void ParallelGpt<T>::allocateBuffer(size_t batch_size,
                                     bool   is_return_context_cum_log_probs)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    const size_t batchxbeam = batch_size * beam_width;
+    const size_t batchxbeam       = batch_size * beam_width;
+    const size_t local_batch_size = getLocalBatchSize(batch_size, 1, pipeline_para_.world_size_);
+    FT_CHECK(batch_size % local_batch_size == 0);
+    const size_t num_microbatches = batch_size / local_batch_size;
+
     const size_t self_cache_size =
         (num_layer_ / pipeline_para_.world_size_) * batchxbeam * memory_len * hidden_units_ / tensor_para_.world_size_;
 
@@ -189,7 +193,8 @@ void ParallelGpt<T>::allocateBuffer(size_t batch_size,
         compact_idx_          = shared_contexts_idx_ + 2 * batchxbeam;
         compact_size_         = (int*)allocator_->reMalloc(compact_size_, sizeof(int), false);
     }
-    generation_should_stop_ = (bool*)allocator_->reMalloc(generation_should_stop_, sizeof(bool), true, true);
+    microbatch_should_stop_ =
+        (bool*)allocator_->reMalloc(microbatch_should_stop_, sizeof(bool) * num_microbatches, true, true);
     tiled_total_padding_count_ =
         (int*)allocator_->reMalloc(tiled_total_padding_count_, batchxbeam * sizeof(int), false);
 
@@ -254,7 +259,7 @@ void ParallelGpt<T>::freeBuffer()
         allocator_->free((void**)(&lp_nccl_logits_buf_));
         allocator_->free((void**)(&lp_logprob_buf_));
 
-        allocator_->free((void**)(&generation_should_stop_), true);
+        allocator_->free((void**)(&microbatch_should_stop_), true);
 
         if (shared_contexts_ratio_ > 0.0f) {
             allocator_->free((void**)(&shared_contexts_idx_));
@@ -1184,6 +1189,10 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
 
     const size_t local_batch_size = getLocalBatchSize(batch_size, 1, pipeline_para_.world_size_);
     FT_CHECK(batch_size % local_batch_size == 0);
+    const size_t iteration_num = batch_size / local_batch_size;
+    for (int microbatch = 0; microbatch < iteration_num; ++microbatch) {
+        microbatch_should_stop_[microbatch] = false;
+    }
 
     for (step_ = step_start; step_ < (int)gen_len; step_++) {
         // Loop body produces Nth token by embedding && encoding token (N-1)
@@ -1192,11 +1201,14 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
         const int  src_indir_idx    = (step_ - step_start) % 2;
         const int  tgt_indir_idx    = 1 - src_indir_idx;
 
-        const size_t iteration_num = batch_size / local_batch_size;
-        *generation_should_stop_   = !fill_caches_only;
+        bool generation_should_stop = !fill_caches_only;
 
         PUSH_RANGE(fmtstr("token_%d", step_ - step_start));
         for (uint ite = 0; ite < iteration_num; ++ite) {
+            // skip the finished microbatch in previous steps
+            if (microbatch_should_stop_[ite]) {
+                continue;
+            }
             const int id_offset               = ite * local_batch_size * beam_width;
             const int hidden_units_offset     = id_offset * hidden_units_;
             const int vocab_size_units_offset = id_offset * vocab_size_padded_;
@@ -1215,9 +1227,8 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
                            stream_);
 
                 // receive updated generation_should_stop_ from last rank
-                if (ite == 0) {
-                    ftNcclRecv(generation_should_stop_, 1, pipeline_para_.world_size_ - 1, pipeline_para_, stream_);
-                }
+                ftNcclRecv(microbatch_should_stop_ + ite, 1, pipeline_para_.world_size_ - 1, pipeline_para_, stream_);
+                generation_should_stop &= microbatch_should_stop_[ite];
 
                 // receive updated cache_indirections from last rank
                 if (beam_width > 1) {
@@ -1242,8 +1253,9 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
                 ftNcclStreamSynchronize(tensor_para_, pipeline_para_, stream_);
                 sync_check_cuda_error();
 
-                if (ite == 0 && *generation_should_stop_) {
-                    break;
+                // skip the microbatch for last step, which is updated by last rank
+                if (microbatch_should_stop_[ite]) {
+                    continue;
                 }
             }
 
@@ -1484,8 +1496,13 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
 
                 PUSH_RANGE("result sampling and stop check");
                 dynamic_decode_layer_->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
-                *generation_should_stop_ &= subbatch_should_stop;
+                generation_should_stop &= subbatch_should_stop;
+                microbatch_should_stop_[ite] = subbatch_should_stop;
                 POP_RANGE;
+            }
+            else {
+                // for other ranks, they cannot update generation_should_stop by DynamicDecode, set to false directly;
+                generation_should_stop &= microbatch_should_stop_[ite];
             }
 
             PUSH_RANGE("result communication");
@@ -1504,10 +1521,8 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
                     ftNcclSend(
                         sequence_lengths_ + id_offset, local_batch_size * beam_width, i, pipeline_para_, stream_);
 
-                    // send updated generation_should_stop_
-                    if (ite == 0) {
-                        ftNcclSend(generation_should_stop_, 1, i, pipeline_para_, stream_);
-                    }
+                    // send updated microbatch_should_stop_
+                    ftNcclSend(microbatch_should_stop_ + ite, 1, i, pipeline_para_, stream_);
 
                     // send updated cache_indirections
                     if (beam_width > 1) {
@@ -1554,6 +1569,11 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
                                      beam_width,
                                      stream_);
         }
+
+        if (generation_should_stop) {
+            break;
+        }
+
         POP_RANGE;
     }
     PUSH_RANGE("communicate tensors");

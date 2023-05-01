@@ -129,7 +129,7 @@ protected:
     bool*     h_finished_buf_;
     int*      sequence_lengths_       = nullptr;
     uint32_t* seq_limit_len_          = nullptr;
-    bool*     generation_should_stop_ = nullptr;
+    bool*     microbatch_should_stop_ = nullptr;
 
     int* shared_contexts_idx_      = nullptr;
     T*   compact_decoder_features_ = nullptr;
