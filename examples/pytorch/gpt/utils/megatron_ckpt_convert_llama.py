@@ -186,23 +186,6 @@ def merge_and_convert_process(i, pipeline_para_rank, saved_dir, factor, key, mod
     else:
         print(f"[ERROR] cannot find key '{key}'")
 
-def preprocess_h_to_4h(val, training_tp_size, np_weight_data_type):
-    """
-    megatron saved format: [TP_train, 2, inter_size / 2 / TP, hidden_size]
-    FT needed format: [hidden_size, inter_size], [hidden_size, inter_size]
-    This function translates megatron weight to FT weight
-    """
-    val_shape = val.shape
-    val = val.view(training_tp_size,
-                   2,
-                   val_shape[0] // (2 * training_tp_size),
-                   val_shape[1])
-    val = val.transpose(0, 1).contiguous()
-    val = val.view(*val_shape)
-
-    val = safe_transpose(val)
-    return torch2np(val, np_weight_data_type)
-
 def split_and_convert_process(i, pipeline_para_rank, saved_dir, factor, key, model_training_args, transformer_model_list, ckpt_ver, np_weight_data_type):
     val = safe_transpose(transformer_model_list[0][key])
     val = torch2np(val, np_weight_data_type)
@@ -238,9 +221,6 @@ def split_and_convert_process(i, pipeline_para_rank, saved_dir, factor, key, mod
             split_vals[j].tofile(saved_path.as_posix())
 
     elif (key.find("mlp.dense_h_to_4h.weight") != -1):
-        val = preprocess_h_to_4h(transformer_model_list[0][key],
-            model_training_args.tensor_model_parallel_size,
-            np_weight_data_type)
         gate_weight, up_weight = np.split(val, 2, axis=-1)
 
         split_gate_weight = np.split(gate_weight, factor, axis=-1)
@@ -454,6 +434,7 @@ def convert_checkpoint(args):
         config["llama"]["num_layer"] = str(model_training_args.num_layers)
         config["llama"]["max_pos_seq_len"] = str(model_training_args.max_position_embeddings)
         config["llama"]["vocab_size"] = str(model_training_args.padded_vocab_size)
+        config["llama"]["layernorm_eps"] = args.layernorm_eps
         config["llama"]["start_id"] = '0'
         config["llama"]["end_id"] = '1'
         config["llama"]["weight_data_type"] = args.weight_data_type
@@ -498,6 +479,9 @@ def main():
     )
     parser.add_argument(
         "--weight-data-type", "-weight_data_type", choices=["fp32", "fp16"], default="fp32", help=""
+    )
+    parser.add_argument(
+        "--layernorm-eps", default="1e-05", type=str, help="rms layernorm eps", required=True
     )
     parser.add_argument(
         "--load-checkpoints-to-cpu",
