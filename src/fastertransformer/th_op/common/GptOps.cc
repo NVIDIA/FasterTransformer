@@ -48,6 +48,7 @@ std::vector<Tensor> find_context_duplications(Tensor input_ids)
                               get_ptr<int>(compact_size_tensor),
                               get_ptr<const int>(input_ids),
                               batch_size,
+                              1,
                               seq_len,
                               stream);
 

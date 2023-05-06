@@ -85,6 +85,7 @@ int test_find_context_dups()
             d_compact_size,
             d_input_ids,
             batch_size,
+            1,//beam_width
             vec_size);
 
     int compact_size;
