@@ -57,7 +57,7 @@ add_library(mpi_utils STATIC mpi_utils.cc)
 set_property(TARGET mpi_utils PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET mpi_utils PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 if (BUILD_MULTI_GPU)
-    target_link_libraries(mpi_utils PUBLIC -lmpi logger)
+    target_link_libraries(mpi_utils PUBLIC ${MPI_mpi_LIBRARY} logger)
 endif()
 
 add_library(nccl_utils STATIC nccl_utils.cc)
