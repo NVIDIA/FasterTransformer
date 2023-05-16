@@ -213,6 +213,9 @@ In the experiments of decoding, we updated the following parameters:
 
 ### Changelog
 
+May 2023
+- Fix bugs of generation early stopping
+
 January 2023
 - Support GPT MoE
 - Support FP8 for Bert and GPT (**Experimental**)
