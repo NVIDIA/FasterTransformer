@@ -593,7 +593,9 @@ class GPT(nn.Module):
                 random_seed: typing.Optional[torch.LongTensor] = None,
                 bad_words_list: typing.Optional[torch.IntTensor] = None,
                 return_output_length: bool = False,
-                return_cum_log_probs: int = 0):
+                return_cum_log_probs: int = 0,
+                request_id=None,
+                stream_tokens_pipe=None):
         if not self.build_model:
             # for the cases we don't load model
             self.cuda()
@@ -619,7 +621,9 @@ class GPT(nn.Module):
                                      min_length,  # optional, can be None
                                      random_seed,  # optional, can be None
                                      bad_words_list, # optional, can be None
-                                     return_cum_log_probs)  # optional, can be None
+                                     return_cum_log_probs,  # optional, can be None
+                                     request_id,  # optional, can be None
+                                     stream_tokens_pipe)  # optional, can be None
         if return_cum_log_probs == 0:
             output_ids, output_lengths = outputs
         else:
