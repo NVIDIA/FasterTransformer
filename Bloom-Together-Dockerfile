@@ -1,0 +1,13 @@
+FROM nvcr.io/nvidia/pytorch:22.09-py3 AS builder
+WORKDIR /workspace/FasterTransformer
+ADD . /workspace/FasterTransformer
+RUN mkdir -p build && \
+    cd build && \
+    git submodule update --init --recursive && \
+    cmake -DSM=xx -DCMAKE_BUILD_TYPE=Release -DBUILD_PYT=ON -DBUILD_MULTI_GPU=ON .. && \
+    make -j 64
+
+RUN pip install -r ./examples/pytorch/gpt/requirement.txt
+
+RUN wget https://together-distro-packages.s3.us-west-2.amazonaws.com/linux/x86_64/bin/together-node-latest -O /usr/local/bin/together-node && \
+    chmod +x /usr/local/bin/together-node

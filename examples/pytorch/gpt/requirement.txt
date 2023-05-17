@@ -4,3 +4,6 @@ fire~=0.4.0
 omegaconf~=2.1.2
 rouge_score~=0.1.2
 transformers~=4.20.1
+together_worker
+loguru
+boto3
