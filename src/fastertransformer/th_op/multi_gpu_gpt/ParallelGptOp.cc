@@ -150,7 +150,9 @@ std::vector<th::Tensor> ParallelGptOp::forward(th::Tensor               input_id
                                                th::optional<th::Tensor> min_length_opt,
                                                th::optional<th::Tensor> random_seed_opt,
                                                th::optional<th::Tensor> bad_words_list_opt,
-                                               th::optional<int64_t>    return_cum_log_probs_opt)
+                                               th::optional<int64_t>    return_cum_log_probs_opt,
+                                               th::optional<int64_t>    request_id,
+                                               th::optional<int64_t>    stream_tokens_pipe)
 {
     CHECK_TH_CUDA(input_ids);
     CHECK_CONTIGUOUS(input_ids);
@@ -196,7 +198,9 @@ std::vector<th::Tensor> ParallelGptOp::forward(th::Tensor               input_id
                    min_length_opt,
                    random_seed_opt,
                    bad_words_list_opt,
-                   return_cum_log_probs_opt);
+                   return_cum_log_probs_opt,
+                   request_id,
+                   stream_tokens_pipe);
     if (return_cum_log_probs > 0) {
         return std::vector<th::Tensor>{output_ids, sequence_lengths, cum_log_probs};
     }

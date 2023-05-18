@@ -114,7 +114,9 @@ std::vector<th::Tensor> GptOp::forward(th::Tensor               input_ids,
                                        th::optional<th::Tensor> len_penalty_opt,
                                        th::optional<th::Tensor> repetition_penalty_opt,
                                        th::optional<th::Tensor> random_seed_opt,
-                                       th::optional<int64_t>    return_cum_log_probs_opt)
+                                       th::optional<int64_t>    return_cum_log_probs_opt,
+                                       th::optional<int64_t>    request_id,
+                                       th::optional<int64_t>    stream_tokens_pipe)
 {
     CHECK_TH_CUDA(input_ids);
     CHECK_CONTIGUOUS(input_ids);
@@ -157,7 +159,9 @@ std::vector<th::Tensor> GptOp::forward(th::Tensor               input_ids,
                    len_penalty_opt,
                    repetition_penalty_opt,
                    random_seed_opt,
-                   return_cum_log_probs_opt);
+                   return_cum_log_probs_opt,
+                   request_id,
+                   stream_tokens_pipe);
     if (return_cum_log_probs > 0) {
         return std::vector<th::Tensor>{output_ids, sequence_lengths, cum_log_probs};
     }

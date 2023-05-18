@@ -156,6 +156,7 @@ class FastBloomInference(FastInferenceInterface):
         self.task_info["stream_tokens"] = args.get("stream_tokens", False)
         self.task_info["return_cum_log_probs"] = args.get("return_cum_log_probs", 0)
         self.task_info["return_output_length"] = args.get("return_output_length", 0)
+        self.task_info["stream_tokens"] = args.get("stream_tokens", False)
         
         if len(self.task_info["prompt_seqs"][0]) == 0 or self.task_info["output_len"] == 0:
             inferenece_result = []
@@ -211,7 +212,9 @@ class FastBloomInference(FastInferenceInterface):
                                     random_seed = self.random_seed_tensor,
                                     bad_words_list = None,
                                     return_output_length = self.task_info["return_output_length"],
-                                    return_cum_log_probs = self.task_info["return_cum_log_probs"])
+                                    return_cum_log_probs = self.task_info["return_cum_log_probs"],
+                                    request_id=self.served,
+                                    stream_tokens_pipe = self.stream_tokens_pipe_w if self.task_info["stream_tokens"] else -1)
             # only a thread (rank 0) gets the output, while the others are supposed to return None.
             time_elapsed = timeit.default_timer() - time
         print("[INFO] Bloom time costs: {:.2f} ms. <rank-{}>".format(time_elapsed * 1000, dist.get_rank()))
@@ -292,7 +295,7 @@ if __name__ == "__main__":
         "ckpt_path": args.ckpt_path,
         "lib_path": args.lib_path,
         "tensor_para_size":args.tensor_para_size,
-        "stream_tokens_pipe": False,
+        "stream_tokens_pipe": True,
         "gpu_num": 8,
         "gpu_type": "A100-80G",
         "gpu_mem": 8000000,
