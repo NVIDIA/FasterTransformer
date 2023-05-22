@@ -1,0 +1,68 @@
+name: DockerHub Release
+
+on:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**/README.md'
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+  DOCKERHUB_REPOSITORY: bloom-fastertransformer
+  DOCKERFILE: Bloom-Together-Dockerfile
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    name: Build and push intermediate image
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.build-image.outputs.tag }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ env.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ env.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v1
+
+      - name: Login to DockerHub
+        id: login-dockerhub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Build, tag, and push image to DockerHub
+        id: build-image
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        run: |
+          git fetch --tags --unshallow --prune
+          curl -sL https://git.io/autotag-install | sh --
+          TAG_NAME=v$(bin/autotag -b main -p main -T datetime)
+          echo $TAG_NAME
+          echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
+          echo "${{ env.TAG_NAME }}"
+          git config --global user.name 'Together Robot'
+          git push --tags
+          docker build -f "$DOCKERFILE" --build-arg TAG_NAME=${TAG_NAME} \
+            -t ${DOCKERHUB_USERNAME}/${DOCKERHUB_REPOSITORY}:${TAG_NAME} \
+            -t ${DOCKERHUB_USERNAME}/${DOCKERHUB_REPOSITORY}:latest .
+          docker push -a ${DOCKERHUB_USERNAME}/${DOCKERHUB_REPOSITORY}
+          echo "::set-output name=tag::$TAG_NAME"
+          echo "Finished push"
+          sleep 30

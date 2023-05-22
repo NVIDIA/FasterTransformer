@@ -11,6 +11,7 @@ import torch
 import torch.distributed as dist
 from torch.nn.utils.rnn import pad_sequence
 from utils.bloom import Bloom
+from utils.word_list import to_word_list_format
 from transformers import AutoTokenizer, AutoConfig
 
 # logging.setLevel(int(os.environ.get('LOG_LEVEL', logging.DEBUG)))
@@ -210,7 +211,7 @@ class FastBloomInference(FastInferenceInterface):
                                     presence_penalty = None,
                                     min_length = None,
                                     random_seed = self.random_seed_tensor,
-                                    bad_words_list = None,
+                                    bad_words_list = to_word_list_format(np.array([self.task_info["stop"]])) if self.task_info["stop"] else None,
                                     return_output_length = self.task_info["return_output_length"],
                                     return_cum_log_probs = self.task_info["return_cum_log_probs"],
                                     request_id=self.served,
