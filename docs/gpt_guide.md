@@ -553,7 +553,7 @@ python ../examples/pytorch/gpt/utils/huggingface_gpt_convert.py -i gpt2-xl/ -o .
 
 ### Run GPT with prompts
 
-GPT now supports p/prompt-tuning. It works with [nemo checkpoint and prompt learning](https://docs.nvidia.com/deeplearning/nemo/user-guide/docs/en/main/nlp/prompt_learning.html).
+GPT now supports p/prompt-tuning. It works with [nemo checkpoint and prompt learning](https://docs.nvidia.com/deeplearning/nemo/user-guide/docs/en/main/nlp/nemo_megatron/prompt_learning.html).
 
 1. Convert the prompt weights
 
