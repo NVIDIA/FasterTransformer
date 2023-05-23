@@ -45,7 +45,7 @@ RUN git submodule update --init --recursive && \
 #     pip install git+https://github.com/NVIDIA/apex --global-option="--cpp_ext" --global-option="--cuda_ext" --global-option="--fast_layer_norm" && \
 #     pip install 3rdparty/NeMo[nlp]
 RUN pip install --upgrade --no-cache-dir pip \
- && pip install --no-cache-dir 3rdparty/NeMo[nlp]
+ && pip install --no-cache-dir 3rdparty/NeMo[nlp] --ignore-installed
 
 ENV NCCL_LAUNCH_MODE=GROUP
 ARG SM=80
