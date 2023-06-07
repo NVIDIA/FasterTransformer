@@ -77,8 +77,8 @@ if __name__ == "__main__":
                         help='number of layers (default: 28)')
     parser.add_argument('-v', '--vocab_size', type=int, default=50400, metavar='BOOL',
                         help='vocabulary size. (default: 50400).')
-    parser.add_argument('-d', '--data_type', type=str, default="bf16", metavar='STRING',
-                        help='data type (default: bf16)', choices=['fp32', 'fp16', 'bf16'])
+    parser.add_argument('-d', '--data_type', type=str, default="0", metavar='STRING',
+                        help='data type (default: bf16)', choices=['0', '1'])
     parser.add_argument('-topk', '--sampling_topk', type=int, default=0, metavar='NUMBER',
                         help='Candidate (k) value of top k sampling in decoding. Default is 0.')
     parser.add_argument('-topp', '--sampling_topp', type=float, default=0.5, metavar='NUMBER',

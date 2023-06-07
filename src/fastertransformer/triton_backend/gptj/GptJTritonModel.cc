@@ -53,7 +53,7 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createGptJMo
         prompt_learning_table_pair.insert({task_name, {task_name_id, prompt_length}});
     }
 
-    if (data_type == "fp16") {
+    if (data_type == "half" || data_type == "fp16") {
         return std::make_shared<GptJTritonModel<half>>(
             reader.GetInteger("ft_instance_hyperparameter", "max_seq_len"),
             reader.GetInteger(model_name, "head_num"),
@@ -71,7 +71,8 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createGptJMo
             reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size"),
             reader.GetInteger("ft_instance_hyperparameter", "enable_custom_all_reduce", 0),
             model_name,
-            model_dir);
+            model_dir,
+            reader.GetInteger("ft_instance_hyperparameter", "int8_mode", 0));
     }
     else if (data_type == "fp32") {
         return std::make_shared<GptJTritonModel<float>>(
@@ -91,7 +92,8 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createGptJMo
             reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size"),
             reader.GetInteger("ft_instance_hyperparameter", "enable_custom_all_reduce", 0),
             model_name,
-            model_dir);
+            model_dir,
+            reader.GetInteger("ft_instance_hyperparameter", "int8_mode", 0));
     }
 #ifdef ENABLE_BF16
     else if (data_type == "bf16") {
@@ -112,7 +114,8 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createGptJMo
             reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size"),
             reader.GetInteger("ft_instance_hyperparameter", "enable_custom_all_reduce", 0),
             model_name,
-            model_dir);
+            model_dir,
+            reader.GetInteger("ft_instance_hyperparameter", "int8_mode", 0));
     }
 #endif
     else {
@@ -125,11 +128,13 @@ template<typename T>
 GptJTritonModel<T>::GptJTritonModel(size_t      tensor_para_size,
                                     size_t      pipeline_para_size,
                                     int         enable_custom_all_reduce,
-                                    std::string model_dir):
+                                    std::string model_dir,
+                                    int         int8_mode):
     tensor_para_size_(tensor_para_size),
     pipeline_para_size_(pipeline_para_size),
     enable_custom_all_reduce_(enable_custom_all_reduce),
     shared_weights_(std::vector<std::shared_ptr<ft::GptJWeight<T>>>(ft::getDeviceCount())),
+    int8_mode_(int8_mode),
     model_dir_(model_dir)
 {
     INIReader reader = INIReader(model_dir + "/config.ini");
@@ -202,7 +207,8 @@ GptJTritonModel<T>::GptJTritonModel(size_t                                     m
                                     size_t                                     pipeline_para_size,
                                     int                                        enable_custom_all_reduce,
                                     std::string                                model_name,
-                                    std::string                                model_dir):
+                                    std::string                                model_dir,
+                                    int                                        int8_mode):
     max_seq_len_(max_seq_len),
     head_num_(head_num),
     size_per_head_(size_per_head),
@@ -216,6 +222,7 @@ GptJTritonModel<T>::GptJTritonModel(size_t                                     m
     pipeline_para_size_(pipeline_para_size),
     enable_custom_all_reduce_(enable_custom_all_reduce),
     shared_weights_(std::vector<std::shared_ptr<ft::GptJWeight<T>>>(ft::getDeviceCount())),
+    int8_mode_(int8_mode),
     model_name_(model_name),
     model_dir_(model_dir),
     prompt_learning_start_id_(prompt_learning_start_id),
@@ -308,6 +315,7 @@ GptJTritonModel<T>::createModelInstance(int                                     
                                                   false,
                                                   cuda_device_prop_ptr.get(),
                                                   attention_type,
+                                                  int8_mode_,
                                                   custom_all_reduce_comm,
                                                   enable_custom_all_reduce_));
 
@@ -335,6 +343,7 @@ void GptJTritonModel<T>::createSharedWeights(int device_id, int rank)
                                                                      tensor_para_rank,
                                                                      pipeline_para_size_,
                                                                      pipeline_para_rank,
+                                                                     int8_mode_,
                                                                      prompt_learning_type_,
                                                                      prompt_learning_table_pair_);
     shared_weights_[device_id]->loadModel(model_dir_);
@@ -350,6 +359,7 @@ std::string GptJTritonModel<T>::toString()
        << "\nnum_layer: " << num_layer_ << "\nvocab_size: " << vocab_size_ << "\nstart_id: " << start_id_
        << "\nend_id: " << end_id_ << "\ntensor_para_size: " << tensor_para_size_
        << "\npipeline_para_size: " << pipeline_para_size_ << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_
+       << "\nint8_mode: " << int8_mode_
        << "\nmodel_name: " << model_name_ << "\nmodel_dir: " << model_dir_ << std::endl;
     return ss.str();
 }

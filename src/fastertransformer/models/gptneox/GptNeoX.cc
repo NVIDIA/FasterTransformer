@@ -42,6 +42,7 @@ void GptNeoX<T>::initialize()
                                                         is_free_buffer_after_forward_,
                                                         is_context_qk_buf_float_,
                                                         attention_type_,
+                                                        int8_mode_,
                                                         custom_all_reduce_comm_,
                                                         enable_custom_all_reduce_);
 
@@ -59,6 +60,7 @@ void GptNeoX<T>::initialize()
                                          cublas_wrapper_,
                                          allocator_,
                                          is_free_buffer_after_forward_,
+                                         int8_mode_,
                                          custom_all_reduce_comm_,
                                          enable_custom_all_reduce_);
 
@@ -150,6 +152,13 @@ void GptNeoX<T>::allocateBuffer(
 
     generation_should_stop_ = (bool*)allocator_->reMalloc(generation_should_stop_, sizeof(bool), true, true);
 
+    if (shared_contexts_ratio_ > 0.0f) {
+        shared_contexts_idx_  = (int*)allocator_->reMalloc(shared_contexts_idx_, batch_size * sizeof(int), false);
+        batch_to_compact_idx_ = (int*)allocator_->reMalloc(batch_to_compact_idx_, batchxbeam * sizeof(int), false);
+        compact_idx_          = (int*)allocator_->reMalloc(compact_idx_, batch_size * sizeof(int), false);
+        compact_size_         = (int*)allocator_->reMalloc(compact_size_, sizeof(int), false);
+    }
+
     is_allocate_buffer_ = true;
 }
 
@@ -201,6 +210,11 @@ void GptNeoX<T>::freeBuffer()
 
         allocator_->free((void**)(&generation_should_stop_), true);
 
+        if (shared_contexts_ratio_ > 0.0f) {
+            allocator_->free((void**)(&shared_contexts_idx_));
+            allocator_->free((void**)(&compact_size_));
+        }
+
         is_allocate_buffer_ = false;
     }
 }
@@ -230,8 +244,10 @@ GptNeoX<T>::GptNeoX(size_t                              head_num,
                     bool                                is_free_buffer_after_forward,
                     cudaDeviceProp*                     cuda_device_prop,
                     AttentionType                       attention_type,
+                    int                                 int8_mode,
                     std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
-                    int                                 enable_custom_all_reduce):
+                    int                                 enable_custom_all_reduce,
+                    float                               shared_contexts_ratio):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, cuda_device_prop),
     head_num_(head_num),
     size_per_head_(size_per_head),
@@ -246,7 +262,9 @@ GptNeoX<T>::GptNeoX(size_t                              head_num,
     use_gptj_residual_(use_gptj_residual),
     hidden_units_(head_num * size_per_head),
     local_head_num_(head_num / 1),
-    attention_type_(attention_type)
+    attention_type_(attention_type),
+    int8_mode_(int8_mode),
+    shared_contexts_ratio_(shared_contexts_ratio)
 {
     tensor_para_.world_size_   = 1;
     tensor_para_.rank_         = 0;
@@ -288,8 +306,10 @@ GptNeoX<T>::GptNeoX(size_t                              head_num,
                     bool                                is_free_buffer_after_forward,
                     cudaDeviceProp*                     cuda_device_prop,
                     AttentionType                       attention_type,
+                    int                                 int8_mode,
                     std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
-                    int                                 enable_custom_all_reduce):
+                    int                                 enable_custom_all_reduce,
+                    float                               shared_contexts_ratio):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, cuda_device_prop),
     head_num_(head_num),
     size_per_head_(size_per_head),
@@ -308,7 +328,9 @@ GptNeoX<T>::GptNeoX(size_t                              head_num,
     local_head_num_(head_num / tensor_para.world_size_),
     custom_all_reduce_comm_(custom_all_reduce_comm),
     enable_custom_all_reduce_(enable_custom_all_reduce),
-    attention_type_(attention_type)
+    attention_type_(attention_type),
+    int8_mode_(int8_mode),
+    shared_contexts_ratio_(shared_contexts_ratio)
 {
     int local_vacab_size = ceil(vocab_size_ / 1.f / tensor_para_.world_size_);
     if (std::is_same<half, T>::value) {
@@ -339,7 +361,9 @@ GptNeoX<T>::GptNeoX(GptNeoX<T> const& gpt):
     vocab_size_padded_(gpt.vocab_size_padded_),
     custom_all_reduce_comm_(gpt.custom_all_reduce_comm_),
     enable_custom_all_reduce_(gpt.enable_custom_all_reduce_),
-    attention_type_(gpt.attention_type_)
+    attention_type_(gpt.attention_type_),
+    int8_mode_(gpt.int8_mode_),
+    shared_contexts_ratio_(gpt.shared_contexts_ratio_)
 {
     initialize();
 }
@@ -561,6 +585,23 @@ void GptNeoX<T>::forward(std::unordered_map<std::string, Tensor>*       output_t
         cudaMemsetAsync(cache_indirections_[0], 0, 2 * sizeof(int) * batch_size * beam_width * max_seq_len, stream_);
     }
 
+    int  compact_size;
+    bool use_shared_contexts = (shared_contexts_ratio_ > 0.0f) && (max_input_length >= 1) && (batch_size > 1);
+    if (use_shared_contexts) {
+        invokeFindContextDups(shared_contexts_idx_,
+                              batch_to_compact_idx_,
+                              compact_idx_,
+                              compact_size_,
+                              input_tensors->at("input_ids").getPtr<int>(),
+                              batch_size,
+                              beam_width,
+                              max_input_length,
+                              stream_);
+        cudaD2Hcpy(&compact_size, compact_size_, 1);
+        use_shared_contexts = compact_size <= shared_contexts_ratio_ * batch_size;
+        sync_check_cuda_error();
+    }
+
     // Prefix prompts
     if (has_prefix_prompt_) {
         cudaMemcpyAsync(prompt_learning_weight_batch_,
@@ -661,6 +702,14 @@ void GptNeoX<T>::forward(std::unordered_map<std::string, Tensor>*       output_t
                     TYPE_INT32,
                     {batch_size * beam_width},
                     has_prefix_prompt_ ? tiled_prompt_lengths_buf_ : nullptr}}};
+
+        if (use_shared_contexts) {
+            decoder_input_tensors.insert(
+                {"compact_idx", Tensor(MEMORY_GPU, TYPE_INT32, {(size_t)compact_size}, compact_idx_)});
+            decoder_input_tensors.insert(
+                {"batch_to_compact_idx",
+                 Tensor(MEMORY_GPU, TYPE_INT32, {batch_size * beam_width}, batch_to_compact_idx_)});
+        }
 
         std::unordered_map<std::string, Tensor> decoder_output_tensors{
             {"decoder_output",

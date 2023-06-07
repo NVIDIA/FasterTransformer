@@ -29,11 +29,13 @@ template<typename T>
 struct GptNeoXDecoderLayerWeight {
 public:
     GptNeoXDecoderLayerWeight() = default;
+    GptNeoXDecoderLayerWeight(const int int8_mode);
     GptNeoXDecoderLayerWeight(const int  hidden_units,
                               const int  inter_size,
                               const int  tensor_para_size  = 1,
                               const int  tensor_para_rank  = 0,
-                              const bool use_gptj_residual = true);
+                              const bool use_gptj_residual = true,
+                              const int int8_mode = 0);
     ~GptNeoXDecoderLayerWeight();
     GptNeoXDecoderLayerWeight(const GptNeoXDecoderLayerWeight& other);
     GptNeoXDecoderLayerWeight& operator=(const GptNeoXDecoderLayerWeight& other);
@@ -54,9 +56,14 @@ private:
     const int attention_dense_bias_weight_id = 5;
     bool      is_maintain_buffer             = false;
     T*        weights_ptr[12];
+    int       int8_mode_ = 0;
+
+    std::vector<int8_t*> int8_weights_ptr = std::vector<int8_t*>(4, nullptr);
+    std::vector<T*>      weight_only_scale_ptr = std::vector<T*>(4, nullptr);
 
     void setWeightPtr();
     void mallocWeights();
+    void copyFrom(const GptNeoXDecoderLayerWeight& other);
 };
 
 }  // namespace fastertransformer

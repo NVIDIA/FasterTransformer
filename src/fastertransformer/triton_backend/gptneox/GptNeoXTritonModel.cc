@@ -34,19 +34,21 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createGptNeo
     int               tensor_para_size = reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size");
     std::string       model_dir        = reader.Get("ft_instance_hyperparameter", "model_dir");
 
-    if (data_type == "half") {
+    if (data_type == "half" || data_type == "fp16") {
         return std::make_shared<GptNeoXTritonModel<half>>(
             reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size"),
             reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size"),
             reader.GetInteger("ft_instance_hyperparameter", "enable_custom_all_reduce", 0),
-            model_dir);
+            model_dir,
+            reader.GetInteger("ft_instance_hyperparameter", "int8_mode", 0));
     }
     else {
         return std::make_shared<GptNeoXTritonModel<float>>(
             reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size"),
             reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size"),
             reader.GetInteger("ft_instance_hyperparameter", "enable_custom_all_reduce", 0),
-            model_dir);
+            model_dir,
+            reader.GetInteger("ft_instance_hyperparameter", "int8_mode", 0));
     }
 }
 
@@ -54,11 +56,13 @@ template<typename T>
 GptNeoXTritonModel<T>::GptNeoXTritonModel(size_t      tensor_para_size,
                                           size_t      pipeline_para_size,
                                           int         enable_custom_all_reduce,
-                                          std::string model_dir):
+                                          std::string model_dir,
+                                          int         int8_mode):
     tensor_para_size_(tensor_para_size),
     pipeline_para_size_(pipeline_para_size),
     shared_weights_(std::vector<std::shared_ptr<ft::GptNeoXWeight<T>>>(ft::getDeviceCount())),
-    enable_custom_all_reduce_(enable_custom_all_reduce)
+    enable_custom_all_reduce_(enable_custom_all_reduce),
+    int8_mode_(int8_mode)
 {
     model_dir_ = model_dir;
     const std::string inifile{model_dir + "/config.ini"};
@@ -168,6 +172,7 @@ std::unique_ptr<AbstractTransformerModelInstance> GptNeoXTritonModel<T>::createM
                        false,
                        cuda_device_prop_ptr.get(),
                        attention_type,
+                       int8_mode_,
                        custom_all_reduce_comm,
                        enable_custom_all_reduce_));
 
@@ -197,6 +202,7 @@ void GptNeoXTritonModel<T>::createSharedWeights(int device_id, int rank)
                                                                         pipeline_para_size_,
                                                                         pipeline_para_rank,
                                                                         use_gptj_residual_,
+                                                                        int8_mode_,
                                                                         prompt_learning_type_,
                                                                         prompt_learning_table_pair_);
     shared_weights_[device_id]->loadModel(model_dir_);
@@ -214,6 +220,7 @@ std::string GptNeoXTritonModel<T>::toString()
        << "\nprompt_learning_type_: " << static_cast<int>(prompt_learning_type_)
        << "\nprompt_learning_start_id_: " << prompt_learning_start_id_ << "\ntensor_para_size: " << tensor_para_size_
        << "\npipeline_para_size: " << pipeline_para_size_ << "\nenable_custom_all_reduce: " << enable_custom_all_reduce_
+       << "\nint8_mode: " << int8_mode_
        << "\nmodel_name: " << model_name_ << "\nmodel_dir: " << model_dir_ << std::endl;
     return ss.str();
 }

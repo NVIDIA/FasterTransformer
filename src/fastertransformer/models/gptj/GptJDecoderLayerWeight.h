@@ -29,10 +29,12 @@ template<typename T>
 struct GptJDecoderLayerWeight {
 public:
     GptJDecoderLayerWeight() = delete;
+    GptJDecoderLayerWeight(const int int8_mode);
     GptJDecoderLayerWeight(const int hidden_units,
                            const int inter_size,
                            const int tensor_para_size = 1,
-                           const int tensor_para_rank = 0);
+                           const int tensor_para_rank = 0,
+                           const int int8_mode = 0);
     ~GptJDecoderLayerWeight();
     GptJDecoderLayerWeight(const GptJDecoderLayerWeight& other);
     GptJDecoderLayerWeight& operator=(const GptJDecoderLayerWeight& other);
@@ -50,9 +52,14 @@ private:
     int  tensor_para_rank_;
     bool is_maintain_buffer = false;
     T*   weights_ptr[9];
+    int  int8_mode_ = 0;
+
+    std::vector<int8_t*> int8_weights_ptr = std::vector<int8_t*>(4, nullptr);
+    std::vector<T*>      weight_only_scale_ptr = std::vector<T*>(4, nullptr);
 
     void setWeightPtr();
     void mallocWeights();
+    void copyFrom(const GptJDecoderLayerWeight& other);
 };
 
 }  // namespace fastertransformer

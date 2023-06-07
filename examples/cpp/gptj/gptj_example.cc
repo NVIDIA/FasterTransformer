@@ -92,6 +92,7 @@ void gptj_example(const INIReader reader)
 
     int tensor_para_size   = reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size");
     int pipeline_para_size = reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size");
+    int int8_mode  = reader.GetInteger("ft_instance_hyperparameter", "int8_mode", 0);
 
     const size_t head_num             = reader.GetInteger(model_name, "head_num");
     const size_t size_per_head        = reader.GetInteger(model_name, "size_per_head");
@@ -287,6 +288,7 @@ void gptj_example(const INIReader reader)
         tensor_para.rank_,
         pipeline_para.world_size_,
         pipeline_para.rank_,
+        int8_mode,
         prompt_learning_type,
         prefix_prompt_table_pair);  // optional if you don't need prefix prompts
 
@@ -336,7 +338,11 @@ void gptj_example(const INIReader reader)
                           &allocator,
                           false,
                           &prop,
-                          attention_type);
+                          attention_type,
+                          int8_mode,
+                          nullptr,
+                          0,
+                          1.0f);
 
     int* d_output_ids;
     int* d_sequence_lengths;

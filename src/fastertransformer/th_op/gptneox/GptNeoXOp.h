@@ -198,6 +198,7 @@ public:
                                             false,           // is_free_buffer_after_forward
                                             &prop_,          // cuda_device_prop
                                             attention_type,  // attention_type
+                                            0,               // don't support int8 in python for now
                                             nullptr,         // custom_all_reduce_comm
                                             0);              // enable_custom_all_reduce
 

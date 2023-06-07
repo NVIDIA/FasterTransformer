@@ -24,15 +24,26 @@ GptNeoXDecoderLayerWeight<T>::GptNeoXDecoderLayerWeight(const int  hidden_units,
                                                         const int  inter_size,
                                                         const int  tensor_para_size,
                                                         const int  tensor_para_rank,
-                                                        const bool use_gptj_residual):
+                                                        const bool use_gptj_residual,
+                                                        const int  int8_mode):
     hidden_units_(hidden_units),
     inter_size_(inter_size),
     tensor_para_size_(tensor_para_size),
     tensor_para_rank_(tensor_para_rank),
+    int8_mode_(int8_mode),
     use_gptj_residual_(use_gptj_residual)
 {
     mallocWeights();
     setWeightPtr();
+
+    FT_CHECK_WITH_INFO(int8_mode_ != 2, "GptNeox doesn't support int8_model == 2");
+    FT_CHECK_WITH_INFO(!(std::is_same<T, float>::value && int8_mode_ == 1),
+                       "Weight only quant does not work with FP32 compute.");
+}
+
+template<typename T>
+GptNeoXDecoderLayerWeight<T>::GptNeoXDecoderLayerWeight(const int int8_mode): int8_mode_(int8_mode)
+{
 }
 
 template<typename T>
@@ -58,7 +69,70 @@ GptNeoXDecoderLayerWeight<T>::~GptNeoXDecoderLayerWeight()
         ffn_weights.intermediate_weight.bias   = nullptr;
         ffn_weights.output_weight.kernel       = nullptr;
         ffn_weights.output_weight.bias         = nullptr;
+
+        if (int8_mode_ != 0) {
+            for (int i = 0; i < int8_weights_ptr.size(); i++) {
+                if (int8_weights_ptr[i] != nullptr) {
+                    deviceFree(int8_weights_ptr[i]);
+                }
+            }
+
+            if (int8_mode_ == 1) {
+                for (int i = 0; i < weight_only_scale_ptr.size(); i++) {
+                    if (weight_only_scale_ptr[i] != nullptr) {
+                        deviceFree(weight_only_scale_ptr[i]);
+                    }
+                }
+            }
+
+            self_attention_weights.query_weight.int8_kernel                             = nullptr;
+            self_attention_weights.query_weight.weight_only_quant_scale                 = nullptr;
+            self_attention_weights.attention_output_weight.int8_kernel                  = nullptr;
+            self_attention_weights.attention_output_weight.weight_only_quant_scale      = nullptr;
+            ffn_weights.intermediate_weight.int8_kernel                                 = nullptr;
+            ffn_weights.intermediate_weight.weight_only_quant_scale                     = nullptr;
+            ffn_weights.output_weight.int8_kernel                                       = nullptr;
+            ffn_weights.output_weight.weight_only_quant_scale                           = nullptr;
+        }
+
         is_maintain_buffer                     = false;
+    }
+}
+
+template<typename T>
+void GptNeoXDecoderLayerWeight<T>::copyFrom(const GptNeoXDecoderLayerWeight& other)
+{
+    cudaD2Dcpy(weights_ptr[0], other.weights_ptr[0], hidden_units_);
+    cudaD2Dcpy(weights_ptr[1], other.weights_ptr[1], hidden_units_);
+    cudaD2Dcpy(weights_ptr[3], other.weights_ptr[3], 3 * hidden_units_ / tensor_para_size_);
+    if (!use_gptj_residual_) {
+        cudaD2Dcpy(weights_ptr[5], other.weights_ptr[5], hidden_units_);
+    }
+
+    cudaD2Dcpy(weights_ptr[7], other.weights_ptr[7], inter_size_ / tensor_para_size_);
+    cudaD2Dcpy(weights_ptr[9], other.weights_ptr[9], hidden_units_);
+    cudaD2Dcpy(weights_ptr[10], other.weights_ptr[10], hidden_units_);
+    cudaD2Dcpy(weights_ptr[11], other.weights_ptr[11], hidden_units_);
+
+
+    if (int8_mode_ == 0) {
+        cudaD2Dcpy(weights_ptr[2], other.weights_ptr[2], hidden_units_ * 3 * hidden_units_ / tensor_para_size_);
+        cudaD2Dcpy(weights_ptr[4], other.weights_ptr[4], hidden_units_ / tensor_para_size_ * hidden_units_);
+        cudaD2Dcpy(weights_ptr[6], other.weights_ptr[6], hidden_units_ * inter_size_ / tensor_para_size_);
+        cudaD2Dcpy(weights_ptr[8], other.weights_ptr[8], inter_size_ / tensor_para_size_ * hidden_units_);
+    }
+    else {
+        cudaD2Dcpy(int8_weights_ptr[0], other.int8_weights_ptr[0], hidden_units_ * 3 * hidden_units_ / tensor_para_size_);
+        cudaD2Dcpy(int8_weights_ptr[1], other.int8_weights_ptr[1], hidden_units_ / tensor_para_size_ * hidden_units_);
+        cudaD2Dcpy(int8_weights_ptr[2], other.int8_weights_ptr[2], hidden_units_ * inter_size_ / tensor_para_size_);
+        cudaD2Dcpy(int8_weights_ptr[3], other.int8_weights_ptr[3], inter_size_ / tensor_para_size_ * hidden_units_);
+
+        if (int8_mode_ == 1) {
+            cudaD2Dcpy(weight_only_scale_ptr[0], other.weight_only_scale_ptr[0], 3 * hidden_units_ / tensor_para_size_);
+            cudaD2Dcpy(weight_only_scale_ptr[1], other.weight_only_scale_ptr[1], hidden_units_);
+            cudaD2Dcpy(weight_only_scale_ptr[2], other.weight_only_scale_ptr[2], inter_size_ / tensor_para_size_);
+            cudaD2Dcpy(weight_only_scale_ptr[3], other.weight_only_scale_ptr[3], hidden_units_);
+        }
     }
 }
 
@@ -68,24 +142,11 @@ GptNeoXDecoderLayerWeight<T>::GptNeoXDecoderLayerWeight(const GptNeoXDecoderLaye
     inter_size_(other.inter_size_),
     tensor_para_size_(other.tensor_para_size_),
     tensor_para_rank_(other.tensor_para_rank_),
+    int8_mode_(other.int8_mode_),
     use_gptj_residual_(other.use_gptj_residual_)
 {
     mallocWeights();
-    cudaD2Dcpy(weights_ptr[0], other.weights_ptr[0], hidden_units_);
-    cudaD2Dcpy(weights_ptr[1], other.weights_ptr[1], hidden_units_);
-    cudaD2Dcpy(weights_ptr[2], other.weights_ptr[2], hidden_units_ * 3 * hidden_units_ / tensor_para_size_);
-    cudaD2Dcpy(weights_ptr[3], other.weights_ptr[3], 3 * hidden_units_ / tensor_para_size_);
-    cudaD2Dcpy(weights_ptr[4], other.weights_ptr[4], hidden_units_ / tensor_para_size_ * hidden_units_);
-    if (!use_gptj_residual_) {
-        cudaD2Dcpy(weights_ptr[5], other.weights_ptr[5], hidden_units_);
-    }
-
-    cudaD2Dcpy(weights_ptr[6], other.weights_ptr[6], hidden_units_ * inter_size_ / tensor_para_size_);
-    cudaD2Dcpy(weights_ptr[7], other.weights_ptr[7], inter_size_ / tensor_para_size_);
-    cudaD2Dcpy(weights_ptr[8], other.weights_ptr[8], inter_size_ / tensor_para_size_ * hidden_units_);
-    cudaD2Dcpy(weights_ptr[9], other.weights_ptr[9], hidden_units_);
-    cudaD2Dcpy(weights_ptr[10], other.weights_ptr[10], hidden_units_);
-    cudaD2Dcpy(weights_ptr[11], other.weights_ptr[11], hidden_units_);
+    copyFrom(other);
     setWeightPtr();
 }
 
@@ -96,24 +157,11 @@ GptNeoXDecoderLayerWeight<T>& GptNeoXDecoderLayerWeight<T>::operator=(const GptN
     inter_size_        = other.inter_size_;
     tensor_para_size_  = other.tensor_para_size_;
     tensor_para_rank_  = other.tensor_para_rank_;
+    int8_mode_          = other.int8_mode_;
     use_gptj_residual_ = other.use_gptj_residual_;
 
     mallocWeights();
-
-    cudaD2Dcpy(weights_ptr[0], other.weights_ptr[0], hidden_units_);
-    cudaD2Dcpy(weights_ptr[1], other.weights_ptr[1], hidden_units_);
-    cudaD2Dcpy(weights_ptr[2], other.weights_ptr[2], hidden_units_ * 3 * hidden_units_ / tensor_para_size_);
-    cudaD2Dcpy(weights_ptr[3], other.weights_ptr[3], 3 * hidden_units_ / tensor_para_size_);
-    cudaD2Dcpy(weights_ptr[4], other.weights_ptr[4], hidden_units_ / tensor_para_size_ * hidden_units_);
-    if (!use_gptj_residual_) {
-        cudaD2Dcpy(weights_ptr[5], other.weights_ptr[5], hidden_units_);
-    }
-    cudaD2Dcpy(weights_ptr[6], other.weights_ptr[6], hidden_units_ * inter_size_ / tensor_para_size_);
-    cudaD2Dcpy(weights_ptr[7], other.weights_ptr[7], inter_size_ / tensor_para_size_);
-    cudaD2Dcpy(weights_ptr[8], other.weights_ptr[8], inter_size_ / tensor_para_size_ * hidden_units_);
-    cudaD2Dcpy(weights_ptr[9], other.weights_ptr[9], hidden_units_);
-    cudaD2Dcpy(weights_ptr[10], other.weights_ptr[10], hidden_units_);
-    cudaD2Dcpy(weights_ptr[11], other.weights_ptr[11], hidden_units_);
+    copyFrom(other);
     setWeightPtr();
     return *this;
 }
@@ -128,19 +176,10 @@ void GptNeoXDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataTyp
         weights_ptr[0], {(size_t)hidden_units_}, dir_path + ".input_layernorm.bias.bin", model_file_type);
     loadWeightFromBin<T>(
         weights_ptr[1], {(size_t)hidden_units_}, dir_path + ".input_layernorm.weight.bin", model_file_type);
-    loadWeightFromBin<T>(weights_ptr[2],
-                         {(size_t)hidden_units_, (size_t)(3 * hidden_units_ / tensor_para_size_)},
-                         dir_path + ".attention.query_key_value.weight." + rank_spec + ".bin",
-                         model_file_type);
 
     loadWeightFromBin<T>(weights_ptr[3],
                          {(size_t)(3 * hidden_units_ / tensor_para_size_)},
                          dir_path + ".attention.query_key_value.bias." + rank_spec + ".bin",
-                         model_file_type);
-
-    loadWeightFromBin<T>(weights_ptr[4],
-                         {(size_t)(hidden_units_ / tensor_para_size_), (size_t)hidden_units_},
-                         dir_path + ".attention.dense.weight." + rank_spec + ".bin",
                          model_file_type);
 
     if (!use_gptj_residual_) {
@@ -148,18 +187,11 @@ void GptNeoXDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataTyp
             weights_ptr[5], {(size_t)hidden_units_}, dir_path + ".attention.dense.bias.bin", model_file_type);
     }
 
-    loadWeightFromBin<T>(weights_ptr[6],
-                         {(size_t)hidden_units_, (size_t)(inter_size_ / tensor_para_size_)},
-                         dir_path + ".mlp.dense_h_to_4h.weight." + rank_spec + ".bin",
-                         model_file_type);
     loadWeightFromBin<T>(weights_ptr[7],
                          {(size_t)(inter_size_ / tensor_para_size_)},
                          dir_path + ".mlp.dense_h_to_4h.bias." + rank_spec + ".bin",
                          model_file_type);
-    loadWeightFromBin<T>(weights_ptr[8],
-                         {(size_t)(inter_size_ / tensor_para_size_), (size_t)hidden_units_},
-                         dir_path + ".mlp.dense_4h_to_h.weight." + rank_spec + ".bin",
-                         model_file_type);
+                         
     if (use_gptj_residual_) {
         loadWeightFromBin<T>(
             weights_ptr[9], {(size_t)hidden_units_}, dir_path + ".mlp.attention.bias.sum.bin", model_file_type);
@@ -172,6 +204,54 @@ void GptNeoXDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataTyp
         weights_ptr[10], {(size_t)hidden_units_}, dir_path + ".post_attention_layernorm.bias.bin", model_file_type);
     loadWeightFromBin<T>(
         weights_ptr[11], {(size_t)hidden_units_}, dir_path + ".post_attention_layernorm.weight.bin", model_file_type);
+
+    // Load weights for GPT
+    if (int8_mode_ == 0) {        
+        loadWeightFromBin<T>(weights_ptr[2],
+                         {(size_t)hidden_units_, (size_t)(3 * hidden_units_ / tensor_para_size_)},
+                         dir_path + ".attention.query_key_value.weight." + rank_spec + ".bin",
+                         model_file_type);
+        
+        loadWeightFromBin<T>(weights_ptr[4],
+                         {(size_t)(hidden_units_ / tensor_para_size_), (size_t)hidden_units_},
+                         dir_path + ".attention.dense.weight." + rank_spec + ".bin",
+                         model_file_type);
+        
+        loadWeightFromBin<T>(weights_ptr[6],
+                         {(size_t)hidden_units_, (size_t)(inter_size_ / tensor_para_size_)},
+                         dir_path + ".mlp.dense_h_to_4h.weight." + rank_spec + ".bin",
+                         model_file_type);
+
+        loadWeightFromBin<T>(weights_ptr[8],
+                         {(size_t)(inter_size_ / tensor_para_size_), (size_t)hidden_units_},
+                         dir_path + ".mlp.dense_4h_to_h.weight." + rank_spec + ".bin",
+                         model_file_type);
+    }
+    else if (int8_mode_ == 1) {
+        loadWeightFromBinAndQuantizeForWeightOnly<T>(int8_weights_ptr[0],
+                                                     weight_only_scale_ptr[0],
+                                                     {(size_t)hidden_units_, (size_t)(3 * hidden_units_ / tensor_para_size_)},
+                                                     dir_path + ".attention.query_key_value.weight." + rank_spec + ".bin",
+                                                     model_file_type);
+
+        loadWeightFromBinAndQuantizeForWeightOnly<T>(int8_weights_ptr[1],
+                                                     weight_only_scale_ptr[1],
+                                                     {(size_t)(hidden_units_ / tensor_para_size_), (size_t)hidden_units_},
+                                                     dir_path + ".attention.dense.weight." + rank_spec + ".bin",
+                                                     model_file_type);
+
+        loadWeightFromBinAndQuantizeForWeightOnly<T>(int8_weights_ptr[2],
+                                                     weight_only_scale_ptr[2],
+                                                     {(size_t)hidden_units_, (size_t)(inter_size_ / tensor_para_size_)},
+                                                     dir_path + ".mlp.dense_h_to_4h.weight." + rank_spec + ".bin",
+                                                     model_file_type);
+
+        loadWeightFromBinAndQuantizeForWeightOnly<T>(int8_weights_ptr[3],
+                                                     weight_only_scale_ptr[3],
+                                                     {(size_t)(inter_size_ / tensor_para_size_), (size_t)hidden_units_},
+                                                     dir_path + ".mlp.dense_4h_to_h.weight." + rank_spec + ".bin",
+                                                     model_file_type);
+    }
 }
 
 template<typename T>
@@ -191,6 +271,21 @@ void GptNeoXDecoderLayerWeight<T>::setWeightPtr()
 
     post_attention_layernorm_weights.beta  = weights_ptr[10];
     post_attention_layernorm_weights.gamma = weights_ptr[11];
+
+    if (int8_mode_ != 0) {
+        self_attention_weights.query_weight.int8_kernel                 = int8_weights_ptr[0];
+        self_attention_weights.attention_output_weight.int8_kernel      = int8_weights_ptr[1];
+        ffn_weights.intermediate_weight.int8_kernel                     = int8_weights_ptr[2];
+        ffn_weights.output_weight.int8_kernel                           = int8_weights_ptr[3];
+
+        if (int8_mode_ == 1) {
+            self_attention_weights.query_weight.weight_only_quant_scale                 = weight_only_scale_ptr[0];
+            self_attention_weights.attention_output_weight.weight_only_quant_scale      = weight_only_scale_ptr[1];
+            ffn_weights.intermediate_weight.weight_only_quant_scale                     = weight_only_scale_ptr[2];
+            ffn_weights.output_weight.weight_only_quant_scale                           = weight_only_scale_ptr[3];
+        }
+    }
+
     is_maintain_buffer                     = true;
 }
 
@@ -199,19 +294,38 @@ void GptNeoXDecoderLayerWeight<T>::mallocWeights()
 {
     deviceMalloc(&weights_ptr[0], hidden_units_);
     deviceMalloc(&weights_ptr[1], hidden_units_);
-    deviceMalloc(&weights_ptr[2], hidden_units_ * 3 * hidden_units_ / tensor_para_size_);
     deviceMalloc(&weights_ptr[3], 3 * hidden_units_ / tensor_para_size_);
-    deviceMalloc(&weights_ptr[4], hidden_units_ / tensor_para_size_ * hidden_units_);
     if (!use_gptj_residual_) {
         deviceMalloc(&weights_ptr[5], hidden_units_);
     }
 
-    deviceMalloc(&weights_ptr[6], hidden_units_ * inter_size_ / tensor_para_size_);
     deviceMalloc(&weights_ptr[7], inter_size_ / tensor_para_size_);
-    deviceMalloc(&weights_ptr[8], inter_size_ / tensor_para_size_ * hidden_units_);
     deviceMalloc(&weights_ptr[9], hidden_units_);
     deviceMalloc(&weights_ptr[10], hidden_units_);
     deviceMalloc(&weights_ptr[11], hidden_units_);
+
+
+    if (int8_mode_ == 0) {
+        deviceMalloc(&weights_ptr[2], hidden_units_ * 3 * hidden_units_ / tensor_para_size_);  // qkv weight
+        deviceMalloc(&weights_ptr[4], hidden_units_ / tensor_para_size_ * hidden_units_);  // attention output weight
+        deviceMalloc(&weights_ptr[6], hidden_units_ * inter_size_ / tensor_para_size_);   // ffn inter weight
+        deviceMalloc(&weights_ptr[8], inter_size_ / tensor_para_size_ * hidden_units_);  // ffn output weight
+    }
+    else {
+        // Alloc FFN and Attention int8 weights
+        deviceMalloc(&int8_weights_ptr[0], hidden_units_ * 3 * hidden_units_ / tensor_para_size_);
+        deviceMalloc(&int8_weights_ptr[1], hidden_units_ / tensor_para_size_ * hidden_units_);
+        deviceMalloc(&int8_weights_ptr[2], hidden_units_ * inter_size_ / tensor_para_size_);
+        deviceMalloc(&int8_weights_ptr[3], inter_size_ / tensor_para_size_ * hidden_units_);
+
+        if (int8_mode_ == 1) {
+            // Alloc scales for weight only quant for attention and FFN weights
+            deviceMalloc(&weight_only_scale_ptr[0], 3 * hidden_units_ / tensor_para_size_);
+            deviceMalloc(&weight_only_scale_ptr[1], hidden_units_);
+            deviceMalloc(&weight_only_scale_ptr[2], inter_size_ / tensor_para_size_);
+            deviceMalloc(&weight_only_scale_ptr[3], hidden_units_);
+        }
+    }
 }
 
 template struct GptNeoXDecoderLayerWeight<float>;
