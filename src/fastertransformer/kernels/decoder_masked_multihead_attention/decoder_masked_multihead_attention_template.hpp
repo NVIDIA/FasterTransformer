@@ -388,27 +388,6 @@ template<>
 struct Qk_vec_acum_fp32_<bf16_8_t> {
     using Type = Float8_;
 };
-
-template<>
-struct Qk_vec_acum_fp32_<uint4> {
-    using Type = Float8_;
-};
-template<>
-struct Qk_vec_acum_fp32_<__nv_bfloat16> {
-    using Type = float;
-};
-template<>
-struct Qk_vec_acum_fp32_<__nv_bfloat162> {
-    using Type = float2;
-};
-template<>
-struct Qk_vec_acum_fp32_<bf16_4_t> {
-    using Type = Float4_;
-};
-template<>
-struct Qk_vec_acum_fp32_<bf16_8_t> {
-    using Type = Float8_;
-};
 #ifdef ENABLE_FP8
 // template<>
 // struct Qk_vec_acum_fp32_<fp8_2_t> {
