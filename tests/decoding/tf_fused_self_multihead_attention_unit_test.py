@@ -56,12 +56,12 @@ class TestFusedQKVMutiheadAttention(unittest.TestCase):
             self.run_attn(4, 128, head, 64, tf.float16)
 
     def test_attn_size_fp32(self):
-        for size in [32, 64, 80, 96, 128, 144, 160, 192, 224, 256]:
+        for size in [32, 64, 80, 96, 112, 128, 144, 160, 192, 224, 256]:
             tf.reset_default_graph()
             self.run_attn(4, 128, 12, size, tf.float32)
 
     def test_attn_size_fp16(self):
-        for size in [32, 64, 80, 96, 128, 144, 160, 192, 224, 256]:
+        for size in [32, 64, 80, 96, 112, 128, 144, 160, 192, 224, 256]:
             tf.reset_default_graph()
             self.run_attn(4, 128, 12, size, tf.float16)
 
