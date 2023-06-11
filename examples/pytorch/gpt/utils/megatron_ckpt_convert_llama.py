@@ -386,7 +386,7 @@ def convert_checkpoint(args):
                     ))
                 if j == training_pipeline_para_size - 1:
                     w_e_head_list.append(torch2np(
-                        m["model"]["word_embeddings_for_head"]["weight"],
+                        m["model"]["language_model"]["output_layer"]["weight"],
                         np_weight_data_type
                     ))
                 transformer_models.append(m["model"]["language_model"][megatron_gpt_key])
