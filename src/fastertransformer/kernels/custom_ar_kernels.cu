@@ -292,7 +292,7 @@ static __global__ void twoShotAllReduceKernel(AllReduceParams<T> params)
             // use round-robin gathering from other ranks
             int offset_rank = local_offset + (dst_rank[ii] - params.local_rank) * params.elts_per_rank;
             reinterpret_cast<PackedType*>(&params.local_output_buffer_ptr[offset_rank])[0] =
-                reinterpret_cast<PackedType*>(&src_d[dst_rank[ii]][offset_rank])[0];
+                reinterpret_cast<PackedType*>(&src_d[ii][offset_rank])[0];
         }
     }
 }
