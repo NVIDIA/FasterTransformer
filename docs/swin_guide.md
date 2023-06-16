@@ -219,10 +219,10 @@ pip install timm==0.4.12
 pip install termcolor==1.1.0
 
 bash -x run_test_v1_int8.sh <batch_size> ##profile of swin-v1 INT8 model
-bash -x run_test_v1_int8_accuracy.sh <batch_size> ##test accuracy of swin-v1 INT8 model
+bash -x run_test_v1_int8_accuracy.sh <imagenet-path> ##test accuracy of swin-v1 INT8 model
 
 bash -x run_test_v2_int8.sh <batch_size> ##profile of swin-v2 INT8 model
-bash -x run_test_v2_int8_accuracy.sh <batch_size> ##test accuracy of swin-v2 INT8 model
+bash -x run_test_v2_int8_accuracy.sh <imagenet-path> ##test accuracy of swin-v2 INT8 model
 ```
 Note: When testing PTQ accuracy for INT8 swin-v1-LARGE, we have to specify `--int8-mode 2` instead of `--int8-mode 1` in **run_test_int8.sh**.
 
