@@ -172,7 +172,7 @@ For example, to evaluate the `Swin-T` with a single GPU. You can see **run.sh** 
 python -m torch.distributed.launch --nproc_per_node 1 \
   --master_port 12345 main.py \
   --eval \
-  --cfg SwinTransformer/configs/swin_tiny_patch4_window7_224.yaml \
+  --cfg SwinTransformer/configs/swin/swin_tiny_patch4_window7_224.yaml \
   --resume ./calib-checkpoint/swin_tiny_patch4_window7_224_calib.pth \
   --data-path <imagenet-path> \
   --int8-mode 1\
