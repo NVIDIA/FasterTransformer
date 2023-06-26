@@ -510,10 +510,11 @@ void Bert<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, const
                       Tensor{MEMORY_GPU, data_type, std::vector<size_t>{h_token_num, hidden_units_}, attn_out_buf_}}});
 
                 bool use_custom_all_reduce_kernel = false;
+                std::vector<Tensor> hidden_features{attn_output_tensors.at("hidden_features")};
                 if (enable_custom_all_reduce_ && custom_all_reduce_comm_ != nullptr) {
-                    std::vector<Tensor> hidden_features{attn_output_tensors.at("hidden_features")};
                     use_custom_all_reduce_kernel =
                         custom_all_reduce_comm_->swapInternalBuffer(&hidden_features, h_token_num * hidden_units_);
+                    attn_output_tensors.at("hidden_features").data = hidden_features[0].data;
                 }
 
                 if (attention_type == AttentionType::FUSED_MHA || attention_type == AttentionType::FUSED_PADDED_MHA) {
@@ -535,6 +536,7 @@ void Bert<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, const
                     }
                     else {
                         custom_all_reduce_comm_->customAllReduce(h_token_num * hidden_units_, stream_);
+                        attn_output_tensors.at("hidden_features").data = hidden_features[0].data;
                     }
                     sync_check_cuda_error();
                 }
