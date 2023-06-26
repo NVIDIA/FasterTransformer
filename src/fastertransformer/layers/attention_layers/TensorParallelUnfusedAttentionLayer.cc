@@ -37,11 +37,12 @@ void TensorParallelUnfusedAttentionLayer<T>::forward(TensorMap*                o
     // For more information, please refer to UnfusedAttentionLayer
 
     const size_t size = output_tensors->at("hidden_features").size();
+    std::vector<Tensor> hidden_features_reduce = {output_tensors->at("hidden_features")};
 
     bool use_custom_all_reduce_kernel = false;
     if (enable_custom_all_reduce_ && custom_all_reduce_comm_ != nullptr) {
-        std::vector<Tensor> hidden_features_reduce = {output_tensors->at("hidden_features")};
         use_custom_all_reduce_kernel = custom_all_reduce_comm_->swapInternalBuffer(&hidden_features_reduce, size);
+        output_tensors->at("hidden_features").data = hidden_features_reduce[0].data;
     }
 
     UnfusedAttentionLayer<T>::forward(output_tensors, input_tensors, attention_weights);
@@ -53,6 +54,7 @@ void TensorParallelUnfusedAttentionLayer<T>::forward(TensorMap*                o
         }
         else {
             custom_all_reduce_comm_->customAllReduce(size, UnfusedAttentionLayer<T>::stream_);
+            output_tensors->at("hidden_features").data = hidden_features_reduce[0].data;
         }
         sync_check_cuda_error();
     }

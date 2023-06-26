@@ -45,6 +45,7 @@ void TensorParallelReluFfnLayer<T>::forward(TensorMap*          output_tensors,
     if (enable_custom_all_reduce_ && custom_all_reduce_comm_ != nullptr) {
         use_custom_all_reduce_kernel =
             custom_all_reduce_comm_->swapInternalBuffer(&swap_tensors, token_num * hidden_units);
+        output_tensors->at("ffn_output").data = swap_tensors[0].data;
     }
 
     ReluFfnLayer<T>::forward(output_tensors, input_tensors, ffn_weights);
@@ -57,6 +58,7 @@ void TensorParallelReluFfnLayer<T>::forward(TensorMap*          output_tensors,
         }
         else {
             custom_all_reduce_comm_->customAllReduce(token_num * hidden_units, ReluFfnLayer<T>::stream_);
+            output_tensors->at("ffn_output").data = swap_tensors[0].data;
         }
         sync_check_cuda_error();
     }

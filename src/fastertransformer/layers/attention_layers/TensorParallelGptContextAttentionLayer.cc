@@ -35,11 +35,12 @@ void TensorParallelGptContextAttentionLayer<T>::forward(TensorMap*              
     //      value_cache [batch, local_head_num, max_seq_len, size_per_head]
 
     const size_t size = output_tensors->at("hidden_features").size();
+    std::vector<Tensor> reduce_tensor{output_tensors->at("hidden_features")};
 
     bool use_custom_all_reduce_kernel = false;
     if (do_all_reduce_ && enable_custom_all_reduce_ && custom_all_reduce_comm_ != nullptr) {
-        std::vector<Tensor> reduce_tensor{output_tensors->at("hidden_features")};
         use_custom_all_reduce_kernel = custom_all_reduce_comm_->swapInternalBuffer(&reduce_tensor, size);
+        output_tensors->at("hidden_features").data = reduce_tensor[0].data;
     }
 
     GptContextAttentionLayer<T>::forward(output_tensors, input_tensors, attention_weights);
@@ -52,6 +53,7 @@ void TensorParallelGptContextAttentionLayer<T>::forward(TensorMap*              
         }
         else {
             custom_all_reduce_comm_->customAllReduce(size, GptContextAttentionLayer<T>::stream_);
+            output_tensors->at("hidden_features").data = reduce_tensor[0].data;
         }
         sync_check_cuda_error();
     }
