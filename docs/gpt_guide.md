@@ -116,7 +116,7 @@ In summary, the workflow to run the GPT model is:
 
 1. Initializing the NCCL comm and setting ranks of tensor parallel and pipeline parallel by MPI or threading
 2. Load weights by the ranks of tensor parallel, pipeline parallel and other model hyper-parameters.
-3. Create the instance of `ParalelGpt` by the ranks of tensor parallel, pipeline parallel and other model hyper-parameters.
+3. Create the instance of `ParallelGpt` by the ranks of tensor parallel, pipeline parallel and other model hyper-parameters.
 4. Receive the request from client and convert the request to the format of input tensors for ParallelGpt.
 5. Run forward
 6. Convert the output tensors of ParallelGpt to response of client and return the response.
