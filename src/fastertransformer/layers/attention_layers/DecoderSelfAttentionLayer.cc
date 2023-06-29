@@ -278,8 +278,8 @@ DecoderSelfAttentionLayer<T>::DecoderSelfAttentionLayer(size_t           max_bat
     int8_mode_(int8_mode)
 {
     FT_CHECK(size_per_head_ == 32 || size_per_head_ == 48 || size_per_head_ == 64 || size_per_head_ == 80
-             || size_per_head_ == 96 || size_per_head_ == 128 || size_per_head_ == 144 || size_per_head_ == 160
-             || size_per_head_ == 192 || size_per_head_ == 224 || size_per_head_ == 256);
+             || size_per_head_ == 96 || size_per_head_ == 112 || size_per_head_ == 128 || size_per_head_ == 144
+             || size_per_head_ == 160 || size_per_head_ == 192 || size_per_head_ == 224 || size_per_head_ == 256);
     if (int8_mode_ == 1) {
         FT_CHECK_WITH_INFO(!(std::is_same<T, float>::value), "Weight only quant not supported for fp32.");
         weight_only_int8_fc_runner_ = std::make_shared<CutlassFpAIntBGemmRunner<T, uint8_t>>();
