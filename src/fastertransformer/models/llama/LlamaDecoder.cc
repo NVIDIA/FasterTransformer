@@ -35,10 +35,11 @@ void LlamaDecoder<T>::initialize()
                                                                            !use_gptj_residual_,
                                                                            is_free_buffer_after_forward_,
                                                                            false,
-                                                                           0,
+                                                                           int8_mode_,
                                                                            custom_all_reduce_comm_,
                                                                            enable_custom_all_reduce_);
 
+    // TODO: SiLu ftn layer not support int8
     ffn_layer_ = new TensorParallelSiluFfnLayer<T>(0,  // max_batch_size
                                                    1,
                                                    head_num_,
@@ -133,6 +134,7 @@ LlamaDecoder<T>::LlamaDecoder(size_t                              head_num,
                               cublasMMWrapper*                    cublas_wrapper,
                               IAllocator*                         allocator,
                               bool                                is_free_buffer_after_forward,
+                              int                                 int8_mode,
                               std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
                               int                                 enable_custom_all_reduce):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
@@ -147,6 +149,7 @@ LlamaDecoder<T>::LlamaDecoder(size_t                              head_num,
     hidden_units_(head_num_ * size_per_head),
     tensor_para_(tensor_para),
     pipeline_para_(pipeline_para),
+    int8_mode_(int8_mode),
     custom_all_reduce_comm_(custom_all_reduce_comm),
     enable_custom_all_reduce_(enable_custom_all_reduce)
 {
@@ -167,6 +170,7 @@ LlamaDecoder<T>::LlamaDecoder(LlamaDecoder<T> const& decoder):
     hidden_units_(decoder.hidden_units_),
     tensor_para_(decoder.tensor_para_),
     pipeline_para_(decoder.pipeline_para_),
+    int8_mode_(decoder.int8_mode_),
     custom_all_reduce_comm_(decoder.custom_all_reduce_comm_),
     enable_custom_all_reduce_(decoder.enable_custom_all_reduce_)
 {
@@ -260,6 +264,7 @@ void LlamaDecoder<T>::forward(std::unordered_map<std::string, Tensor>*          
             }
         }
 
+        // TODO 使用的是T5 LN，这里是没有int8的参数支持
         invokeGeneralT5LayerNorm(decoder_normed_input_,
                                  layer_input,
                                  gpt_decoder_layer_weight->at(l)->pre_layernorm_weights.gamma,
@@ -301,7 +306,7 @@ void LlamaDecoder<T>::forward(std::unordered_map<std::string, Tensor>*          
                                    local_batch_size,
                                    hidden_units_,
                                    (float*)nullptr,
-                                   0,
+                                   int8_mode_,
                                    stream_);
         }
         else {
