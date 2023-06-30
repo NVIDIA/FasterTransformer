@@ -44,7 +44,7 @@ void LlamaContextDecoder<T>::initialize()
                                                                           custom_all_reduce_comm_,
                                                                           enable_custom_all_reduce_);
 
-// TODO: 这里的SiluFfnLayer是不支持int8的dataType，再不做修改的情况下试一下会不会报错。
+
     ffn_layer_ = new TensorParallelSiluFfnLayer<T>(0,  // max_batch_size
                                                    0,  // max_seq_len
                                                    head_num_,
@@ -60,7 +60,8 @@ void LlamaContextDecoder<T>::initialize()
                                                    false,
                                                    true,  // use_gated_activation = true;
                                                    custom_all_reduce_comm_,
-                                                   enable_custom_all_reduce_);
+                                                   enable_custom_all_reduce_,
+                                                   int8_mode_); 
 }
 
 template<typename T>

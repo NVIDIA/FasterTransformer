@@ -541,6 +541,5 @@ void llama_example(const INIReader reader)
     if (d_sequence_lengths != nullptr) {
         deviceFree(d_sequence_lengths);
     }
-
     return;
 }

@@ -210,6 +210,7 @@ public:
                  IAllocator*      allocator,
                  bool             is_free_buffer_after_forward,
                  bool             sparse               = false,
+                 int              int8_mode            = 0,
                  bool             use_gated_activation = false);
 
     SiluFfnLayer(SiluFfnLayer<T> const& ffn_layer);

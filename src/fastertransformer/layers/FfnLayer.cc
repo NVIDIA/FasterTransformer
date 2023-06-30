@@ -684,6 +684,7 @@ SiluFfnLayer<T>::SiluFfnLayer(size_t           max_batch_size,
                               IAllocator*      allocator,
                               bool             is_free_buffer_after_forward,
                               bool             sparse,
+                              int              int8_mode,
                               bool             use_gated_activation):
     FfnLayer<T>(max_batch_size,
                 max_seq_len,
@@ -696,7 +697,7 @@ SiluFfnLayer<T>::SiluFfnLayer(size_t           max_batch_size,
                 allocator,
                 is_free_buffer_after_forward,
                 sparse,
-                0,
+                int8_mode,
                 use_gated_activation)
 {
 }

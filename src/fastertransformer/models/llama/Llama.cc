@@ -927,68 +927,68 @@ void Llama<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                 sync_check_cuda_error();
 
                 
-                // if (tensor_para_.world_size_ == 1) {
-                //     float alpha = 1.0f;
-                //     float beta  = 0.0f;
-                //     cublas_wrapper_->Gemm(CUBLAS_OP_T,
-                //                           CUBLAS_OP_N,
-                //                           vocab_size_padded_,  // n
-                //                           local_batch_size * beam_width,
-                //                           hidden_units_,  // k
-                //                           &alpha,
-                //                           padded_embedding_kernel_ptr_,
-                //                           gemm_data_type,
-                //                           hidden_units_,  // k
-                //                           normed_decoder_output_buf_ + hidden_units_offset,
-                //                           gemm_data_type,
-                //                           hidden_units_,  // k
-                //                           &beta,
-                //                           logits_buf_ + vocab_size_units_offset,
-                //                           CUDA_R_32F,
-                //                           vocab_size_padded_, /* n */
-                //                           CUDA_R_32F,
-                //                           cublasGemmAlgo_t(-1));
-                // }
-                // else {
-                //     FT_CHECK(vocab_size_padded_ % tensor_para_.world_size_ == 0);
-                //     const int local_vocab_size = vocab_size_padded_ / tensor_para_.world_size_;
-                //     float     alpha            = 1.0f;
-                //     float     beta             = 0.0f;
-                //     cublas_wrapper_->Gemm(CUBLAS_OP_T,
-                //                           CUBLAS_OP_N,
-                //                           local_vocab_size,  // n
-                //                           local_batch_size * beam_width,
-                //                           hidden_units_,  // k
-                //                           &alpha,
-                //                           padded_embedding_kernel_ptr_
-                //                               + tensor_para_.rank_ * local_vocab_size * hidden_units_,
-                //                           gemm_data_type,
-                //                           hidden_units_,  // k
-                //                           normed_decoder_output_buf_ + hidden_units_offset,
-                //                           gemm_data_type,
-                //                           hidden_units_,  // k
-                //                           &beta,
-                //                           nccl_logits_buf_ + vocab_size_units_offset
-                //                               + tensor_para_.rank_ * local_batch_size * beam_width * local_vocab_size,
-                //                           CUDA_R_32F,
-                //                           local_vocab_size, /* n */
-                //                           CUDA_R_32F,
-                //                           cublasGemmAlgo_t(-1));
+                if (tensor_para_.world_size_ == 1) {
+                    float alpha = 1.0f;
+                    float beta  = 0.0f;
+                    cublas_wrapper_->Gemm(CUBLAS_OP_T,
+                                          CUBLAS_OP_N,
+                                          vocab_size_padded_,  // n
+                                          local_batch_size * beam_width,
+                                          hidden_units_,  // k
+                                          &alpha,
+                                          padded_embedding_kernel_ptr_,
+                                          gemm_data_type,
+                                          hidden_units_,  // k
+                                          normed_decoder_output_buf_ + hidden_units_offset,
+                                          gemm_data_type,
+                                          hidden_units_,  // k
+                                          &beta,
+                                          logits_buf_ + vocab_size_units_offset,
+                                          CUDA_R_32F,
+                                          vocab_size_padded_, /* n */
+                                          CUDA_R_32F,
+                                          cublasGemmAlgo_t(-1));
+                }
+                else {
+                    FT_CHECK(vocab_size_padded_ % tensor_para_.world_size_ == 0);
+                    const int local_vocab_size = vocab_size_padded_ / tensor_para_.world_size_;
+                    float     alpha            = 1.0f;
+                    float     beta             = 0.0f;
+                    cublas_wrapper_->Gemm(CUBLAS_OP_T,
+                                          CUBLAS_OP_N,
+                                          local_vocab_size,  // n
+                                          local_batch_size * beam_width,
+                                          hidden_units_,  // k
+                                          &alpha,
+                                          padded_embedding_kernel_ptr_
+                                              + tensor_para_.rank_ * local_vocab_size * hidden_units_,
+                                          gemm_data_type,
+                                          hidden_units_,  // k
+                                          normed_decoder_output_buf_ + hidden_units_offset,
+                                          gemm_data_type,
+                                          hidden_units_,  // k
+                                          &beta,
+                                          nccl_logits_buf_ + vocab_size_units_offset
+                                              + tensor_para_.rank_ * local_batch_size * beam_width * local_vocab_size,
+                                          CUDA_R_32F,
+                                          local_vocab_size, /* n */
+                                          CUDA_R_32F,
+                                          cublasGemmAlgo_t(-1));
                     
 
-                //     ftNcclAllGather(nccl_logits_buf_ + vocab_size_units_offset,
-                //                     nccl_logits_buf_ + vocab_size_units_offset,
-                //                     local_batch_size * beam_width * local_vocab_size,
-                //                     tensor_para_.rank_,
-                //                     tensor_para_,
-                //                     stream_);
-                //     invokeTransposeAxis01(logits_buf_ + vocab_size_units_offset,
-                //                           nccl_logits_buf_ + vocab_size_units_offset,
-                //                           tensor_para_.world_size_,
-                //                           local_batch_size * beam_width,
-                //                           local_vocab_size,
-                //                           stream_);
-                // }
+                    ftNcclAllGather(nccl_logits_buf_ + vocab_size_units_offset,
+                                    nccl_logits_buf_ + vocab_size_units_offset,
+                                    local_batch_size * beam_width * local_vocab_size,
+                                    tensor_para_.rank_,
+                                    tensor_para_,
+                                    stream_);
+                    invokeTransposeAxis01(logits_buf_ + vocab_size_units_offset,
+                                          nccl_logits_buf_ + vocab_size_units_offset,
+                                          tensor_para_.world_size_,
+                                          local_batch_size * beam_width,
+                                          local_vocab_size,
+                                          stream_);
+                }
                 
                 
                 int                                     tmp_local_batch_size       = local_batch_size;

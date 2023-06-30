@@ -55,7 +55,8 @@ void LlamaDecoder<T>::initialize()
                                                    false,
                                                    true,  // use_gated_activation = true;
                                                    custom_all_reduce_comm_,
-                                                   enable_custom_all_reduce_);
+                                                   enable_custom_all_reduce_,
+                                                   int8_mode_); 
 }
 
 template<typename T>
