@@ -277,7 +277,6 @@ void llama_example(const INIReader reader)
         cublas_wrapper.setFP32GemmConfig();
     }
 
-    printf("******* Enter  gpt_weights ********** \n");
     const bool                          use_gptj_residual = false;
     fastertransformer::LlamaWeight<T> gpt_weights(hidden_units,
                                                   inter_size,
@@ -292,8 +291,6 @@ void llama_example(const INIReader reader)
                                                   int8_mode,
                                                   prompt_learning_type,
                                                   prefix_prompt_table_pair);
-
-    printf("******* Enter loadModel  ********* \n");
 
     gpt_weights.loadModel(model_dir);
     unsigned long long random_seed;
@@ -311,8 +308,6 @@ void llama_example(const INIReader reader)
                                                        true,   // is_fuse
                                                        false,  // with_relative_position_bias
                                                        true);  // causal_mask
-
-    printf("******* Inilize  Llama  ********* \n");
 
     Llama<T> gpt = Llama<T>(head_num,
                             size_per_head,
@@ -349,12 +344,9 @@ void llama_example(const INIReader reader)
     int* d_output_ids;
     int* d_sequence_lengths;
 
-    printf("******* deviceMalloc start  ********* \n");
 
     deviceMalloc(&d_output_ids, request_batch_size * beam_width * total_output_len, false);
     deviceMalloc(&d_sequence_lengths, request_batch_size * beam_width, false);
-
-    printf("******* deviceMalloc end  ********* \n");
 
     std::vector<uint32_t>                   output_seq_len(request_batch_size, total_output_len);
     std::unordered_map<std::string, Tensor> input_tensors = std::unordered_map<std::string, Tensor>{
@@ -421,8 +413,6 @@ void llama_example(const INIReader reader)
 
     print_mem_usage();
 
-    printf("******* before cudaDeviceSynchronize ********* \n");
-
     int ite = 1;
     cudaDeviceSynchronize();
     mpi::barrier();
@@ -433,19 +423,16 @@ void llama_example(const INIReader reader)
     ft_nvtx::setScope("warmup_time");
     PUSH_RANGE("warmup time")
 
-    printf("******* before gpt.forward ********* \n");
     for (int i = 0; i < ite; ++i) {
         gpt.forward(&output_tensors, &input_tensors, &gpt_weights);
     }
 
-    printf("******* end gpt.forward ********* \n");
     cudaDeviceSynchronize();
     mpi::barrier();
 
     POP_RANGE;
     ft_nvtx::resetScope();
 
-    printf("******* end cudaDeviceSynchronize ********* \n");
 
     if (rank == 0) {
 
@@ -458,11 +445,8 @@ void llama_example(const INIReader reader)
             size_t outCount = total_output_len * request_batch_size * beam_width;
             int*   hBuf     = new int[outCount];
 
-            printf("******* before cudaD2Hcpy ********* \n");
-
             cudaD2Hcpy(hBuf, d_output_ids, outCount);
 
-            printf("******* end cudaD2Hcpy ********* \n");
             {
                 std::cout << "Writing " << outCount << " elements\n";
                 int zeroCount = 0;
@@ -496,11 +480,9 @@ void llama_example(const INIReader reader)
 
     ft_nvtx::setScope("total_time");
     PUSH_RANGE("total time")
-    printf("******* before gpt forward ********* \n");
     for (int i = 0; i < ite; ++i) {
         gpt.forward(&output_tensors, &input_tensors, &gpt_weights);
     }
-    printf("******* after gpt forward ********* \n");
     cudaDeviceSynchronize();
     mpi::barrier();
 
