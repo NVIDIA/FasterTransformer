@@ -1497,6 +1497,8 @@ void ParallelGpt<T>::forward(std::unordered_map<std::string, Tensor>*       outp
                     dynamic_decode_output_tensors.insert(*t);
                 }
 
+dynamic_decode_input_tensors.at("logits").saveNpy("debug_results/ft_logits_step_" + std::to_string(step_) + ".npy");
+
                 PUSH_RANGE("result sampling and stop check");
                 dynamic_decode_layer_->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
                 generation_should_stop &= subbatch_should_stop;
