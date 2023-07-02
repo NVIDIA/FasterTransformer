@@ -81,6 +81,7 @@ void llama_example(const INIReader reader)
 
     int tensor_para_size   = reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size");
     int pipeline_para_size = reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size");
+    int int8_mode  = reader.GetInteger("ft_instance_hyperparameter", "int8_mode", 0);
 
     const size_t head_num             = reader.GetInteger(model_name, "head_num");
     const size_t size_per_head        = reader.GetInteger(model_name, "size_per_head");
@@ -177,6 +178,7 @@ void llama_example(const INIReader reader)
         tiled_stop_words.insert(tiled_stop_words.end(), stop_words.begin(), stop_words.end());
     }
 
+    
     int* d_stop_words = nullptr;
     deviceMalloc(&d_stop_words, tiled_stop_words.size(), false);
     cudaH2Dcpy(d_stop_words, tiled_stop_words.data(), tiled_stop_words.size());
@@ -192,6 +194,7 @@ void llama_example(const INIReader reader)
                    end_id,
                    1,
                    "../examples/cpp/llama/start_ids.csv");
+
 
     int* d_input_ids;
     int* d_input_lengths;
@@ -285,6 +288,7 @@ void llama_example(const INIReader reader)
                                                   pipeline_para.world_size_,
                                                   pipeline_para.rank_,
                                                   use_gptj_residual,
+                                                  int8_mode,
                                                   prompt_learning_type,
                                                   prefix_prompt_table_pair);
 
@@ -331,12 +335,19 @@ void llama_example(const INIReader reader)
                             &allocator,
                             false,
                             &prop,
-                            attention_type);
+                            attention_type,
+                            int8_mode,
+                            nullptr,
+                            0,
+                            1.0f);
 
     int* d_output_ids;
     int* d_sequence_lengths;
+
+
     deviceMalloc(&d_output_ids, request_batch_size * beam_width * total_output_len, false);
     deviceMalloc(&d_sequence_lengths, request_batch_size * beam_width, false);
+
     std::vector<uint32_t>                   output_seq_len(request_batch_size, total_output_len);
     std::unordered_map<std::string, Tensor> input_tensors = std::unordered_map<std::string, Tensor>{
         {"input_ids",
@@ -411,14 +422,17 @@ void llama_example(const INIReader reader)
     ite = 1;
     ft_nvtx::setScope("warmup_time");
     PUSH_RANGE("warmup time")
+
     for (int i = 0; i < ite; ++i) {
         gpt.forward(&output_tensors, &input_tensors, &gpt_weights);
     }
+
     cudaDeviceSynchronize();
     mpi::barrier();
 
     POP_RANGE;
     ft_nvtx::resetScope();
+
 
     if (rank == 0) {
 
@@ -430,6 +444,7 @@ void llama_example(const INIReader reader)
         else {
             size_t outCount = total_output_len * request_batch_size * beam_width;
             int*   hBuf     = new int[outCount];
+
             cudaD2Hcpy(hBuf, d_output_ids, outCount);
 
             {
@@ -468,7 +483,6 @@ void llama_example(const INIReader reader)
     for (int i = 0; i < ite; ++i) {
         gpt.forward(&output_tensors, &input_tensors, &gpt_weights);
     }
-
     cudaDeviceSynchronize();
     mpi::barrier();
 
@@ -509,6 +523,5 @@ void llama_example(const INIReader reader)
     if (d_sequence_lengths != nullptr) {
         deviceFree(d_sequence_lengths);
     }
-
     return;
 }

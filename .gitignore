@@ -13,6 +13,8 @@ __pycache__/
 /models
 /notebooks
 **/.ipynb_checkpoints/
+.DS_Store
 
 /3rdparty/NeMo/
 /3rdparty/apex/
+

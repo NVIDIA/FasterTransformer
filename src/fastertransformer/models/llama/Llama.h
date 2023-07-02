@@ -41,6 +41,7 @@ private:
     float layernorm_eps_;
 
     static constexpr bool  neox_rotary_style_ = true;
+    float       shared_contexts_ratio_;
 
     int    start_id_;
     int    end_id_;
@@ -54,6 +55,7 @@ private:
     int                                 enable_custom_all_reduce_;
 
     AttentionType attention_type_;
+    const int     int8_mode_      = 0;
 
     size_t     vocab_size_padded_;
     const bool is_context_qk_buf_float_ =
@@ -120,6 +122,11 @@ protected:
 
     bool* generation_should_stop_ = nullptr;
 
+    int* shared_contexts_idx_  = nullptr;
+    int* compact_idx_          = nullptr;
+    int* batch_to_compact_idx_ = nullptr;
+    int* compact_size_         = nullptr;
+
     T*     context_decoder_input_buf_;
     T*     context_decoder_output_buf_;
     float* output_log_probs_buf_;
@@ -165,8 +172,10 @@ public:
           bool                                is_free_buffer_after_forward,
           cudaDeviceProp*                     cuda_device_prop         = nullptr,
           AttentionType                       attention_type           = AttentionType::UNFUSED_MHA,
+          int                                 int8_mode                = 0,
           std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
-          int                                 enable_custom_all_reduce = 0);
+          int                                 enable_custom_all_reduce = 0,
+          float                               shared_contexts_ratio    = 1.0f);
 
     Llama(size_t                              head_num,
           size_t                              size_per_head,
@@ -195,8 +204,10 @@ public:
           bool                                is_free_buffer_after_forward,
           cudaDeviceProp*                     cuda_device_prop         = nullptr,
           AttentionType                       attention_type           = AttentionType::UNFUSED_MHA,
+          int                                 int8_mode                = 0,
           std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
-          int                                 enable_custom_all_reduce = 0);
+          int                                 enable_custom_all_reduce = 0,
+          float                               shared_contexts_ratio    = 1.0f);
 
     Llama(Llama<T> const& Llama);
 

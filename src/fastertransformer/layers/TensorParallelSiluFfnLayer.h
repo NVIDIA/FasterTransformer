@@ -47,7 +47,8 @@ public:
                                bool                                is_sparse,
                                bool                                use_gated_activation     = false,
                                std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
-                               int                                 enable_custom_all_reduce = 0);
+                               int                                 enable_custom_all_reduce = 0,
+                               int                                 int8_mode                = 0);
 
     TensorParallelSiluFfnLayer(TensorParallelSiluFfnLayer<T> const& ffn_layer);
 

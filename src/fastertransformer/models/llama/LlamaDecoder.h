@@ -70,6 +70,8 @@ protected:
     BaseAttentionLayer<T>* self_attention_layer_;
     FfnLayer<T>*           ffn_layer_;
 
+    int int8_mode_ = 0;
+
 public:
     LlamaDecoder(size_t                              head_num,
                  size_t                              size_per_head,
@@ -85,6 +87,7 @@ public:
                  cublasMMWrapper*                    cublas_wrapper,
                  IAllocator*                         allocator,
                  bool                                is_free_buffer_after_forward,
+                 int                                 int8_mode                 = 0,
                  std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm    = nullptr,
                  int                                 enable_custom_all_reduce_ = 0);
 
