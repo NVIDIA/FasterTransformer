@@ -200,11 +200,12 @@ void TensorParallelDecoderSelfAttentionLayer<T>::forward(TensorMap*             
     //      value_cache [batch, head_num, max_seq_len, size_per_head]
 
     const size_t size = output_tensors->at("hidden_features").size();
+    std::vector<Tensor> reduce_tensor{output_tensors->at("hidden_features")};
 
     bool use_custom_all_reduce_kernel = false;
     if (enable_custom_all_reduce_ && custom_all_reduce_comm_ != nullptr && do_all_reduce_) {
-        std::vector<Tensor> reduce_tensor{output_tensors->at("hidden_features")};
         use_custom_all_reduce_kernel = custom_all_reduce_comm_->swapInternalBuffer(&reduce_tensor, size);
+        output_tensors->at("hidden_features").data = reduce_tensor[0].data;
     }
 
     DecoderSelfAttentionLayer<T>::forward(output_tensors, input_tensors, attention_weights);
@@ -217,6 +218,7 @@ void TensorParallelDecoderSelfAttentionLayer<T>::forward(TensorMap*             
         }
         else {
             custom_all_reduce_comm_->customAllReduce(size, DecoderSelfAttentionLayer<T>::stream_);
+            output_tensors->at("hidden_features").data = reduce_tensor[0].data;
         }
         sync_check_cuda_error();
     }
