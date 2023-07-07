@@ -81,7 +81,7 @@ void FfnLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, c
     }
 
     // TODO: INT8 and Sparsity are currently not implemented (geglu or reglu)
-    const bool use_gated_activation = use_gated_activation_ && ffn_weights->intermediate_weight2.kernel != nullptr;
+    const bool use_gated_activation = use_gated_activation_ && (ffn_weights->intermediate_weight2.kernel != nullptr || ffn_weights->intermediate_weight2.int8_kernel != nullptr);
 
     // moe can't be used with use_gated_activation currently
     FT_CHECK(!(use_gated_activation && use_moe));

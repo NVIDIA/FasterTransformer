@@ -50,7 +50,7 @@ template<typename T>
 LlamaDecoderLayerWeight<T>::~LlamaDecoderLayerWeight()
 {
     if (is_maintain_buffer == true) {
-        for (int i = 0; i < 12; i++) {
+        for (int i = 0; i < 14; i++) {
             if (!use_gptj_residual_ && i != attention_dense_bias_weight_id) {
                 cudaFree(weights_ptr[i]);
             }
