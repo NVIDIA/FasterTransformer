@@ -820,11 +820,18 @@ void Llama<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                         sizeof(T) * vocab_size_ * hidden_units_,
                         cudaMemcpyDeviceToDevice,
                         stream_);
-        cudaMemcpyAsync(padded_embedding_bias_,
-                        gpt_weights->post_decoder_embedding.bias,
-                        sizeof(T) * vocab_size_,
-                        cudaMemcpyDeviceToDevice,
-                        stream_);
+        if (gpt_weights->post_decoder_embedding.bias) {
+            cudaMemcpyAsync(padded_embedding_bias_,
+                            gpt_weights->post_decoder_embedding.bias,
+                            sizeof(T) * vocab_size_,
+                            cudaMemcpyDeviceToDevice,
+                            stream_);
+        } else {
+            cudaMemsetAsync(padded_embedding_bias_,
+                            0,
+                            sizeof(T) * vocab_size_,
+                            stream_);
+        }
         sync_check_cuda_error();
     }
 

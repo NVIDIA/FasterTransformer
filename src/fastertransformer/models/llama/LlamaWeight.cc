@@ -89,6 +89,7 @@ LlamaWeight<T>::~LlamaWeight()
         post_decoder_layernorm.beta   = nullptr;
         post_decoder_layernorm.gamma  = nullptr;
         post_decoder_embedding.kernel = nullptr;
+        post_decoder_embedding.bias = nullptr;
         is_maintain_buffer            = false;
     }
 }
@@ -196,6 +197,7 @@ void LlamaWeight<T>::setWeightPtr()
     post_decoder_layernorm.beta   = weights_ptr[1];
     post_decoder_layernorm.gamma  = weights_ptr[2];
     post_decoder_embedding.kernel = weights_ptr[3];
+    post_decoder_embedding.bias   = nullptr;
 
     // prompt learning tables: set weight ptr
     if (malloc_load_prompt_weights_) {
