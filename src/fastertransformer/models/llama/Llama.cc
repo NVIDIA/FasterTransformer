@@ -108,9 +108,6 @@ void Llama<T>::allocateBuffer(
         padded_embedding_kernel_ =
             (T*)(allocator_->reMalloc(padded_embedding_kernel_, sizeof(T) * hidden_units_ * vocab_size_padded_, true));
         padded_embedding_kernel_ptr_ = padded_embedding_kernel_;
-
-        padded_embedding_bias_ =
-            (T*)(allocator_->reMalloc(padded_embedding_bias_, sizeof(T) * vocab_size_padded_, true));
     }
 
     input_attention_mask_ = (T*)(allocator_->reMalloc(
@@ -184,7 +181,6 @@ void Llama<T>::freeBuffer()
         if (vocab_size_ != vocab_size_padded_) {
             padded_embedding_kernel_ptr_ = nullptr;
             allocator_->free((void**)(&padded_embedding_kernel_));
-            allocator_->free((void**)(&padded_embedding_bias_));
         }
 
         allocator_->free((void**)(&input_attention_mask_));
@@ -818,11 +814,6 @@ void Llama<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         cudaMemcpyAsync(padded_embedding_kernel_,
                         gpt_weights->post_decoder_embedding.kernel,
                         sizeof(T) * vocab_size_ * hidden_units_,
-                        cudaMemcpyDeviceToDevice,
-                        stream_);
-        cudaMemcpyAsync(padded_embedding_bias_,
-                        gpt_weights->post_decoder_embedding.bias,
-                        sizeof(T) * vocab_size_,
                         cudaMemcpyDeviceToDevice,
                         stream_);
         sync_check_cuda_error();

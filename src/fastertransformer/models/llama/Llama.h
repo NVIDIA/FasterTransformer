@@ -84,7 +84,6 @@ private:
 
 protected:
     T*       padded_embedding_kernel_;
-    T*       padded_embedding_bias_;
     const T* padded_embedding_kernel_ptr_;
 
     T* input_attention_mask_;
