@@ -174,7 +174,7 @@ void DebertaWeight<T>::loadModel(std::string dir_path)
 
     for (uint l = 0; l < num_layer_; l++) {
         if (isValidLayerParallelId(l)) {
-            deberta_layer_weights[l].loadModel(dir_path + "model.encoder.layer." + std::to_string(l) + ".",
+            deberta_layer_weights[l].loadModel(dir_path + "/model.encoder.layer." + std::to_string(l) + ".",
                                                model_file_type);
         }
     }
