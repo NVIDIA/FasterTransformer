@@ -8,6 +8,7 @@ This repository provides a script and recipe to run the highly optimized transfo
   - [Table Of Contents](#table-of-contents)
   - [Model overview](#model-overview)
     - [Support matrix](#support-matrix)
+  - [Projects](#projects)
   - [Advanced](#advanced)
     - [Global Environment](#global-environment)
   - [Performance](#performance)
@@ -71,6 +72,12 @@ FasterTransformer is built on top of CUDA, cuBLAS, cuBLASLt and C++. We provide 
 * Note that the FasterTransformer supports the models above on C++ because all source codes are built on C++.
 
 More details of specific models are put in `xxx_guide.md` of [`docs/`](docs), where `xxx` means the model name. Some common questions and the respective answers are put in [`docs/QAList.md`](docs/QAList.md). Note that the model of Encoder and BERT are similar and we put the explanation into `bert_guide.md` together.
+
+## Projects
+
+- [LMDeploy](https://github.com/InternLM/lmdeploy)
+
+   Based on FasterTransformer, It has implemented an efficient inference engine - **TurboMind**, supports the inference of **Llama** and **Llama-2** and their variant models.
 
 ## Advanced
 
