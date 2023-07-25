@@ -115,6 +115,7 @@ void OnlineBeamSearchLayer<T>::invokeSoftMax(TensorMap* output_tensors, TensorMa
 
     const int   batch_size       = output_tensors->at("output_ids").shape[1];
     const int   beam_width       = output_tensors->at("output_ids").shape[2];
+    const int   max_input_length = input_tensors->at("max_input_length").getVal<int>();
     const int   step             = input_tensors->at("step").getVal<int>();
     const int   ite              = input_tensors->at("ite").getVal<int>();
     const int   local_batch_size = input_tensors->at("logits").shape[0];
@@ -125,6 +126,7 @@ void OnlineBeamSearchLayer<T>::invokeSoftMax(TensorMap* output_tensors, TensorMa
         input_tensors->isExist("len_penalty") ? input_tensors->at("len_penalty").getVal<float>() : 0.0f;
 
     const int id_offset = step * batch_size * beam_width + local_batch_size * ite * beam_width;
+    const int gen_offset = (step - max_input_length) * batch_size * beam_width + local_batch_size * ite * beam_width;
 
     BeamHypotheses beam_hyps;
     if (output_tensors->isExist("beam_hyps")) {
@@ -147,7 +149,7 @@ void OnlineBeamSearchLayer<T>::invokeSoftMax(TensorMap* output_tensors, TensorMa
                       output_tensors->at("finished").getPtr<bool>(),
                       output_tensors->at("sequence_length").getPtr<int>(),
                       output_tensors->at("cum_log_probs").getPtr<float>(),
-                      output_tensors->getPtrWithOffset<float>("output_log_probs", id_offset, nullptr),
+                      output_tensors->getPtrWithOffset<float>("output_log_probs", gen_offset, nullptr),
                       output_tensors->at("output_ids").getPtrWithOffset<int>(id_offset),
                       topk_softmax_workspace_,
                       topk_softmax_workspace_size_,
