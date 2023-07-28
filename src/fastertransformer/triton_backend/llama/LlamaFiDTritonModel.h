@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include "src/fastertransformer/models/llama/Llama.h"
+#include "src/fastertransformer/models/llama/LlamaFiD.h"
 #include "src/fastertransformer/triton_backend/transformer_triton_backend.hpp"
 #include "src/fastertransformer/utils/cuda_utils.h"
 #include "src/fastertransformer/utils/custom_ar_comm.h"

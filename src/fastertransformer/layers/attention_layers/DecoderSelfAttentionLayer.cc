@@ -65,6 +65,7 @@ void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
                                         const float* qkv_scale_out,
                                         const float* attention_out_scale,
                                         const int    int8_mode,
+                                        const int rotary_position,
                                         cudaStream_t stream)
 {
     using DataType = typename SATypeConverter<T>::Type;
@@ -135,6 +136,7 @@ void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
     params.ia3_value_weights = reinterpret_cast<const DataType*>(ia3_value_weights);
 
     params.int8_mode = int8_mode;
+    params.rotary_position = rotary_position;
     if (int8_mode == 2) {
         params.qkv_scale_out       = qkv_scale_out;
         params.attention_out_scale = attention_out_scale;
@@ -177,7 +179,8 @@ void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
                                                      const T*     ia3_value_weights,                                   \
                                                      const float* qkv_scale_out,                                       \
                                                      const float* attention_out_scale,                                 \
-                                                     const int    int8_mode,                                           \
+                                                     const int    int8_mode,                                            \
+                                                     const int    rotary_position,                                       \
                                                      cudaStream_t stream)
 
 INSTANTIATE_FUSEDQKV_MASKED_ATTENTION_DISPATCH(float);
@@ -611,6 +614,7 @@ void DecoderSelfAttentionLayer<T>::forward(TensorMap*                output_tens
         int8_mode_ == 2 ? attention_weights->query_weight.scale_out : nullptr,
         int8_mode_ == 2 ? attention_weights->attention_output_weight.scale : nullptr,
         int8_mode_,
+        input_tensors->getVal<int>("rotary_position"),
         stream_);
     sync_check_cuda_error();
 

@@ -208,13 +208,14 @@ void LlamaDecoder<T>::forward(std::unordered_map<std::string, Tensor>*          
     //              Here, local_batch_size contains the beam_width, so local_batch_size / beam_width
     //              is real local_batch_size.
     //      masked_tokens[local_batch_size, memory_len]
+    //      rotary_position [1] on cpu
 
     // output tensors:
     //      decoder_output [local_batch_size, hidden_dimension],
     //      key_cache [num_layer, batch_size, head_num, size_per_head // x, memory_len, x]
     //      value_cache [num_layer, batch_size, head_num, memory_len, size_per_head]
 
-    FT_CHECK(input_tensors->size() == 11);
+    FT_CHECK(input_tensors->size() == 12);
     FT_CHECK(output_tensors->size() == 3);
 
     const DataType data_type        = getTensorType<T>();
@@ -288,6 +289,7 @@ void LlamaDecoder<T>::forward(std::unordered_map<std::string, Tensor>*          
             {"hidden_features", Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, self_attn_output_}},
             {"key_cache", Tensor{MEMORY_GPU, data_type, self_k_cache_size, k_cache.getPtrWithOffset(cache_offset)}},
             {"value_cache", Tensor{MEMORY_GPU, data_type, self_v_cache_size, v_cache.getPtrWithOffset(cache_offset)}}};
+
 
         self_attention_layer_->forward(&self_attention_output_tensors,
                                        &self_attention_input_tensors,

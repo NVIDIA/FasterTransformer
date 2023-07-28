@@ -67,7 +67,7 @@ std::unordered_map<std::string, ft::Tensor> LlamaTritonModelInstance<T>::convert
     h_total_output_lengths_         = reinterpret_cast<uint32_t*>(malloc(request_batch_size * sizeof(uint32_t)));
     for (int i = 0; i < request_batch_size; ++i) {
         h_total_output_lengths_[i] =
-            reinterpret_cast<const uint32_t*>(input_tensors->at("request_output_len").data)[i] + input_data_len;
+            reinterpret_cast<const uint32_t*>(input_tensors->at("request_output_len").data)[i] + request_batch_size * input_data_len;
     }
 
     std::unordered_map<std::string, ft::Tensor> ft_input_tensors = std::unordered_map<std::string, ft::Tensor>{
@@ -170,7 +170,7 @@ LlamaTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::str
     const uint32_t max_request_output_len = (size_t)*std::max_element(
         (int*)input_tensors->at("request_output_len").data,
         (int*)input_tensors->at("request_output_len").data + input_tensors->at("request_output_len").shape[0]);
-    const uint32_t total_output_len = max_request_output_len + input_tensors->at("input_ids").shape[1];
+    const uint32_t total_output_len = max_request_output_len + request_batch_size * input_tensors->at("input_ids").shape[1];
     const uint32_t beam_width =
         input_tensors->count("beam_width") ? (size_t)(*(uint*)input_tensors->at("beam_width").data) : 1;
 
@@ -181,12 +181,12 @@ LlamaTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::str
     std::unordered_map<std::string, ft::Tensor> output_tensors = std::unordered_map<std::string, ft::Tensor>{
         {"output_ids",
          ft::Tensor{ft::MEMORY_GPU,
-                    ft::TYPE_UINT32,
+                    ft::TYPE_INT32,
                     std::vector<size_t>{request_batch_size, beam_width, total_output_len},
                     d_output_ids_}},
         {"sequence_length",
          ft::Tensor{ft::MEMORY_GPU,
-                    ft::TYPE_UINT32,
+                    ft::TYPE_INT32,
                     std::vector<size_t>{request_batch_size, beam_width},
                     d_sequence_lengths_}}};
 

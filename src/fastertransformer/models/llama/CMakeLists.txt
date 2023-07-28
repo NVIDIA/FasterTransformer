@@ -52,14 +52,15 @@ set_property(TARGET LlamaWeight PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET LlamaWeight PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(LlamaWeight PUBLIC LlamaDecoderLayerWeight cuda_utils logger)
 
-add_library(Llama STATIC Llama.cc)
-set_property(TARGET Llama PROPERTY POSITION_INDEPENDENT_CODE  ON)
-set_property(TARGET Llama PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(Llama PUBLIC -lcudart
+add_library(LlamaFiD STATIC LlamaFiD.cc)
+set_property(TARGET LlamaFiD PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET LlamaFiD PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+target_link_libraries(LlamaFiD PUBLIC -lcudart
                       LlamaDecoder
                       LlamaContextDecoder
                       decoding_kernels
                       gpt_kernels
+                      memory_utils
                       DynamicDecodeLayer
                       BaseBeamSearchLayer
                       bert_preprocess_kernels

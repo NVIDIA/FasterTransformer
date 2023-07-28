@@ -16,7 +16,7 @@
 
 #include "3rdparty/INIReader.h"
 #include "examples/cpp/multi_gpu_gpt/gpt_example_utils.h"
-#include "src/fastertransformer/models/llama/Llama.h"
+#include "src/fastertransformer/models/llama/LlamaFiD.h"
 #include "src/fastertransformer/utils/mpi_utils.h"
 #include "src/fastertransformer/utils/nccl_utils.h"
 #include "src/fastertransformer/utils/nvtx_utils.h"
@@ -103,7 +103,7 @@ void llama_example(const INIReader reader)
     const float  len_penalty                = reader.GetFloat("request", "len_penalty");
     const float  beam_search_diversity_rate = reader.GetFloat("request", "beam_search_diversity_rate");
     const int    min_length                 = reader.GetInteger("request", "min_length", 0);
-    const size_t request_batch_size         = 1; // reader.GetInteger("request", "request_batch_size");
+    const size_t request_batch_size         = reader.GetInteger("request", "request_batch_size");
     // The length of tokens we hope this model to generate
     const int request_output_len = reader.GetInteger("request", "request_output_len");
 
@@ -246,7 +246,7 @@ void llama_example(const INIReader reader)
         prefix_prompt_task_ids[i] = (num_tasks > 0) ? i % num_tasks : 0;
     }
 
-    const int total_output_len = max_input_len + request_output_len;
+    const int total_output_len = max_input_len * request_batch_size + request_output_len;
 
     cudaStream_t     stream;
     cublasHandle_t   cublas_handle;
@@ -416,7 +416,8 @@ void llama_example(const INIReader reader)
     }
     cudaDeviceSynchronize();
     mpi::barrier();
-
+    //output_tensors.output_ids
+    printDebugLayer(d_output_ids, request_batch_size * beam_width * total_output_len, "return");
     POP_RANGE;
     ft_nvtx::resetScope();
 
@@ -465,9 +466,9 @@ void llama_example(const INIReader reader)
 
     ft_nvtx::setScope("total_time");
     PUSH_RANGE("total time")
-    for (int i = 0; i < ite; ++i) {
-        gpt.forward(&output_tensors, &input_tensors, &gpt_weights);
-    }
+    // for (int i = 0; i < ite; ++i) {
+    //     gpt.forward(&output_tensors, &input_tensors, &gpt_weights);
+    // }
 
     cudaDeviceSynchronize();
     mpi::barrier();

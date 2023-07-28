@@ -16,8 +16,8 @@
 
 #pragma once
 
-#include "src/fastertransformer/models/llama/Llama.h"
-#include "src/fastertransformer/triton_backend/llama/LlamaTritonModel.h"
+#include "src/fastertransformer/models/llama/LlamaFiD.h"
+#include "src/fastertransformer/triton_backend/llama/LlamaFiDTritonModel.h"
 #include "src/fastertransformer/triton_backend/transformer_triton_backend.hpp"
 #include <memory>
 

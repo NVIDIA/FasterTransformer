@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/triton_backend/llama/LlamaTritonModel.h"
+#include "src/fastertransformer/triton_backend/llama/LlamaFiDTritonModel.h"
 #include "3rdparty/INIReader.h"
 #include "src/fastertransformer/triton_backend/llama/LlamaTritonModelInstance.h"
 #include "src/fastertransformer/triton_backend/transformer_triton_backend.hpp"

@@ -106,6 +106,9 @@ template<typename T>
 void invokeInPlaceTranspose0213(T* data, T* workspace, const int dim0, const int dim1, const int dim2, const int dim3);
 
 template<typename T>
+void invokeFlattenKV(T* dst, T* src, const int dim0, const int dim1, const int dim2, const int dim3, const int dim4, const int n_context, const int dim3_diff);
+
+template<typename T>
 void invokeInPlaceTranspose102(T* data, T* workspace, const int dim0, const int dim1, const int dim2);
 
 template<typename T>

@@ -25,6 +25,7 @@
 #include "src/fastertransformer/models/llama/LlamaWeight.h"
 #include "src/fastertransformer/utils/custom_ar_comm.h"
 #include "src/fastertransformer/utils/prompt_learning.h"
+#include "src/fastertransformer/utils/memory_utils.h"
 
 namespace fastertransformer {
 
@@ -75,7 +76,7 @@ private:
 
     void allocateBuffer() override;
     void allocateBuffer(
-        size_t batch_size, size_t beam_width, size_t max_seq_len, size_t max_cache_seq_len, size_t max_input_len);
+        size_t batch_size, size_t beam_width, size_t max_seq_len, size_t max_cache_seq_len, size_t max_input_len, size_t max_cache_len);
     void freeBuffer() override;
 
     void initialize();
@@ -102,7 +103,9 @@ protected:
     uint32_t* seq_limit_len_             = nullptr;
 
     T*   key_cache_;
+    T*   key_cache_full;
     T*   value_cache_;
+    T*   value_cache_full;
     int* cache_indirections_[2] = {nullptr, nullptr};
 
     // prompt_learning weight_batch ptrs
