@@ -757,7 +757,7 @@ void GptNeoX<T>::forward(std::unordered_map<std::string, Tensor>*       output_t
 
     invokeMaskPaddingTokens(masked_tokens_,
                             input_tensors->at("input_lengths").getPtr<const int>(),  // not_tiled
-                            tiled_prompt_lengths_buf_,
+                            has_prefix_prompt_ ? tiled_prompt_lengths_buf_ : (const int*)nullptr,,
                             max_cache_seq_len,
                             max_input_length + max_prefix_prompt_length,
                             0,
