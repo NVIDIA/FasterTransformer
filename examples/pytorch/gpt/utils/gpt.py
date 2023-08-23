@@ -403,38 +403,39 @@ class GPTWeights:
         layer_num = self.layer_num
         if self.int8_mode != 0:
             for i in range(layer_num):
-                self.int8_w[i + 0 * layer_num], self.scale[i + 0 *
-                                                           layer_num] = self.weight_transpose_calibrate_quantize(self.w[2 * layer_num + i])
-                self.int8_w[i + 1 * layer_num], self.scale[i + 1 *
-                                                           layer_num] = self.weight_transpose_calibrate_quantize(self.w[4 * layer_num + i])
-                self.int8_w[i + 2 * layer_num], self.scale[i + 2 *
-                                                           layer_num] = self.weight_transpose_calibrate_quantize(self.w[8 * layer_num + i])
-                self.int8_w[i + 3 * layer_num], self.scale[i + 3 *
-                                                           layer_num] = self.weight_transpose_calibrate_quantize(self.w[10 * layer_num + i])
+                if is_load(i):
+                    self.int8_w[i + 0 * layer_num], self.scale[i + 0 *
+                                                               layer_num] = self.weight_transpose_calibrate_quantize(self.w[2 * layer_num + i])
+                    self.int8_w[i + 1 * layer_num], self.scale[i + 1 *
+                                                               layer_num] = self.weight_transpose_calibrate_quantize(self.w[4 * layer_num + i])
+                    self.int8_w[i + 2 * layer_num], self.scale[i + 2 *
+                                                               layer_num] = self.weight_transpose_calibrate_quantize(self.w[8 * layer_num + i])
+                    self.int8_w[i + 3 * layer_num], self.scale[i + 3 *
+                                                               layer_num] = self.weight_transpose_calibrate_quantize(self.w[10 * layer_num + i])
 
-                # We clear the original weights since they are no longer needed
-                if self.int8_mode == 1:
-                    self.w[2 * layer_num + i] = torch.empty(0).to(str_type_map[self.inference_data_type])
-                    self.w[4 * layer_num + i] = torch.empty(0).to(str_type_map[self.inference_data_type])
-                    self.w[8 * layer_num + i] = torch.empty(0).to(str_type_map[self.inference_data_type])
-                    self.w[10 * layer_num + i] = torch.empty(0).to(str_type_map[self.inference_data_type])
-
-                if self.has_adapters:
-                    self.int8_w[i + 4 * layer_num], self.scale[i + 4 * layer_num] = self.weight_transpose_calibrate_quantize(
-                        self.w[12 * layer_num + i + self.adapter_offset])
-                    self.int8_w[i + 5 * layer_num], self.scale[i + 5 * layer_num] = self.weight_transpose_calibrate_quantize(
-                        self.w[14 * layer_num + i + self.adapter_offset])
-                    self.int8_w[i + 6 * layer_num], self.scale[i + 6 * layer_num] = self.weight_transpose_calibrate_quantize(
-                        self.w[16 * layer_num + i + self.adapter_offset])
-                    self.int8_w[i + 7 * layer_num], self.scale[i + 7 * layer_num] = self.weight_transpose_calibrate_quantize(
-                        self.w[18 * layer_num + i + self.adapter_offset])
-
-                    # Similar to above:
+                    # We clear the original weights since they are no longer needed
                     if self.int8_mode == 1:
-                        self.w[12 * layer_num + i + self.adapter_offset] = torch.empty(0).to(str_type_map[self.inference_data_type])
-                        self.w[14 * layer_num + i + self.adapter_offset] = torch.empty(0).to(str_type_map[self.inference_data_type])
-                        self.w[16 * layer_num + i + self.adapter_offset] = torch.empty(0).to(str_type_map[self.inference_data_type])
-                        self.w[18 * layer_num + i + self.adapter_offset] = torch.empty(0).to(str_type_map[self.inference_data_type])
+                        self.w[2 * layer_num + i] = torch.empty(0).to(str_type_map[self.inference_data_type])
+                        self.w[4 * layer_num + i] = torch.empty(0).to(str_type_map[self.inference_data_type])
+                        self.w[8 * layer_num + i] = torch.empty(0).to(str_type_map[self.inference_data_type])
+                        self.w[10 * layer_num + i] = torch.empty(0).to(str_type_map[self.inference_data_type])
+
+                    if self.has_adapters:
+                        self.int8_w[i + 4 * layer_num], self.scale[i + 4 * layer_num] = self.weight_transpose_calibrate_quantize(
+                            self.w[12 * layer_num + i + self.adapter_offset])
+                        self.int8_w[i + 5 * layer_num], self.scale[i + 5 * layer_num] = self.weight_transpose_calibrate_quantize(
+                            self.w[14 * layer_num + i + self.adapter_offset])
+                        self.int8_w[i + 6 * layer_num], self.scale[i + 6 * layer_num] = self.weight_transpose_calibrate_quantize(
+                            self.w[16 * layer_num + i + self.adapter_offset])
+                        self.int8_w[i + 7 * layer_num], self.scale[i + 7 * layer_num] = self.weight_transpose_calibrate_quantize(
+                            self.w[18 * layer_num + i + self.adapter_offset])
+
+                        # Similar to above:
+                        if self.int8_mode == 1:
+                            self.w[12 * layer_num + i + self.adapter_offset] = torch.empty(0).to(str_type_map[self.inference_data_type])
+                            self.w[14 * layer_num + i + self.adapter_offset] = torch.empty(0).to(str_type_map[self.inference_data_type])
+                            self.w[16 * layer_num + i + self.adapter_offset] = torch.empty(0).to(str_type_map[self.inference_data_type])
+                            self.w[18 * layer_num + i + self.adapter_offset] = torch.empty(0).to(str_type_map[self.inference_data_type])
         return True
 
 
