@@ -333,6 +333,8 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:FfnLayer>
   $<TARGET_OBJECTS:FusedAttentionLayer>
   $<TARGET_OBJECTS:GptContextAttentionLayer>
+  $<TARGET_OBJECTS:LlamaContextAttentionLayer>
+  $<TARGET_OBJECTS:LlamaDecoderSelfAttentionLayer>
   $<TARGET_OBJECTS:GptJ>
   $<TARGET_OBJECTS:GptJContextDecoder>
   $<TARGET_OBJECTS:GptJDecoder>
@@ -353,6 +355,12 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:ParallelGptDecoderLayerWeight>
   $<TARGET_OBJECTS:ParallelGptTritonBackend>
   $<TARGET_OBJECTS:ParallelGptWeight>
+  $<TARGET_OBJECTS:Llama>
+  $<TARGET_OBJECTS:LlamaContextDecoder>
+  $<TARGET_OBJECTS:LlamaDecoder>
+  $<TARGET_OBJECTS:LlamaDecoderLayerWeight>
+  $<TARGET_OBJECTS:LlamaTritonBackend>
+  $<TARGET_OBJECTS:LlamaWeight>
   $<TARGET_OBJECTS:T5Common>
   $<TARGET_OBJECTS:T5Decoder>
   $<TARGET_OBJECTS:T5Decoding>
@@ -361,6 +369,8 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:T5EncoderTritonBackend>
   $<TARGET_OBJECTS:TensorParallelDecoderCrossAttentionLayer>
   $<TARGET_OBJECTS:TensorParallelDecoderSelfAttentionLayer>
+  $<TARGET_OBJECTS:TensorParallelLlamaDecoderSelfAttentionLayer>
+  $<TARGET_OBJECTS:TensorParallelLlamaContextAttentionLayer>
   $<TARGET_OBJECTS:TensorParallelDisentangledAttentionLayer>
   $<TARGET_OBJECTS:TensorParallelGeluFfnLayer>
   $<TARGET_OBJECTS:TensorParallelSiluFfnLayer>
@@ -394,6 +404,7 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:fpA_intB_gemm>
   $<TARGET_OBJECTS:gen_relative_pos_bias>
   $<TARGET_OBJECTS:gpt_kernels>
+  $<TARGET_OBJECTS:repeat_kv_kernels>
   $<TARGET_OBJECTS:int8_gemm>
   $<TARGET_OBJECTS:layernorm_int8_kernels>
   $<TARGET_OBJECTS:layernorm_kernels>

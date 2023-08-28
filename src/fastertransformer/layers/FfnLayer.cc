@@ -81,7 +81,7 @@ void FfnLayer<T>::forward(TensorMap* output_tensors, TensorMap* input_tensors, c
     }
 
     // TODO: INT8 and Sparsity are currently not implemented (geglu or reglu)
-    const bool use_gated_activation = use_gated_activation_ && ffn_weights->intermediate_weight2.kernel != nullptr;
+    const bool use_gated_activation = use_gated_activation_ && (ffn_weights->intermediate_weight2.kernel != nullptr || ffn_weights->intermediate_weight2.int8_kernel != nullptr);
 
     // moe can't be used with use_gated_activation currently
     FT_CHECK(!(use_gated_activation && use_moe));
@@ -684,6 +684,7 @@ SiluFfnLayer<T>::SiluFfnLayer(size_t           max_batch_size,
                               IAllocator*      allocator,
                               bool             is_free_buffer_after_forward,
                               bool             sparse,
+                              int              int8_mode,
                               bool             use_gated_activation):
     FfnLayer<T>(max_batch_size,
                 max_seq_len,
@@ -696,7 +697,7 @@ SiluFfnLayer<T>::SiluFfnLayer(size_t           max_batch_size,
                 allocator,
                 is_free_buffer_after_forward,
                 sparse,
-                0,
+                int8_mode,
                 use_gated_activation)
 {
 }

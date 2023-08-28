@@ -114,6 +114,10 @@ add_library(transpose_int8_kernels STATIC transpose_int8_kernels.cu)
 set_property(TARGET transpose_int8_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET transpose_int8_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 
+add_library(repeat_kv_kernels STATIC repeat_kv_kernels.cu)
+set_property(TARGET repeat_kv_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET repeat_kv_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+
 add_library(matrix_transpose_kernels STATIC matrix_transpose_kernels.cu)
 set_property(TARGET matrix_transpose_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET matrix_transpose_kernels PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
