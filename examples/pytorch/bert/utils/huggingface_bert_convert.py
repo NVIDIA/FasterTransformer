@@ -37,7 +37,7 @@ sys.path.append(dir_path + "/../../../..")
 sys.path.append(dir_path)
 from examples.pytorch.utils import torch2np, safe_transpose, WEIGHT2DTYPE
 
-from transformers import BertModel # transformers-4.10.0-py3
+from transformers import AutoModel # transformers-4.10.0-py3
 
 def split_and_convert_process(i, saved_dir,factor,key, args, val):
 
@@ -91,7 +91,7 @@ def split_and_convert(args):
 
     # load position_embedding from rank 0
     torch_device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    model = BertModel.from_pretrained(args.in_file).to(torch_device)
+    model = AutoModel.from_pretrained(args.in_file).to(torch_device)
     np_weight_data_type = WEIGHT2DTYPE[args.weight_data_type]
 
     hf_config = vars(model.config)
