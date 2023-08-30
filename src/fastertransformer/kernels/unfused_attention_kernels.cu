@@ -661,7 +661,7 @@ void invokeMaskedSoftmax(MaskedSoftmaxParam<T, T_IN>& param, cudaStream_t stream
     dim3 block((param.k_length / (is_half2 ? 2 : 1) + 31) / 32 * 32);
 
 	if (block.x > 4096 && block.x <= 8192) {
-        LAUNCH_MAKSED_SOFTMAX_(8);
+        LAUNCH_MAKSED_SOFTMAX(8);
     }
     else if (block.x > 2048 && block.x <= 4096) {
         LAUNCH_MAKSED_SOFTMAX(4)
