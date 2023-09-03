@@ -388,7 +388,6 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                     ftNcclAllGather(layer_input, layer_input, data_size, tensor_para_.rank_, tensor_para_, stream_);
                 }
             }
-            // TODO: 这里用的LN跟neox不一样，不太清楚这里需不需要改成int8的LN
             invokeGeneralT5LayerNorm(decoder_normed_input_,
                                    layer_input,
                                    gpt_decoder_layer_weight->at(l)->pre_layernorm_weights.gamma,
