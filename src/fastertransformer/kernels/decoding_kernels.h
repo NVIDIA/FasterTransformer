@@ -123,6 +123,7 @@ void invokeGatherTree(int*         beams,
 struct gatherTreeParam {
     int*       beams                          = nullptr;
     int*       max_sequence_lengths           = nullptr;
+    uint*      sequence_lengths_for_output    = nullptr;
     int        max_sequence_length_final_step = 0;
     const int* input_lengths                  = nullptr;
     // response input lengths (used to slice the ids during postprocessing)

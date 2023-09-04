@@ -496,9 +496,9 @@ __global__ void gatherTree(gatherTreeParam param)
             int tmp_len =
                 param.max_sequence_lengths[batch * param.beam_width + j] + param.max_sequence_length_final_step;
             // also remove the length of the soft prompts, p_prompt_tuning
-            param.max_sequence_lengths[batch * param.beam_width + j] =
-                tmp_len - param.max_prefix_soft_prompt_length
-                - (param.max_input_length - param.max_input_without_prompt_length);
+            param.sequence_lengths_for_output[batch * param.beam_width + j] =
+                uint32_t(tmp_len - param.max_prefix_soft_prompt_length
+                - (param.max_input_length - param.max_input_without_prompt_length));
             // update the response input length
             if (update_response_input_length) {
                 param.response_input_lengths[batch * param.beam_width + j] = input_len - prompt_len;

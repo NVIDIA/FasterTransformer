@@ -24,12 +24,12 @@
 #include <float.h>
 #include <type_traits>
 
-// #define MMHA_USE_HMMA_FOR_REDUCTION
+#define MMHA_USE_HMMA_FOR_REDUCTION
 
 // Below are knobs to extend FP32 accumulation for higher FP16 accuracy
 
 // Does not seem to affect the accuracy that much
-// #define MMHA_USE_FP32_ACUM_FOR_FMA
+#define MMHA_USE_FP32_ACUM_FOR_FMA
 
 // Seems to slightly improve the accuracy
 #define MMHA_USE_FP32_ACUM_FOR_OUT
@@ -389,26 +389,6 @@ struct Qk_vec_acum_fp32_<bf16_8_t> {
     using Type = Float8_;
 };
 
-template<>
-struct Qk_vec_acum_fp32_<uint4> {
-    using Type = Float8_;
-};
-template<>
-struct Qk_vec_acum_fp32_<__nv_bfloat16> {
-    using Type = float;
-};
-template<>
-struct Qk_vec_acum_fp32_<__nv_bfloat162> {
-    using Type = float2;
-};
-template<>
-struct Qk_vec_acum_fp32_<bf16_4_t> {
-    using Type = Float4_;
-};
-template<>
-struct Qk_vec_acum_fp32_<bf16_8_t> {
-    using Type = Float8_;
-};
 #ifdef ENABLE_FP8
 // template<>
 // struct Qk_vec_acum_fp32_<fp8_2_t> {
