@@ -1186,6 +1186,7 @@ void GptNeoX<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*      
         gatherTreeParam param;
         param.beams                = transposed_output_ids_buf_;
         param.max_sequence_lengths = sequence_lengths_;
+        param.sequence_lengths_for_output = sequence_lengths;
         // add sequence_length 1 here because the sequence_length of time step t is t - 1
         param.max_sequence_length_final_step = 1;
         param.max_time                       = max_output_seq_len;
@@ -1203,8 +1204,8 @@ void GptNeoX<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*      
         param.stream                          = stream_;
         param.output_ids                      = output_tensors->at("output_ids").getPtr<int>();
         invokeGatherTree(param);
-        invokeCudaD2DcpyConvert(
-            sequence_lengths, sequence_lengths_, output_tensors->at("sequence_length").size(), stream_);
+        // invokeCudaD2DcpyConvert(
+        //     sequence_lengths, sequence_lengths_, output_tensors->at("sequence_length").size(), stream_);
         sync_check_cuda_error();
     }
     if ((output_tensors->count("output_log_probs") > 0 && output_tensors->at("output_log_probs").data != nullptr)) {
