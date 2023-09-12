@@ -42,7 +42,7 @@ target_link_libraries(DecoderSelfAttentionLayer PUBLIC -lcublas -lcudart cublasM
 add_library(LlamaDecoderSelfAttentionLayer STATIC LlamaDecoderSelfAttentionLayer.cc)
 set_property(TARGET LlamaDecoderSelfAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET LlamaDecoderSelfAttentionLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(LlamaDecoderSelfAttentionLayer PUBLIC -lcublas -lcudart cublasMMWrapper memory_utils decoder_masked_multihead_attention fpA_intB_gemm int8_gemm tensor nvtx_utils)
+target_link_libraries(LlamaDecoderSelfAttentionLayer PUBLIC -lcublas -lcudart cublasMMWrapper memory_utils decoder_masked_groupedquery_attention fpA_intB_gemm int8_gemm tensor nvtx_utils)
 
 add_library(LlamaContextAttentionLayer STATIC LlamaContextAttentionLayer.cc)
 set_property(TARGET LlamaContextAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)

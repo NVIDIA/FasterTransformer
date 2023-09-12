@@ -104,7 +104,7 @@ void Llama<T>::allocateBuffer(
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     const size_t batchxbeam      = batch_size * beam_width;
     const size_t self_cache_size = (num_layer_ / pipeline_para_.world_size_) * batchxbeam * max_cache_seq_len
-                                   * hidden_units_ / tensor_para_.world_size_;
+                                   * kv_head_num_ * size_per_head_ / tensor_para_.world_size_;
 
     if (vocab_size_ != vocab_size_padded_) {
         padded_embedding_kernel_ =
@@ -596,13 +596,13 @@ void Llama<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
 
     const std::vector<size_t> self_k_cache_shape = {num_layer_ / pipeline_para_.world_size_,
                                                     batch_size * beam_width,
-                                                    local_head_num_,
+                                                    local_kv_head_num_,
                                                     size_per_head_ / (16 / sizeof(T)),
                                                     max_cache_seq_len,
                                                     16 / sizeof(T)};
     const std::vector<size_t> self_v_cache_shape = {num_layer_ / pipeline_para_.world_size_,
                                                     batch_size * beam_width,
-                                                    local_head_num_,
+                                                    local_kv_head_num_,
                                                     max_cache_seq_len,
                                                     size_per_head_};
 

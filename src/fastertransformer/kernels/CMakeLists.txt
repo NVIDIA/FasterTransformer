@@ -15,6 +15,7 @@
 cmake_minimum_required(VERSION 3.8)
 
 add_subdirectory(cutlass_kernels)
+add_subdirectory(llama)
 
 add_library(image_shift_partition_kernels image_shift_partition_kernels.cu)
 set_property(TARGET image_shift_partition_kernels PROPERTY POSITION_INDEPENDENT_CODE  ON)

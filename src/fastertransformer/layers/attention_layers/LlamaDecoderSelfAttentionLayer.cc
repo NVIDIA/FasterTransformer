@@ -15,7 +15,7 @@
  */
 
 #include "src/fastertransformer/layers/attention_layers/LlamaDecoderSelfAttentionLayer.h"
-#include "src/fastertransformer/kernels/decoder_masked_multihead_attention.h"
+#include "src/fastertransformer/kernels/llama/decoder_masked_groupedquery_attention.h"
 #include "src/fastertransformer/utils/logger.h"
 #include "src/fastertransformer/utils/memory_utils.h"
 #include "src/fastertransformer/kernels/repeat_kv_kernels.h"
@@ -47,6 +47,7 @@ void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
                                         const int    inference_batch_size,
                                         const int    beam_width,
                                         const int    head_num,
+                                        const int    kv_head_num,
                                         const int    size_per_head,
                                         const int    rotary_embedding_dim,
                                         const bool   neox_rotary_style,
@@ -70,7 +71,7 @@ void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
 {
     using DataType = typename SATypeConverter<T>::Type;
     // Prepare the parameters.
-    Masked_multihead_attention_params<DataType> params;
+    Masked_groupedquery_attention_params<DataType> params;
     memset(&params, 0, sizeof(params));
     int hidden_units = head_num * size_per_head;
     if (qkv_bias != nullptr) {
@@ -112,6 +113,7 @@ void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
     // timestep adding max_prefix_prompt_length for shared memory size calculation and rotary embedding computation
     params.timestep             = step + max_prefix_prompt_length - 1;
     params.num_heads            = head_num;
+    params.num_kv_heads         = kv_head_num;
     params.hidden_size_per_head = size_per_head;
     params.rotary_embedding_dim = rotary_embedding_dim;
     params.neox_rotary_style    = neox_rotary_style;
@@ -142,7 +144,7 @@ void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
     }
 
     PUSH_RANGE("scaled dot-product fusion");
-    masked_multihead_attention(params, stream);
+    masked_groupedquery_attention(params, stream);
     POP_RANGE;
 }
 
@@ -160,6 +162,7 @@ void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
                                                      const int    inference_batch_size,                                \
                                                      const int    beam_width,                                          \
                                                      const int    head_num,                                            \
+                                                     const int    kv_head_num,                                         \
                                                      const int    size_per_head,                                       \
                                                      const int    rotary_embedding_dim,                                \
                                                      const bool   neox_rotary_style,                                   \
@@ -629,6 +632,7 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*           output_tens
         batch_size,
         beam_width,
         local_head_num_,
+        local_kv_head_num_,
         size_per_head_,
         rotary_embedding_dim_,
         neox_rotary_style_,

@@ -352,6 +352,7 @@ void LlamaContextAttentionLayer<T>::forward(TensorMap*                output_ten
                                 max_seq_len,
                                 size_per_head_,
                                 local_head_num_,
+                                local_kv_head_num_,
                                 stream_);
     // IDEA : after this, k_cache = (batch_size, num_heads, Dh/x, prefix_prompt_len + L, x)
     // k_cache = (batch_size, num_heads, prefix_prompt_len + L, Dh)

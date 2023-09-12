@@ -461,7 +461,7 @@ void LlamaContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                 // element in batch_idx_to_compact_idx may reference the local batch
                 // we're processing. We also need to discard references that aren't in
                 // that particular local batch.
-                const size_t cache_stride_per_batch = hidden_units_ / tensor_para_.world_size_ * max_seq_len;
+                const size_t cache_stride_per_batch = kv_head_num_ * size_per_head_ / tensor_para_.world_size_ * max_seq_len;
                 const size_t cache_layer_offset =
                     (l - getFirstLayerParallelId()) * request_batch_size * cache_stride_per_batch;
                 invokeUnCompactCaches(k_cache.getPtrWithOffset<T>(cache_layer_offset),
