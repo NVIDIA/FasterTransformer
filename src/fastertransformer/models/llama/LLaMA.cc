@@ -214,16 +214,8 @@ LLaMA<T>::LLaMA(size_t                              head_num,
                     size_t                              rotary_embedding_dim,
                     int                                 start_id,
                     int                                 end_id,
-                    int                                 prompt_learning_start_id,  // only needed by p/prompt-tuning
-                    PromptLearningType                  prompt_learning_type,
                     bool                                use_gptj_residual,
-                    float                               beam_search_diversity_rate,
-                    size_t                              top_k,
-                    float                               top_p,
                     unsigned long long                  random_seed,
-                    float                               temperature,
-                    float                               len_penalty,
-                    float                               repetition_penalty,
                     cudaStream_t                        stream,
                     cublasMMWrapper*                    cublas_wrapper,
                     IAllocator*                         allocator,
@@ -241,8 +233,6 @@ LLaMA<T>::LLaMA(size_t                              head_num,
     rotary_embedding_dim_(rotary_embedding_dim),
     start_id_(start_id),
     end_id_(end_id),
-    prompt_learning_start_id_(prompt_learning_start_id),
-    prompt_learning_type_(prompt_learning_type),
     use_gptj_residual_(use_gptj_residual),
     hidden_units_(head_num * size_per_head),
     local_head_num_(head_num / 1),
@@ -270,16 +260,8 @@ LLaMA<T>::LLaMA(size_t                              head_num,
                     size_t                              rotary_embedding_dim,
                     int                                 start_id,
                     int                                 end_id,
-                    int                                 prompt_learning_start_id,  // only needed by p/prompt-tuning
-                    PromptLearningType                  prompt_learning_type,
                     bool                                use_gptj_residual,
-                    float                               beam_search_diversity_rate,
-                    size_t                              top_k,
-                    float                               top_p,
                     unsigned long long                  random_seed,
-                    float                               temperature,
-                    float                               len_penalty,
-                    float                               repetition_penalty,
                     NcclParam                           tensor_para,
                     NcclParam                           pipeline_para,
                     cudaStream_t                        stream,
@@ -299,8 +281,6 @@ LLaMA<T>::LLaMA(size_t                              head_num,
     rotary_embedding_dim_(rotary_embedding_dim),
     start_id_(start_id),
     end_id_(end_id),
-    prompt_learning_start_id_(prompt_learning_start_id),
-    prompt_learning_type_(prompt_learning_type),
     use_gptj_residual_(use_gptj_residual),
     hidden_units_(head_num * size_per_head),
     tensor_para_(tensor_para),
@@ -330,7 +310,6 @@ LLaMA<T>::LLaMA(LLaMA<T> const& llama):
     start_id_(llama.start_id_),
     end_id_(llama.end_id_),
     prompt_learning_start_id_(llama.prompt_learning_start_id_),
-    prompt_learning_type_(llama.prompt_learning_type_),
     use_gptj_residual_(llama.use_gptj_residual_),
     hidden_units_(llama.hidden_units_),
     tensor_para_(llama.tensor_para_),
@@ -383,26 +362,13 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     // input_tensors:
     //      input_ids [batch_size, max_input_length]
     //      input_lengths [batch_size]
-    //      prompt_learning_task_name_ids [batch_size] on cpu, optional
     //      output_seq_len [batch_size] on cpu
     //      start_id [batch_size] on cpu, optional
     //      end_id [batch_size] on cpu, optional
     //      stop_words_list [batch_size, 2, stop_words_length], optional
     //      bad_words_list [2, bad_words_length] or [batch_size, 2, bad_words_length], optional
-    //      runtime_top_k [1] or [batch_size] on cpu, optional, uint.
-    //      runtime_top_p [1] or [batch_size] on cpu, optional, float.
-    //      beam_search_diversity_rate [1] or [batch_size] on cpu, optional, float.
-    //      temperature [1] or [batch_size] on cpu, optional, float.
-    //      len_penalty [1] or [batch_size] on cpu, optional, float.
-    //      repetition_penalty [1] or [batch_size] on cpu, optional, float.
     //      min_length [1] or [batch_size] on cpu, optional, int
     //      random_seed [1] or [batch_size] on cpu, optional, unsigned long long int.
-    //      request_prompt_lengths [batch_size], optional
-    //      request_prompt_embedding [batch_size, max_prompt_length, hidden_units], float, optional
-    //      requst_prompt_type [batch_size], int, optional
-    //      top_p_decay [batch_size] on gpu, float, optional
-    //      top_p_min [batch_size] on gpu, float, optional
-    //      top_p_reset_ids [batch_size] on gpu, uint32, optional
 
     // output_tensors:
     //      output_ids [batch_size, beam_width, max_output_seq_len]
@@ -432,83 +398,28 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     const size_t batch_size = output_tensors->at("output_ids").shape[0];
     const size_t beam_width = output_tensors->at("output_ids").shape[1];
 
-    PromptLearningType request_prompt_type = PromptLearningType::no_prompt;
-    int                valid_prompt_inputs = input_tensors->count("request_prompt_type")
-                              + input_tensors->count("request_prompt_lengths")
-                              + input_tensors->count("request_prompt_embedding");
-
-    if (valid_prompt_inputs == 3) {
-        request_prompt_type = static_cast<PromptLearningType>(input_tensors->at("request_prompt_type").getVal<int>());
-        FT_LOG_INFO("Apply prompt embedding from input, will ignore task name ids");
-    }
-    else if (valid_prompt_inputs > 0) {
-        FT_LOG_WARNING(
-            "Prompts not applied: request_prompt_embedding, request_prompt_lengths, request_prompt_type are all needed!");
-    }
-    if (request_prompt_type == PromptLearningType::prefix_prompt) {
-        FT_LOG_WARNING("Request prompt doesn't support prefix prompt currently!");
-    }
 
     // Prefix Prompt Inputs
     // Padding works as follows: p p x x i i i x x --> p p i i i x x x x (p denotes prompt, i denotes input, x denotes
     // pad)
     // TODO (perkzz): move unnecessary paddings
-    const int* prompt_learning_task_name_ids =
-        input_tensors->count("prompt_learning_task_name_ids") ?
-            input_tensors->at("prompt_learning_task_name_ids").getPtr<const int>() :
-            nullptr;
-    has_prefix_prompt_ =
-        (prompt_learning_task_name_ids != nullptr) && (prompt_learning_type_ == PromptLearningType::prefix_prompt);
+    has_prefix_prompt_ = false;
     int max_prefix_prompt_length = 0;
-
-    FT_CHECK_WITH_INFO(
-        !(prompt_learning_task_name_ids != nullptr
-          && (prompt_learning_type_ == PromptLearningType::no_prompt
-              || prompt_learning_type_ == PromptLearningType::soft_prompt)),
-        "prompt_learning_type is prefix_prompt either p_prompt_tuning when prompt_learning_task_name_ids are provided.");
 
     // NOTE: Prefix Prompt PreProcessing
     // get prefix_prompt_weight for each batch --> shape [batch, beam_width]
     // --> ptrs with shape [num_layers, 2, num_heads, perfix_seq_len, size_per_head]
     std::vector<const T*> prefix_prompt_weight_batch_ptrs;
     std::vector<int>      prefix_prompt_lengths;
-    if (has_prefix_prompt_) {
-        for (int bs_id = 0; bs_id < batch_size; ++bs_id) {
-            int task_id = prompt_learning_task_name_ids[bs_id];
-            // throw errors when prompt task_name_ids are not found
-            std::pair<const T*, int> prefix_prompt_weight_length_pair;
-            try {
-                prefix_prompt_weight_length_pair = llama_weights->prompt_learning_table.at(task_id);
-            }
-            catch (const std::out_of_range& oor) {
-                FT_LOG_ERROR("prefix_prompt_weights_lengths not found for prompt task id: " + task_id);
-                throw oor;
-            }
-            for (int bw_id = 0; bw_id < beam_width; ++bw_id) {
-                prefix_prompt_weight_batch_ptrs.push_back(prefix_prompt_weight_length_pair.first);
-                prefix_prompt_lengths.push_back(prefix_prompt_weight_length_pair.second);
-            }
-        }
-
-        max_prefix_prompt_length = *max_element(prefix_prompt_lengths.begin(), prefix_prompt_lengths.end());
-
-        FT_LOG_DEBUG("max_prefix_prompt_length: %d", max_prefix_prompt_length);
-
-        if (max_prefix_prompt_length == 0) {
-            has_prefix_prompt_ = false;
-            FT_LOG_DEBUG("prompts are not applied !");
-        }
-    }
 
     int max_input_length = input_tensors->at("input_ids").shape[1];
     FT_CHECK_WITH_INFO(!(max_input_length == 0 && max_prefix_prompt_length > 0),
                        "Prefix Prompt should come with inputs!");
 
     // Prefix Soft Prompt
-    has_prefix_soft_prompt_ = request_prompt_type == PromptLearningType::soft_prompt;
-    const size_t max_prefix_soft_prompt_length =
-        has_prefix_soft_prompt_ ? input_tensors->at("request_prompt_embedding").shape[1] : 0;
-    const size_t limit_len_offset   = max_prefix_soft_prompt_length + (max_input_length == 0 ? 1 : 0);
+    has_prefix_soft_prompt_ = false;
+    const size_t max_prefix_soft_prompt_length = 0;
+    const size_t limit_len_offset   = 0 + (max_input_length == 0 ? 1 : 0);
     const size_t max_output_seq_len = input_tensors->at("output_seq_len").max<uint32_t>() + limit_len_offset;
     const size_t max_seq_len        = max_output_seq_len;
     // max cache seq len should include max prefix prompt length as it has k/v states
@@ -527,7 +438,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     }
     const cudaDataType_t gemm_data_type = getCudaDataType<T>();
     allocateBuffer(
-        batch_size, beam_width, max_seq_len, max_cache_seq_len, max_input_length + max_prefix_soft_prompt_length);
+        batch_size, beam_width, max_seq_len, max_cache_seq_len, max_input_length + 0);
     setSeqLimitLen(seq_limit_len_, input_tensors->at("output_seq_len"), limit_len_offset, batch_size);
 
     sync_check_cuda_error();
@@ -562,23 +473,11 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     }
 
     // Prefix prompts
-    if (has_prefix_prompt_) {
-        cudaMemcpyAsync(prompt_learning_weight_batch_,
-                        prefix_prompt_weight_batch_ptrs.data(),
-                        sizeof(T*) * batch_size * beam_width,
-                        cudaMemcpyDefault,
-                        stream_);
-        cudaMemcpyAsync(tiled_prompt_lengths_buf_,
-                        prefix_prompt_lengths.data(),
-                        sizeof(int) * batch_size * beam_width,
-                        cudaMemcpyDefault,
-                        stream_);
-    }
 
     sync_check_cuda_error();
 
     // handle first step
-    if (has_prefix_prompt_ || has_prefix_soft_prompt_ || max_input_length > 1) {
+    if (max_input_length > 1) {
         invokeTileGptInputs(tiled_input_ids_buf_,
                             tiled_input_lengths_buf_,
                             input_tensors->at("input_ids").getPtr<int>(),
@@ -589,43 +488,19 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                             stream_);
         sync_check_cuda_error();
 
-        if (has_prefix_soft_prompt_) {
-            inputIdsEmbeddingLookupPosEncodingSoftPromptParam<T> param;
-            param.from_tensor                   = context_decoder_input_buf_;
-            param.output_ids                    = output_ids_buf_;
-            param.input_lengths                 = tiled_input_lengths_buf_;
-            param.embedding_table               = llama_weights->pre_decoder_embedding_table;
-            param.pos_table                     = llama_weights->position_encoding_table;
-            param.prefix_soft_prompt_embedding  = input_tensors->at("request_prompt_embedding").getPtr<float>();
-            param.prefix_soft_prompt_lengths    = input_tensors->at("request_prompt_lengths").getPtr<int>();
-            param.input_ids                     = tiled_input_ids_buf_;
-            param.start_step                    = 1;
-            param.max_input_length              = max_input_length;
-            param.max_prefix_soft_prompt_length = max_prefix_soft_prompt_length;
-            param.batch_size                    = batch_size;
-            param.beam_width                    = beam_width;
-            param.hidden_units                  = hidden_units_;
-            param.stream                        = stream_;
-
-            invokeInputIdsEmbeddingLookupPosEncodingSoftPrompt(param);
-            sync_check_cuda_error();
-            max_input_length += max_prefix_soft_prompt_length;  // view soft_prompt as input
-        }
-        else {
-            invokeInputIdsEmbeddingLookupPosEncoding(context_decoder_input_buf_,
-                                                     output_ids_buf_,
-                                                     llama_weights->pre_decoder_embedding_table,
-                                                     llama_weights->position_encoding_table,
-                                                     pPromptTuningParam<T>{},  // no p/prompt tuning
-                                                     tiled_input_ids_buf_,
-                                                     1,
-                                                     max_input_length,
-                                                     max_input_length,
-                                                     batch_size * beam_width,
-                                                     hidden_units_,
-                                                     stream_);
-            sync_check_cuda_error();
-        }
+        invokeInputIdsEmbeddingLookupPosEncoding(context_decoder_input_buf_,
+                output_ids_buf_,
+                llama_weights->pre_decoder_embedding_table,
+                llama_weights->position_encoding_table,
+                pPromptTuningParam<T>{},  // no p/prompt tuning
+                tiled_input_ids_buf_,
+                1,
+                max_input_length,
+                max_input_length,
+                batch_size * beam_width,
+                hidden_units_,
+                stream_);
+        sync_check_cuda_error();
 
         invokeBuildDecoderAttentionMask(input_attention_mask_,
                                         tiled_input_lengths_buf_,
@@ -688,8 +563,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         sync_check_cuda_error();
     }
     else if (max_input_length == 0) {
-        FT_CHECK(prompt_learning_type_ == PromptLearningType::no_prompt
-                 && request_prompt_type == PromptLearningType::no_prompt);  // Not support prompts in this case
         max_input_length++;
         invokeDecodingInitialize(finished_buf_,
                                  sequence_lengths_,
@@ -709,8 +582,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         sync_check_cuda_error();
     }
     else if (max_input_length == 1) {
-        FT_CHECK(prompt_learning_type_ == PromptLearningType::no_prompt
-                 && request_prompt_type == PromptLearningType::no_prompt);  // Not support prompts in this case
         invokeDecodingInitialize(finished_buf_,
                                  sequence_lengths_,
                                  nullptr,
@@ -1093,8 +964,6 @@ void LLaMA<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*       o
     const size_t batch_size       = output_tensors->at("output_ids").shape[0];
     const size_t beam_width       = output_tensors->at("output_ids").shape[1];
     uint*        sequence_lengths = output_tensors->at("sequence_length").getPtr<uint>();
-    const size_t max_prefix_soft_prompt_length =
-        has_prefix_soft_prompt_ ? input_tensors->at("request_prompt_embedding").shape[1] : 0;
 
     if (input_tensors->at("input_ids").shape[1] == 0) {
         invokeCudaD2DcpyConvert(
@@ -1149,7 +1018,7 @@ void LLaMA<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*       o
         param.prefix_soft_prompt_lengths =
             has_prefix_soft_prompt_ ? input_tensors->at("request_prompt_lengths").getPtr<int>() : nullptr;
         param.input_lengths                   = tiled_input_lengths_buf_;
-        param.max_prefix_soft_prompt_length   = max_prefix_soft_prompt_length;
+        param.max_prefix_soft_prompt_length   = 0;
         param.max_input_without_prompt_length = max_input_length;
         param.stream                          = stream_;
         param.output_ids                      = output_tensors->at("output_ids").getPtr<int>();

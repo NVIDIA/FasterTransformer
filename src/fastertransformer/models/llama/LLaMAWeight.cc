@@ -28,9 +28,7 @@ LLaMAWeight<T>::LLaMAWeight(const int                                  hidden_un
                                 const int                                  tensor_para_rank,
                                 const int                                  layer_para_size,
                                 const int                                  layer_para_rank,
-                                const bool                                 use_gptj_residual,
-                                PromptLearningType                         prompt_learning_type,
-                                std::map<std::string, std::pair<int, int>> prompt_learning_pair):
+                                const bool                                 use_gptj_residual):
     hidden_units_(hidden_units),
     inter_size_(inter_size),
     vocab_size_(vocab_size),
@@ -40,23 +38,10 @@ LLaMAWeight<T>::LLaMAWeight(const int                                  hidden_un
     tensor_para_rank_(tensor_para_rank),
     layer_para_size_(layer_para_size),
     layer_para_rank_(layer_para_rank),
-    use_gptj_residual_(use_gptj_residual),
-    prompt_learning_type_(prompt_learning_type),
-    prompt_learning_pair_(prompt_learning_pair)
+    use_gptj_residual_(use_gptj_residual)
 {
     FT_CHECK(num_layer_ % layer_para_size_ == 0);
-    // set prompt weight size
-    if (prompt_learning_type_ == PromptLearningType::prefix_prompt) {
-        prompt_token_weight_size_ = 2 * num_layer_ * hidden_units_ / tensor_para_size_;
-    }
-    else if (prompt_learning_type_ == PromptLearningType::p_prompt_tuning) {
-        prompt_token_weight_size_ = hidden_units_;
-    }
 
-    // set if load and malloc prompt weights
-    malloc_load_prompt_weights_ = !prompt_learning_pair_.empty()
-                                  && (prompt_learning_type_ == PromptLearningType::p_prompt_tuning
-                                      || prompt_learning_type_ == PromptLearningType::prefix_prompt);
 
     decoder_layer_weights.reserve(num_layer_);
     for (int l = 0; l < num_layer_; l++) {
@@ -103,10 +88,7 @@ LLaMAWeight<T>::LLaMAWeight(const LLaMAWeight& other):
     layer_para_size_(other.layer_para_size_),
     layer_para_rank_(other.layer_para_rank_),
     use_gptj_residual_(other.use_gptj_residual_),
-    prompt_token_weight_size_(other.prompt_token_weight_size_),
-    malloc_load_prompt_weights_(other.malloc_load_prompt_weights_),
-    prompt_learning_type_(other.prompt_learning_type_),
-    prompt_learning_pair_(other.prompt_learning_pair_)
+    prompt_token_weight_size_(other.prompt_token_weight_size_)
 {
     mallocWeights();
     cudaD2Dcpy(weights_ptr[0], other.weights_ptr[0], vocab_size_ * hidden_units_);
@@ -115,18 +97,6 @@ LLaMAWeight<T>::LLaMAWeight(const LLaMAWeight& other):
     cudaD2Dcpy(weights_ptr[3], other.weights_ptr[3], hidden_units_ * vocab_size_);
 
     // prompt learning table: malloc weights and set weight ptr
-    if (malloc_load_prompt_weights_) {
-        for (auto const& prompt : prompt_learning_pair_) {
-            std::string task_name     = prompt.first;
-            int         task_name_id  = prompt.second.first;
-            int         prompt_length = prompt.second.second;
-            size_t      prompt_id     = num_base_weights + (size_t)task_name_id;
-
-            // cuda device to device memcpy prompt table weights buffer memory
-            cudaD2Dcpy(weights_ptr[prompt_id], other.weights_ptr[prompt_id], prompt_length * prompt_token_weight_size_);
-        }
-    }
-
     setWeightPtr();
 
     decoder_layer_weights.clear();
@@ -150,28 +120,12 @@ LLaMAWeight<T>& LLaMAWeight<T>::operator=(const LLaMAWeight& other)
     layer_para_rank_            = other.layer_para_rank_;
     use_gptj_residual_          = other.use_gptj_residual_;
     prompt_token_weight_size_   = other.prompt_token_weight_size_;
-    malloc_load_prompt_weights_ = other.malloc_load_prompt_weights_;
-    prompt_learning_type_       = other.prompt_learning_type_;
-    prompt_learning_pair_       = other.prompt_learning_pair_;
 
     mallocWeights();
     cudaD2Dcpy(weights_ptr[0], other.weights_ptr[0], vocab_size_ * hidden_units_);
     cudaD2Dcpy(weights_ptr[1], other.weights_ptr[1], hidden_units_);
     cudaD2Dcpy(weights_ptr[2], other.weights_ptr[2], hidden_units_);
     cudaD2Dcpy(weights_ptr[3], other.weights_ptr[3], hidden_units_ * vocab_size_);
-
-    // prompt learning table: malloc weights and set weight ptr
-    if (malloc_load_prompt_weights_) {
-        for (auto const& prompt : prompt_learning_pair_) {
-            std::string task_name     = prompt.first;
-            int         task_name_id  = prompt.second.first;
-            int         prompt_length = prompt.second.second;
-            size_t      prompt_id     = num_base_weights + (size_t)task_name_id;
-
-            // cuda device to device memcpy prompt table weights buffer memory
-            cudaD2Dcpy(weights_ptr[prompt_id], other.weights_ptr[prompt_id], prompt_length * prompt_token_weight_size_);
-        }
-    }
 
     setWeightPtr();
 
@@ -186,49 +140,22 @@ LLaMAWeight<T>& LLaMAWeight<T>::operator=(const LLaMAWeight& other)
 template<typename T>
 void LLaMAWeight<T>::setWeightPtr()
 {
-    prompt_learning_table.resize(prompt_learning_pair_.size());
-
     pre_decoder_embedding_table   = weights_ptr[0];
     post_decoder_layernorm.beta   = weights_ptr[1];
     post_decoder_layernorm.gamma  = weights_ptr[2];
     post_decoder_embedding.kernel = weights_ptr[3];
-
-    // prompt learning tables: set weight ptr
-    if (malloc_load_prompt_weights_) {
-        for (auto const& prompt : prompt_learning_pair_) {
-            int    task_name_id   = prompt.second.first;
-            int    prompt_length  = prompt.second.second;
-            size_t task_weight_id = num_base_weights + (size_t)task_name_id;
-
-            // set weight ptr
-            prompt_learning_table[task_name_id] = {weights_ptr[task_weight_id], prompt_length};
-        }
-    }
 }
 
 template<typename T>
 void LLaMAWeight<T>::mallocWeights()
 {
-    weights_ptr.resize(num_base_weights + prompt_learning_pair_.size());
+    weights_ptr.resize(num_base_weights);
 
     deviceMalloc(&weights_ptr[0], vocab_size_ * hidden_units_);
     deviceMalloc(&weights_ptr[1], hidden_units_);
     deviceMalloc(&weights_ptr[2], hidden_units_);
     deviceMalloc(&weights_ptr[3], hidden_units_ * vocab_size_);
 
-    // prompt learning tables: malloc weights
-    if (malloc_load_prompt_weights_) {
-        for (auto const& prompt : prompt_learning_pair_) {
-            int    task_name_id   = prompt.second.first;
-            int    prompt_length  = prompt.second.second;
-            size_t task_weight_id = num_base_weights + (size_t)task_name_id;
-
-            // malloc weights
-            T* prompt_weights_ptr = nullptr;
-            deviceMalloc(&prompt_weights_ptr, prompt_length * prompt_token_weight_size_);
-            weights_ptr[task_weight_id] = prompt_weights_ptr;
-        }
-    }
     is_maintain_buffer = true;
 }
 
@@ -248,28 +175,6 @@ void LLaMAWeight<T>::loadModel(std::string dir_path)
                          {(size_t)(vocab_size_ * hidden_units_)},
                          dir_path + "/model.lm_head.weight.bin",
                          model_file_type);
-
-    // prompt table: load weights from bin
-    if (malloc_load_prompt_weights_) {
-        for (auto const& prompt : prompt_learning_pair_) {
-            std::string task_name      = prompt.first;
-            int         task_name_id   = prompt.second.first;
-            int         prompt_length  = prompt.second.second;
-            size_t      task_weight_id = num_base_weights + (size_t)task_name_id;
-
-            std::string prompt_weight_path_name = (prompt_learning_type_ == PromptLearningType::p_prompt_tuning) ?
-                                                      (dir_path + "/model.prompt_table." + task_name + ".weight.bin") :
-                                                      (dir_path + "/model.prefix_prompt." + task_name + ".weight."
-                                                       + std::to_string(tensor_para_rank_) + ".bin");
-
-            if (prompt_length > 0) {
-                loadWeightFromBin<T>(weights_ptr[task_weight_id],
-                                     {(size_t)(prompt_length * (int)prompt_token_weight_size_)},
-                                     prompt_weight_path_name,
-                                     model_file_type);
-            }
-        }
-    }
 
     for (int l = 0; l < num_layer_; l++) {
         if (isValidLayerParallelId(l)) {

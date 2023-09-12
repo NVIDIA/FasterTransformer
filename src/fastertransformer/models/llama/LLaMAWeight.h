@@ -37,9 +37,7 @@ struct LLaMAWeight {
         const int                                  tensor_para_rank     = 0,
         const int                                  layer_para_size      = 1,
         const int                                  layer_para_rank      = 0,
-        const bool                                 use_gptj_residual_   = true,
-        PromptLearningType                         prompt_learning_type = PromptLearningType::no_prompt,
-        std::map<std::string, std::pair<int, int>> prompt_learning_pair = std::map<std::string, std::pair<int, int>>{});
+        const bool                                 use_gptj_residual_   = true);
 
     ~LLaMAWeight();
     LLaMAWeight(const LLaMAWeight& other);
@@ -54,15 +52,6 @@ struct LLaMAWeight {
     // GPT-J does not use embedding table, but we leave the ptr such that
     // LLaMA::forward and Gpt::forward become identical
     const T* position_encoding_table = nullptr;
-
-    /*
-        prompt_learning_pair = vectors of [weight ptr, prompt length] pair
-        prompt_length is stored here for compatible prompt learning table
-        prefix_prompt weights store as shape [num_layers, 2, num_heads, perfix_seq_len, size_per_head]
-        p/prompt tuning weights store as shape [prompt_len, hidden_units]
-        idx is the task_name_id of the prompt tables
-    */
-    std::vector<std::pair<const T*, int>> prompt_learning_table = {};
 
     LayerNormWeight<T> post_decoder_layernorm;
     DenseWeight<T>     post_decoder_embedding;
@@ -92,9 +81,6 @@ private:
     bool use_gptj_residual_;
 
     // prompt learning pair (task_name, (task_name_id, prompt_len))
-    PromptLearningType                         prompt_learning_type_;
-    std::map<std::string, std::pair<int, int>> prompt_learning_pair_;
-    bool                                       malloc_load_prompt_weights_ = false;
     // each prompt token's weight size
     size_t prompt_token_weight_size_ = 0;
 

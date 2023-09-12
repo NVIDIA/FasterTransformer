@@ -41,7 +41,7 @@ LLaMA::LLaMA(const int64_t            head_num,
 
     switch (st_) {
         case at::ScalarType::Float:
-            ftgpt = new FTGptNeoX<float>((size_t)head_num,
+            ftllama = new FTLLaMA<float>((size_t)head_num,
                                          (size_t)size_per_head,
                                          (size_t)inter_size,
                                          (size_t)layer_num,
@@ -56,7 +56,7 @@ LLaMA::LLaMA(const int64_t            head_num,
                                          weights);
             break;
         case at::ScalarType::Half:
-            ftgpt = new FTGptNeoX<half>((size_t)head_num,
+            ftllama = new FTLLaMA<half>((size_t)head_num,
                                         (size_t)size_per_head,
                                         (size_t)inter_size,
                                         (size_t)layer_num,
@@ -77,7 +77,7 @@ LLaMA::LLaMA(const int64_t            head_num,
 
 LLaMA::~LLaMA()
 {
-    delete ftgpt;
+    delete ftllama;
 }
 
 std::vector<th::Tensor> LLaMA::forward(th::Tensor               input_ids,
@@ -119,7 +119,7 @@ std::vector<th::Tensor> LLaMA::forward(th::Tensor               input_ids,
     th::Tensor cum_log_probs =
         torch::empty({batch_size, beam_width}, torch::dtype(torch::kFloat32).device(torch::kCUDA).requires_grad(false));
 
-    ftgpt->forward(input_ids,
+    ftllama->forward(input_ids,
                    input_lengths,
                    output_ids,
                    sequence_lengths,

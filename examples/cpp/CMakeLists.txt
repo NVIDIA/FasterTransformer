@@ -26,6 +26,7 @@ add_subdirectory(wenet)
 
 add_subdirectory(gptj)
 add_subdirectory(gptneox)
+add_subdirectory(llama)
 add_subdirectory(multi_gpu_gpt)
 
 if(ENABLE_FP8)
