@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/models/gptneox/GptNeoXDecoderLayerWeight.h"
+#include "src/fastertransformer/models/llama/LLaMADecoderLayerWeight.h"
 #include "src/fastertransformer/utils/memory_utils.h"
 
 namespace fastertransformer {
 
 template<typename T>
-GptNeoXDecoderLayerWeight<T>::GptNeoXDecoderLayerWeight(const int  hidden_units,
+LLaMADecoderLayerWeight<T>::LLaMADecoderLayerWeight(const int  hidden_units,
                                                         const int  inter_size,
                                                         const int  tensor_para_size,
                                                         const int  tensor_para_rank,
@@ -36,7 +36,7 @@ GptNeoXDecoderLayerWeight<T>::GptNeoXDecoderLayerWeight(const int  hidden_units,
 }
 
 template<typename T>
-GptNeoXDecoderLayerWeight<T>::~GptNeoXDecoderLayerWeight()
+LLaMADecoderLayerWeight<T>::~LLaMADecoderLayerWeight()
 {
     if (is_maintain_buffer == true) {
         for (int i = 0; i < 12; i++) {
@@ -63,7 +63,7 @@ GptNeoXDecoderLayerWeight<T>::~GptNeoXDecoderLayerWeight()
 }
 
 template<typename T>
-GptNeoXDecoderLayerWeight<T>::GptNeoXDecoderLayerWeight(const GptNeoXDecoderLayerWeight& other):
+LLaMADecoderLayerWeight<T>::LLaMADecoderLayerWeight(const LLaMADecoderLayerWeight& other):
     hidden_units_(other.hidden_units_),
     inter_size_(other.inter_size_),
     tensor_para_size_(other.tensor_para_size_),
@@ -90,7 +90,7 @@ GptNeoXDecoderLayerWeight<T>::GptNeoXDecoderLayerWeight(const GptNeoXDecoderLaye
 }
 
 template<typename T>
-GptNeoXDecoderLayerWeight<T>& GptNeoXDecoderLayerWeight<T>::operator=(const GptNeoXDecoderLayerWeight& other)
+LLaMADecoderLayerWeight<T>& LLaMADecoderLayerWeight<T>::operator=(const LLaMADecoderLayerWeight& other)
 {
     hidden_units_      = other.hidden_units_;
     inter_size_        = other.inter_size_;
@@ -119,7 +119,7 @@ GptNeoXDecoderLayerWeight<T>& GptNeoXDecoderLayerWeight<T>::operator=(const GptN
 }
 
 template<typename T>
-void GptNeoXDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType model_file_type)
+void LLaMADecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType model_file_type)
 {
     FT_CHECK(is_maintain_buffer == true);
     const std::string rank_spec = std::to_string(tensor_para_rank_);
@@ -175,7 +175,7 @@ void GptNeoXDecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataTyp
 }
 
 template<typename T>
-void GptNeoXDecoderLayerWeight<T>::setWeightPtr()
+void LLaMADecoderLayerWeight<T>::setWeightPtr()
 {
     pre_layernorm_weights.beta                            = weights_ptr[0];
     pre_layernorm_weights.gamma                           = weights_ptr[1];
@@ -195,7 +195,7 @@ void GptNeoXDecoderLayerWeight<T>::setWeightPtr()
 }
 
 template<typename T>
-void GptNeoXDecoderLayerWeight<T>::mallocWeights()
+void LLaMADecoderLayerWeight<T>::mallocWeights()
 {
     deviceMalloc(&weights_ptr[0], hidden_units_);
     deviceMalloc(&weights_ptr[1], hidden_units_);
@@ -214,7 +214,7 @@ void GptNeoXDecoderLayerWeight<T>::mallocWeights()
     deviceMalloc(&weights_ptr[11], hidden_units_);
 }
 
-template struct GptNeoXDecoderLayerWeight<float>;
-template struct GptNeoXDecoderLayerWeight<half>;
+template struct LLaMADecoderLayerWeight<float>;
+template struct LLaMADecoderLayerWeight<half>;
 
 }  // namespace fastertransformer

@@ -23,7 +23,7 @@
 #include "src/fastertransformer/layers/BaseLayer.h"
 #include "src/fastertransformer/layers/FfnLayer.h"
 #include "src/fastertransformer/layers/attention_layers/BaseAttentionLayer.h"
-#include "src/fastertransformer/models/gptneox/GptNeoXDecoderLayerWeight.h"
+#include "src/fastertransformer/models/llama/LLaMADecoderLayerWeight.h"
 #include "src/fastertransformer/utils/Tensor.h"
 #include "src/fastertransformer/utils/allocator.h"
 #include "src/fastertransformer/utils/cublasMMWrapper.h"
@@ -33,7 +33,7 @@
 namespace fastertransformer {
 
 template<typename T>
-class GptNeoXDecoder: public BaseLayer {
+class LLaMADecoder: public BaseLayer {
 private:
 protected:
     void         allocateBuffer() override;
@@ -71,7 +71,7 @@ protected:
     FfnLayer<T>*           ffn_layer_;
 
 public:
-    GptNeoXDecoder(size_t                              head_num,
+    LLaMADecoder(size_t                              head_num,
                    size_t                              size_per_head,
                    size_t                              inter_size,
                    size_t                              num_layer,
@@ -88,17 +88,17 @@ public:
                    std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm    = nullptr,
                    int                                 enable_custom_all_reduce_ = 0);
 
-    GptNeoXDecoder(GptNeoXDecoder<T> const& decoder);
+    LLaMADecoder(LLaMADecoder<T> const& decoder);
 
-    virtual ~GptNeoXDecoder();
+    virtual ~LLaMADecoder();
 
     virtual void forward(std::unordered_map<std::string, Tensor>*          output_tensors,
                          const std::unordered_map<std::string, Tensor>*    input_tensors,
-                         const std::vector<GptNeoXDecoderLayerWeight<T>*>* decoder_layer_weights);
+                         const std::vector<LLaMADecoderLayerWeight<T>*>* decoder_layer_weights);
 
     virtual void forward(std::vector<Tensor>*                              output_tensors,
                          const std::vector<Tensor>*                        input_tensors,
-                         const std::vector<GptNeoXDecoderLayerWeight<T>*>* decoder_layer_weights);
+                         const std::vector<LLaMADecoderLayerWeight<T>*>* decoder_layer_weights);
 };
 
 }  // namespace fastertransformer

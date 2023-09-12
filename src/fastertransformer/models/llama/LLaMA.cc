@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/models/gptneox/GptNeoX.h"
+#include "src/fastertransformer/models/llama/LLaMA.h"
 #include "src/fastertransformer/kernels/bert_preprocess_kernels.h"
 #include "src/fastertransformer/kernels/decoding_kernels.h"
 #include "src/fastertransformer/kernels/gpt_kernels.h"
@@ -24,9 +24,9 @@
 namespace fastertransformer {
 
 template<typename T>
-void GptNeoX<T>::initialize()
+void LLaMA<T>::initialize()
 {
-    gpt_context_decoder_ = new GptNeoXContextDecoder<T>(head_num_,
+    llama_context_decoder_ = new LLaMAContextDecoder<T>(head_num_,
                                                         size_per_head_,
                                                         inter_size_,
                                                         num_layer_,
@@ -45,7 +45,7 @@ void GptNeoX<T>::initialize()
                                                         custom_all_reduce_comm_,
                                                         enable_custom_all_reduce_);
 
-    gpt_decoder_ = new GptNeoXDecoder<T>(head_num_,
+    llama_decoder_ = new LLaMADecoder<T>(head_num_,
                                          size_per_head_,
                                          inter_size_,
                                          num_layer_,
@@ -73,13 +73,13 @@ void GptNeoX<T>::initialize()
 }
 
 template<typename T>
-void GptNeoX<T>::allocateBuffer()
+void LLaMA<T>::allocateBuffer()
 {
     FT_CHECK(false);
 }
 
 template<typename T>
-void GptNeoX<T>::allocateBuffer(
+void LLaMA<T>::allocateBuffer(
     size_t batch_size, size_t beam_width, size_t max_seq_len, size_t max_cache_seq_len, size_t max_input_len)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
@@ -154,7 +154,7 @@ void GptNeoX<T>::allocateBuffer(
 }
 
 template<typename T>
-void GptNeoX<T>::freeBuffer()
+void LLaMA<T>::freeBuffer()
 {
     if (is_allocate_buffer_) {
         if (vocab_size_ != vocab_size_padded_) {
@@ -206,7 +206,7 @@ void GptNeoX<T>::freeBuffer()
 }
 
 template<typename T>
-GptNeoX<T>::GptNeoX(size_t                              head_num,
+LLaMA<T>::LLaMA(size_t                              head_num,
                     size_t                              size_per_head,
                     size_t                              inter_size,
                     size_t                              num_layer,
@@ -262,7 +262,7 @@ GptNeoX<T>::GptNeoX(size_t                              head_num,
 }
 
 template<typename T>
-GptNeoX<T>::GptNeoX(size_t                              head_num,
+LLaMA<T>::LLaMA(size_t                              head_num,
                     size_t                              size_per_head,
                     size_t                              inter_size,
                     size_t                              num_layer,
@@ -319,66 +319,66 @@ GptNeoX<T>::GptNeoX(size_t                              head_num,
 }
 
 template<typename T>
-GptNeoX<T>::GptNeoX(GptNeoX<T> const& gpt):
-    BaseLayer(gpt),
-    head_num_(gpt.head_num_),
-    size_per_head_(gpt.size_per_head_),
-    inter_size_(gpt.inter_size_),
-    num_layer_(gpt.num_layer_),
-    vocab_size_(gpt.vocab_size_),
-    rotary_embedding_dim_(gpt.rotary_embedding_dim_),
-    start_id_(gpt.start_id_),
-    end_id_(gpt.end_id_),
-    prompt_learning_start_id_(gpt.prompt_learning_start_id_),
-    prompt_learning_type_(gpt.prompt_learning_type_),
-    use_gptj_residual_(gpt.use_gptj_residual_),
-    hidden_units_(gpt.hidden_units_),
-    tensor_para_(gpt.tensor_para_),
-    pipeline_para_(gpt.pipeline_para_),
-    local_head_num_(gpt.local_head_num_),
-    vocab_size_padded_(gpt.vocab_size_padded_),
-    custom_all_reduce_comm_(gpt.custom_all_reduce_comm_),
-    enable_custom_all_reduce_(gpt.enable_custom_all_reduce_),
-    attention_type_(gpt.attention_type_)
+LLaMA<T>::LLaMA(LLaMA<T> const& llama):
+    BaseLayer(llama),
+    head_num_(llama.head_num_),
+    size_per_head_(llama.size_per_head_),
+    inter_size_(llama.inter_size_),
+    num_layer_(llama.num_layer_),
+    vocab_size_(llama.vocab_size_),
+    rotary_embedding_dim_(llama.rotary_embedding_dim_),
+    start_id_(llama.start_id_),
+    end_id_(llama.end_id_),
+    prompt_learning_start_id_(llama.prompt_learning_start_id_),
+    prompt_learning_type_(llama.prompt_learning_type_),
+    use_gptj_residual_(llama.use_gptj_residual_),
+    hidden_units_(llama.hidden_units_),
+    tensor_para_(llama.tensor_para_),
+    pipeline_para_(llama.pipeline_para_),
+    local_head_num_(llama.local_head_num_),
+    vocab_size_padded_(llama.vocab_size_padded_),
+    custom_all_reduce_comm_(llama.custom_all_reduce_comm_),
+    enable_custom_all_reduce_(llama.enable_custom_all_reduce_),
+    attention_type_(llama.attention_type_)
 {
     initialize();
 }
 
 template<typename T>
-GptNeoX<T>::~GptNeoX()
+LLaMA<T>::~LLaMA()
 {
-    delete gpt_decoder_;
+    delete llama_decoder_;
     delete dynamic_decode_layer_;
-    delete gpt_context_decoder_;
+    delete llama_context_decoder_;
     freeBuffer();
 }
 
 template<typename T>
-void GptNeoX<T>::registerCallback(callback_sig* fn, void* ctx)
+void LLaMA<T>::registerCallback(callback_sig* fn, void* ctx)
 {
     token_generated_cb_  = fn;
     token_generated_ctx_ = ctx;
 }
 
 template<typename T>
-void GptNeoX<T>::unRegisterCallback()
+void LLaMA<T>::unRegisterCallback()
 {
     token_generated_cb_  = nullptr;
     token_generated_ctx_ = nullptr;
 }
 
 template<typename T>
-void GptNeoX<T>::forward(std::vector<Tensor>*       output_tensors,
+void LLaMA<T>::forward(std::vector<Tensor>*       output_tensors,
                          const std::vector<Tensor>* input_tensors,
-                         const GptNeoXWeight<T>*    gpt_weights)
+                         const LLaMAWeight<T>*    llama_weights)
 {
     FT_CHECK(false);
 }
 
 template<typename T>
-void GptNeoX<T>::forward(std::unordered_map<std::string, Tensor>*       output_tensors,
+void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_tensors,
                          const std::unordered_map<std::string, Tensor>* input_tensors,
-                         const GptNeoXWeight<T>*                        gpt_weights)
+                         const LLaMAWeight<T>*                        llama_weights)
 {
     // input_tensors:
     //      input_ids [batch_size, max_input_length]
@@ -478,7 +478,7 @@ void GptNeoX<T>::forward(std::unordered_map<std::string, Tensor>*       output_t
             // throw errors when prompt task_name_ids are not found
             std::pair<const T*, int> prefix_prompt_weight_length_pair;
             try {
-                prefix_prompt_weight_length_pair = gpt_weights->prompt_learning_table.at(task_id);
+                prefix_prompt_weight_length_pair = llama_weights->prompt_learning_table.at(task_id);
             }
             catch (const std::out_of_range& oor) {
                 FT_LOG_ERROR("prefix_prompt_weights_lengths not found for prompt task id: " + task_id);
@@ -594,8 +594,8 @@ void GptNeoX<T>::forward(std::unordered_map<std::string, Tensor>*       output_t
             param.from_tensor                   = context_decoder_input_buf_;
             param.output_ids                    = output_ids_buf_;
             param.input_lengths                 = tiled_input_lengths_buf_;
-            param.embedding_table               = gpt_weights->pre_decoder_embedding_table;
-            param.pos_table                     = gpt_weights->position_encoding_table;
+            param.embedding_table               = llama_weights->pre_decoder_embedding_table;
+            param.pos_table                     = llama_weights->position_encoding_table;
             param.prefix_soft_prompt_embedding  = input_tensors->at("request_prompt_embedding").getPtr<float>();
             param.prefix_soft_prompt_lengths    = input_tensors->at("request_prompt_lengths").getPtr<int>();
             param.input_ids                     = tiled_input_ids_buf_;
@@ -614,8 +614,8 @@ void GptNeoX<T>::forward(std::unordered_map<std::string, Tensor>*       output_t
         else {
             invokeInputIdsEmbeddingLookupPosEncoding(context_decoder_input_buf_,
                                                      output_ids_buf_,
-                                                     gpt_weights->pre_decoder_embedding_table,
-                                                     gpt_weights->position_encoding_table,
+                                                     llama_weights->pre_decoder_embedding_table,
+                                                     llama_weights->position_encoding_table,
                                                      pPromptTuningParam<T>{},  // no p/prompt tuning
                                                      tiled_input_ids_buf_,
                                                      1,
@@ -673,8 +673,8 @@ void GptNeoX<T>::forward(std::unordered_map<std::string, Tensor>*       output_t
             {"last_token_hidden_units",
              Tensor{MEMORY_GPU, data_type, {batch_size * beam_width, hidden_units_}, decoder_output_buf_}}};
 
-        gpt_context_decoder_->forward(
-            &decoder_output_tensors, &decoder_input_tensors, &gpt_weights->decoder_layer_weights);
+        llama_context_decoder_->forward(
+            &decoder_output_tensors, &decoder_input_tensors, &llama_weights->decoder_layer_weights);
         sync_check_cuda_error();
         invokeDecodingInitialize(finished_buf_,
                                  sequence_lengths_,
@@ -739,16 +739,16 @@ void GptNeoX<T>::forward(std::unordered_map<std::string, Tensor>*       output_t
     }
 
     if (vocab_size_ == vocab_size_padded_) {
-        padded_embedding_kernel_ptr_ = gpt_weights->post_decoder_embedding.kernel;
+        padded_embedding_kernel_ptr_ = llama_weights->post_decoder_embedding.kernel;
     }
     else {
         cudaMemcpyAsync(padded_embedding_kernel_,
-                        gpt_weights->post_decoder_embedding.kernel,
+                        llama_weights->post_decoder_embedding.kernel,
                         sizeof(T) * vocab_size_ * hidden_units_,
                         cudaMemcpyDeviceToDevice,
                         stream_);
         cudaMemcpyAsync(padded_embedding_bias_,
-                        gpt_weights->post_decoder_embedding.bias,
+                        llama_weights->post_decoder_embedding.bias,
                         sizeof(T) * vocab_size_,
                         cudaMemcpyDeviceToDevice,
                         stream_);
@@ -782,8 +782,8 @@ void GptNeoX<T>::forward(std::unordered_map<std::string, Tensor>*       output_t
             if (!(max_input_length > 1 && step == max_input_length)) {
                 if (pipeline_para_.rank_ == 0) {
                     invokeEmbeddingLookupPosEncodingPadCount(decoder_input_buf_ + hidden_units_offset,
-                                                             gpt_weights->pre_decoder_embedding_table,
-                                                             gpt_weights->position_encoding_table,
+                                                             llama_weights->pre_decoder_embedding_table,
+                                                             llama_weights->position_encoding_table,
                                                              output_ids_buf_ + id_offset,
                                                              tiled_total_padding_count_ + id_offset,
                                                              local_batch_size * beam_width,
@@ -838,15 +838,15 @@ void GptNeoX<T>::forward(std::unordered_map<std::string, Tensor>*       output_t
                             decoder_output_buf_ + hidden_units_offset}},
                     {"key_cache", Tensor{MEMORY_GPU, data_type, self_k_cache_shape, key_cache_}},
                     {"value_cache", Tensor{MEMORY_GPU, data_type, self_v_cache_shape, value_cache_}}};
-                gpt_decoder_->forward(
-                    &decoder_output_tensors, &decoder_input_tensors, &gpt_weights->decoder_layer_weights);
+                llama_decoder_->forward(
+                    &decoder_output_tensors, &decoder_input_tensors, &llama_weights->decoder_layer_weights);
             }
 
             if (pipeline_para_.rank_ == pipeline_para_.world_size_ - 1) {
                 invokeGeneralLayerNorm(normed_decoder_output_buf_ + hidden_units_offset,
                                        decoder_output_buf_ + hidden_units_offset,
-                                       gpt_weights->post_decoder_layernorm.gamma,
-                                       gpt_weights->post_decoder_layernorm.beta,
+                                       llama_weights->post_decoder_layernorm.gamma,
+                                       llama_weights->post_decoder_layernorm.beta,
                                        layernorm_eps_,
                                        local_batch_size * beam_width,
                                        hidden_units_,
@@ -1045,7 +1045,7 @@ void GptNeoX<T>::forward(std::unordered_map<std::string, Tensor>*       output_t
 }
 
 template<typename T>
-void GptNeoX<T>::sendTensorsToFirstPipelineNode(std::unordered_map<std::string, Tensor>*       output_tensors,
+void LLaMA<T>::sendTensorsToFirstPipelineNode(std::unordered_map<std::string, Tensor>*       output_tensors,
                                                 const std::unordered_map<std::string, Tensor>* input_tensors)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
@@ -1080,7 +1080,7 @@ void GptNeoX<T>::sendTensorsToFirstPipelineNode(std::unordered_map<std::string, 
 }
 
 template<typename T>
-void GptNeoX<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*       output_tensors,
+void LLaMA<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*       output_tensors,
                                   const std::unordered_map<std::string, Tensor>* input_tensors,
                                   const size_t                                   max_input_length,
                                   const size_t                                   max_output_seq_len)
@@ -1176,36 +1176,36 @@ void GptNeoX<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*      
 }
 
 template<typename T>
-size_t GptNeoX<T>::getPipelineParallelRank()
+size_t LLaMA<T>::getPipelineParallelRank()
 {
     return pipeline_para_.rank_;
 }
 
 template<typename T>
-size_t GptNeoX<T>::getPipelineParallelSize()
+size_t LLaMA<T>::getPipelineParallelSize()
 {
     return pipeline_para_.world_size_;
 }
 
 template<typename T>
-size_t GptNeoX<T>::getTensorParallelRank()
+size_t LLaMA<T>::getTensorParallelRank()
 {
     return tensor_para_.rank_;
 }
 
 template<typename T>
-size_t GptNeoX<T>::getTensorParallelSize()
+size_t LLaMA<T>::getTensorParallelSize()
 {
     return tensor_para_.world_size_;
 }
 
 template<typename T>
-bool* GptNeoX<T>::getFinishBuffer()
+bool* LLaMA<T>::getFinishBuffer()
 {
     return finished_buf_;
 }
 
-template class GptNeoX<float>;
-template class GptNeoX<half>;
+template class LLaMA<float>;
+template class LLaMA<half>;
 
 }  // namespace fastertransformer

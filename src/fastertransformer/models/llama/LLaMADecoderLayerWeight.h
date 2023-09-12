@@ -26,17 +26,17 @@
 namespace fastertransformer {
 
 template<typename T>
-struct GptNeoXDecoderLayerWeight {
+struct LLaMADecoderLayerWeight {
 public:
-    GptNeoXDecoderLayerWeight() = default;
-    GptNeoXDecoderLayerWeight(const int  hidden_units,
+    LLaMADecoderLayerWeight() = default;
+    LLaMADecoderLayerWeight(const int  hidden_units,
                               const int  inter_size,
                               const int  tensor_para_size  = 1,
                               const int  tensor_para_rank  = 0,
                               const bool use_gptj_residual = true);
-    ~GptNeoXDecoderLayerWeight();
-    GptNeoXDecoderLayerWeight(const GptNeoXDecoderLayerWeight& other);
-    GptNeoXDecoderLayerWeight& operator=(const GptNeoXDecoderLayerWeight& other);
+    ~LLaMADecoderLayerWeight();
+    LLaMADecoderLayerWeight(const LLaMADecoderLayerWeight& other);
+    LLaMADecoderLayerWeight& operator=(const LLaMADecoderLayerWeight& other);
 
     void loadModel(std::string dir_path, FtCudaDataType model_file_type);
 

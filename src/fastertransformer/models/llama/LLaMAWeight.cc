@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/models/gptneox/GptNeoXWeight.h"
+#include "src/fastertransformer/models/llama/LLaMAWeight.h"
 
 namespace fastertransformer {
 
 template<typename T>
-GptNeoXWeight<T>::GptNeoXWeight(const int                                  hidden_units,
+LLaMAWeight<T>::LLaMAWeight(const int                                  hidden_units,
                                 const int                                  inter_size,
                                 const int                                  vocab_size,
                                 const int                                  num_layer,
@@ -61,13 +61,13 @@ GptNeoXWeight<T>::GptNeoXWeight(const int                                  hidde
     decoder_layer_weights.reserve(num_layer_);
     for (int l = 0; l < num_layer_; l++) {
         if (isValidLayerParallelId(l)) {
-            decoder_layer_weights.push_back(new GptNeoXDecoderLayerWeight<T>(
+            decoder_layer_weights.push_back(new LLaMADecoderLayerWeight<T>(
                 hidden_units_, inter_size_, tensor_para_size_, tensor_para_rank_, use_gptj_residual_));
         }
         else {
             // Layer-parallelism: allocate empty layer because
             // this rank does not compute it:
-            decoder_layer_weights.push_back(new GptNeoXDecoderLayerWeight<T>(0, 0));
+            decoder_layer_weights.push_back(new LLaMADecoderLayerWeight<T>(0, 0));
         }
     }
 
@@ -76,7 +76,7 @@ GptNeoXWeight<T>::GptNeoXWeight(const int                                  hidde
 }
 
 template<typename T>
-GptNeoXWeight<T>::~GptNeoXWeight()
+LLaMAWeight<T>::~LLaMAWeight()
 {
     if (is_maintain_buffer == true) {
         for (int i = 0; i < weights_ptr.size(); i++) {
@@ -92,7 +92,7 @@ GptNeoXWeight<T>::~GptNeoXWeight()
 }
 
 template<typename T>
-GptNeoXWeight<T>::GptNeoXWeight(const GptNeoXWeight& other):
+LLaMAWeight<T>::LLaMAWeight(const LLaMAWeight& other):
     hidden_units_(other.hidden_units_),
     inter_size_(other.inter_size_),
     vocab_size_(other.vocab_size_),
@@ -137,7 +137,7 @@ GptNeoXWeight<T>::GptNeoXWeight(const GptNeoXWeight& other):
 }
 
 template<typename T>
-GptNeoXWeight<T>& GptNeoXWeight<T>::operator=(const GptNeoXWeight& other)
+LLaMAWeight<T>& LLaMAWeight<T>::operator=(const LLaMAWeight& other)
 {
     hidden_units_               = other.hidden_units_;
     inter_size_                 = other.inter_size_;
@@ -184,7 +184,7 @@ GptNeoXWeight<T>& GptNeoXWeight<T>::operator=(const GptNeoXWeight& other)
 }
 
 template<typename T>
-void GptNeoXWeight<T>::setWeightPtr()
+void LLaMAWeight<T>::setWeightPtr()
 {
     prompt_learning_table.resize(prompt_learning_pair_.size());
 
@@ -207,7 +207,7 @@ void GptNeoXWeight<T>::setWeightPtr()
 }
 
 template<typename T>
-void GptNeoXWeight<T>::mallocWeights()
+void LLaMAWeight<T>::mallocWeights()
 {
     weights_ptr.resize(num_base_weights + prompt_learning_pair_.size());
 
@@ -233,9 +233,9 @@ void GptNeoXWeight<T>::mallocWeights()
 }
 
 template<typename T>
-void GptNeoXWeight<T>::loadModel(std::string dir_path)
+void LLaMAWeight<T>::loadModel(std::string dir_path)
 {
-    FtCudaDataType model_file_type = getModelFileType(dir_path + "/config.ini", "gptneox");
+    FtCudaDataType model_file_type = getModelFileType(dir_path + "/config.ini", "llama");
     FT_CHECK(is_maintain_buffer == true);
 
     loadWeightFromBin<T>(
@@ -279,24 +279,24 @@ void GptNeoXWeight<T>::loadModel(std::string dir_path)
 }
 
 template<typename T>
-void GptNeoXWeight<T>::resizeLayer(const int num_layer)
+void LLaMAWeight<T>::resizeLayer(const int num_layer)
 {
     num_layer_ = num_layer;
     decoder_layer_weights.reserve(num_layer_);
     for (int l = 0; l < num_layer_; l++) {
-        decoder_layer_weights.push_back(new GptNeoXDecoderLayerWeight<T>());
+        decoder_layer_weights.push_back(new LLaMADecoderLayerWeight<T>());
     }
 }
 
 template<typename T>
-bool GptNeoXWeight<T>::isValidLayerParallelId(int l)
+bool LLaMAWeight<T>::isValidLayerParallelId(int l)
 {
     int local_num_layer = (int)(ceil(num_layer_ * 1.0f / layer_para_size_));
     return l < num_layer_ && (l >= local_num_layer * layer_para_rank_)
            && (l < local_num_layer * (layer_para_rank_ + 1));
 }
 
-template struct GptNeoXWeight<float>;
-template struct GptNeoXWeight<half>;
+template struct LLaMAWeight<float>;
+template struct LLaMAWeight<half>;
 
 }  // namespace fastertransformer

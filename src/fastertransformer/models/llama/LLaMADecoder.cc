@@ -14,14 +14,14 @@
  * limitations under the License.
  */
 
-#include "src/fastertransformer/models/gptneox/GptNeoXDecoder.h"
+#include "src/fastertransformer/models/llama/LLaMADecoder.h"
 #include "src/fastertransformer/layers/TensorParallelGeluFfnLayer.h"
 #include "src/fastertransformer/layers/attention_layers/TensorParallelDecoderSelfAttentionLayer.h"
 
 namespace fastertransformer {
 
 template<typename T>
-void GptNeoXDecoder<T>::initialize()
+void LLaMADecoder<T>::initialize()
 {
     self_attention_layer_ = new TensorParallelDecoderSelfAttentionLayer<T>(0,  // max_batch_size
                                                                            head_num_,
@@ -59,13 +59,13 @@ void GptNeoXDecoder<T>::initialize()
 }
 
 template<typename T>
-void GptNeoXDecoder<T>::allocateBuffer()
+void LLaMADecoder<T>::allocateBuffer()
 {
     FT_CHECK(false);
 }
 
 template<typename T>
-void GptNeoXDecoder<T>::allocateBuffer(size_t batch_size)
+void LLaMADecoder<T>::allocateBuffer(size_t batch_size)
 {
     decoder_normed_input_ = reinterpret_cast<T*>(
         allocator_->reMalloc(decoder_normed_input_, sizeof(T) * batch_size * hidden_units_, false));
@@ -79,7 +79,7 @@ void GptNeoXDecoder<T>::allocateBuffer(size_t batch_size)
 }
 
 template<typename T>
-void GptNeoXDecoder<T>::freeBuffer()
+void LLaMADecoder<T>::freeBuffer()
 {
     if (is_allocate_buffer_ == true) {
         allocator_->free((void**)(&decoder_normed_input_));
@@ -91,7 +91,7 @@ void GptNeoXDecoder<T>::freeBuffer()
 }
 
 template<typename T>
-bool GptNeoXDecoder<T>::isValidLayerParallelId(uint l)
+bool LLaMADecoder<T>::isValidLayerParallelId(uint l)
 {
     int local_num_layer = (int)(ceil(num_layer_ * 1.0f / pipeline_para_.world_size_));
     return l < num_layer_ && (l >= local_num_layer * pipeline_para_.rank_)
@@ -99,28 +99,28 @@ bool GptNeoXDecoder<T>::isValidLayerParallelId(uint l)
 }
 
 template<typename T>
-bool GptNeoXDecoder<T>::isFirstLayerParallelId(uint l)
+bool LLaMADecoder<T>::isFirstLayerParallelId(uint l)
 {
     int local_num_layer = (int)(ceil(num_layer_ * 1.0f / pipeline_para_.world_size_));
     return l < num_layer_ && (l == local_num_layer * pipeline_para_.rank_);
 }
 
 template<typename T>
-bool GptNeoXDecoder<T>::isLastLayerParallelId(uint l)
+bool LLaMADecoder<T>::isLastLayerParallelId(uint l)
 {
     int local_num_layer = (int)(ceil(num_layer_ * 1.0f / pipeline_para_.world_size_));
     return l < num_layer_ && (l == local_num_layer * (pipeline_para_.rank_ + 1) - 1);
 }
 
 template<typename T>
-int GptNeoXDecoder<T>::getFirstLayerParallelId()
+int LLaMADecoder<T>::getFirstLayerParallelId()
 {
     int local_num_layer = (int)(ceil(num_layer_ * 1.0f / pipeline_para_.world_size_));
     return local_num_layer * pipeline_para_.rank_;
 }
 
 template<typename T>
-GptNeoXDecoder<T>::GptNeoXDecoder(size_t                              head_num,
+LLaMADecoder<T>::LLaMADecoder(size_t                              head_num,
                                   size_t                              size_per_head,
                                   size_t                              inter_size,
                                   size_t                              num_layer,
@@ -155,7 +155,7 @@ GptNeoXDecoder<T>::GptNeoXDecoder(size_t                              head_num,
 }
 
 template<typename T>
-GptNeoXDecoder<T>::GptNeoXDecoder(GptNeoXDecoder<T> const& decoder):
+LLaMADecoder<T>::LLaMADecoder(LLaMADecoder<T> const& decoder):
     BaseLayer(decoder.stream_, decoder.cublas_wrapper_, decoder.allocator_, decoder.is_free_buffer_after_forward_),
     head_num_(decoder.head_num_),
     size_per_head_(decoder.size_per_head_),
@@ -175,7 +175,7 @@ GptNeoXDecoder<T>::GptNeoXDecoder(GptNeoXDecoder<T> const& decoder):
 }
 
 template<typename T>
-GptNeoXDecoder<T>::~GptNeoXDecoder()
+LLaMADecoder<T>::~LLaMADecoder()
 {
     delete self_attention_layer_;
     delete ffn_layer_;
@@ -183,17 +183,17 @@ GptNeoXDecoder<T>::~GptNeoXDecoder()
 }
 
 template<typename T>
-void GptNeoXDecoder<T>::forward(std::vector<Tensor>*                              output_tensors,
+void LLaMADecoder<T>::forward(std::vector<Tensor>*                              output_tensors,
                                 const std::vector<Tensor>*                        input_tensors,
-                                const std::vector<GptNeoXDecoderLayerWeight<T>*>* gpt_decoder_layer_weight)
+                                const std::vector<LLaMADecoderLayerWeight<T>*>* llama_decoder_layer_weight)
 {
     FT_CHECK(false);
 }
 
 template<typename T>
-void GptNeoXDecoder<T>::forward(std::unordered_map<std::string, Tensor>*          output_tensors,
+void LLaMADecoder<T>::forward(std::unordered_map<std::string, Tensor>*          output_tensors,
                                 const std::unordered_map<std::string, Tensor>*    input_tensors,
-                                const std::vector<GptNeoXDecoderLayerWeight<T>*>* gpt_decoder_layer_weight)
+                                const std::vector<LLaMADecoderLayerWeight<T>*>* llama_decoder_layer_weight)
 {
     // input tensors:
     //      decoder_input [local_batch_size, hidden_dimension],
@@ -263,8 +263,8 @@ void GptNeoXDecoder<T>::forward(std::unordered_map<std::string, Tensor>*        
 
         invokeGeneralLayerNorm(decoder_normed_input_,
                                layer_input,
-                               gpt_decoder_layer_weight->at(l)->pre_layernorm_weights.gamma,
-                               gpt_decoder_layer_weight->at(l)->pre_layernorm_weights.beta,
+                               llama_decoder_layer_weight->at(l)->pre_layernorm_weights.gamma,
+                               llama_decoder_layer_weight->at(l)->pre_layernorm_weights.beta,
                                layernorm_eps_,
                                local_batch_size,
                                hidden_units_,
@@ -294,12 +294,12 @@ void GptNeoXDecoder<T>::forward(std::unordered_map<std::string, Tensor>*        
 
         self_attention_layer_->forward(&self_attention_output_tensors,
                                        &self_attention_input_tensors,
-                                       &gpt_decoder_layer_weight->at(l)->self_attention_weights);
+                                       &llama_decoder_layer_weight->at(l)->self_attention_weights);
         if (use_gptj_residual_) {
             invokeGeneralLayerNorm(decoder_normed_input_,
                                    layer_input,
-                                   gpt_decoder_layer_weight->at(l)->post_attention_layernorm_weights.gamma,
-                                   gpt_decoder_layer_weight->at(l)->post_attention_layernorm_weights.beta,
+                                   llama_decoder_layer_weight->at(l)->post_attention_layernorm_weights.gamma,
+                                   llama_decoder_layer_weight->at(l)->post_attention_layernorm_weights.beta,
                                    layernorm_eps_,
                                    local_batch_size,
                                    hidden_units_,
@@ -313,9 +313,9 @@ void GptNeoXDecoder<T>::forward(std::unordered_map<std::string, Tensor>*        
                 decoder_normed_input_,
                 self_attn_output_,
                 layer_input,
-                gpt_decoder_layer_weight->at(l)->post_attention_layernorm_weights.gamma,
-                gpt_decoder_layer_weight->at(l)->post_attention_layernorm_weights.beta,
-                gpt_decoder_layer_weight->at(l)->self_attention_weights.attention_output_weight.bias,
+                llama_decoder_layer_weight->at(l)->post_attention_layernorm_weights.gamma,
+                llama_decoder_layer_weight->at(l)->post_attention_layernorm_weights.beta,
+                llama_decoder_layer_weight->at(l)->self_attention_weights.attention_output_weight.bias,
                 layernorm_eps_,
                 local_batch_size,
                 hidden_units_,
@@ -334,7 +334,7 @@ void GptNeoXDecoder<T>::forward(std::unordered_map<std::string, Tensor>*        
                                               data_type,
                                               {local_batch_size, hidden_units_},
                                               use_gptj_residual_ ? ffn_output_ : layer_output}}});
-        ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &gpt_decoder_layer_weight->at(l)->ffn_weights);
+        ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &llama_decoder_layer_weight->at(l)->ffn_weights);
 
         if (use_gptj_residual_) {
             // Original workflow:
@@ -346,7 +346,7 @@ void GptNeoXDecoder<T>::forward(std::unordered_map<std::string, Tensor>*        
                                               ffn_output_,
                                               self_attn_output_,
                                               layer_input,
-                                              gpt_decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
+                                              llama_decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
                                               local_batch_size,
                                               hidden_units_,
                                               tensor_para_.world_size_,
@@ -358,7 +358,7 @@ void GptNeoXDecoder<T>::forward(std::unordered_map<std::string, Tensor>*        
         else {
             invokeAddBiasResidual(layer_output,
                                   self_attn_output_,
-                                  gpt_decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
+                                  llama_decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
                                   local_batch_size,
                                   hidden_units_,
                                   stream_);
@@ -385,7 +385,7 @@ void GptNeoXDecoder<T>::forward(std::unordered_map<std::string, Tensor>*        
     }
 }
 
-template class GptNeoXDecoder<float>;
-template class GptNeoXDecoder<half>;
+template class LLaMADecoder<float>;
+template class LLaMADecoder<half>;
 
 }  // namespace fastertransformer

@@ -23,7 +23,7 @@
 #include "src/fastertransformer/layers/BaseLayer.h"
 #include "src/fastertransformer/layers/FfnLayer.h"
 #include "src/fastertransformer/layers/attention_layers/BaseAttentionLayer.h"
-#include "src/fastertransformer/models/gptneox/GptNeoXDecoderLayerWeight.h"
+#include "src/fastertransformer/models/llama/LLaMADecoderLayerWeight.h"
 #include "src/fastertransformer/utils/Tensor.h"
 #include "src/fastertransformer/utils/allocator.h"
 #include "src/fastertransformer/utils/cublasMMWrapper.h"
@@ -33,7 +33,7 @@
 namespace fastertransformer {
 
 template<typename T>
-class GptNeoXContextDecoder: public BaseLayer {
+class LLaMAContextDecoder: public BaseLayer {
 private:
     // meta data
     size_t head_num_;
@@ -82,7 +82,7 @@ protected:
     int*    cu_seqlens_             = nullptr;
 
 public:
-    GptNeoXContextDecoder(size_t                              head_num,
+    LLaMAContextDecoder(size_t                              head_num,
                           size_t                              size_per_head,
                           size_t                              inter_size,
                           size_t                              num_layer,
@@ -101,17 +101,17 @@ public:
                           std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm    = nullptr,
                           int                                 enable_custom_all_reduce_ = 0);
 
-    GptNeoXContextDecoder(GptNeoXContextDecoder<T> const& decoder);
+    LLaMAContextDecoder(LLaMAContextDecoder<T> const& decoder);
 
-    ~GptNeoXContextDecoder();
+    ~LLaMAContextDecoder();
 
     void forward(std::vector<Tensor>*                              output_tensors,
                  const std::vector<Tensor>*                        input_tensors,
-                 const std::vector<GptNeoXDecoderLayerWeight<T>*>* decoder_layer_weights);
+                 const std::vector<LLaMADecoderLayerWeight<T>*>* decoder_layer_weights);
 
     void forward(std::unordered_map<std::string, Tensor>*          output_tensors,
                  const std::unordered_map<std::string, Tensor>*    input_tensors,
-                 const std::vector<GptNeoXDecoderLayerWeight<T>*>* gpt_decoder_layer_weight);
+                 const std::vector<LLaMADecoderLayerWeight<T>*>* llama_decoder_layer_weight);
 };
 
 }  // namespace fastertransformer

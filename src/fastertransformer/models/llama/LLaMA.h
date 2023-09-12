@@ -20,16 +20,16 @@
 #include <vector>
 
 #include "src/fastertransformer/layers/DynamicDecodeLayer.h"
-#include "src/fastertransformer/models/gptneox/GptNeoXContextDecoder.h"
-#include "src/fastertransformer/models/gptneox/GptNeoXDecoder.h"
-#include "src/fastertransformer/models/gptneox/GptNeoXWeight.h"
+#include "src/fastertransformer/models/llama/LLaMAContextDecoder.h"
+#include "src/fastertransformer/models/llama/LLaMADecoder.h"
+#include "src/fastertransformer/models/llama/LLaMAWeight.h"
 #include "src/fastertransformer/utils/custom_ar_comm.h"
 #include "src/fastertransformer/utils/prompt_learning.h"
 
 namespace fastertransformer {
 
 template<typename T>
-class GptNeoX: public BaseLayer {
+class LLaMA: public BaseLayer {
 private:
     // meta data
     size_t head_num_;
@@ -69,8 +69,8 @@ private:
     bool               has_prefix_prompt_;
     bool               has_prefix_soft_prompt_;
 
-    GptNeoXDecoder<T>*         gpt_decoder_;
-    GptNeoXContextDecoder<T>*  gpt_context_decoder_;
+    LLaMADecoder<T>*         llama_decoder_;
+    LLaMAContextDecoder<T>*  llama_context_decoder_;
     DynamicDecodeLayer<float>* dynamic_decode_layer_;
 
     void allocateBuffer() override;
@@ -137,7 +137,7 @@ protected:
                                         const std::unordered_map<std::string, Tensor>* input_tensors);
 
 public:
-    GptNeoX(size_t                              head_num,
+    LLaMA(size_t                              head_num,
             size_t                              size_per_head,
             size_t                              inter_size,
             size_t                              num_layer,
@@ -164,7 +164,7 @@ public:
             std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
             int                                 enable_custom_all_reduce = 0);
 
-    GptNeoX(size_t                              head_num,
+    LLaMA(size_t                              head_num,
             size_t                              size_per_head,
             size_t                              inter_size,
             size_t                              num_layer,
@@ -193,17 +193,17 @@ public:
             std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
             int                                 enable_custom_all_reduce = 0);
 
-    GptNeoX(GptNeoX<T> const& GptNeoX);
+    LLaMA(LLaMA<T> const& LLaMA);
 
-    ~GptNeoX();
+    ~LLaMA();
 
     void forward(std::vector<Tensor>*       output_tensors,
                  const std::vector<Tensor>* input_tensors,
-                 const GptNeoXWeight<T>*    gpt_weights);
+                 const LLaMAWeight<T>*    llama_weights);
 
     void forward(std::unordered_map<std::string, Tensor>*       output_tensors,
                  const std::unordered_map<std::string, Tensor>* input_tensors,
-                 const GptNeoXWeight<T>*                        gpt_weights);
+                 const LLaMAWeight<T>*                        llama_weights);
 
     size_t getPipelineParallelRank();
     size_t getPipelineParallelSize();

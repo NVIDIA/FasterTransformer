@@ -17,17 +17,17 @@
 #pragma once
 
 #include "src/fastertransformer/kernels/layernorm_kernels.h"
-#include "src/fastertransformer/models/gptneox/GptNeoXDecoderLayerWeight.h"
+#include "src/fastertransformer/models/llama/LLaMADecoderLayerWeight.h"
 #include "src/fastertransformer/utils/memory_utils.h"
 #include "src/fastertransformer/utils/prompt_learning.h"
 
 namespace fastertransformer {
 
 template<typename T>
-struct GptNeoXWeight {
+struct LLaMAWeight {
 
-    GptNeoXWeight() = default;
-    GptNeoXWeight(
+    LLaMAWeight() = default;
+    LLaMAWeight(
         const int                                  hidden_units,
         const int                                  inter_size,
         const int                                  vocab_size,
@@ -41,18 +41,18 @@ struct GptNeoXWeight {
         PromptLearningType                         prompt_learning_type = PromptLearningType::no_prompt,
         std::map<std::string, std::pair<int, int>> prompt_learning_pair = std::map<std::string, std::pair<int, int>>{});
 
-    ~GptNeoXWeight();
-    GptNeoXWeight(const GptNeoXWeight& other);
-    GptNeoXWeight& operator=(const GptNeoXWeight& other);
+    ~LLaMAWeight();
+    LLaMAWeight(const LLaMAWeight& other);
+    LLaMAWeight& operator=(const LLaMAWeight& other);
 
     void loadModel(std::string dir_path);
 
     void resizeLayer(const int num_layer);
 
-    std::vector<GptNeoXDecoderLayerWeight<T>*> decoder_layer_weights;
+    std::vector<LLaMADecoderLayerWeight<T>*> decoder_layer_weights;
     const T*                                   pre_decoder_embedding_table = nullptr;
     // GPT-J does not use embedding table, but we leave the ptr such that
-    // GptNeoX::forward and Gpt::forward become identical
+    // LLaMA::forward and Gpt::forward become identical
     const T* position_encoding_table = nullptr;
 
     /*
