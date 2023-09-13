@@ -16,8 +16,8 @@
 
 #include "src/fastertransformer/models/llama/LLaMA.h"
 #include "src/fastertransformer/kernels/bert_preprocess_kernels.h"
-#include "src/fastertransformer/kernels/decoding_kernels.h"
 #include "src/fastertransformer/kernels/gpt_kernels.h"
+#include "src/fastertransformer/kernels/decoding_kernels.h"
 #include "src/fastertransformer/layers/beam_search_layers/BaseBeamSearchLayer.h"
 #include <algorithm>
 
@@ -32,9 +32,7 @@ void LLaMA<T>::initialize()
                                                         num_layer_,
                                                         rotary_embedding_dim_,
                                                         neox_rotary_style_,
-                                                        use_gptj_residual_,
                                                         layernorm_eps_,
-                                                        tensor_para_,
                                                         pipeline_para_,
                                                         stream_,
                                                         cublas_wrapper_,
@@ -51,9 +49,7 @@ void LLaMA<T>::initialize()
                                          num_layer_,
                                          rotary_embedding_dim_,
                                          neox_rotary_style_,
-                                         use_gptj_residual_,
                                          layernorm_eps_,
-                                         tensor_para_,
                                          pipeline_para_,
                                          stream_,
                                          cublas_wrapper_,
@@ -96,20 +92,16 @@ void LLaMA<T>::allocateBuffer(
             (T*)(allocator_->reMalloc(padded_embedding_bias_, sizeof(T) * vocab_size_padded_, true));
     }
 
-    input_attention_mask_ = (T*)(allocator_->reMalloc(
-        input_attention_mask_, sizeof(T) * batchxbeam * max_seq_len * max_cache_seq_len, false));
-    decoder_input_buf_ = (T*)(allocator_->reMalloc(decoder_input_buf_, sizeof(T) * batchxbeam * hidden_units_, false));
-    decoder_output_buf_ =
-        (T*)(allocator_->reMalloc(decoder_output_buf_, sizeof(T) * batchxbeam * hidden_units_, false));
-    normed_decoder_output_buf_ =
-        (T*)(allocator_->reMalloc(normed_decoder_output_buf_, sizeof(T) * batchxbeam * hidden_units_, false));
-    logits_buf_ = (float*)(allocator_->reMalloc(logits_buf_, sizeof(float) * batchxbeam * vocab_size_padded_, false));
-    nccl_logits_buf_ =
-        (float*)(allocator_->reMalloc(nccl_logits_buf_, sizeof(float) * batchxbeam * vocab_size_padded_, false));
-    cum_log_probs_    = (float*)(allocator_->reMalloc(cum_log_probs_, sizeof(float) * batchxbeam, false));
-    finished_buf_     = (bool*)(allocator_->reMalloc(finished_buf_, sizeof(bool) * batchxbeam, false));
-    h_finished_buf_   = new bool[batchxbeam];
-    sequence_lengths_ = (int*)(allocator_->reMalloc(sequence_lengths_, sizeof(int) * batchxbeam, false));
+    input_attention_mask_ = (T*)(allocator_->reMalloc(input_attention_mask_, sizeof(T) * batchxbeam * max_seq_len * max_cache_seq_len, false));
+    decoder_input_buf_    = (T*)(allocator_->reMalloc(decoder_input_buf_, sizeof(T) * batchxbeam * hidden_units_, false));
+    decoder_output_buf_   = (T*)(allocator_->reMalloc(decoder_output_buf_, sizeof(T) * batchxbeam * hidden_units_, false));
+    normed_decoder_output_buf_ = (T*)(allocator_->reMalloc(normed_decoder_output_buf_, sizeof(T) * batchxbeam * hidden_units_, false));
+    logits_buf_           = (float*)(allocator_->reMalloc(logits_buf_, sizeof(float) * batchxbeam * vocab_size_padded_, false));
+    nccl_logits_buf_      = (float*)(allocator_->reMalloc(nccl_logits_buf_, sizeof(float) * batchxbeam * vocab_size_padded_, false));
+    cum_log_probs_        = (float*)(allocator_->reMalloc(cum_log_probs_, sizeof(float) * batchxbeam, false));
+    finished_buf_         = (bool*)(allocator_->reMalloc(finished_buf_, sizeof(bool) * batchxbeam, false));
+    h_finished_buf_       = new bool[batchxbeam];
+    sequence_lengths_     = (int*)(allocator_->reMalloc(sequence_lengths_, sizeof(int) * batchxbeam, false));
 
     key_cache_   = (T*)(allocator_->reMalloc(key_cache_, sizeof(T) * self_cache_size * 2, true));
     value_cache_ = key_cache_ + self_cache_size;
@@ -214,7 +206,6 @@ LLaMA<T>::LLaMA(size_t                              head_num,
                     size_t                              rotary_embedding_dim,
                     int                                 start_id,
                     int                                 end_id,
-                    bool                                use_gptj_residual,
                     unsigned long long                  random_seed,
                     cudaStream_t                        stream,
                     cublasMMWrapper*                    cublas_wrapper,
@@ -233,7 +224,6 @@ LLaMA<T>::LLaMA(size_t                              head_num,
     rotary_embedding_dim_(rotary_embedding_dim),
     start_id_(start_id),
     end_id_(end_id),
-    use_gptj_residual_(use_gptj_residual),
     hidden_units_(head_num * size_per_head),
     local_head_num_(head_num / 1),
     attention_type_(attention_type)
@@ -260,7 +250,6 @@ LLaMA<T>::LLaMA(size_t                              head_num,
                     size_t                              rotary_embedding_dim,
                     int                                 start_id,
                     int                                 end_id,
-                    bool                                use_gptj_residual,
                     unsigned long long                  random_seed,
                     NcclParam                           tensor_para,
                     NcclParam                           pipeline_para,
@@ -281,7 +270,6 @@ LLaMA<T>::LLaMA(size_t                              head_num,
     rotary_embedding_dim_(rotary_embedding_dim),
     start_id_(start_id),
     end_id_(end_id),
-    use_gptj_residual_(use_gptj_residual),
     hidden_units_(head_num * size_per_head),
     tensor_para_(tensor_para),
     pipeline_para_(pipeline_para),
@@ -310,7 +298,6 @@ LLaMA<T>::LLaMA(LLaMA<T> const& llama):
     start_id_(llama.start_id_),
     end_id_(llama.end_id_),
     prompt_learning_start_id_(llama.prompt_learning_start_id_),
-    use_gptj_residual_(llama.use_gptj_residual_),
     hidden_units_(llama.hidden_units_),
     tensor_para_(llama.tensor_para_),
     pipeline_para_(llama.pipeline_para_),
@@ -403,27 +390,19 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     // Padding works as follows: p p x x i i i x x --> p p i i i x x x x (p denotes prompt, i denotes input, x denotes
     // pad)
     // TODO (perkzz): move unnecessary paddings
-    has_prefix_prompt_ = false;
     int max_prefix_prompt_length = 0;
 
     // NOTE: Prefix Prompt PreProcessing
     // get prefix_prompt_weight for each batch --> shape [batch, beam_width]
     // --> ptrs with shape [num_layers, 2, num_heads, perfix_seq_len, size_per_head]
-    std::vector<const T*> prefix_prompt_weight_batch_ptrs;
-    std::vector<int>      prefix_prompt_lengths;
-
     int max_input_length = input_tensors->at("input_ids").shape[1];
-    FT_CHECK_WITH_INFO(!(max_input_length == 0 && max_prefix_prompt_length > 0),
-                       "Prefix Prompt should come with inputs!");
 
     // Prefix Soft Prompt
-    has_prefix_soft_prompt_ = false;
-    const size_t max_prefix_soft_prompt_length = 0;
-    const size_t limit_len_offset   = 0 + (max_input_length == 0 ? 1 : 0);
+    const size_t limit_len_offset   = (max_input_length == 0 ? 1 : 0);
     const size_t max_output_seq_len = input_tensors->at("output_seq_len").max<uint32_t>() + limit_len_offset;
     const size_t max_seq_len        = max_output_seq_len;
     // max cache seq len should include max prefix prompt length as it has k/v states
-    const size_t max_cache_seq_len = max_output_seq_len + max_prefix_prompt_length;
+    const size_t max_cache_seq_len = max_output_seq_len;
     if (max_cache_seq_len < max_seq_len) {
         FT_LOG_WARNING("max_cache_seq_len (%d) is less than max_seq_len (%d). "
                        "Note that this reduces the memory cost of k/v cache, but may hurt the accuracy.",
@@ -437,8 +416,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                        max_seq_len);
     }
     const cudaDataType_t gemm_data_type = getCudaDataType<T>();
-    allocateBuffer(
-        batch_size, beam_width, max_seq_len, max_cache_seq_len, max_input_length + 0);
+    allocateBuffer(batch_size, beam_width, max_seq_len, max_cache_seq_len, max_input_length);
     setSeqLimitLen(seq_limit_len_, input_tensors->at("output_seq_len"), limit_len_offset, batch_size);
 
     sync_check_cuda_error();
@@ -471,8 +449,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     if (beam_width > 1) {
         cudaMemsetAsync(cache_indirections_[0], 0, 2 * sizeof(int) * batch_size * beam_width * max_seq_len, stream_);
     }
-
-    // Prefix prompts
 
     sync_check_cuda_error();
 
@@ -507,7 +483,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                                         tiled_prompt_lengths_buf_,
                                         batch_size * beam_width,
                                         max_input_length,
-                                        max_prefix_prompt_length,
+                                        0,
                                         stream_);
         sync_check_cuda_error();
 
@@ -523,19 +499,19 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                     {batch_size * beam_width,
                      1,
                      (size_t)max_input_length,
-                     (size_t)(max_input_length + max_prefix_prompt_length)},
+                     (size_t)(max_input_length)},
                     input_attention_mask_}},
             {"input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size * beam_width}, tiled_input_lengths_buf_}},
             {"d_prefix_prompt_batch",
              Tensor{MEMORY_GPU,
                     data_type,
                     {batch_size * beam_width},
-                    has_prefix_prompt_ ? prompt_learning_weight_batch_ : nullptr}},
+                    nullptr}},
             {"d_prefix_prompt_lengths",
              Tensor{MEMORY_GPU,
                     TYPE_INT32,
                     {batch_size * beam_width},
-                    has_prefix_prompt_ ? tiled_prompt_lengths_buf_ : nullptr}}};
+                    nullptr}}};
 
         std::unordered_map<std::string, Tensor> decoder_output_tensors{
             {"decoder_output",
@@ -561,8 +537,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                                  max_input_length - 1,
                                  stream_);
         sync_check_cuda_error();
-    }
-    else if (max_input_length == 0) {
+    } else if (max_input_length == 0) {
         max_input_length++;
         invokeDecodingInitialize(finished_buf_,
                                  sequence_lengths_,
@@ -580,8 +555,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                         cudaMemcpyHostToDevice,
                         stream_);
         sync_check_cuda_error();
-    }
-    else if (max_input_length == 1) {
+    } else if (max_input_length == 1) {
         invokeDecodingInitialize(finished_buf_,
                                  sequence_lengths_,
                                  nullptr,
@@ -630,7 +604,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                             input_tensors->at("input_lengths").getPtr<const int>(),  // not_tiled
                             tiled_prompt_lengths_buf_,
                             max_cache_seq_len,
-                            max_input_length + max_prefix_prompt_length,
+                            max_input_length,
                             0,
                             batch_size,
                             beam_width,
@@ -685,7 +659,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                      Tensor{MEMORY_GPU,
                             TYPE_INT32,
                             {local_batch_size},
-                            has_prefix_prompt_ ? (tiled_prompt_lengths_buf_ + id_offset) : nullptr}},
+                            nullptr}},
                     {"max_prefix_prompt_length", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &max_prefix_prompt_length}},
                     {"max_input_length", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &max_input_length}},
                     {"step", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &step}},
@@ -902,9 +876,9 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
              */
             invokeUpdatePaddingCount(tiled_total_padding_count_,
                                      input_tensors->at("input_lengths").getPtr<const int>(),  // not_tiled
-                                     has_prefix_prompt_ ? tiled_prompt_lengths_buf_ : (const int*)nullptr,
+                                     (const int*)nullptr,
                                      max_input_length,
-                                     has_prefix_prompt_ ? max_prefix_prompt_length : 0,
+                                     0,
                                      batch_size,
                                      beam_width,
                                      stream_);
@@ -1015,8 +989,7 @@ void LLaMA<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*       o
         param.parent_ids                     = beam_width == 1 ? nullptr : parent_ids_buf_;
         param.end_tokens                     = end_ids_buf_;
         param.max_input_length               = max_input_length;
-        param.prefix_soft_prompt_lengths =
-            has_prefix_soft_prompt_ ? input_tensors->at("request_prompt_lengths").getPtr<int>() : nullptr;
+        param.prefix_soft_prompt_lengths     = nullptr;
         param.input_lengths                   = tiled_input_lengths_buf_;
         param.max_prefix_soft_prompt_length   = 0;
         param.max_input_without_prompt_length = max_input_length;

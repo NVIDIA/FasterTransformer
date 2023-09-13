@@ -23,31 +23,26 @@ LLaMAWeight<T>::LLaMAWeight(const int                                  hidden_un
                                 const int                                  inter_size,
                                 const int                                  vocab_size,
                                 const int                                  num_layer,
-                                const int                                  max_seq_len,
                                 const int                                  tensor_para_size,
                                 const int                                  tensor_para_rank,
                                 const int                                  layer_para_size,
-                                const int                                  layer_para_rank,
-                                const bool                                 use_gptj_residual):
+                                const int                                  layer_para_rank):
     hidden_units_(hidden_units),
     inter_size_(inter_size),
     vocab_size_(vocab_size),
     num_layer_(num_layer),
-    max_seq_len_(max_seq_len),
     tensor_para_size_(tensor_para_size),
     tensor_para_rank_(tensor_para_rank),
     layer_para_size_(layer_para_size),
-    layer_para_rank_(layer_para_rank),
-    use_gptj_residual_(use_gptj_residual)
+    layer_para_rank_(layer_para_rank)
 {
     FT_CHECK(num_layer_ % layer_para_size_ == 0);
-
 
     decoder_layer_weights.reserve(num_layer_);
     for (int l = 0; l < num_layer_; l++) {
         if (isValidLayerParallelId(l)) {
             decoder_layer_weights.push_back(new LLaMADecoderLayerWeight<T>(
-                hidden_units_, inter_size_, tensor_para_size_, tensor_para_rank_, use_gptj_residual_));
+                hidden_units_, inter_size_, tensor_para_size_, tensor_para_rank_));
         }
         else {
             // Layer-parallelism: allocate empty layer because
@@ -82,12 +77,10 @@ LLaMAWeight<T>::LLaMAWeight(const LLaMAWeight& other):
     inter_size_(other.inter_size_),
     vocab_size_(other.vocab_size_),
     num_layer_(other.num_layer_),
-    max_seq_len_(other.max_seq_len_),
     tensor_para_size_(other.tensor_para_size_),
     tensor_para_rank_(other.tensor_para_rank_),
     layer_para_size_(other.layer_para_size_),
     layer_para_rank_(other.layer_para_rank_),
-    use_gptj_residual_(other.use_gptj_residual_),
     prompt_token_weight_size_(other.prompt_token_weight_size_)
 {
     mallocWeights();
@@ -113,12 +106,10 @@ LLaMAWeight<T>& LLaMAWeight<T>::operator=(const LLaMAWeight& other)
     inter_size_                 = other.inter_size_;
     vocab_size_                 = other.vocab_size_;
     num_layer_                  = other.num_layer_;
-    max_seq_len_                = other.max_seq_len_;
     tensor_para_size_           = other.tensor_para_size_;
     tensor_para_rank_           = other.tensor_para_rank_;
     layer_para_size_            = other.layer_para_size_;
     layer_para_rank_            = other.layer_para_rank_;
-    use_gptj_residual_          = other.use_gptj_residual_;
     prompt_token_weight_size_   = other.prompt_token_weight_size_;
 
     mallocWeights();
@@ -169,6 +160,7 @@ void LLaMAWeight<T>::loadModel(std::string dir_path)
         weights_ptr[0], {(size_t)(vocab_size_ * hidden_units_)}, dir_path + "/model.wte.bin", model_file_type);
     loadWeightFromBin<T>(
         weights_ptr[1], {(size_t)hidden_units_}, dir_path + "/model.final_layernorm.bias.bin", model_file_type);
+
     loadWeightFromBin<T>(
         weights_ptr[2], {(size_t)hidden_units_}, dir_path + "/model.final_layernorm.weight.bin", model_file_type);
     loadWeightFromBin<T>(weights_ptr[3],

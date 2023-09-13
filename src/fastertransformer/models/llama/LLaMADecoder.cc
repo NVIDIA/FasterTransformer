@@ -15,47 +15,43 @@
  */
 
 #include "src/fastertransformer/models/llama/LLaMADecoder.h"
-#include "src/fastertransformer/layers/TensorParallelGeluFfnLayer.h"
-#include "src/fastertransformer/layers/attention_layers/TensorParallelDecoderSelfAttentionLayer.h"
+#include "src/fastertransformer/layers/FfnLayer.h"
+#include "src/fastertransformer/layers/attention_layers/DecoderSelfAttentionLayer.h"
 
 namespace fastertransformer {
 
 template<typename T>
 void LLaMADecoder<T>::initialize()
 {
-    self_attention_layer_ = new TensorParallelDecoderSelfAttentionLayer<T>(0,  // max_batch_size
-                                                                           head_num_,
-                                                                           size_per_head_,
-                                                                           rotary_embedding_dim_,
-                                                                           neox_rotary_style_,
-                                                                           tensor_para_,
-                                                                           stream_,
-                                                                           cublas_wrapper_,
-                                                                           allocator_,
-                                                                           !use_gptj_residual_,
-                                                                           is_free_buffer_after_forward_,
-                                                                           false,
-                                                                           0,
-                                                                           custom_all_reduce_comm_,
-                                                                           enable_custom_all_reduce_);
+    self_attention_layer_ = new DecoderSelfAttentionLayer<T>(0,  // max_batch_size
+                                                             head_num_,
+                                                             size_per_head_,
+                                                             head_num_,
+                                                             rotary_embedding_dim_,
+                                                             neox_rotary_style_,
+                                                             head_num_ * size_per_head_,
+                                                             1.0f,
+                                                             stream_,
+                                                             cublas_wrapper_,
+                                                             allocator_,
+                                                             is_free_buffer_after_forward_,
+                                                             false,
+                                                             0);
 
-    ffn_layer_ = new TensorParallelGeluFfnLayer<T>(0,  // max_batch_size
-                                                   1,
-                                                   head_num_,
-                                                   size_per_head_,
-                                                   0,  // expert_num
-                                                   inter_size_,
-                                                   tensor_para_,
-                                                   stream_,
-                                                   cublas_wrapper_,
-                                                   allocator_,
-                                                   !use_gptj_residual_,
-                                                   is_free_buffer_after_forward_,
-                                                   false,
-                                                   0,
-                                                   false,  // use_gated_activation = false;
-                                                   custom_all_reduce_comm_,
-                                                   enable_custom_all_reduce_);
+    ffn_layer_ = new GeluFfnLayer<T>(0, // max_batch_size
+                                     1, 
+                                     head_num_,
+                                     size_per_head_,
+                                     0,  // expert_num
+                                     inter_size_,
+                                     stream_,
+                                     cublas_wrapper_,
+                                     allocator_,
+                                     is_free_buffer_after_forward_,
+                                     false,
+                                     0,
+                                     false  // use_gated_activation = false
+                                     );
 }
 
 template<typename T>
@@ -126,9 +122,7 @@ LLaMADecoder<T>::LLaMADecoder(size_t                              head_num,
                                   size_t                              num_layer,
                                   size_t                              rotary_embedding_dim,
                                   bool                                neox_rotary_style,
-                                  bool                                use_gptj_residual,
                                   float                               layernorm_eps,
-                                  NcclParam                           tensor_para,
                                   NcclParam                           pipeline_para,
                                   cudaStream_t                        stream,
                                   cublasMMWrapper*                    cublas_wrapper,
@@ -143,10 +137,8 @@ LLaMADecoder<T>::LLaMADecoder(size_t                              head_num,
     num_layer_(num_layer),
     rotary_embedding_dim_(rotary_embedding_dim),
     neox_rotary_style_(neox_rotary_style),
-    use_gptj_residual_(use_gptj_residual),
     layernorm_eps_(layernorm_eps),
     hidden_units_(head_num_ * size_per_head),
-    tensor_para_(tensor_para),
     pipeline_para_(pipeline_para),
     custom_all_reduce_comm_(custom_all_reduce_comm),
     enable_custom_all_reduce_(enable_custom_all_reduce)
@@ -163,10 +155,8 @@ LLaMADecoder<T>::LLaMADecoder(LLaMADecoder<T> const& decoder):
     num_layer_(decoder.num_layer_),
     rotary_embedding_dim_(decoder.rotary_embedding_dim_),
     neox_rotary_style_(decoder.neox_rotary_style_),
-    use_gptj_residual_(decoder.use_gptj_residual_),
     layernorm_eps_(decoder.layernorm_eps_),
     hidden_units_(decoder.hidden_units_),
-    tensor_para_(decoder.tensor_para_),
     pipeline_para_(decoder.pipeline_para_),
     custom_all_reduce_comm_(decoder.custom_all_reduce_comm_),
     enable_custom_all_reduce_(decoder.enable_custom_all_reduce_)
@@ -247,18 +237,15 @@ void LLaMADecoder<T>::forward(std::unordered_map<std::string, Tensor>*          
         T* layer_output = (l == num_layer_ - 1) ? decoder_output : decoder_layer_output_;
 
         if (isFirstLayerParallelId(l) == true && pipeline_para_.rank_ != 0 && pipeline_para_.world_size_ > 1) {
-            int data_size = local_batch_size * hidden_units_ / tensor_para_.world_size_;
+            int data_size = local_batch_size * hidden_units_;
             // ftNcclRecv(layer_input, local_batch_size * hidden_units_, pipeline_para_.rank_ - 1, pipeline_para_,
             // stream_);
 
-            ftNcclRecv(layer_input + data_size * tensor_para_.rank_,
+            ftNcclRecv(layer_input,
                        data_size,
                        pipeline_para_.rank_ - 1,
                        pipeline_para_,
                        stream_);
-            if (tensor_para_.world_size_ > 1) {
-                ftNcclAllGather(layer_input, layer_input, data_size, tensor_para_.rank_, tensor_para_, stream_);
-            }
         }
 
         invokeGeneralLayerNorm(decoder_normed_input_,
@@ -293,22 +280,10 @@ void LLaMADecoder<T>::forward(std::unordered_map<std::string, Tensor>*          
             {"value_cache", Tensor{MEMORY_GPU, data_type, self_v_cache_size, v_cache.getPtrWithOffset(cache_offset)}}};
 
         self_attention_layer_->forward(&self_attention_output_tensors,
-                                       &self_attention_input_tensors,
-                                       &llama_decoder_layer_weight->at(l)->self_attention_weights);
-        if (use_gptj_residual_) {
-            invokeGeneralLayerNorm(decoder_normed_input_,
-                                   layer_input,
-                                   llama_decoder_layer_weight->at(l)->post_attention_layernorm_weights.gamma,
-                                   llama_decoder_layer_weight->at(l)->post_attention_layernorm_weights.beta,
-                                   layernorm_eps_,
-                                   local_batch_size,
-                                   hidden_units_,
-                                   (float*)nullptr,
-                                   0,
-                                   stream_);
-        }
-        else {
-            invokeGeneralAddBiasResidualPreLayerNorm(
+                &self_attention_input_tensors,
+                &llama_decoder_layer_weight->at(l)->self_attention_weights);
+
+        invokeGeneralAddBiasResidualPreLayerNorm(
                 self_attn_output_,
                 decoder_normed_input_,
                 self_attn_output_,
@@ -325,7 +300,6 @@ void LLaMADecoder<T>::forward(std::unordered_map<std::string, Tensor>*          
                 (float*)nullptr,
                 0,
                 stream_);
-        }
 
         TensorMap ffn_input_tensors(
             {{"ffn_input", Tensor{MEMORY_GPU, data_type, {local_batch_size, hidden_units_}, decoder_normed_input_}}});
@@ -333,46 +307,22 @@ void LLaMADecoder<T>::forward(std::unordered_map<std::string, Tensor>*          
                                        Tensor{MEMORY_GPU,
                                               data_type,
                                               {local_batch_size, hidden_units_},
-                                              use_gptj_residual_ ? ffn_output_ : layer_output}}});
+                                              layer_output}}});
         ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &llama_decoder_layer_weight->at(l)->ffn_weights);
 
-        if (use_gptj_residual_) {
-            // Original workflow:
-            //      layer_output = layer_input + reduceSum(ffn_output + self_attn_output + ffn_output_bias)
-            // Our workflow:
-            //      layer_output = reduceSum(ffn_output + self_attn_output + ffn_output_bias + layer_input / TP_size)
-            // They are equivalent on math, but we can use same buffer for layer_input and layer_output
-            invokeAddBiasAttentionFfnResidual(layer_output,
-                                              ffn_output_,
-                                              self_attn_output_,
-                                              layer_input,
-                                              llama_decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
-                                              local_batch_size,
-                                              hidden_units_,
-                                              tensor_para_.world_size_,
-                                              stream_);
-            if (tensor_para_.world_size_ > 1) {
-                ftNcclAllReduceSum(layer_output, layer_output, local_batch_size * hidden_units_, tensor_para_, stream_);
-            }
-        }
-        else {
-            invokeAddBiasResidual(layer_output,
-                                  self_attn_output_,
-                                  llama_decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
-                                  local_batch_size,
-                                  hidden_units_,
-                                  stream_);
-        }
+        invokeAddBiasResidual(layer_output,
+                self_attn_output_,
+                llama_decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
+                local_batch_size,
+                hidden_units_,
+                stream_);
 
         sync_check_cuda_error();
 
         if (isLastLayerParallelId(l) == true && pipeline_para_.rank_ != pipeline_para_.world_size_ - 1
             && pipeline_para_.world_size_ > 1) {
-            int data_size = local_batch_size * hidden_units_ / tensor_para_.world_size_;
-            // ftNcclSend(layer_output, local_batch_size * hidden_units_, pipeline_para_.rank_ + 1, pipeline_para_,
-            // stream_);
-
-            ftNcclSend(layer_output + data_size * tensor_para_.rank_,
+            int data_size = local_batch_size * hidden_units_;
+            ftNcclSend(layer_output,
                        data_size,
                        pipeline_para_.rank_ + 1,
                        pipeline_para_,

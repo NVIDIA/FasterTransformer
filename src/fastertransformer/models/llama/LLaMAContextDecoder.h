@@ -42,13 +42,11 @@ private:
     size_t num_layer_;
     size_t rotary_embedding_dim_;
     bool   neox_rotary_style_;
-    bool   use_gptj_residual_;
     float  layernorm_eps_;
 
     // calculated data
     size_t hidden_units_;
 
-    NcclParam tensor_para_;
     NcclParam pipeline_para_;
 
     std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm_;
@@ -88,9 +86,7 @@ public:
                           size_t                              num_layer,
                           size_t                              rotary_embedding_dim,
                           bool                                neox_rotary_style,
-                          bool                                use_gptj_residual,
                           float                               layernorm_eps,
-                          NcclParam                           tensor_para,
                           NcclParam                           pipeline_para,
                           cudaStream_t                        stream,
                           cublasMMWrapper*                    cublas_wrapper,

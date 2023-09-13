@@ -60,9 +60,6 @@ private:
         (std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM") == nullptr ||
          std::string(std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM")) != "ON");
 
-    // Residual Type
-    const bool use_gptj_residual_ = true;
-
     // Prompt Learning Parameters
     PromptLearningType prompt_learning_type_;
     int                prompt_learning_start_id_;  // start_id for prompt_learning (only needed by prefix prompts)
@@ -145,7 +142,6 @@ public:
             size_t                              rotary_embedding_dim,
             int                                 start_id,
             int                                 end_id,
-            bool                                use_gptj_residual,
             unsigned long long                  random_seed,
             cudaStream_t                        stream,
             cublasMMWrapper*                    cublas_wrapper,
@@ -164,7 +160,6 @@ public:
             size_t                              rotary_embedding_dim,
             int                                 start_id,
             int                                 end_id,
-            bool                                use_gptj_residual,
             unsigned long long                  random_seed,
             NcclParam                           tensor_para,
             NcclParam                           pipeline_para,

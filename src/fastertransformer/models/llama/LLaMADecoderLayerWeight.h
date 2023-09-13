@@ -32,8 +32,7 @@ public:
     LLaMADecoderLayerWeight(const int  hidden_units,
                               const int  inter_size,
                               const int  tensor_para_size  = 1,
-                              const int  tensor_para_rank  = 0,
-                              const bool use_gptj_residual = true);
+                              const int  tensor_para_rank  = 0);
     ~LLaMADecoderLayerWeight();
     LLaMADecoderLayerWeight(const LLaMADecoderLayerWeight& other);
     LLaMADecoderLayerWeight& operator=(const LLaMADecoderLayerWeight& other);
@@ -50,7 +49,6 @@ private:
     int       inter_size_;
     int       tensor_para_size_;
     int       tensor_para_rank_;
-    bool      use_gptj_residual_;
     const int attention_dense_bias_weight_id = 5;
     bool      is_maintain_buffer             = false;
     T*        weights_ptr[12];

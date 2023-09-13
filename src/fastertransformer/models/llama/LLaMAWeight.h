@@ -32,12 +32,10 @@ struct LLaMAWeight {
         const int                                  inter_size,
         const int                                  vocab_size,
         const int                                  num_layer,
-        const int                                  max_seq_len,
         const int                                  tensor_para_size     = 1,
         const int                                  tensor_para_rank     = 0,
         const int                                  layer_para_size      = 1,
-        const int                                  layer_para_rank      = 0,
-        const bool                                 use_gptj_residual_   = true);
+        const int                                  layer_para_rank      = 0);
 
     ~LLaMAWeight();
     LLaMAWeight(const LLaMAWeight& other);
@@ -49,17 +47,10 @@ struct LLaMAWeight {
 
     std::vector<LLaMADecoderLayerWeight<T>*> decoder_layer_weights;
     const T*                                   pre_decoder_embedding_table = nullptr;
-    // GPT-J does not use embedding table, but we leave the ptr such that
-    // LLaMA::forward and Gpt::forward become identical
     const T* position_encoding_table = nullptr;
 
     LayerNormWeight<T> post_decoder_layernorm;
     DenseWeight<T>     post_decoder_embedding;
-
-    inline void setMaxSeqLen(size_t max_seq_len)
-    {
-        max_seq_len_ = max_seq_len;
-    }
 
 private:
     void setWeightPtr();
@@ -70,15 +61,11 @@ private:
     int inter_size_;
     int vocab_size_;
     int num_layer_;
-    int max_seq_len_;
 
     int tensor_para_size_;
     int tensor_para_rank_;
     int layer_para_size_;
     int layer_para_rank_;
-
-    // residual type
-    bool use_gptj_residual_;
 
     // prompt learning pair (task_name, (task_name_id, prompt_len))
     // each prompt token's weight size

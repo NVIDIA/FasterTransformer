@@ -205,18 +205,14 @@ void llama_example(const INIReader reader)
         cublas_wrapper.setFP32GemmConfig();
     }
 
-    // LLAMA Residual Type
-    const bool                          use_gptj_residual = (bool)reader.GetInteger(model_name, "use_gptj_residual", 1);
     fastertransformer::LLaMAWeight<T> llama_weights(hidden_units,
                                                     inter_size,
                                                     vocab_size,
                                                     decoder_layers,
-                                                    0,  // max_seq_len, deprecated
                                                     tensor_para.world_size_,
                                                     tensor_para.rank_,
                                                     pipeline_para.world_size_,
-                                                    pipeline_para.rank_,
-                                                    use_gptj_residual);
+                                                    pipeline_para.rank_);
 
     model_dir = model_dir + "/" + std::to_string(tensor_para.world_size_) + "-gpu";
     llama_weights.loadModel(model_dir);
@@ -244,7 +240,6 @@ void llama_example(const INIReader reader)
                                 rotary_embedding_dim,
                                 start_id,
                                 end_id,
-                                use_gptj_residual,
                                 random_seed,
                                 tensor_para,
                                 pipeline_para,
