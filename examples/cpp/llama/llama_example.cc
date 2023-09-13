@@ -19,10 +19,8 @@
 #include "src/fastertransformer/utils/nccl_utils.h"
 #include "src/fastertransformer/utils/nvtx_utils.h"
 #include "src/fastertransformer/utils/word_list.h"
+#include "examples/cpp/llama/llama_example_utils.h"
 #include "3rdparty/INIReader.h"
-
-// Remove LATER
-#include "examples/cpp/multi_gpu_gpt/gpt_example_utils.h"
 
 #include <cuda_profiler_api.h>
 #include <fstream>
