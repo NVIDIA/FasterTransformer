@@ -32,8 +32,6 @@ struct LLaMAWeight {
         const int                                  inter_size,
         const int                                  vocab_size,
         const int                                  num_layer,
-        const int                                  tensor_para_size     = 1,
-        const int                                  tensor_para_rank     = 0,
         const int                                  layer_para_size      = 1,
         const int                                  layer_para_rank      = 0);
 
@@ -62,8 +60,6 @@ private:
     int vocab_size_;
     int num_layer_;
 
-    int tensor_para_size_;
-    int tensor_para_rank_;
     int layer_para_size_;
     int layer_para_rank_;
 

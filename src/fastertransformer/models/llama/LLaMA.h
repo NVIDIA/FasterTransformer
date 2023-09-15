@@ -24,7 +24,6 @@
 #include "src/fastertransformer/models/llama/LLaMADecoder.h"
 #include "src/fastertransformer/models/llama/LLaMAWeight.h"
 #include "src/fastertransformer/utils/custom_ar_comm.h"
-#include "src/fastertransformer/utils/prompt_learning.h"
 
 namespace fastertransformer {
 
@@ -40,13 +39,12 @@ private:
     size_t rotary_embedding_dim_;
 
     static constexpr bool  neox_rotary_style_ = true;
-    static constexpr float layernorm_eps_     = 1e-5f;
+    static constexpr float layernorm_eps_     = 1e-6f;
 
     int    start_id_;
     int    end_id_;
     size_t hidden_units_;
 
-    size_t    local_head_num_;
     NcclParam tensor_para_;
     NcclParam pipeline_para_;
 
@@ -55,19 +53,11 @@ private:
 
     AttentionType attention_type_;
 
-    size_t     vocab_size_padded_;
-    const bool is_context_qk_buf_float_ =
-        (std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM") == nullptr ||
-         std::string(std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM")) != "ON");
+    const bool is_context_qk_buf_float_ = (std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM") == nullptr
+                                           || std::string(std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM")) != "ON");
 
-    // Prompt Learning Parameters
-    PromptLearningType prompt_learning_type_;
-    int                prompt_learning_start_id_;  // start_id for prompt_learning (only needed by prefix prompts)
-    bool               has_prefix_prompt_;
-    bool               has_prefix_soft_prompt_;
-
-    LLaMADecoder<T>*         llama_decoder_;
-    LLaMAContextDecoder<T>*  llama_context_decoder_;
+    LLaMADecoder<T>*           llama_decoder_;
+    LLaMAContextDecoder<T>*    llama_context_decoder_;
     DynamicDecodeLayer<float>* dynamic_decode_layer_;
 
     void allocateBuffer() override;
@@ -78,10 +68,6 @@ private:
     void initialize();
 
 protected:
-    T*       padded_embedding_kernel_;
-    T*       padded_embedding_bias_;
-    const T* padded_embedding_kernel_ptr_;
-
     T* input_attention_mask_;
 
     T* decoder_input_buf_;
@@ -101,10 +87,6 @@ protected:
     T*   key_cache_;
     T*   value_cache_;
     int* cache_indirections_[2] = {nullptr, nullptr};
-
-    // prompt_learning weight_batch ptrs
-    const T** prompt_learning_weight_batch_;
-    int*      tiled_prompt_lengths_buf_;  // only needed by prefix prompts
 
     int*  tiled_input_ids_buf_;
     int*  tiled_input_lengths_buf_;
@@ -135,42 +117,42 @@ protected:
 
 public:
     LLaMA(size_t                              head_num,
-            size_t                              size_per_head,
-            size_t                              inter_size,
-            size_t                              num_layer,
-            size_t                              vocab_size,
-            size_t                              rotary_embedding_dim,
-            int                                 start_id,
-            int                                 end_id,
-            unsigned long long                  random_seed,
-            cudaStream_t                        stream,
-            cublasMMWrapper*                    cublas_wrapper,
-            IAllocator*                         allocator,
-            bool                                is_free_buffer_after_forward,
-            cudaDeviceProp*                     cuda_device_prop         = nullptr,
-            AttentionType                       attention_type           = AttentionType::UNFUSED_MHA,
-            std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
-            int                                 enable_custom_all_reduce = 0);
+          size_t                              size_per_head,
+          size_t                              inter_size,
+          size_t                              num_layer,
+          size_t                              vocab_size,
+          size_t                              rotary_embedding_dim,
+          int                                 start_id,
+          int                                 end_id,
+          unsigned long long                  random_seed,
+          cudaStream_t                        stream,
+          cublasMMWrapper*                    cublas_wrapper,
+          IAllocator*                         allocator,
+          bool                                is_free_buffer_after_forward,
+          cudaDeviceProp*                     cuda_device_prop         = nullptr,
+          AttentionType                       attention_type           = AttentionType::UNFUSED_MHA,
+          std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
+          int                                 enable_custom_all_reduce = 0);
 
     LLaMA(size_t                              head_num,
-            size_t                              size_per_head,
-            size_t                              inter_size,
-            size_t                              num_layer,
-            size_t                              vocab_size,
-            size_t                              rotary_embedding_dim,
-            int                                 start_id,
-            int                                 end_id,
-            unsigned long long                  random_seed,
-            NcclParam                           tensor_para,
-            NcclParam                           pipeline_para,
-            cudaStream_t                        stream,
-            cublasMMWrapper*                    cublas_wrapper,
-            IAllocator*                         allocator,
-            bool                                is_free_buffer_after_forward,
-            cudaDeviceProp*                     cuda_device_prop         = nullptr,
-            AttentionType                       attention_type           = AttentionType::UNFUSED_MHA,
-            std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
-            int                                 enable_custom_all_reduce = 0);
+          size_t                              size_per_head,
+          size_t                              inter_size,
+          size_t                              num_layer,
+          size_t                              vocab_size,
+          size_t                              rotary_embedding_dim,
+          int                                 start_id,
+          int                                 end_id,
+          unsigned long long                  random_seed,
+          NcclParam                           tensor_para,
+          NcclParam                           pipeline_para,
+          cudaStream_t                        stream,
+          cublasMMWrapper*                    cublas_wrapper,
+          IAllocator*                         allocator,
+          bool                                is_free_buffer_after_forward,
+          cudaDeviceProp*                     cuda_device_prop         = nullptr,
+          AttentionType                       attention_type           = AttentionType::UNFUSED_MHA,
+          std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
+          int                                 enable_custom_all_reduce = 0);
 
     LLaMA(LLaMA<T> const& LLaMA);
 
@@ -178,11 +160,11 @@ public:
 
     void forward(std::vector<Tensor>*       output_tensors,
                  const std::vector<Tensor>* input_tensors,
-                 const LLaMAWeight<T>*    llama_weights);
+                 const LLaMAWeight<T>*      llama_weights);
 
     void forward(std::unordered_map<std::string, Tensor>*       output_tensors,
                  const std::unordered_map<std::string, Tensor>* input_tensors,
-                 const LLaMAWeight<T>*                        llama_weights);
+                 const LLaMAWeight<T>*                          llama_weights);
 
     size_t getPipelineParallelRank();
     size_t getPipelineParallelSize();

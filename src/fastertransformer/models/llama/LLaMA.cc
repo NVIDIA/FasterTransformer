@@ -16,8 +16,8 @@
 
 #include "src/fastertransformer/models/llama/LLaMA.h"
 #include "src/fastertransformer/kernels/bert_preprocess_kernels.h"
-#include "src/fastertransformer/kernels/gpt_kernels.h"
 #include "src/fastertransformer/kernels/decoding_kernels.h"
+#include "src/fastertransformer/kernels/gpt_kernels.h"
 #include "src/fastertransformer/layers/beam_search_layers/BaseBeamSearchLayer.h"
 #include <algorithm>
 
@@ -59,7 +59,7 @@ void LLaMA<T>::initialize()
                                          enable_custom_all_reduce_);
 
     dynamic_decode_layer_ = new DynamicDecodeLayer<float>(vocab_size_,
-                                                          vocab_size_padded_,
+                                                          vocab_size_,
                                                           0,  // end_id, deprecated
                                                           stream_,
                                                           cublas_wrapper_,
@@ -79,29 +79,24 @@ void LLaMA<T>::allocateBuffer(
     size_t batch_size, size_t beam_width, size_t max_seq_len, size_t max_cache_seq_len, size_t max_input_len)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    const size_t batchxbeam      = batch_size * beam_width;
-    const size_t self_cache_size = (num_layer_ / pipeline_para_.world_size_) * batchxbeam * max_cache_seq_len
-                                   * hidden_units_ / tensor_para_.world_size_;
+    const size_t batchxbeam = batch_size * beam_width;
+    const size_t self_cache_size =
+        (num_layer_ / pipeline_para_.world_size_) * batchxbeam * max_cache_seq_len * hidden_units_;
 
-    if (vocab_size_ != vocab_size_padded_) {
-        padded_embedding_kernel_ =
-            (T*)(allocator_->reMalloc(padded_embedding_kernel_, sizeof(T) * hidden_units_ * vocab_size_padded_, true));
-        padded_embedding_kernel_ptr_ = padded_embedding_kernel_;
-
-        padded_embedding_bias_ =
-            (T*)(allocator_->reMalloc(padded_embedding_bias_, sizeof(T) * vocab_size_padded_, true));
-    }
-
-    input_attention_mask_ = (T*)(allocator_->reMalloc(input_attention_mask_, sizeof(T) * batchxbeam * max_seq_len * max_cache_seq_len, false));
-    decoder_input_buf_    = (T*)(allocator_->reMalloc(decoder_input_buf_, sizeof(T) * batchxbeam * hidden_units_, false));
-    decoder_output_buf_   = (T*)(allocator_->reMalloc(decoder_output_buf_, sizeof(T) * batchxbeam * hidden_units_, false));
-    normed_decoder_output_buf_ = (T*)(allocator_->reMalloc(normed_decoder_output_buf_, sizeof(T) * batchxbeam * hidden_units_, false));
-    logits_buf_           = (float*)(allocator_->reMalloc(logits_buf_, sizeof(float) * batchxbeam * vocab_size_padded_, false));
-    nccl_logits_buf_      = (float*)(allocator_->reMalloc(nccl_logits_buf_, sizeof(float) * batchxbeam * vocab_size_padded_, false));
-    cum_log_probs_        = (float*)(allocator_->reMalloc(cum_log_probs_, sizeof(float) * batchxbeam, false));
-    finished_buf_         = (bool*)(allocator_->reMalloc(finished_buf_, sizeof(bool) * batchxbeam, false));
-    h_finished_buf_       = new bool[batchxbeam];
-    sequence_lengths_     = (int*)(allocator_->reMalloc(sequence_lengths_, sizeof(int) * batchxbeam, false));
+    input_attention_mask_ = (T*)(allocator_->reMalloc(
+        input_attention_mask_, sizeof(T) * batchxbeam * max_seq_len * max_cache_seq_len, false));
+    decoder_input_buf_ = (T*)(allocator_->reMalloc(decoder_input_buf_, sizeof(T) * batchxbeam * hidden_units_, false));
+    decoder_output_buf_ =
+        (T*)(allocator_->reMalloc(decoder_output_buf_, sizeof(T) * batchxbeam * hidden_units_, false));
+    normed_decoder_output_buf_ =
+        (T*)(allocator_->reMalloc(normed_decoder_output_buf_, sizeof(T) * batchxbeam * hidden_units_, false));
+    logits_buf_ = (float*)(allocator_->reMalloc(logits_buf_, sizeof(float) * batchxbeam * vocab_size_, false));
+    nccl_logits_buf_ =
+        (float*)(allocator_->reMalloc(nccl_logits_buf_, sizeof(float) * batchxbeam * vocab_size_, false));
+    cum_log_probs_    = (float*)(allocator_->reMalloc(cum_log_probs_, sizeof(float) * batchxbeam, false));
+    finished_buf_     = (bool*)(allocator_->reMalloc(finished_buf_, sizeof(bool) * batchxbeam, false));
+    h_finished_buf_   = new bool[batchxbeam];
+    sequence_lengths_ = (int*)(allocator_->reMalloc(sequence_lengths_, sizeof(int) * batchxbeam, false));
 
     key_cache_   = (T*)(allocator_->reMalloc(key_cache_, sizeof(T) * self_cache_size * 2, true));
     value_cache_ = key_cache_ + self_cache_size;
@@ -110,12 +105,6 @@ void LLaMA<T>::allocateBuffer(
             (int*)(allocator_->reMalloc(cache_indirections_[0], sizeof(int) * batchxbeam * max_seq_len * 2, true));
         cache_indirections_[1] = cache_indirections_[0] + batchxbeam * max_seq_len;
     }
-
-    // prompt_learning weight batch ptrs
-    prompt_learning_weight_batch_ =
-        (const T**)(allocator_->reMalloc(prompt_learning_weight_batch_, sizeof(T*) * batchxbeam, false));
-    tiled_prompt_lengths_buf_ =
-        (int*)(allocator_->reMalloc(tiled_prompt_lengths_buf_, sizeof(int) * batchxbeam, false));
 
     tiled_input_ids_buf_ =
         (int*)(allocator_->reMalloc(tiled_input_ids_buf_, sizeof(int) * batchxbeam * max_input_len, true));
@@ -149,12 +138,6 @@ template<typename T>
 void LLaMA<T>::freeBuffer()
 {
     if (is_allocate_buffer_) {
-        if (vocab_size_ != vocab_size_padded_) {
-            padded_embedding_kernel_ptr_ = nullptr;
-            allocator_->free((void**)(&padded_embedding_kernel_));
-            allocator_->free((void**)(&padded_embedding_bias_));
-        }
-
         allocator_->free((void**)(&input_attention_mask_));
         allocator_->free((void**)(&decoder_input_buf_));
         allocator_->free((void**)(&decoder_output_buf_));
@@ -170,9 +153,6 @@ void LLaMA<T>::freeBuffer()
         if (cache_indirections_[0] != nullptr) {
             allocator_->free((void**)(&cache_indirections_)[0]);
         }
-
-        allocator_->free((void**)(&prompt_learning_weight_batch_));
-        allocator_->free((void**)(&tiled_prompt_lengths_buf_));
 
         allocator_->free((void**)(&tiled_input_ids_buf_));
         allocator_->free((void**)(&tiled_input_lengths_buf_));
@@ -199,22 +179,22 @@ void LLaMA<T>::freeBuffer()
 
 template<typename T>
 LLaMA<T>::LLaMA(size_t                              head_num,
-                    size_t                              size_per_head,
-                    size_t                              inter_size,
-                    size_t                              num_layer,
-                    size_t                              vocab_size,
-                    size_t                              rotary_embedding_dim,
-                    int                                 start_id,
-                    int                                 end_id,
-                    unsigned long long                  random_seed,
-                    cudaStream_t                        stream,
-                    cublasMMWrapper*                    cublas_wrapper,
-                    IAllocator*                         allocator,
-                    bool                                is_free_buffer_after_forward,
-                    cudaDeviceProp*                     cuda_device_prop,
-                    AttentionType                       attention_type,
-                    std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
-                    int                                 enable_custom_all_reduce):
+                size_t                              size_per_head,
+                size_t                              inter_size,
+                size_t                              num_layer,
+                size_t                              vocab_size,
+                size_t                              rotary_embedding_dim,
+                int                                 start_id,
+                int                                 end_id,
+                unsigned long long                  random_seed,
+                cudaStream_t                        stream,
+                cublasMMWrapper*                    cublas_wrapper,
+                IAllocator*                         allocator,
+                bool                                is_free_buffer_after_forward,
+                cudaDeviceProp*                     cuda_device_prop,
+                AttentionType                       attention_type,
+                std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
+                int                                 enable_custom_all_reduce):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, cuda_device_prop),
     head_num_(head_num),
     size_per_head_(size_per_head),
@@ -225,42 +205,33 @@ LLaMA<T>::LLaMA(size_t                              head_num,
     start_id_(start_id),
     end_id_(end_id),
     hidden_units_(head_num * size_per_head),
-    local_head_num_(head_num / 1),
     attention_type_(attention_type)
 {
-    tensor_para_.world_size_   = 1;
-    tensor_para_.rank_         = 0;
     pipeline_para_.world_size_ = 1;
     pipeline_para_.rank_       = 0;
-
-    int local_vacab_size = ceil(vocab_size_ / 1.f / tensor_para_.world_size_);
-    if (std::is_same<half, T>::value) {
-        local_vacab_size = ceil(local_vacab_size / 8.f) * 8;
-    }
-    vocab_size_padded_ = (size_t)local_vacab_size * tensor_para_.world_size_;
     initialize();
 }
 
 template<typename T>
 LLaMA<T>::LLaMA(size_t                              head_num,
-                    size_t                              size_per_head,
-                    size_t                              inter_size,
-                    size_t                              num_layer,
-                    size_t                              vocab_size,
-                    size_t                              rotary_embedding_dim,
-                    int                                 start_id,
-                    int                                 end_id,
-                    unsigned long long                  random_seed,
-                    NcclParam                           tensor_para,
-                    NcclParam                           pipeline_para,
-                    cudaStream_t                        stream,
-                    cublasMMWrapper*                    cublas_wrapper,
-                    IAllocator*                         allocator,
-                    bool                                is_free_buffer_after_forward,
-                    cudaDeviceProp*                     cuda_device_prop,
-                    AttentionType                       attention_type,
-                    std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
-                    int                                 enable_custom_all_reduce):
+                size_t                              size_per_head,
+                size_t                              inter_size,
+                size_t                              num_layer,
+                size_t                              vocab_size,
+                size_t                              rotary_embedding_dim,
+                int                                 start_id,
+                int                                 end_id,
+                unsigned long long                  random_seed,
+                NcclParam                           tensor_para,
+                NcclParam                           pipeline_para,
+                cudaStream_t                        stream,
+                cublasMMWrapper*                    cublas_wrapper,
+                IAllocator*                         allocator,
+                bool                                is_free_buffer_after_forward,
+                cudaDeviceProp*                     cuda_device_prop,
+                AttentionType                       attention_type,
+                std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
+                int                                 enable_custom_all_reduce):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, cuda_device_prop),
     head_num_(head_num),
     size_per_head_(size_per_head),
@@ -271,18 +242,11 @@ LLaMA<T>::LLaMA(size_t                              head_num,
     start_id_(start_id),
     end_id_(end_id),
     hidden_units_(head_num * size_per_head),
-    tensor_para_(tensor_para),
     pipeline_para_(pipeline_para),
-    local_head_num_(head_num / tensor_para.world_size_),
     custom_all_reduce_comm_(custom_all_reduce_comm),
     enable_custom_all_reduce_(enable_custom_all_reduce),
     attention_type_(attention_type)
 {
-    int local_vacab_size = ceil(vocab_size_ / 1.f / tensor_para_.world_size_);
-    if (std::is_same<half, T>::value) {
-        local_vacab_size = ceil(local_vacab_size / 8.f) * 8;
-    }
-    vocab_size_padded_ = (size_t)local_vacab_size * tensor_para_.world_size_;
     initialize();
 }
 
@@ -297,12 +261,8 @@ LLaMA<T>::LLaMA(LLaMA<T> const& llama):
     rotary_embedding_dim_(llama.rotary_embedding_dim_),
     start_id_(llama.start_id_),
     end_id_(llama.end_id_),
-    prompt_learning_start_id_(llama.prompt_learning_start_id_),
     hidden_units_(llama.hidden_units_),
-    tensor_para_(llama.tensor_para_),
     pipeline_para_(llama.pipeline_para_),
-    local_head_num_(llama.local_head_num_),
-    vocab_size_padded_(llama.vocab_size_padded_),
     custom_all_reduce_comm_(llama.custom_all_reduce_comm_),
     enable_custom_all_reduce_(llama.enable_custom_all_reduce_),
     attention_type_(llama.attention_type_)
@@ -335,16 +295,16 @@ void LLaMA<T>::unRegisterCallback()
 
 template<typename T>
 void LLaMA<T>::forward(std::vector<Tensor>*       output_tensors,
-                         const std::vector<Tensor>* input_tensors,
-                         const LLaMAWeight<T>*    llama_weights)
+                       const std::vector<Tensor>* input_tensors,
+                       const LLaMAWeight<T>*      llama_weights)
 {
     FT_CHECK(false);
 }
 
 template<typename T>
 void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_tensors,
-                         const std::unordered_map<std::string, Tensor>* input_tensors,
-                         const LLaMAWeight<T>*                        llama_weights)
+                       const std::unordered_map<std::string, Tensor>* input_tensors,
+                       const LLaMAWeight<T>*                          llama_weights)
 {
     // input_tensors:
     //      input_ids [batch_size, max_input_length]
@@ -385,13 +345,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     const size_t batch_size = output_tensors->at("output_ids").shape[0];
     const size_t beam_width = output_tensors->at("output_ids").shape[1];
 
-
-    // Prefix Prompt Inputs
-    // Padding works as follows: p p x x i i i x x --> p p i i i x x x x (p denotes prompt, i denotes input, x denotes
-    // pad)
-    // TODO (perkzz): move unnecessary paddings
-    int max_prefix_prompt_length = 0;
-
     // NOTE: Prefix Prompt PreProcessing
     // get prefix_prompt_weight for each batch --> shape [batch, beam_width]
     // --> ptrs with shape [num_layers, 2, num_heads, perfix_seq_len, size_per_head]
@@ -431,15 +384,12 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
 
     const std::vector<size_t> self_k_cache_shape = {num_layer_ / pipeline_para_.world_size_,
                                                     batch_size * beam_width,
-                                                    local_head_num_,
+                                                    head_num_,
                                                     size_per_head_ / (16 / sizeof(T)),
                                                     max_cache_seq_len,
                                                     16 / sizeof(T)};
-    const std::vector<size_t> self_v_cache_shape = {num_layer_ / pipeline_para_.world_size_,
-                                                    batch_size * beam_width,
-                                                    local_head_num_,
-                                                    max_cache_seq_len,
-                                                    size_per_head_};
+    const std::vector<size_t> self_v_cache_shape = {
+        num_layer_ / pipeline_para_.world_size_, batch_size * beam_width, head_num_, max_cache_seq_len, size_per_head_};
 
     // initialize the output ids and parent ids
     cudaMemsetAsync(output_ids_buf_, 0, sizeof(int) * batch_size * beam_width * max_seq_len, stream_);
@@ -452,8 +402,11 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
 
     sync_check_cuda_error();
 
+    std::cout << __FILE__ << ":" << __LINE__ << "\n";
+
     // handle first step
     if (max_input_length > 1) {
+        std::cout << __FILE__ << ":" << __LINE__ << "\n";
         invokeTileGptInputs(tiled_input_ids_buf_,
                             tiled_input_lengths_buf_,
                             input_tensors->at("input_ids").getPtr<int>(),
@@ -465,22 +418,22 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         sync_check_cuda_error();
 
         invokeInputIdsEmbeddingLookupPosEncoding(context_decoder_input_buf_,
-                output_ids_buf_,
-                llama_weights->pre_decoder_embedding_table,
-                llama_weights->position_encoding_table,
-                pPromptTuningParam<T>{},  // no p/prompt tuning
-                tiled_input_ids_buf_,
-                1,
-                max_input_length,
-                max_input_length,
-                batch_size * beam_width,
-                hidden_units_,
-                stream_);
+                                                 output_ids_buf_,
+                                                 llama_weights->pre_decoder_embedding_table,
+                                                 llama_weights->position_encoding_table,
+                                                 pPromptTuningParam<T>{},  // no p/prompt tuning
+                                                 tiled_input_ids_buf_,
+                                                 1,
+                                                 max_input_length,
+                                                 max_input_length,
+                                                 batch_size * beam_width,
+                                                 hidden_units_,
+                                                 stream_);
         sync_check_cuda_error();
 
         invokeBuildDecoderAttentionMask(input_attention_mask_,
                                         tiled_input_lengths_buf_,
-                                        tiled_prompt_lengths_buf_,
+                                        nullptr,
                                         batch_size * beam_width,
                                         max_input_length,
                                         0,
@@ -496,22 +449,9 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
             {"attention_mask",
              Tensor{MEMORY_GPU,
                     data_type,
-                    {batch_size * beam_width,
-                     1,
-                     (size_t)max_input_length,
-                     (size_t)(max_input_length)},
+                    {batch_size * beam_width, 1, (size_t)max_input_length, (size_t)(max_input_length)},
                     input_attention_mask_}},
-            {"input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size * beam_width}, tiled_input_lengths_buf_}},
-            {"d_prefix_prompt_batch",
-             Tensor{MEMORY_GPU,
-                    data_type,
-                    {batch_size * beam_width},
-                    nullptr}},
-            {"d_prefix_prompt_lengths",
-             Tensor{MEMORY_GPU,
-                    TYPE_INT32,
-                    {batch_size * beam_width},
-                    nullptr}}};
+            {"input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size * beam_width}, tiled_input_lengths_buf_}}};
 
         std::unordered_map<std::string, Tensor> decoder_output_tensors{
             {"decoder_output",
@@ -524,9 +464,11 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
             {"last_token_hidden_units",
              Tensor{MEMORY_GPU, data_type, {batch_size * beam_width, hidden_units_}, decoder_output_buf_}}};
 
+        std::cout << __FILE__ << ":" << __LINE__ << "\n";
         llama_context_decoder_->forward(
             &decoder_output_tensors, &decoder_input_tensors, &llama_weights->decoder_layer_weights);
         sync_check_cuda_error();
+        std::cout << __FILE__ << ":" << __LINE__ << "\n";
         invokeDecodingInitialize(finished_buf_,
                                  sequence_lengths_,
                                  nullptr,
@@ -537,7 +479,8 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                                  max_input_length - 1,
                                  stream_);
         sync_check_cuda_error();
-    } else if (max_input_length == 0) {
+    }
+    else if (max_input_length == 0) {
         max_input_length++;
         invokeDecodingInitialize(finished_buf_,
                                  sequence_lengths_,
@@ -555,7 +498,8 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                         cudaMemcpyHostToDevice,
                         stream_);
         sync_check_cuda_error();
-    } else if (max_input_length == 1) {
+    }
+    else if (max_input_length == 1) {
         invokeDecodingInitialize(finished_buf_,
                                  sequence_lengths_,
                                  nullptr,
@@ -582,27 +526,11 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                         cudaMemcpyDeviceToDevice,
                         stream_);
     }
-
-    if (vocab_size_ == vocab_size_padded_) {
-        padded_embedding_kernel_ptr_ = llama_weights->post_decoder_embedding.kernel;
-    }
-    else {
-        cudaMemcpyAsync(padded_embedding_kernel_,
-                        llama_weights->post_decoder_embedding.kernel,
-                        sizeof(T) * vocab_size_ * hidden_units_,
-                        cudaMemcpyDeviceToDevice,
-                        stream_);
-        cudaMemcpyAsync(padded_embedding_bias_,
-                        llama_weights->post_decoder_embedding.bias,
-                        sizeof(T) * vocab_size_,
-                        cudaMemcpyDeviceToDevice,
-                        stream_);
-        sync_check_cuda_error();
-    }
+    std::cout << __FILE__ << ":" << __LINE__ << "\n";
 
     invokeMaskPaddingTokens(masked_tokens_,
                             input_tensors->at("input_lengths").getPtr<const int>(),  // not_tiled
-                            tiled_prompt_lengths_buf_,
+                            nullptr,
                             max_cache_seq_len,
                             max_input_length,
                             0,
@@ -611,6 +539,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                             stream_);
 
     for (int step = max_input_length; step < (int)max_output_seq_len; step++) {
+        std::cout << __FILE__ << ":" << __LINE__ << "\n";
         const int src_indir_idx = (step - max_input_length) % 2;
         const int tgt_indir_idx = 1 - src_indir_idx;
 
@@ -622,7 +551,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         for (uint ite = 0; ite < iteration_num; ++ite) {
             const int id_offset               = ite * local_batch_size * beam_width;
             const int hidden_units_offset     = id_offset * hidden_units_;
-            const int vocab_size_units_offset = id_offset * vocab_size_padded_;
+            const int vocab_size_units_offset = id_offset * vocab_size_;
 
             if (!(max_input_length > 1 && step == max_input_length)) {
                 if (pipeline_para_.rank_ == 0) {
@@ -655,12 +584,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                             TYPE_INT32,
                             {local_batch_size * beam_width},
                             tiled_total_padding_count_ + id_offset}},
-                    {"d_prefix_prompt_lengths",
-                     Tensor{MEMORY_GPU,
-                            TYPE_INT32,
-                            {local_batch_size},
-                            nullptr}},
-                    {"max_prefix_prompt_length", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &max_prefix_prompt_length}},
                     {"max_input_length", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &max_input_length}},
                     {"step", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &step}},
                     {"ite", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &ite}},
@@ -688,85 +611,42 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
             }
 
             if (pipeline_para_.rank_ == pipeline_para_.world_size_ - 1) {
-                invokeGeneralLayerNorm(normed_decoder_output_buf_ + hidden_units_offset,
-                                       decoder_output_buf_ + hidden_units_offset,
-                                       llama_weights->post_decoder_layernorm.gamma,
-                                       llama_weights->post_decoder_layernorm.beta,
-                                       layernorm_eps_,
-                                       local_batch_size * beam_width,
-                                       hidden_units_,
-                                       (float*)nullptr,
-                                       0,
-                                       stream_);
+                invokeGeneralLLaMALayerNorm(normed_decoder_output_buf_ + hidden_units_offset,
+                                            decoder_output_buf_ + hidden_units_offset,
+                                            llama_weights->post_decoder_layernorm.gamma,
+                                            llama_weights->post_decoder_layernorm.beta,
+                                            layernorm_eps_,
+                                            local_batch_size * beam_width,
+                                            hidden_units_,
+                                            stream_);
                 sync_check_cuda_error();
 
-                if (tensor_para_.world_size_ == 1) {
-                    float alpha = 1.0f;
-                    float beta  = 0.0f;
-                    cublas_wrapper_->Gemm(CUBLAS_OP_T,
-                                          CUBLAS_OP_N,
-                                          vocab_size_padded_,  // n
-                                          local_batch_size * beam_width,
-                                          hidden_units_,  // k
-                                          &alpha,
-                                          padded_embedding_kernel_ptr_,
-                                          gemm_data_type,
-                                          hidden_units_,  // k
-                                          normed_decoder_output_buf_ + hidden_units_offset,
-                                          gemm_data_type,
-                                          hidden_units_,  // k
-                                          &beta,
-                                          logits_buf_ + vocab_size_units_offset,
-                                          CUDA_R_32F,
-                                          vocab_size_padded_, /* n */
-                                          CUDA_R_32F,
-                                          cublasGemmAlgo_t(-1));
-                }
-                else {
-                    FT_CHECK(vocab_size_padded_ % tensor_para_.world_size_ == 0);
-                    const int local_vocab_size = vocab_size_padded_ / tensor_para_.world_size_;
-                    float     alpha            = 1.0f;
-                    float     beta             = 0.0f;
-                    cublas_wrapper_->Gemm(CUBLAS_OP_T,
-                                          CUBLAS_OP_N,
-                                          local_vocab_size,  // n
-                                          local_batch_size * beam_width,
-                                          hidden_units_,  // k
-                                          &alpha,
-                                          padded_embedding_kernel_ptr_
-                                              + tensor_para_.rank_ * local_vocab_size * hidden_units_,
-                                          gemm_data_type,
-                                          hidden_units_,  // k
-                                          normed_decoder_output_buf_ + hidden_units_offset,
-                                          gemm_data_type,
-                                          hidden_units_,  // k
-                                          &beta,
-                                          nccl_logits_buf_ + vocab_size_units_offset
-                                              + tensor_para_.rank_ * local_batch_size * beam_width * local_vocab_size,
-                                          CUDA_R_32F,
-                                          local_vocab_size, /* n */
-                                          CUDA_R_32F,
-                                          cublasGemmAlgo_t(-1));
-                    ftNcclAllGather(nccl_logits_buf_ + vocab_size_units_offset,
-                                    nccl_logits_buf_ + vocab_size_units_offset,
-                                    local_batch_size * beam_width * local_vocab_size,
-                                    tensor_para_.rank_,
-                                    tensor_para_,
-                                    stream_);
-                    invokeTransposeAxis01(logits_buf_ + vocab_size_units_offset,
-                                          nccl_logits_buf_ + vocab_size_units_offset,
-                                          tensor_para_.world_size_,
-                                          local_batch_size * beam_width,
-                                          local_vocab_size,
-                                          stream_);
-                }
+                float alpha = 1.0f;
+                float beta  = 0.0f;
+                cublas_wrapper_->Gemm(CUBLAS_OP_T,
+                                      CUBLAS_OP_N,
+                                      vocab_size_,
+                                      local_batch_size * beam_width,
+                                      hidden_units_,  // k
+                                      &alpha,
+                                      llama_weights->post_decoder_embedding.kernel,
+                                      gemm_data_type,
+                                      hidden_units_,  // k
+                                      normed_decoder_output_buf_ + hidden_units_offset,
+                                      gemm_data_type,
+                                      hidden_units_,  // k
+                                      &beta,
+                                      logits_buf_ + vocab_size_units_offset,
+                                      CUDA_R_32F,
+                                      vocab_size_,
+                                      CUDA_R_32F,
+                                      cublasGemmAlgo_t(-1));
 
                 int                                     tmp_local_batch_size       = local_batch_size;
                 bool                                    is_initialize_random_table = step == max_input_length;
                 std::unordered_map<std::string, Tensor> dynamic_decode_input_tensors{
-                    {"logits",
-                     Tensor{MEMORY_GPU, TYPE_FP32, {batch_size, beam_width, vocab_size_padded_}, logits_buf_}},
-                    // {"embedding_bias", Tensor{MEMORY_GPU, data_type, {vocab_size_padded_}, nullptr}},
+                    {"logits", Tensor{MEMORY_GPU, TYPE_FP32, {batch_size, beam_width, vocab_size_}, logits_buf_}},
+                    // {"embedding_bias", Tensor{MEMORY_GPU, data_type, {vocab_size_}, nullptr}},
                     {"step", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &step}},
                     {"max_input_length", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &max_input_length}},
                     {"input_lengths",
@@ -854,7 +734,8 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
             }
             ftNcclGroupEnd();
             // throw errors when detected
-            ftNcclStreamSynchronize(tensor_para_, pipeline_para_, stream_);
+            NcclParam tensor_para(0, 1);
+            ftNcclStreamSynchronize(tensor_para, pipeline_para_, stream_);
             sync_check_cuda_error();
         }
 
@@ -865,14 +746,13 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
             setOutputTensors(output_tensors, input_tensors, max_input_length, max_output_seq_len);
             sendTensorsToFirstPipelineNode(output_tensors, input_tensors);
 
-            if (pipeline_para_.rank_ == 0 && tensor_para_.rank_ == 0) {
+            if (pipeline_para_.rank_ == 0) {
                 token_generated_cb_(output_tensors, token_generated_ctx_);
             }
         }
         if (step == max_input_length) {
             /* We have just finished processing input: update the padding count:
              * total_padding_count += (max_input_length - input_lengths)
-             * if has prefix prompts, += (max_prefix_prompt_length - prompt_length)
              */
             invokeUpdatePaddingCount(tiled_total_padding_count_,
                                      input_tensors->at("input_lengths").getPtr<const int>(),  // not_tiled
@@ -884,6 +764,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                                      stream_);
         }
     }
+    std::cout << __FILE__ << ":" << __LINE__ << "\n";
 
     setOutputTensors(output_tensors, input_tensors, max_input_length, max_output_seq_len);
     sendTensorsToFirstPipelineNode(output_tensors, input_tensors);
@@ -891,15 +772,16 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
 
 template<typename T>
 void LLaMA<T>::sendTensorsToFirstPipelineNode(std::unordered_map<std::string, Tensor>*       output_tensors,
-                                                const std::unordered_map<std::string, Tensor>* input_tensors)
+                                              const std::unordered_map<std::string, Tensor>* input_tensors)
 {
+    NcclParam tensor_para(0, 1);
+
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (pipeline_para_.world_size_ == 1) {
         // throw errors when detected
-        ftNcclStreamSynchronize(tensor_para_, pipeline_para_, stream_);
+        ftNcclStreamSynchronize(tensor_para, pipeline_para_, stream_);
         return;
     }
-
     const auto pp_rank = pipeline_para_.rank_;
 
     ftNcclGroupStart();
@@ -921,14 +803,14 @@ void LLaMA<T>::sendTensorsToFirstPipelineNode(std::unordered_map<std::string, Te
     }
     ftNcclGroupEnd();
     // throw errors when detected
-    ftNcclStreamSynchronize(tensor_para_, pipeline_para_, stream_);
+    ftNcclStreamSynchronize(tensor_para, pipeline_para_, stream_);
 }
 
 template<typename T>
 void LLaMA<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*       output_tensors,
-                                  const std::unordered_map<std::string, Tensor>* input_tensors,
-                                  const size_t                                   max_input_length,
-                                  const size_t                                   max_output_seq_len)
+                                const std::unordered_map<std::string, Tensor>* input_tensors,
+                                const size_t                                   max_input_length,
+                                const size_t                                   max_output_seq_len)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     if (pipeline_para_.rank_ != pipeline_para_.world_size_ - 1) {
@@ -981,15 +863,15 @@ void LLaMA<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*       o
         param.beams                = transposed_output_ids_buf_;
         param.max_sequence_lengths = sequence_lengths_;
         // add sequence_length 1 here because the sequence_length of time step t is t - 1
-        param.max_sequence_length_final_step = 1;
-        param.max_time                       = max_output_seq_len;
-        param.batch_size                     = batch_size;
-        param.beam_width                     = beam_width;
-        param.step_ids                       = output_ids_buf_;
-        param.parent_ids                     = beam_width == 1 ? nullptr : parent_ids_buf_;
-        param.end_tokens                     = end_ids_buf_;
-        param.max_input_length               = max_input_length;
-        param.prefix_soft_prompt_lengths     = nullptr;
+        param.max_sequence_length_final_step  = 1;
+        param.max_time                        = max_output_seq_len;
+        param.batch_size                      = batch_size;
+        param.beam_width                      = beam_width;
+        param.step_ids                        = output_ids_buf_;
+        param.parent_ids                      = beam_width == 1 ? nullptr : parent_ids_buf_;
+        param.end_tokens                      = end_ids_buf_;
+        param.max_input_length                = max_input_length;
+        param.prefix_soft_prompt_lengths      = nullptr;
         param.input_lengths                   = tiled_input_lengths_buf_;
         param.max_prefix_soft_prompt_length   = 0;
         param.max_input_without_prompt_length = max_input_length;
@@ -1027,18 +909,6 @@ template<typename T>
 size_t LLaMA<T>::getPipelineParallelSize()
 {
     return pipeline_para_.world_size_;
-}
-
-template<typename T>
-size_t LLaMA<T>::getTensorParallelRank()
-{
-    return tensor_para_.rank_;
-}
-
-template<typename T>
-size_t LLaMA<T>::getTensorParallelSize()
-{
-    return tensor_para_.world_size_;
 }
 
 template<typename T>

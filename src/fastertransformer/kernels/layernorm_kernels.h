@@ -24,7 +24,8 @@
 
 namespace fastertransformer {
 
-enum class LayerNormType {
+enum class LayerNormType
+{
     pre_layernorm,
     post_layernorm,
     InvalidType
@@ -160,6 +161,16 @@ void invokeGeneralT5LayerNorm(T*           out,
                               const int    m,
                               const int    n,
                               cudaStream_t stream);
+
+template<typename T>
+void invokeGeneralLLaMALayerNorm(T*           out,
+                                 const T*     input,
+                                 const T*     gamma,
+                                 const T*     beta,
+                                 const float  layernorm_eps,
+                                 const int    m,
+                                 const int    n,
+                                 cudaStream_t stream);
 
 template<typename T>
 void invokeGeneralAddResidualT5PreLayerNorm(T*           output,

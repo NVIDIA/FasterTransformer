@@ -21,7 +21,6 @@
 #include "src/fastertransformer/layers/FfnLayer.h"
 #include "src/fastertransformer/layers/attention_layers/GptContextAttentionLayer.h"
 
-
 namespace fastertransformer {
 
 template<typename T>
@@ -42,8 +41,8 @@ void LLaMAContextDecoder<T>::initialize()
                                                             false,
                                                             0);
 
-    ffn_layer_ = new GeluFfnLayer<T>(0, // max_batch_size
-                                     1, 
+    ffn_layer_ = new GeluFfnLayer<T>(0,  // max_batch_size
+                                     1,
                                      head_num_,
                                      size_per_head_,
                                      0,  // expert_num
@@ -55,7 +54,7 @@ void LLaMAContextDecoder<T>::initialize()
                                      false,
                                      0,
                                      false  // use_gated_activation = false
-                                     );
+    );
 }
 
 template<typename T>
@@ -128,21 +127,21 @@ int LLaMAContextDecoder<T>::getFirstLayerParallelId()
 
 template<typename T>
 LLaMAContextDecoder<T>::LLaMAContextDecoder(size_t                              head_num,
-                                                size_t                              size_per_head,
-                                                size_t                              inter_size,
-                                                size_t                              num_layer,
-                                                size_t                              rotary_embedding_dim,
-                                                bool                                neox_rotary_style,
-                                                float                               layernorm_eps,
-                                                NcclParam                           pipeline_para,
-                                                cudaStream_t                        stream,
-                                                cublasMMWrapper*                    cublas_wrapper,
-                                                IAllocator*                         allocator,
-                                                bool                                is_free_buffer_after_forward,
-                                                bool                                is_qk_buf_float,
-                                                AttentionType                       attention_type,
-                                                std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
-                                                int                                 enable_custom_all_reduce):
+                                            size_t                              size_per_head,
+                                            size_t                              inter_size,
+                                            size_t                              num_layer,
+                                            size_t                              rotary_embedding_dim,
+                                            bool                                neox_rotary_style,
+                                            float                               layernorm_eps,
+                                            NcclParam                           pipeline_para,
+                                            cudaStream_t                        stream,
+                                            cublasMMWrapper*                    cublas_wrapper,
+                                            IAllocator*                         allocator,
+                                            bool                                is_free_buffer_after_forward,
+                                            bool                                is_qk_buf_float,
+                                            AttentionType                       attention_type,
+                                            std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
+                                            int                                 enable_custom_all_reduce):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     head_num_(head_num),
     size_per_head_(size_per_head),
@@ -190,9 +189,9 @@ LLaMAContextDecoder<T>::~LLaMAContextDecoder()
 }
 
 template<typename T>
-void LLaMAContextDecoder<T>::forward(std::vector<Tensor>*                              output_tensors,
-                                       const std::vector<Tensor>*                        input_tensors,
-                                       const std::vector<LLaMADecoderLayerWeight<T>*>* llama_decoder_layer_weight)
+void LLaMAContextDecoder<T>::forward(std::vector<Tensor>*                            output_tensors,
+                                     const std::vector<Tensor>*                      input_tensors,
+                                     const std::vector<LLaMADecoderLayerWeight<T>*>* llama_decoder_layer_weight)
 {
     std::unordered_map<std::string, Tensor> input_tensors_map{{"decoder_input", input_tensors->at(0)},
                                                               {"attention_mask", input_tensors->at(1)},
@@ -206,17 +205,14 @@ void LLaMAContextDecoder<T>::forward(std::vector<Tensor>*                       
 }
 
 template<typename T>
-void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*          output_tensors,
-                                       const std::unordered_map<std::string, Tensor>*    input_tensors,
-                                       const std::vector<LLaMADecoderLayerWeight<T>*>* llama_decoder_layer_weight)
+void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*        output_tensors,
+                                     const std::unordered_map<std::string, Tensor>*  input_tensors,
+                                     const std::vector<LLaMADecoderLayerWeight<T>*>* llama_decoder_layer_weight)
 {
     // input tensors:
     //      decoder_input [batch_size, seq_len, hidden_dimension],
     //      attention_mask [batch_size, 1, seq_len, seq_len + max_prompt_length]
     //      input_lengths [batch_size]
-    //      d_prefix_prompt_batch [batch_size],
-    //          each element contains ptr with buffer shape[2, local_head_num_, prompt_length, size_per_head]
-    //      prefix_prompt_lengths [batch size]
 
     // output tensors:
     //      decoder_output [batch_size, seq_len, hidden_dimension],
@@ -228,7 +224,7 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
     // For example, the shape of decoder_input becomes [ite, batch_size, seq_len, hidden_dimension] during
     // computing.
 
-    FT_CHECK(input_tensors->size() == 5);
+    FT_CHECK(input_tensors->size() == 3);
     FT_CHECK(output_tensors->size() == 4);
 
     const int batch_size = input_tensors->at("decoder_input").shape[0];
@@ -238,13 +234,12 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
     const DataType data_type = getTensorType<T>();
     allocateBuffer(batch_size, seq_len);
 
-    T*         decoder_input           = input_tensors->at("decoder_input").getPtr<T>();
-    T*         decoder_output          = output_tensors->at("decoder_output").getPtr<T>();
-    const T*   attention_mask          = input_tensors->at("attention_mask").getPtr<const T>();
-    const T**  d_prefix_prompt_batch   = input_tensors->at("d_prefix_prompt_batch").getPtr<const T*>();
-    const int* d_prefix_prompt_lengths = input_tensors->at("d_prefix_prompt_lengths").getPtr<const int>();
+    T*       decoder_input  = input_tensors->at("decoder_input").getPtr<T>();
+    T*       decoder_output = output_tensors->at("decoder_output").getPtr<T>();
+    const T* attention_mask = input_tensors->at("attention_mask").getPtr<const T>();
 
-    const int local_batch_size = getLocalBatchSize(batch_size, seq_len, pipeline_para_.world_size_);
+    // const int local_batch_size = getLocalBatchSize(batch_size, seq_len, pipeline_para_.world_size_);
+    const int local_batch_size = batch_size;
     FT_CHECK(batch_size % local_batch_size == 0);
     const int iteration_num = batch_size / local_batch_size;
 
@@ -261,9 +256,7 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
         self_v_cache_size.push_back(*t);
     }
 
-    AttentionType attention_type  = (d_prefix_prompt_lengths != nullptr) ?
-                                        getUnfusedAttentionType(attention_type_) :
-                                        attention_type_;
+    AttentionType attention_type  = attention_type_;
     const bool    is_unpadded_mha = isUnPaddedMHA(attention_type);
 
     for (int ite = 0; ite < iteration_num; ite++) {
@@ -309,23 +302,19 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
 
             if (isFirstLayerParallelId(l) && pipeline_para_.rank_ != 0 && pipeline_para_.world_size_ > 1) {
                 int data_size = h_token_num * hidden_units_;
-                ftNcclRecv(layer_input,
-                           data_size,
-                           pipeline_para_.rank_ - 1,
-                           pipeline_para_,
-                           stream_);
+                std::cout << __FILE__ << ":" << __LINE__ << "\n";
+                std::cout << "Recv: " << layer_output << "," << data_size << "\n";
+                ftNcclRecv(layer_input, data_size, pipeline_para_.rank_ - 1, pipeline_para_, stream_);
             }
 
-            invokeGeneralLayerNorm(decoder_normed_input_,
-                                   layer_input,
-                                   llama_decoder_layer_weight->at(l)->pre_layernorm_weights.gamma,
-                                   llama_decoder_layer_weight->at(l)->pre_layernorm_weights.beta,
-                                   layernorm_eps_,
-                                   h_token_num,
-                                   hidden_units_,
-                                   (float*)nullptr,
-                                   0,
-                                   stream_);
+            invokeGeneralLLaMALayerNorm(decoder_normed_input_,
+                                        layer_input,
+                                        llama_decoder_layer_weight->at(l)->pre_layernorm_weights.gamma,
+                                        llama_decoder_layer_weight->at(l)->pre_layernorm_weights.beta,
+                                        layernorm_eps_,
+                                        h_token_num,
+                                        hidden_units_,
+                                        stream_);
             sync_check_cuda_error();
 
             TensorMap self_attention_input_tensors{
@@ -339,19 +328,6 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                 {"attention_type", Tensor{MEMORY_CPU, TYPE_VOID, {1}, &attention_type}},
                 {"is_final_layer", Tensor{MEMORY_CPU, TYPE_BOOL, {(size_t)1}, &is_final}},
                 {"layer_id", Tensor{MEMORY_CPU, TYPE_INT32, {(size_t)1}, &l}}};
-            self_attention_input_tensors.insertIfValid(
-                "d_prefix_prompt_batch",
-                Tensor{MEMORY_GPU,
-                       data_type,
-                       {(size_t)local_batch_size},
-                       d_prefix_prompt_batch != nullptr ? d_prefix_prompt_batch + ite * local_batch_size : nullptr});
-            self_attention_input_tensors.insertIfValid("d_prefix_prompt_lengths",
-                                                       Tensor{MEMORY_GPU,
-                                                              TYPE_INT32,
-                                                              {(size_t)local_batch_size},
-                                                              d_prefix_prompt_lengths != nullptr ?
-                                                                  d_prefix_prompt_lengths + ite * local_batch_size :
-                                                                  nullptr});
 
             if (is_unpadded_mha) {
                 self_attention_input_tensors.insert("padding_offset",
@@ -383,51 +359,48 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
 
             if (is_final == false) {
                 invokeGeneralAddBiasResidualPreLayerNorm(
-                        self_attn_output_,
-                        decoder_normed_input_,
-                        self_attn_output_,
-                        layer_input,
-                        llama_decoder_layer_weight->at(l)->post_attention_layernorm_weights.gamma,
-                        llama_decoder_layer_weight->at(l)->post_attention_layernorm_weights.beta,
-                        llama_decoder_layer_weight->at(l)->self_attention_weights.attention_output_weight.bias,
-                        layernorm_eps_,
-                        h_token_num,
-                        hidden_units_,
-                        (float*)nullptr,
-                        (float*)nullptr,
-                        (float*)nullptr,
-                        (float*)nullptr,
-                        0,
-                        stream_);
+                    self_attn_output_,
+                    decoder_normed_input_,
+                    self_attn_output_,
+                    layer_input,
+                    llama_decoder_layer_weight->at(l)->post_attention_layernorm_weights.gamma,
+                    llama_decoder_layer_weight->at(l)->post_attention_layernorm_weights.beta,
+                    llama_decoder_layer_weight->at(l)->self_attention_weights.attention_output_weight.bias,
+                    layernorm_eps_,
+                    h_token_num,
+                    hidden_units_,
+                    (float*)nullptr,
+                    (float*)nullptr,
+                    (float*)nullptr,
+                    (float*)nullptr,
+                    0,
+                    stream_);
 
                 TensorMap ffn_input_tensors(
                     {{"ffn_input",
                       Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, decoder_normed_input_}}});
-                TensorMap ffn_output_tensors({{"ffn_output",
-                                               Tensor{MEMORY_GPU,
-                                                      data_type,
-                                                      {h_token_num, (size_t)hidden_units_},
-                                                      layer_output}}});
+                TensorMap ffn_output_tensors(
+                    {{"ffn_output",
+                      Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, layer_output}}});
                 ffn_layer_->forward(
                     &ffn_output_tensors, &ffn_input_tensors, &llama_decoder_layer_weight->at(l)->ffn_weights);
 
                 invokeAddBiasResidual(layer_output,
-                        self_attn_output_,
-                        llama_decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
-                        h_token_num,
-                        hidden_units_,
-                        stream_);
+                                      self_attn_output_,
+                                      llama_decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
+                                      h_token_num,
+                                      hidden_units_,
+                                      stream_);
 
                 sync_check_cuda_error();
 
                 if (isLastLayerParallelId(l) && pipeline_para_.rank_ != pipeline_para_.world_size_ - 1
                     && pipeline_para_.world_size_ > 1) {
                     int data_size = h_token_num * hidden_units_;
-                    ftNcclSend(layer_output,
-                               data_size,
-                               pipeline_para_.rank_ + 1,
-                               pipeline_para_,
-                               stream_);
+                    std::cout << __FILE__ << ":" << __LINE__ << "\n";
+                    std::cout << "Send: " << layer_output << "," << data_size << "\n";
+                    ftNcclSend(layer_output, data_size, pipeline_para_.rank_ + 1, pipeline_para_, stream_);
+                    std::cout << __FILE__ << ":" << __LINE__ << "\n";
                 }
 
                 if ((l == num_layer_ - 1) && is_unpadded_mha) {

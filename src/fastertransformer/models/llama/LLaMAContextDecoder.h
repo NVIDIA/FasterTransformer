@@ -81,32 +81,32 @@ protected:
 
 public:
     LLaMAContextDecoder(size_t                              head_num,
-                          size_t                              size_per_head,
-                          size_t                              inter_size,
-                          size_t                              num_layer,
-                          size_t                              rotary_embedding_dim,
-                          bool                                neox_rotary_style,
-                          float                               layernorm_eps,
-                          NcclParam                           pipeline_para,
-                          cudaStream_t                        stream,
-                          cublasMMWrapper*                    cublas_wrapper,
-                          IAllocator*                         allocator,
-                          bool                                is_free_buffer_after_forward,
-                          bool                                is_qk_buf_float,
-                          AttentionType                       attention_type            = AttentionType::FUSED_MHA,
-                          std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm    = nullptr,
-                          int                                 enable_custom_all_reduce_ = 0);
+                        size_t                              size_per_head,
+                        size_t                              inter_size,
+                        size_t                              num_layer,
+                        size_t                              rotary_embedding_dim,
+                        bool                                neox_rotary_style,
+                        float                               layernorm_eps,
+                        NcclParam                           pipeline_para,
+                        cudaStream_t                        stream,
+                        cublasMMWrapper*                    cublas_wrapper,
+                        IAllocator*                         allocator,
+                        bool                                is_free_buffer_after_forward,
+                        bool                                is_qk_buf_float,
+                        AttentionType                       attention_type            = AttentionType::FUSED_MHA,
+                        std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm    = nullptr,
+                        int                                 enable_custom_all_reduce_ = 0);
 
     LLaMAContextDecoder(LLaMAContextDecoder<T> const& decoder);
 
     ~LLaMAContextDecoder();
 
-    void forward(std::vector<Tensor>*                              output_tensors,
-                 const std::vector<Tensor>*                        input_tensors,
+    void forward(std::vector<Tensor>*                            output_tensors,
+                 const std::vector<Tensor>*                      input_tensors,
                  const std::vector<LLaMADecoderLayerWeight<T>*>* decoder_layer_weights);
 
-    void forward(std::unordered_map<std::string, Tensor>*          output_tensors,
-                 const std::unordered_map<std::string, Tensor>*    input_tensors,
+    void forward(std::unordered_map<std::string, Tensor>*        output_tensors,
+                 const std::unordered_map<std::string, Tensor>*  input_tensors,
                  const std::vector<LLaMADecoderLayerWeight<T>*>* llama_decoder_layer_weight);
 };
 

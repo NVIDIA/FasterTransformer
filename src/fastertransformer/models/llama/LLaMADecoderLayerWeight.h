@@ -29,10 +29,7 @@ template<typename T>
 struct LLaMADecoderLayerWeight {
 public:
     LLaMADecoderLayerWeight() = default;
-    LLaMADecoderLayerWeight(const int  hidden_units,
-                              const int  inter_size,
-                              const int  tensor_para_size  = 1,
-                              const int  tensor_para_rank  = 0);
+    LLaMADecoderLayerWeight(const int hidden_units, const int inter_size);
     ~LLaMADecoderLayerWeight();
     LLaMADecoderLayerWeight(const LLaMADecoderLayerWeight& other);
     LLaMADecoderLayerWeight& operator=(const LLaMADecoderLayerWeight& other);
@@ -47,11 +44,9 @@ public:
 private:
     int       hidden_units_;
     int       inter_size_;
-    int       tensor_para_size_;
-    int       tensor_para_rank_;
     const int attention_dense_bias_weight_id = 5;
     bool      is_maintain_buffer             = false;
-    T*        weights_ptr[12];
+    T*        weights_ptr[14];
 
     void setWeightPtr();
     void mallocWeights();

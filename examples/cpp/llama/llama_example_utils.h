@@ -28,4 +28,5 @@ int read_start_ids(size_t            batch_size,
                    const int         end_id,
                    const int         beam_width,
                    std::string       file_name);
+
 }  // namespace fastertransformer

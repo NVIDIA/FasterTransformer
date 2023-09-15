@@ -1859,6 +1859,100 @@ template void invokeGeneralT5LayerNorm(__nv_bfloat16*       out,
                                        cudaStream_t         stream);
 #endif
 
+/*******************  invokeGeneralLLaMALayerNorm  ***********************/
+
+template<typename T>
+__global__ void generalLLaMALayerNorm(const T* __restrict input,
+                                      const T* __restrict gamma,
+                                      const T* __restrict beta,
+                                      T*          normed_output,
+                                      const float layernorm_eps,
+                                      int         m,
+                                      int         n)
+{
+    const int tid = threadIdx.x;
+
+    extern __shared__ __align__(sizeof(float)) char _shmem[];
+    T*                                              shmem = reinterpret_cast<T*>(_shmem);
+
+    __shared__ float s_mean_sq;
+    float            mean_sq = 0.0f;
+
+    using Float_Packed_T = typename packed_as<float, num_elems<T>::value>::type;
+    using Scalar_T       = typename packed_as<T, 1>::type;
+
+    float local_sum = 0.0f;
+    for (int i = tid; i < n; i += blockDim.x) {
+        float val = (float)(ldg(&input[blockIdx.x * n + i]));
+        local_sum += val * val;
+    }
+
+    mean_sq = blockReduceSum(local_sum);
+
+    if (threadIdx.x == 0) {
+        s_mean_sq = rsqrtf(mean_sq / (float)n + layernorm_eps);
+    }
+    __syncthreads();
+
+    for (int i = tid; i < n; i += blockDim.x) {
+        const int index    = blockIdx.x * n + i;
+        float     beta_val = (beta == nullptr) ? 0.0f : (float)ldg(&beta[i]);
+        T         val      = (T)(((float)input[index] * s_mean_sq) * (float)(ldg(&gamma[i])) + beta_val);
+
+        normed_output[index] = val;
+    }
+}
+
+template<typename T>
+void invokeGeneralLLaMALayerNorm(T*           out,
+                                 const T*     input,
+                                 const T*     gamma,
+                                 const T*     beta,
+                                 const float  layernorm_eps,
+                                 const int    m,
+                                 const int    n,
+                                 cudaStream_t stream)
+{
+    dim3 grid(m);
+    dim3 block(min(n, 1024));
+
+    /* For general cases, n is equal to hidden_units, e.g., 512/1024.
+       Since we have warp shuffle inside the code, block.x % 32 should be 0.
+     */
+    if (n % 32 != 0) {
+        block.x = 1024;
+    }
+
+    generalLLaMALayerNorm<T><<<grid, block, 0, stream>>>(input, gamma, beta, out, layernorm_eps, m, n);
+}
+
+template void invokeGeneralLLaMALayerNorm(float*       out,
+                                          const float* input,
+                                          const float* gamma,
+                                          const float* beta,
+                                          const float  layernorm_eps,
+                                          const int    m,
+                                          const int    n,
+                                          cudaStream_t stream);
+template void invokeGeneralLLaMALayerNorm(half*        out,
+                                          const half*  input,
+                                          const half*  gamma,
+                                          const half*  beta,
+                                          const float  layernorm_eps,
+                                          const int    m,
+                                          const int    n,
+                                          cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeGeneralLLaMALayerNorm(__nv_bfloat16*       out,
+                                          const __nv_bfloat16* input,
+                                          const __nv_bfloat16* gamma,
+                                          const __nv_bfloat16* beta,
+                                          const float          layernorm_eps,
+                                          const int            m,
+                                          const int            n,
+                                          cudaStream_t         stream);
+#endif
+
 /*******************  invokeLayernormShiftPartition  ***********************/
 
 // applied to half2 and bfloat162

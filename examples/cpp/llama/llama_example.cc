@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
+#include "3rdparty/INIReader.h"
+#include "examples/cpp/llama/llama_example_utils.h"
 #include "src/fastertransformer/models/llama/LLaMA.h"
 #include "src/fastertransformer/utils/mpi_utils.h"
 #include "src/fastertransformer/utils/nccl_utils.h"
 #include "src/fastertransformer/utils/nvtx_utils.h"
 #include "src/fastertransformer/utils/word_list.h"
-#include "examples/cpp/llama/llama_example_utils.h"
-#include "3rdparty/INIReader.h"
 
 #include <cuda_profiler_api.h>
 #include <fstream>
@@ -71,9 +71,9 @@ int main(int argc, char* argv[])
 template<typename T>
 void llama_example(const INIReader reader)
 {
-    const std::string model_name = reader.Get("ft_instance_hyperparameter", "model_name");
-    std::string       model_dir  = std::string(reader.Get("ft_instance_hyperparameter", "model_dir"));
-    int pipeline_para_size       = reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size");
+    const std::string model_name         = reader.Get("ft_instance_hyperparameter", "model_name");
+    std::string       model_dir          = std::string(reader.Get("ft_instance_hyperparameter", "model_dir"));
+    int               pipeline_para_size = reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size");
 
     const size_t head_num             = reader.GetInteger(model_name, "head_num");
     const size_t size_per_head        = reader.GetInteger(model_name, "size_per_head");
@@ -85,7 +85,7 @@ void llama_example(const INIReader reader)
     const int    end_id               = reader.GetInteger(model_name, "end_id");
 
     const size_t hidden_units = head_num * size_per_head;
-    const size_t inter_size   = multiple_of * ((2 * hidden_units + multiple_of -1) / multiple_of);
+    const size_t inter_size   = multiple_of * ((2 * hidden_units + multiple_of - 1) / multiple_of);
 
     const size_t beam_width         = reader.GetInteger("request", "beam_width");
     const size_t request_batch_size = reader.GetInteger("request", "request_batch_size");
@@ -207,8 +207,6 @@ void llama_example(const INIReader reader)
                                                     inter_size,
                                                     vocab_size,
                                                     decoder_layers,
-                                                    tensor_para.world_size_,
-                                                    tensor_para.rank_,
                                                     pipeline_para.world_size_,
                                                     pipeline_para.rank_);
 
@@ -231,22 +229,22 @@ void llama_example(const INIReader reader)
                                                        true);  // causal_mask
 
     LLaMA<T> llama = LLaMA<T>(head_num,
-                                size_per_head,
-                                inter_size,
-                                decoder_layers,
-                                vocab_size,
-                                rotary_embedding_dim,
-                                start_id,
-                                end_id,
-                                random_seed,
-                                tensor_para,
-                                pipeline_para,
-                                stream,
-                                &cublas_wrapper,
-                                &allocator,
-                                false,
-                                &prop,
-                                attention_type);
+                              size_per_head,
+                              inter_size,
+                              decoder_layers,
+                              vocab_size,
+                              rotary_embedding_dim,
+                              start_id,
+                              end_id,
+                              random_seed,
+                              tensor_para,
+                              pipeline_para,
+                              stream,
+                              &cublas_wrapper,
+                              &allocator,
+                              false,
+                              &prop,
+                              attention_type);
 
     int* d_output_ids;
     int* d_sequence_lengths;
@@ -264,7 +262,6 @@ void llama_example(const INIReader reader)
         {"min_length", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{1}, &min_length}},
         {"start_id", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{request_batch_size}, start_ids.data()}},
         {"end_id", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{request_batch_size}, end_ids.data()}}};
-
 
     input_tensors.insert({"random_seed", Tensor{MEMORY_CPU, TYPE_UINT64, std::vector<size_t>{1}, &random_seed}});
 
