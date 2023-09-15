@@ -402,11 +402,9 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
 
     sync_check_cuda_error();
 
-    std::cout << __FILE__ << ":" << __LINE__ << "\n";
 
     // handle first step
     if (max_input_length > 1) {
-        std::cout << __FILE__ << ":" << __LINE__ << "\n";
         invokeTileGptInputs(tiled_input_ids_buf_,
                             tiled_input_lengths_buf_,
                             input_tensors->at("input_ids").getPtr<int>(),
@@ -464,11 +462,9 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
             {"last_token_hidden_units",
              Tensor{MEMORY_GPU, data_type, {batch_size * beam_width, hidden_units_}, decoder_output_buf_}}};
 
-        std::cout << __FILE__ << ":" << __LINE__ << "\n";
         llama_context_decoder_->forward(
             &decoder_output_tensors, &decoder_input_tensors, &llama_weights->decoder_layer_weights);
         sync_check_cuda_error();
-        std::cout << __FILE__ << ":" << __LINE__ << "\n";
         invokeDecodingInitialize(finished_buf_,
                                  sequence_lengths_,
                                  nullptr,
@@ -526,7 +522,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                         cudaMemcpyDeviceToDevice,
                         stream_);
     }
-    std::cout << __FILE__ << ":" << __LINE__ << "\n";
 
     invokeMaskPaddingTokens(masked_tokens_,
                             input_tensors->at("input_lengths").getPtr<const int>(),  // not_tiled
@@ -539,7 +534,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                             stream_);
 
     for (int step = max_input_length; step < (int)max_output_seq_len; step++) {
-        std::cout << __FILE__ << ":" << __LINE__ << "\n";
         const int src_indir_idx = (step - max_input_length) % 2;
         const int tgt_indir_idx = 1 - src_indir_idx;
 
@@ -764,7 +758,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                                      stream_);
         }
     }
-    std::cout << __FILE__ << ":" << __LINE__ << "\n";
 
     setOutputTensors(output_tensors, input_tensors, max_input_length, max_output_seq_len);
     sendTensorsToFirstPipelineNode(output_tensors, input_tensors);

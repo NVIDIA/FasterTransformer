@@ -42,7 +42,7 @@ void LLaMAContextDecoder<T>::initialize()
                                                             0);
 
     ffn_layer_ = new GeluFfnLayer<T>(0,  // max_batch_size
-                                     1,
+                                     0,
                                      head_num_,
                                      size_per_head_,
                                      0,  // expert_num
