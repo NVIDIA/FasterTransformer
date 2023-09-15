@@ -81,16 +81,13 @@ void llama_example(const INIReader reader)
     const size_t decoder_layers       = reader.GetInteger(model_name, "decoder_layers");
     const size_t rotary_embedding_dim = reader.GetInteger(model_name, "rotary_embedding");
     const int    multiple_of          = reader.GetInteger(model_name, "multiple_of");
-    const int    start_id             = reader.GetInteger(model_name, "start_id");
-    const int    end_id               = reader.GetInteger(model_name, "end_id");
 
     const size_t hidden_units = head_num * size_per_head;
     const size_t inter_size   = multiple_of * ((2 * hidden_units + multiple_of - 1) / multiple_of);
 
-    const size_t beam_width         = reader.GetInteger("request", "beam_width");
     const size_t request_batch_size = reader.GetInteger("request", "request_batch_size");
-    const int    request_output_len = reader.GetInteger("request", "request_output_len");
     const int    min_length         = reader.GetInteger("request", "min_length", 0);
+    const int    padding_id           = reader.GetInteger(model_name, "padding_id");
 
     FT_CHECK(decoder_layers % pipeline_para_size == 0);
 
@@ -128,29 +125,6 @@ void llama_example(const INIReader reader)
     NcclParam pipeline_para;
     ftNcclInitialize(tensor_para, pipeline_para, 1, pipeline_para_size);
 
-    // Handle bad_words dictionary
-    std::vector<int> bad_words;
-    read_word_list("../examples/cpp/llama/bad_words.csv", bad_words);
-
-    int* d_bad_words = nullptr;
-    deviceMalloc(&d_bad_words, bad_words.size(), false);
-    cudaH2Dcpy(d_bad_words, bad_words.data(), bad_words.size());
-
-    // Handle stop_words dictionary
-    std::vector<int> stop_words;
-    read_word_list("../examples/cpp/llama/stop_words.csv", stop_words);
-
-    const size_t stop_words_len = stop_words.size() / 2;
-    // Tile with same dict for each element
-    std::vector<int> tiled_stop_words;
-    for (int i = 0; i < request_batch_size; i++) {
-        tiled_stop_words.insert(tiled_stop_words.end(), stop_words.begin(), stop_words.end());
-    }
-
-    int* d_stop_words = nullptr;
-    deviceMalloc(&d_stop_words, tiled_stop_words.size(), false);
-    cudaH2Dcpy(d_stop_words, tiled_stop_words.data(), tiled_stop_words.size());
-
     // Read ids of request from file.
     size_t           max_input_len = -1;
     std::vector<int> v_start_lengths;
@@ -159,7 +133,7 @@ void llama_example(const INIReader reader)
                    &v_start_lengths,
                    &v_start_ids,
                    max_input_len,
-                   end_id,
+                   padding_id,
                    1,
                    "../examples/cpp/llama/start_ids.csv");
 
@@ -177,10 +151,8 @@ void llama_example(const INIReader reader)
         cudaH2Dcpy(d_input_ids, v_start_ids.data(), request_batch_size * max_input_len);
         cudaH2Dcpy(d_input_lengths, v_start_lengths.data(), request_batch_size);
     }
-    std::vector<int> start_ids(request_batch_size, start_id);
-    std::vector<int> end_ids(request_batch_size, end_id);
 
-    const int total_output_len = max_input_len + request_output_len;
+    const int total_output_len = max_input_len;
 
     cudaStream_t     stream;
     cublasHandle_t   cublas_handle;
@@ -203,12 +175,8 @@ void llama_example(const INIReader reader)
         cublas_wrapper.setFP32GemmConfig();
     }
 
-    fastertransformer::LLaMAWeight<T> llama_weights(hidden_units,
-                                                    inter_size,
-                                                    vocab_size,
-                                                    decoder_layers,
-                                                    pipeline_para.world_size_,
-                                                    pipeline_para.rank_);
+    fastertransformer::LLaMAWeight<T> llama_weights(
+        hidden_units, inter_size, vocab_size, decoder_layers, pipeline_para.world_size_, pipeline_para.rank_);
 
     model_dir = model_dir + "/" + std::to_string(tensor_para.world_size_) + "-gpu";
     llama_weights.loadModel(model_dir);
@@ -234,22 +202,20 @@ void llama_example(const INIReader reader)
                               decoder_layers,
                               vocab_size,
                               rotary_embedding_dim,
-                              start_id,
-                              end_id,
                               random_seed,
                               tensor_para,
                               pipeline_para,
                               stream,
                               &cublas_wrapper,
                               &allocator,
-                              false,
+                              false,  // is_free_buffer_after_forward
                               &prop,
                               attention_type);
 
     int* d_output_ids;
     int* d_sequence_lengths;
-    deviceMalloc(&d_output_ids, request_batch_size * beam_width * total_output_len, false);
-    deviceMalloc(&d_sequence_lengths, request_batch_size * beam_width, false);
+    deviceMalloc(&d_output_ids, request_batch_size * total_output_len, false);
+    deviceMalloc(&d_sequence_lengths, request_batch_size, false);
     std::vector<uint32_t>                   output_seq_len(request_batch_size, total_output_len);
     std::unordered_map<std::string, Tensor> input_tensors = std::unordered_map<std::string, Tensor>{
         {"input_ids",
@@ -257,27 +223,18 @@ void llama_example(const INIReader reader)
         {"input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size}, d_input_lengths}},
         {"output_seq_len",
          Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<size_t>{request_batch_size}, output_seq_len.data()}},
-        {"bad_words_list", Tensor{MEMORY_GPU, TYPE_INT32, {2, bad_words.size() / 2}, d_bad_words}},
-        {"stop_words_list", Tensor{MEMORY_GPU, TYPE_INT32, {request_batch_size, 2, stop_words_len}, d_stop_words}},
         {"min_length", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{1}, &min_length}},
-        {"start_id", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{request_batch_size}, start_ids.data()}},
-        {"end_id", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{request_batch_size}, end_ids.data()}}};
-
-    input_tensors.insert({"random_seed", Tensor{MEMORY_CPU, TYPE_UINT64, std::vector<size_t>{1}, &random_seed}});
+        {"random_seed", Tensor{MEMORY_CPU, TYPE_UINT64, std::vector<size_t>{1}, &random_seed}}};
 
     std::unordered_map<std::string, Tensor> output_tensors = std::unordered_map<std::string, Tensor>{
         {"output_ids",
          Tensor{MEMORY_GPU,
                 TYPE_INT32,
-                std::vector<size_t>{request_batch_size, beam_width, (size_t)total_output_len},
+                std::vector<size_t>{request_batch_size, 1, (size_t)total_output_len},
                 d_output_ids}},
         {"sequence_length",
-         Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size, beam_width}, d_sequence_lengths}},
-        {"output_log_probs",
-         Tensor{MEMORY_GPU,
-                TYPE_FP32,
-                std::vector<size_t>{(size_t)request_output_len, request_batch_size, beam_width},
-                nullptr}}};
+         Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size}, d_sequence_lengths}},
+    };
 
     print_mem_usage();
 
@@ -307,7 +264,7 @@ void llama_example(const INIReader reader)
             printf("[WARNING] Cannot write results into output file %s \n", fName.c_str());
         }
         else {
-            size_t outCount = total_output_len * request_batch_size * beam_width;
+            size_t outCount = total_output_len * request_batch_size;
             int*   hBuf     = new int[outCount];
             cudaD2Hcpy(hBuf, d_output_ids, outCount);
 
@@ -357,10 +314,9 @@ void llama_example(const INIReader reader)
 
     cudaProfilerStop();
 
-    printf("[INFO] request_batch_size %ld beam_width %ld head_num %ld size_per_head %ld total_output_len %d"
+    printf("[INFO] request_batch_size %ld head_num %ld size_per_head %ld total_output_len %d"
            " decoder_layers %ld vocab_size %ld FT-CPP-decoding-beamsearch-time %.2f ms\n",
            request_batch_size,
-           beam_width,
            head_num,
            size_per_head,
            total_output_len,
@@ -374,8 +330,6 @@ void llama_example(const INIReader reader)
     delete cublas_algo_map;
     delete cublas_wrapper_mutex;
 
-    cudaFree(d_bad_words);
-    cudaFree(d_stop_words);
     if (d_input_ids != nullptr) {
         cudaFree(d_input_ids);
     }

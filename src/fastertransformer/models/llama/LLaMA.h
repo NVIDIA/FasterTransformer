@@ -39,8 +39,6 @@ private:
     static constexpr bool  neox_rotary_style_ = true;
     static constexpr float layernorm_eps_     = 1e-6f;
 
-    int    start_id_;
-    int    end_id_;
     size_t hidden_units_;
 
     NcclParam tensor_para_;
@@ -58,27 +56,18 @@ private:
 
     void allocateBuffer() override;
     void allocateBuffer(
-        size_t batch_size, size_t beam_width, size_t max_seq_len, size_t max_cache_seq_len, size_t max_input_len);
+        size_t batch_size, size_t max_seq_len, size_t max_cache_seq_len, size_t max_input_len);
     void freeBuffer() override;
 
     void initialize();
 
 protected:
     T* input_attention_mask_;
-
-    T* decoder_input_buf_;
     T* decoder_output_buf_;
-    T* normed_decoder_output_buf_;
 
     float* logits_buf_;
-    float* nccl_logits_buf_;
-    float* cum_log_probs_;
 
-    bool*     finished_buf_;
-    bool*     h_finished_buf_;
     int*      sequence_lengths_          = nullptr;
-    int*      tiled_total_padding_count_ = nullptr;
-    uint32_t* seq_limit_len_             = nullptr;
 
     T*   key_cache_;
     T*   value_cache_;
@@ -88,16 +77,11 @@ protected:
     int*  tiled_input_lengths_buf_;
     int*  transposed_output_ids_buf_;
     int*  output_ids_buf_;
-    int*  parent_ids_buf_;
     int*  start_ids_buf_;
     int*  end_ids_buf_;
-    bool* masked_tokens_ = nullptr;
-
-    bool* generation_should_stop_ = nullptr;
 
     T*     context_decoder_input_buf_;
     T*     context_decoder_output_buf_;
-    float* output_log_probs_buf_;
 
     // function pointer callback
     using callback_sig                 = void(std::unordered_map<std::string, Tensor>*, void*);
@@ -118,8 +102,6 @@ public:
           size_t                              num_layer,
           size_t                              vocab_size,
           size_t                              rotary_embedding_dim,
-          int                                 start_id,
-          int                                 end_id,
           unsigned long long                  random_seed,
           cudaStream_t                        stream,
           cublasMMWrapper*                    cublas_wrapper,
@@ -136,8 +118,6 @@ public:
           size_t                              num_layer,
           size_t                              vocab_size,
           size_t                              rotary_embedding_dim,
-          int                                 start_id,
-          int                                 end_id,
           unsigned long long                  random_seed,
           NcclParam                           tensor_para,
           NcclParam                           pipeline_para,

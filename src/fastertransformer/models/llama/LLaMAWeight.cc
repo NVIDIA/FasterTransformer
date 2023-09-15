@@ -124,7 +124,6 @@ void LLaMAWeight<T>::setWeightPtr()
 {
     pre_decoder_embedding_table   = weights_ptr[0];
     post_decoder_layernorm.beta   = weights_ptr[1];
-    post_decoder_layernorm.beta   = nullptr;
     post_decoder_layernorm.gamma  = weights_ptr[2];
     post_decoder_embedding.kernel = weights_ptr[3];
 }

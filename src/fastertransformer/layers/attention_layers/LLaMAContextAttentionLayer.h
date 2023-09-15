@@ -32,13 +32,12 @@ private:
     size_t max_seq_len_    = 0;
 
     // metadata
-    const size_t head_num_;
-    const size_t size_per_head_;
-    const size_t hidden_units_;
-    const size_t local_head_num_;
-    const size_t local_hidden_units_;
-    const size_t rotary_embedding_dim_;
-    const bool   neox_rotary_style_;
+    const size_t           head_num_;
+    const size_t           size_per_head_;
+    const size_t           hidden_units_;
+    const size_t           rotary_embedding_dim_;
+    const bool             neox_rotary_style_;
+    static constexpr float layernorm_eps_ = 1e-6f;
 
     // fmha runner
     int                        sm_ = getSMVersion();
@@ -73,52 +72,48 @@ protected:
     size_t mixed_gemm_ws_bytes_  = 0;
     char*  int8_gemm_workspace_  = nullptr;
     size_t int8_gemm_ws_bytes_   = 0;
-
-    // int8_mode_ == 0 means we don't use any mechanism related to INT8.
-    // int8_mode_ == 1 for weight quantized only gemm for GPT
-    // int8_mode_ == 2 for SmoothQuant O3 (per tensor scales)
-    const int int8_mode_ = 0;
+    T*     decoder_normed_input_ = nullptr;
 
 public:
     LLaMAContextAttentionLayer(size_t           max_batch_size,
-                             size_t           max_seq_len,
-                             size_t           head_num,
-                             size_t           size_per_head,
-                             cudaStream_t     stream,
-                             cublasMMWrapper* cublas_wrapper,
-                             IAllocator*      allocator,
-                             bool             is_free_buffer_after_forward,
-                             bool             is_qk_buf_float,
-                             bool             sparse    = false,
-                             int              int8_mode = 0);
+                               size_t           max_seq_len,
+                               size_t           head_num,
+                               size_t           size_per_head,
+                               cudaStream_t     stream,
+                               cublasMMWrapper* cublas_wrapper,
+                               IAllocator*      allocator,
+                               bool             is_free_buffer_after_forward,
+                               bool             is_qk_buf_float,
+                               bool             sparse    = false,
+                               int              int8_mode = 0);
 
     LLaMAContextAttentionLayer(size_t           max_batch_size,
-                             size_t           max_seq_len,
-                             size_t           head_num,
-                             size_t           size_per_head,
-                             size_t           local_head_num,
-                             cudaStream_t     stream,
-                             cublasMMWrapper* cublas_wrapper,
-                             IAllocator*      allocator,
-                             bool             is_free_buffer_after_forward,
-                             bool             is_qk_buf_float,
-                             bool             sparse    = false,
-                             int              int8_mode = 0);
+                               size_t           max_seq_len,
+                               size_t           head_num,
+                               size_t           size_per_head,
+                               size_t           local_head_num,
+                               cudaStream_t     stream,
+                               cublasMMWrapper* cublas_wrapper,
+                               IAllocator*      allocator,
+                               bool             is_free_buffer_after_forward,
+                               bool             is_qk_buf_float,
+                               bool             sparse    = false,
+                               int              int8_mode = 0);
 
     LLaMAContextAttentionLayer(size_t           max_batch_size,
-                             size_t           max_seq_len,
-                             size_t           head_num,
-                             size_t           size_per_head,
-                             size_t           local_head_num,
-                             size_t           rotary_embedding_dim,
-                             bool             neox_rotary_style_,
-                             cudaStream_t     stream,
-                             cublasMMWrapper* cublas_wrapper,
-                             IAllocator*      allocator,
-                             bool             is_free_buffer_after_forward,
-                             bool             is_qk_buf_float,
-                             bool             sparse    = false,
-                             int              int8_mode = 0);
+                               size_t           max_seq_len,
+                               size_t           head_num,
+                               size_t           size_per_head,
+                               size_t           local_head_num,
+                               size_t           rotary_embedding_dim,
+                               bool             neox_rotary_style_,
+                               cudaStream_t     stream,
+                               cublasMMWrapper* cublas_wrapper,
+                               IAllocator*      allocator,
+                               bool             is_free_buffer_after_forward,
+                               bool             is_qk_buf_float,
+                               bool             sparse    = false,
+                               int              int8_mode = 0);
 
     LLaMAContextAttentionLayer(LLaMAContextAttentionLayer<T> const& attention_layer);
 

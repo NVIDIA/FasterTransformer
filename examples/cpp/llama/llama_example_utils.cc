@@ -26,7 +26,7 @@ int read_start_ids(size_t            batch_size,
                    std::vector<int>* v_start_lengths,
                    std::vector<int>* v_start_ids,
                    size_t&           max_input_len,
-                   const int         end_id,
+                   const int         padding_id,
                    const int         beam_width,
                    std::string       file_name)
 {
@@ -68,7 +68,7 @@ int read_start_ids(size_t            batch_size,
     while ((int)tmp_start_lengths.size() < batch_size) {
         std::vector<int> padding_ids;
         for (int i = 0; i < max_input_len; i++) {
-            padding_ids.push_back(end_id);
+            padding_ids.push_back(padding_id);
         }
         tmp_start_ids.push_back(padding_ids);
         tmp_start_lengths.push_back(max_input_len);
@@ -77,7 +77,7 @@ int read_start_ids(size_t            batch_size,
     // Add padding
     for (int i = 0; i < (int)tmp_start_ids.size(); i++) {
         for (int j = (int)tmp_start_ids[i].size(); j < max_input_len; j++) {
-            tmp_start_ids[i].push_back(end_id);
+            tmp_start_ids[i].push_back(padding_id);
         }
     }
 
