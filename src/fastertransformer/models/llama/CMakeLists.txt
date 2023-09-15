@@ -19,26 +19,12 @@ set_property(TARGET LLaMADecoderLayerWeight PROPERTY POSITION_INDEPENDENT_CODE  
 set_property(TARGET LLaMADecoderLayerWeight PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(LLaMADecoderLayerWeight PUBLIC memory_utils cuda_utils logger)
 
-add_library(LLaMADecoder STATIC LLaMADecoder.cc)
-set_property(TARGET LLaMADecoder PROPERTY POSITION_INDEPENDENT_CODE  ON)
-set_property(TARGET LLaMADecoder PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
-target_link_libraries(LLaMADecoder PUBLIC -lcudart cublasMMWrapper
-                      TensorParallelDecoderSelfAttentionLayer
-                      TensorParallelGeluFfnLayer
-                      layernorm_kernels
-                      add_residual_kernels
-                      LLaMADecoderLayerWeight
-                      tensor
-                      nccl_utils
-                      cuda_utils
-                      logger)
-
 add_library(LLaMAContextDecoder STATIC LLaMAContextDecoder.cc)
 set_property(TARGET LLaMAContextDecoder PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET LLaMAContextDecoder PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(LLaMAContextDecoder PUBLIC -lcudart cublasMMWrapper
-                      TensorParallelGptContextAttentionLayer
-                      TensorParallelGeluFfnLayer
+                      LLaMAContextAttentionLayer
+                      FfnLayer
                       layernorm_kernels
                       add_residual_kernels
                       gpt_kernels
@@ -56,11 +42,9 @@ add_library(LLaMA STATIC LLaMA.cc)
 set_property(TARGET LLaMA PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET LLaMA PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(LLaMA PUBLIC -lcudart
-                      LLaMADecoder
                       LLaMAContextDecoder
                       decoding_kernels
                       gpt_kernels
-                      DynamicDecodeLayer
                       BaseBeamSearchLayer
                       bert_preprocess_kernels
                       tensor

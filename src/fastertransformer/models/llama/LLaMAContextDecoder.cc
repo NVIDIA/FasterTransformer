@@ -19,27 +19,27 @@
 #include "src/fastertransformer/kernels/gpt_kernels.h"
 
 #include "src/fastertransformer/layers/FfnLayer.h"
-#include "src/fastertransformer/layers/attention_layers/GptContextAttentionLayer.h"
+#include "src/fastertransformer/layers/attention_layers/LLaMAContextAttentionLayer.h"
 
 namespace fastertransformer {
 
 template<typename T>
 void LLaMAContextDecoder<T>::initialize()
 {
-    self_attention_layer_ = new GptContextAttentionLayer<T>(0,  // max_batch_size
-                                                            0,  // max_seq_len
-                                                            head_num_,
-                                                            size_per_head_,
-                                                            head_num_,
-                                                            rotary_embedding_dim_,
-                                                            neox_rotary_style_,
-                                                            stream_,
-                                                            cublas_wrapper_,
-                                                            allocator_,
-                                                            is_free_buffer_after_forward_,
-                                                            is_qk_buf_float_,
-                                                            false,
-                                                            0);
+    self_attention_layer_ = new LLaMAContextAttentionLayer<T>(0,  // max_batch_size
+                                                              0,  // max_seq_len
+                                                              head_num_,
+                                                              size_per_head_,
+                                                              head_num_,
+                                                              rotary_embedding_dim_,
+                                                              neox_rotary_style_,
+                                                              stream_,
+                                                              cublas_wrapper_,
+                                                              allocator_,
+                                                              is_free_buffer_after_forward_,
+                                                              is_qk_buf_float_,
+                                                              false,
+                                                              0);
 
     ffn_layer_ = new GeluFfnLayer<T>(0,  // max_batch_size
                                      0,

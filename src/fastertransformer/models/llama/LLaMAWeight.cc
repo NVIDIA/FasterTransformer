@@ -78,7 +78,7 @@ LLaMAWeight<T>::LLaMAWeight(const LLaMAWeight& other):
 {
     mallocWeights();
     cudaD2Dcpy(weights_ptr[0], other.weights_ptr[0], vocab_size_ * hidden_units_);
-    //cudaD2Dcpy(weights_ptr[1], other.weights_ptr[1], hidden_units_);
+    cudaD2Dcpy(weights_ptr[1], other.weights_ptr[1], hidden_units_);
     cudaD2Dcpy(weights_ptr[2], other.weights_ptr[2], hidden_units_);
     cudaD2Dcpy(weights_ptr[3], other.weights_ptr[3], hidden_units_ * vocab_size_);
 
@@ -105,7 +105,7 @@ LLaMAWeight<T>& LLaMAWeight<T>::operator=(const LLaMAWeight& other)
 
     mallocWeights();
     cudaD2Dcpy(weights_ptr[0], other.weights_ptr[0], vocab_size_ * hidden_units_);
-    //cudaD2Dcpy(weights_ptr[1], other.weights_ptr[1], hidden_units_);
+    cudaD2Dcpy(weights_ptr[1], other.weights_ptr[1], hidden_units_);
     cudaD2Dcpy(weights_ptr[2], other.weights_ptr[2], hidden_units_);
     cudaD2Dcpy(weights_ptr[3], other.weights_ptr[3], hidden_units_ * vocab_size_);
 
@@ -123,7 +123,7 @@ template<typename T>
 void LLaMAWeight<T>::setWeightPtr()
 {
     pre_decoder_embedding_table   = weights_ptr[0];
-    //post_decoder_layernorm.beta   = weights_ptr[1];
+    post_decoder_layernorm.beta   = weights_ptr[1];
     post_decoder_layernorm.beta   = nullptr;
     post_decoder_layernorm.gamma  = weights_ptr[2];
     post_decoder_embedding.kernel = weights_ptr[3];
@@ -135,7 +135,7 @@ void LLaMAWeight<T>::mallocWeights()
     weights_ptr.resize(num_base_weights);
 
     deviceMalloc(&weights_ptr[0], vocab_size_ * hidden_units_);
-    //deviceMalloc(&weights_ptr[1], hidden_units_);
+    deviceMalloc(&weights_ptr[1], hidden_units_);
     deviceMalloc(&weights_ptr[2], hidden_units_);
     deviceMalloc(&weights_ptr[3], hidden_units_ * vocab_size_);
 
@@ -152,7 +152,7 @@ void LLaMAWeight<T>::loadModel(std::string dir_path)
                          {(size_t)(vocab_size_ * hidden_units_)},
                          dir_path + "/model.tok_embeddings.weight.bin",
                          model_file_type);
-    //loadWeightFromBin<T>(weights_ptr[1], {(size_t)hidden_units_}, dir_path + "/model.norm.bias.bin", model_file_type);
+    loadWeightFromBin<T>(weights_ptr[1], {(size_t)hidden_units_}, dir_path + "/model.norm.bias.bin", model_file_type);
     loadWeightFromBin<T>(weights_ptr[2], {(size_t)hidden_units_}, dir_path + "/model.norm.weight.bin", model_file_type);
     loadWeightFromBin<T>(weights_ptr[3],
                          {(size_t)(vocab_size_ * hidden_units_)},

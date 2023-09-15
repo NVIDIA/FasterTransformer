@@ -59,19 +59,19 @@ LLaMADecoderLayerWeight<T>::LLaMADecoderLayerWeight(const LLaMADecoderLayerWeigh
     hidden_units_(other.hidden_units_), inter_size_(other.inter_size_)
 {
     mallocWeights();
-    //cudaD2Dcpy(weights_ptr[0], other.weights_ptr[0], hidden_units_);
-    cudaD2Dcpy(weights_ptr[1], other.weights_ptr[1], hidden_units_); nullptr;
+    cudaD2Dcpy(weights_ptr[0], other.weights_ptr[0], hidden_units_);
+    cudaD2Dcpy(weights_ptr[1], other.weights_ptr[1], hidden_units_);
     cudaD2Dcpy(weights_ptr[2], other.weights_ptr[2], hidden_units_ * 3 * hidden_units_);
-    //cudaD2Dcpy(weights_ptr[3], other.weights_ptr[3], 3 * hidden_units_);
+    cudaD2Dcpy(weights_ptr[3], other.weights_ptr[3], 3 * hidden_units_);
     cudaD2Dcpy(weights_ptr[4], other.weights_ptr[4], hidden_units_ * hidden_units_);
-    //cudaD2Dcpy(weights_ptr[5], other.weights_ptr[5], hidden_units_);
+    cudaD2Dcpy(weights_ptr[5], other.weights_ptr[5], hidden_units_);
     cudaD2Dcpy(weights_ptr[6], other.weights_ptr[6], hidden_units_ * inter_size_);
-    //cudaD2Dcpy(weights_ptr[7], other.weights_ptr[7], inter_size_);
+    cudaD2Dcpy(weights_ptr[7], other.weights_ptr[7], inter_size_);
     cudaD2Dcpy(weights_ptr[8], other.weights_ptr[8], inter_size_ * hidden_units_);
-    //cudaD2Dcpy(weights_ptr[9], other.weights_ptr[9], hidden_units_);
+    cudaD2Dcpy(weights_ptr[9], other.weights_ptr[9], hidden_units_);
     cudaD2Dcpy(weights_ptr[10], other.weights_ptr[10], hidden_units_ * inter_size_);
-    //cudaD2Dcpy(weights_ptr[11], other.weights_ptr[11], inter_size_);
-    //cudaD2Dcpy(weights_ptr[12], other.weights_ptr[12], hidden_units_);
+    cudaD2Dcpy(weights_ptr[11], other.weights_ptr[11], inter_size_);
+    cudaD2Dcpy(weights_ptr[12], other.weights_ptr[12], hidden_units_);
     cudaD2Dcpy(weights_ptr[13], other.weights_ptr[13], hidden_units_);
     setWeightPtr();
 }
@@ -84,19 +84,19 @@ LLaMADecoderLayerWeight<T>& LLaMADecoderLayerWeight<T>::operator=(const LLaMADec
 
     mallocWeights();
 
-    //cudaD2Dcpy(weights_ptr[0], other.weights_ptr[0], hidden_units_);
+    cudaD2Dcpy(weights_ptr[0], other.weights_ptr[0], hidden_units_);
     cudaD2Dcpy(weights_ptr[1], other.weights_ptr[1], hidden_units_);
     cudaD2Dcpy(weights_ptr[2], other.weights_ptr[2], hidden_units_ * 3 * hidden_units_);
-    //cudaD2Dcpy(weights_ptr[3], other.weights_ptr[3], 3 * hidden_units_);
+    cudaD2Dcpy(weights_ptr[3], other.weights_ptr[3], 3 * hidden_units_);
     cudaD2Dcpy(weights_ptr[4], other.weights_ptr[4], hidden_units_ * hidden_units_);
-    //cudaD2Dcpy(weights_ptr[5], other.weights_ptr[5], hidden_units_);
+    cudaD2Dcpy(weights_ptr[5], other.weights_ptr[5], hidden_units_);
     cudaD2Dcpy(weights_ptr[6], other.weights_ptr[6], hidden_units_ * inter_size_);
-    //cudaD2Dcpy(weights_ptr[7], other.weights_ptr[7], inter_size_);
+    cudaD2Dcpy(weights_ptr[7], other.weights_ptr[7], inter_size_);
     cudaD2Dcpy(weights_ptr[8], other.weights_ptr[8], inter_size_ * hidden_units_);
-    //cudaD2Dcpy(weights_ptr[9], other.weights_ptr[9], hidden_units_);
+    cudaD2Dcpy(weights_ptr[9], other.weights_ptr[9], hidden_units_);
     cudaD2Dcpy(weights_ptr[10], other.weights_ptr[10], hidden_units_ * inter_size_);
-    //cudaD2Dcpy(weights_ptr[11], other.weights_ptr[11], inter_size_);
-    //cudaD2Dcpy(weights_ptr[12], other.weights_ptr[12], hidden_units_);
+    cudaD2Dcpy(weights_ptr[11], other.weights_ptr[11], inter_size_);
+    cudaD2Dcpy(weights_ptr[12], other.weights_ptr[12], hidden_units_);
     cudaD2Dcpy(weights_ptr[13], other.weights_ptr[13], hidden_units_);
     setWeightPtr();
     return *this;
@@ -107,8 +107,8 @@ void LLaMADecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType 
 {
     FT_CHECK(is_maintain_buffer == true);
 
-//    loadWeightFromBin<T>(
-//        weights_ptr[0], {(size_t)hidden_units_}, dir_path + ".attention_norm.bias.bin", model_file_type);
+    loadWeightFromBin<T>(
+        weights_ptr[0], {(size_t)hidden_units_}, dir_path + ".attention_norm.bias.bin", model_file_type);
     loadWeightFromBin<T>(
         weights_ptr[1], {(size_t)hidden_units_}, dir_path + ".attention_norm.weight.bin", model_file_type);
 
@@ -116,67 +116,60 @@ void LLaMADecoderLayerWeight<T>::loadModel(std::string dir_path, FtCudaDataType 
                          {(size_t)hidden_units_, (size_t)(3 * hidden_units_)},
                          dir_path + ".attention.query_key_value.weight.bin",
                          model_file_type);
-//    loadWeightFromBin<T>(weights_ptr[3],
-//                         {(size_t)(3 * hidden_units_)},
-//                         dir_path + ".attention.query_key_value.bias.bin",
-//                         model_file_type);
+    loadWeightFromBin<T>(weights_ptr[3],
+                         {(size_t)(3 * hidden_units_)},
+                         dir_path + ".attention.query_key_value.bias.bin",
+                         model_file_type);
 
     loadWeightFromBin<T>(weights_ptr[4],
                          {(size_t)(hidden_units_), (size_t)hidden_units_},
                          dir_path + ".attention.wo.weight.bin",
                          model_file_type);
-//    loadWeightFromBin<T>(weights_ptr[5], {(size_t)hidden_units_}, dir_path + ".attention.wo.bias.bin", model_file_type);
+    loadWeightFromBin<T>(weights_ptr[5], {(size_t)hidden_units_}, dir_path + ".attention.wo.bias.bin", model_file_type);
 
     loadWeightFromBin<T>(weights_ptr[6],
                          {(size_t)hidden_units_, (size_t)(inter_size_)},
                          dir_path + ".feed_forward.w1.weight.bin",
                          model_file_type);
-//    loadWeightFromBin<T>(
-//        weights_ptr[7], {(size_t)(inter_size_)}, dir_path + ".feed_forward.w1.bias.bin", model_file_type);
+    loadWeightFromBin<T>(
+        weights_ptr[7], {(size_t)(inter_size_)}, dir_path + ".feed_forward.w1.bias.bin", model_file_type);
 
     loadWeightFromBin<T>(weights_ptr[8],
                          {(size_t)(inter_size_), (size_t)hidden_units_},
                          dir_path + ".feed_forward.w2.weight.bin",
                          model_file_type);
-//    loadWeightFromBin<T>(
-//        weights_ptr[9], {(size_t)hidden_units_}, dir_path + ".feed_forward.w2.bias.bin", model_file_type);
+    loadWeightFromBin<T>(
+        weights_ptr[9], {(size_t)hidden_units_}, dir_path + ".feed_forward.w2.bias.bin", model_file_type);
 
     loadWeightFromBin<T>(weights_ptr[10],
                          {(size_t)hidden_units_, (size_t)(inter_size_)},
                          dir_path + ".feed_forward.w3.weight.bin",
                          model_file_type);
-//    loadWeightFromBin<T>(
-//        weights_ptr[11], {(size_t)(inter_size_)}, dir_path + ".feed_forward.w3.bias.bin", model_file_type);
+    loadWeightFromBin<T>(
+        weights_ptr[11], {(size_t)(inter_size_)}, dir_path + ".feed_forward.w3.bias.bin", model_file_type);
 
-//    loadWeightFromBin<T>(weights_ptr[12], {(size_t)hidden_units_}, dir_path + ".ffn_norm.bias.bin", model_file_type);
+    loadWeightFromBin<T>(weights_ptr[12], {(size_t)hidden_units_}, dir_path + ".ffn_norm.bias.bin", model_file_type);
     loadWeightFromBin<T>(weights_ptr[13], {(size_t)hidden_units_}, dir_path + ".ffn_norm.weight.bin", model_file_type);
 }
 
 template<typename T>
 void LLaMADecoderLayerWeight<T>::setWeightPtr()
 {
-    //pre_layernorm_weights.beta                            = weights_ptr[0];
-    pre_layernorm_weights.beta                            = nullptr;
+    pre_layernorm_weights.beta                            = weights_ptr[0];
     pre_layernorm_weights.gamma                           = weights_ptr[1];
     self_attention_weights.query_weight.kernel            = weights_ptr[2];
-    //self_attention_weights.query_weight.bias              = weights_ptr[3];
-    self_attention_weights.query_weight.bias              = nullptr;
+    self_attention_weights.query_weight.bias              = weights_ptr[3];
     self_attention_weights.attention_output_weight.kernel = weights_ptr[4];
-    //self_attention_weights.attention_output_weight.bias   = weights_ptr[5];
-    self_attention_weights.attention_output_weight.bias   = nullptr;
+    self_attention_weights.attention_output_weight.bias   = weights_ptr[5];
 
     ffn_weights.intermediate_weight.kernel = weights_ptr[6];
-    //ffn_weights.intermediate_weight.bias   = weights_ptr[7];
-    ffn_weights.intermediate_weight.bias   = nullptr;
+    ffn_weights.intermediate_weight.bias   = weights_ptr[7];
     ffn_weights.output_weight.kernel       = weights_ptr[8];
-    //ffn_weights.output_weight.bias         = weights_ptr[9];
-    ffn_weights.output_weight.bias         = nullptr;
+    ffn_weights.output_weight.bias         = weights_ptr[9];
     ffn_weights.gating_weight.kernel       = weights_ptr[10];
-    //ffn_weights.gating_weight.bias         = weights_ptr[11];
-    ffn_weights.gating_weight.bias         = nullptr;
+    ffn_weights.gating_weight.bias         = weights_ptr[11];
 
-    //post_attention_layernorm_weights.beta  = weights_ptr[12];
-    post_attention_layernorm_weights.beta  = nullptr;
+    post_attention_layernorm_weights.beta  = weights_ptr[12];
     post_attention_layernorm_weights.gamma = weights_ptr[13];
     is_maintain_buffer                     = true;
 }
@@ -184,20 +177,20 @@ void LLaMADecoderLayerWeight<T>::setWeightPtr()
 template<typename T>
 void LLaMADecoderLayerWeight<T>::mallocWeights()
 {
-    //deviceMalloc(&weights_ptr[0], hidden_units_);
+    deviceMalloc(&weights_ptr[0], hidden_units_);
     deviceMalloc(&weights_ptr[1], hidden_units_);
     deviceMalloc(&weights_ptr[2], hidden_units_ * 3 * hidden_units_);
-    //deviceMalloc(&weights_ptr[3], 3 * hidden_units_);
+    deviceMalloc(&weights_ptr[3], 3 * hidden_units_);
     deviceMalloc(&weights_ptr[4], hidden_units_ * hidden_units_);
-    //deviceMalloc(&weights_ptr[5], hidden_units_);
+    deviceMalloc(&weights_ptr[5], hidden_units_);
 
     deviceMalloc(&weights_ptr[6], hidden_units_ * inter_size_);
-    //deviceMalloc(&weights_ptr[7], inter_size_);
+    deviceMalloc(&weights_ptr[7], inter_size_);
     deviceMalloc(&weights_ptr[8], inter_size_ * hidden_units_);
-    //deviceMalloc(&weights_ptr[9], hidden_units_);
+    deviceMalloc(&weights_ptr[9], hidden_units_);
     deviceMalloc(&weights_ptr[10], hidden_units_ * inter_size_);
-    //deviceMalloc(&weights_ptr[11], inter_size_);
-    //deviceMalloc(&weights_ptr[12], hidden_units_);
+    deviceMalloc(&weights_ptr[11], inter_size_);
+    deviceMalloc(&weights_ptr[12], hidden_units_);
     deviceMalloc(&weights_ptr[13], hidden_units_);
 }
 

@@ -42,30 +42,6 @@ void LLaMA<T>::initialize()
                                                         attention_type_,
                                                         custom_all_reduce_comm_,
                                                         enable_custom_all_reduce_);
-
-    llama_decoder_ = new LLaMADecoder<T>(head_num_,
-                                         size_per_head_,
-                                         inter_size_,
-                                         num_layer_,
-                                         rotary_embedding_dim_,
-                                         neox_rotary_style_,
-                                         layernorm_eps_,
-                                         pipeline_para_,
-                                         stream_,
-                                         cublas_wrapper_,
-                                         allocator_,
-                                         is_free_buffer_after_forward_,
-                                         custom_all_reduce_comm_,
-                                         enable_custom_all_reduce_);
-
-    dynamic_decode_layer_ = new DynamicDecodeLayer<float>(vocab_size_,
-                                                          vocab_size_,
-                                                          0,  // end_id, deprecated
-                                                          stream_,
-                                                          cublas_wrapper_,
-                                                          allocator_,
-                                                          is_free_buffer_after_forward_,
-                                                          cuda_device_prop_);
 }
 
 template<typename T>
@@ -273,8 +249,6 @@ LLaMA<T>::LLaMA(LLaMA<T> const& llama):
 template<typename T>
 LLaMA<T>::~LLaMA()
 {
-    delete llama_decoder_;
-    delete dynamic_decode_layer_;
     delete llama_context_decoder_;
     freeBuffer();
 }
@@ -373,15 +347,8 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     setSeqLimitLen(seq_limit_len_, input_tensors->at("output_seq_len"), limit_len_offset, batch_size);
 
     sync_check_cuda_error();
-    {
-        TensorMap input_map(*input_tensors);
-        dynamic_decode_layer_->setup(batch_size, beam_width, &input_map);
-        handleOptArg(&input_map, "start_id", start_ids_buf_, start_id_, batch_size);
-        handleOptArg(&input_map, "end_id", end_ids_buf_, end_id_, batch_size);
-    }
 
-    const DataType data_type = getTensorType<T>();
-
+    const DataType            data_type          = getTensorType<T>();
     const std::vector<size_t> self_k_cache_shape = {num_layer_ / pipeline_para_.world_size_,
                                                     batch_size * beam_width,
                                                     head_num_,
@@ -401,7 +368,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     }
 
     sync_check_cuda_error();
-
 
     // handle first step
     if (max_input_length > 1) {
@@ -532,232 +498,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                             batch_size,
                             beam_width,
                             stream_);
-
-    for (int step = max_input_length; step < (int)max_output_seq_len; step++) {
-        const int src_indir_idx = (step - max_input_length) % 2;
-        const int tgt_indir_idx = 1 - src_indir_idx;
-
-        const size_t local_batch_size = getLocalBatchSize(batch_size, 1, pipeline_para_.world_size_);
-        FT_CHECK(batch_size % local_batch_size == 0);
-        const size_t iteration_num = batch_size / local_batch_size;
-        *generation_should_stop_   = true;
-
-        for (uint ite = 0; ite < iteration_num; ++ite) {
-            const int id_offset               = ite * local_batch_size * beam_width;
-            const int hidden_units_offset     = id_offset * hidden_units_;
-            const int vocab_size_units_offset = id_offset * vocab_size_;
-
-            if (!(max_input_length > 1 && step == max_input_length)) {
-                if (pipeline_para_.rank_ == 0) {
-                    invokeEmbeddingLookupPosEncodingPadCount(decoder_input_buf_ + hidden_units_offset,
-                                                             llama_weights->pre_decoder_embedding_table,
-                                                             llama_weights->position_encoding_table,
-                                                             output_ids_buf_ + id_offset,
-                                                             tiled_total_padding_count_ + id_offset,
-                                                             local_batch_size * beam_width,
-                                                             hidden_units_,
-                                                             (T)(1.0f),
-                                                             step - 1,
-                                                             batch_size * beam_width,
-                                                             0,
-                                                             stream_);
-                    sync_check_cuda_error();
-                }
-                std::unordered_map<std::string, Tensor> decoder_input_tensors{
-                    {"decoder_input",
-                     Tensor{MEMORY_GPU,
-                            data_type,
-                            {local_batch_size * beam_width, hidden_units_},
-                            decoder_input_buf_ + hidden_units_offset}},
-                    {"finished",
-                     Tensor{MEMORY_GPU, TYPE_BOOL, {local_batch_size * beam_width}, finished_buf_ + id_offset}},
-                    {"sequence_lengths",
-                     Tensor{MEMORY_GPU, TYPE_INT32, {local_batch_size * beam_width}, sequence_lengths_ + id_offset}},
-                    {"total_padding_tokens",
-                     Tensor{MEMORY_GPU,
-                            TYPE_INT32,
-                            {local_batch_size * beam_width},
-                            tiled_total_padding_count_ + id_offset}},
-                    {"max_input_length", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &max_input_length}},
-                    {"step", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &step}},
-                    {"ite", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &ite}},
-                    {"cache_indirection",
-                     Tensor{MEMORY_GPU,
-                            TYPE_INT32,
-                            {local_batch_size, beam_width, max_output_seq_len},
-                            beam_width > 1 ? cache_indirections_[src_indir_idx] + id_offset * max_output_seq_len :
-                                             nullptr}},
-                    {"masked_tokens",
-                     Tensor{MEMORY_GPU,
-                            TYPE_BOOL,
-                            {local_batch_size * beam_width, max_cache_seq_len},
-                            masked_tokens_ + id_offset * max_cache_seq_len}}};
-                std::unordered_map<std::string, Tensor> decoder_output_tensors{
-                    {"decoder_output",
-                     Tensor{MEMORY_GPU,
-                            data_type,
-                            {local_batch_size * beam_width, hidden_units_},
-                            decoder_output_buf_ + hidden_units_offset}},
-                    {"key_cache", Tensor{MEMORY_GPU, data_type, self_k_cache_shape, key_cache_}},
-                    {"value_cache", Tensor{MEMORY_GPU, data_type, self_v_cache_shape, value_cache_}}};
-                llama_decoder_->forward(
-                    &decoder_output_tensors, &decoder_input_tensors, &llama_weights->decoder_layer_weights);
-            }
-
-            if (pipeline_para_.rank_ == pipeline_para_.world_size_ - 1) {
-                invokeGeneralLLaMALayerNorm(normed_decoder_output_buf_ + hidden_units_offset,
-                                            decoder_output_buf_ + hidden_units_offset,
-                                            llama_weights->post_decoder_layernorm.gamma,
-                                            llama_weights->post_decoder_layernorm.beta,
-                                            layernorm_eps_,
-                                            local_batch_size * beam_width,
-                                            hidden_units_,
-                                            stream_);
-                sync_check_cuda_error();
-
-                float alpha = 1.0f;
-                float beta  = 0.0f;
-                cublas_wrapper_->Gemm(CUBLAS_OP_T,
-                                      CUBLAS_OP_N,
-                                      vocab_size_,
-                                      local_batch_size * beam_width,
-                                      hidden_units_,  // k
-                                      &alpha,
-                                      llama_weights->post_decoder_embedding.kernel,
-                                      gemm_data_type,
-                                      hidden_units_,  // k
-                                      normed_decoder_output_buf_ + hidden_units_offset,
-                                      gemm_data_type,
-                                      hidden_units_,  // k
-                                      &beta,
-                                      logits_buf_ + vocab_size_units_offset,
-                                      CUDA_R_32F,
-                                      vocab_size_,
-                                      CUDA_R_32F,
-                                      cublasGemmAlgo_t(-1));
-
-                int                                     tmp_local_batch_size       = local_batch_size;
-                bool                                    is_initialize_random_table = step == max_input_length;
-                std::unordered_map<std::string, Tensor> dynamic_decode_input_tensors{
-                    {"logits", Tensor{MEMORY_GPU, TYPE_FP32, {batch_size, beam_width, vocab_size_}, logits_buf_}},
-                    // {"embedding_bias", Tensor{MEMORY_GPU, data_type, {vocab_size_}, nullptr}},
-                    {"step", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &step}},
-                    {"max_input_length", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &max_input_length}},
-                    {"input_lengths",
-                     Tensor{MEMORY_GPU, TYPE_INT32, {batch_size, beam_width}, tiled_input_lengths_buf_}},
-                    {"sequence_limit_length", Tensor{MEMORY_GPU, TYPE_UINT32, {batch_size}, seq_limit_len_}},
-                    {"ite", Tensor{MEMORY_CPU, TYPE_UINT32, {1}, &ite}},
-                    {"src_cache_indirection",
-                     Tensor{MEMORY_GPU,
-                            TYPE_INT32,
-                            {local_batch_size, beam_width, max_output_seq_len},
-                            cache_indirections_[src_indir_idx] + id_offset * max_output_seq_len}},
-                    {"local_batch_size", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &tmp_local_batch_size}},
-                    {"end_id", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size}, end_ids_buf_}},
-                    {"is_initialize_random_table", Tensor{MEMORY_CPU, TYPE_BOOL, {1}, &is_initialize_random_table}}};
-
-                for (auto t = input_tensors->begin(); t != input_tensors->end(); ++t) {
-                    if (dynamic_decode_input_tensors.find(t->first) == dynamic_decode_input_tensors.end()) {
-                        dynamic_decode_input_tensors.insert(*t);
-                    }
-                }
-
-                // common outputs
-                bool                                    subbatch_should_stop = false;
-                std::unordered_map<std::string, Tensor> dynamic_decode_output_tensors{
-                    {"output_ids",
-                     Tensor{MEMORY_GPU, TYPE_INT32, {max_seq_len, batch_size, beam_width}, output_ids_buf_}},
-                    {"finished", Tensor{MEMORY_GPU, TYPE_BOOL, {batch_size * beam_width}, finished_buf_}},
-                    // cum_log_probs is necessary for beam search, while it is optional for sampling.
-                    {"cum_log_probs",
-                     Tensor{MEMORY_GPU,
-                            TYPE_FP32,
-                            {batch_size * beam_width},
-                            ((beam_width > 1) || (output_tensors->count("cum_log_probs") > 0)) ? cum_log_probs_ :
-                                                                                                 nullptr}},
-                    {"output_log_probs",
-                     Tensor{MEMORY_GPU,
-                            TYPE_FP32,
-                            {max_seq_len, batch_size, beam_width},
-                            output_tensors->count("output_log_probs") > 0
-                                    && output_tensors->at("output_log_probs").data != nullptr ?
-                                output_log_probs_buf_ :
-                                nullptr}},
-                    {"parent_ids",
-                     Tensor{MEMORY_GPU, TYPE_INT32, {max_seq_len, batch_size, beam_width}, parent_ids_buf_}},
-                    {"sequence_length", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size * beam_width}, sequence_lengths_}},
-                    {"tgt_cache_indirection",
-                     Tensor{MEMORY_GPU,
-                            TYPE_INT32,
-                            {local_batch_size, beam_width, max_output_seq_len},
-                            cache_indirections_[tgt_indir_idx] + id_offset * max_output_seq_len}},
-                    {"should_stop", Tensor{MEMORY_CPU, TYPE_BOOL, {1}, &subbatch_should_stop}}};
-
-                for (auto t = output_tensors->begin(); t != output_tensors->end(); ++t) {
-                    // Handle exceptions.
-                    if (t->first == "cum_log_probs" || t->first == "output_log_probs") {
-                        continue;
-                    }
-                    dynamic_decode_output_tensors.insert(*t);
-                }
-
-                dynamic_decode_layer_->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
-                *generation_should_stop_ &= subbatch_should_stop;
-            }
-        }
-
-        if (pipeline_para_.world_size_ > 1) {
-            ftNcclGroupStart();
-            ftNcclBroadCast(output_ids_buf_ + step * batch_size * beam_width,
-                            batch_size * beam_width,
-                            pipeline_para_.world_size_ - 1,
-                            pipeline_para_,
-                            stream_);
-
-            ftNcclBroadCast(
-                sequence_lengths_, batch_size * beam_width, pipeline_para_.world_size_ - 1, pipeline_para_, stream_);
-
-            ftNcclBroadCast(generation_should_stop_, 1, pipeline_para_.world_size_ - 1, pipeline_para_, stream_);
-
-            if (beam_width > 1) {
-                ftNcclBroadCast(cache_indirections_[tgt_indir_idx],
-                                batch_size * beam_width * max_output_seq_len,
-                                pipeline_para_.world_size_ - 1,
-                                pipeline_para_,
-                                stream_);
-            }
-            ftNcclGroupEnd();
-            // throw errors when detected
-            NcclParam tensor_para(0, 1);
-            ftNcclStreamSynchronize(tensor_para, pipeline_para_, stream_);
-            sync_check_cuda_error();
-        }
-
-        if (*generation_should_stop_) {
-            break;
-        }
-        if (token_generated_cb_ && step + 1 < (int)max_output_seq_len) {
-            setOutputTensors(output_tensors, input_tensors, max_input_length, max_output_seq_len);
-            sendTensorsToFirstPipelineNode(output_tensors, input_tensors);
-
-            if (pipeline_para_.rank_ == 0) {
-                token_generated_cb_(output_tensors, token_generated_ctx_);
-            }
-        }
-        if (step == max_input_length) {
-            /* We have just finished processing input: update the padding count:
-             * total_padding_count += (max_input_length - input_lengths)
-             */
-            invokeUpdatePaddingCount(tiled_total_padding_count_,
-                                     input_tensors->at("input_lengths").getPtr<const int>(),  // not_tiled
-                                     (const int*)nullptr,
-                                     max_input_length,
-                                     0,
-                                     batch_size,
-                                     beam_width,
-                                     stream_);
-        }
-    }
 
     setOutputTensors(output_tensors, input_tensors, max_input_length, max_output_seq_len);
     sendTensorsToFirstPipelineNode(output_tensors, input_tensors);

@@ -19,9 +19,7 @@
 #include <cstddef>
 #include <vector>
 
-#include "src/fastertransformer/layers/DynamicDecodeLayer.h"
 #include "src/fastertransformer/models/llama/LLaMAContextDecoder.h"
-#include "src/fastertransformer/models/llama/LLaMADecoder.h"
 #include "src/fastertransformer/models/llama/LLaMAWeight.h"
 #include "src/fastertransformer/utils/custom_ar_comm.h"
 
@@ -56,9 +54,7 @@ private:
     const bool is_context_qk_buf_float_ = (std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM") == nullptr
                                            || std::string(std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM")) != "ON");
 
-    LLaMADecoder<T>*           llama_decoder_;
     LLaMAContextDecoder<T>*    llama_context_decoder_;
-    DynamicDecodeLayer<float>* dynamic_decode_layer_;
 
     void allocateBuffer() override;
     void allocateBuffer(
