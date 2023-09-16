@@ -162,12 +162,12 @@ void LLaMADecoderLayerWeight<T>::setWeightPtr()
     self_attention_weights.attention_output_weight.kernel = weights_ptr[4];
     self_attention_weights.attention_output_weight.bias   = weights_ptr[5];
 
-    ffn_weights.intermediate_weight.kernel = weights_ptr[6];
-    ffn_weights.intermediate_weight.bias   = weights_ptr[7];
-    ffn_weights.output_weight.kernel       = weights_ptr[8];
-    ffn_weights.output_weight.bias         = weights_ptr[9];
-    ffn_weights.gating_weight.kernel       = weights_ptr[10];
-    ffn_weights.gating_weight.bias         = weights_ptr[11];
+    ffn_weights.intermediate_weight.kernel  = weights_ptr[6];
+    ffn_weights.intermediate_weight.bias    = weights_ptr[7];
+    ffn_weights.output_weight.kernel        = weights_ptr[8];
+    ffn_weights.output_weight.bias          = weights_ptr[9];
+    ffn_weights.intermediate_weight2.kernel = weights_ptr[10];
+    ffn_weights.intermediate_weight2.bias   = weights_ptr[11];
 
     post_attention_layernorm_weights.beta  = weights_ptr[12];
     post_attention_layernorm_weights.gamma = weights_ptr[13];

@@ -82,6 +82,7 @@ protected:
 
     T*     context_decoder_input_buf_;
     T*     context_decoder_output_buf_;
+    T*     output_logits_;
 
     // function pointer callback
     using callback_sig                 = void(std::unordered_map<std::string, Tensor>*, void*);

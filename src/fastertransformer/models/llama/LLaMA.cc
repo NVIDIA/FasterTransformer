@@ -83,6 +83,9 @@ void LLaMA<T>::allocateBuffer(size_t batch_size, size_t max_seq_len, size_t max_
     context_decoder_output_buf_ = (T*)(allocator_->reMalloc(
         context_decoder_output_buf_, sizeof(T) * batch_size * max_input_len * hidden_units_, false));
 
+    output_logits_ = (T*)(allocator_->reMalloc(
+        output_logits_, sizeof(T) * batch_size * vocab_size_ * hidden_units_, false));
+
     is_allocate_buffer_ = true;
 }
 
@@ -110,6 +113,7 @@ void LLaMA<T>::freeBuffer()
 
         allocator_->free((void**)(&context_decoder_input_buf_));
         allocator_->free((void**)(&context_decoder_output_buf_));
+        allocator_->free((void**)(&output_logits_));
 
         is_allocate_buffer_ = false;
     }
@@ -379,29 +383,49 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         &decoder_output_tensors, &decoder_input_tensors, &llama_weights->decoder_layer_weights);
     sync_check_cuda_error();
 
-    //    invokeGeneralLLaMALayerNorm(
-    //            context_decoder_input_buf_,
-    //            embedding_input_buf_,
-    //            llama_weights->post_decoder_layernorm.gamma,
-    //            llama_weights->post_decoder_layernorm.beta,
-    //            layernorm_eps_,
-    //            batch_size * max_input_length,
-    //            hidden_units_,
-    //            stream_);
-    //    sync_check_cuda_error();
-    //
-    //    cublas_wrapper_->Gemm(CUBLAS_OP_N,
-    //                          CUBLAS_OP_N,
-    //                          batch_size * max_input_length,
-    //                          vocab_size_,
-    //                          hidden_units_,
-    //                          context_decoder_output_buf_,
-    //                          hidden_units_,  // n
-    //                          llama_weights->post_decoder_embedding.kernel,
-    //                          vocab_size_,  // k
-    //                          /* FIXME */,
-    //                          hidden_units_ /* n */);
-    //    sync_check_cuda_error();
+    if (pipeline_para_.rank_ == pipeline_para_.world_size_ - 1) {
+        invokeGeneralLLaMALayerNorm(context_decoder_input_buf_,
+                                    context_decoder_output_buf_,
+                                    llama_weights->post_decoder_layernorm.gamma,
+                                    llama_weights->post_decoder_layernorm.beta,
+                                    layernorm_eps_,
+                                    batch_size * max_input_length,
+                                    hidden_units_,
+                                    stream_);
+        sync_check_cuda_error();
+        cublas_wrapper_->Gemm(CUBLAS_OP_N,
+                CUBLAS_OP_N,
+                vocab_size_,
+                batch_size * max_input_length,
+                hidden_units_,
+                llama_weights->post_decoder_embedding.kernel,
+                vocab_size_,
+                context_decoder_input_buf_,
+                hidden_units_,  // n
+                output_logits_,
+                vocab_size_);
+        sync_check_cuda_error();
+
+        T* out = (T*)malloc(sizeof(T) * batch_size * max_input_length * vocab_size_);
+        cudaMemcpy(out,
+                   output_logits_,
+                   sizeof(T) * batch_size * max_input_length * vocab_size_,
+                   cudaMemcpyDeviceToHost);
+
+        for (int b = 0; b < batch_size; ++b) {
+            std::cout << "[";
+            for (int s = 0; s < max_input_length; ++s) {
+                std::cout << "[";
+                for (int v = 0; v < 8; ++v) {
+                    std::cout << out[b * max_input_length * vocab_size_ + s * vocab_size_ + v] << " ";
+                }
+                std::cout << "]\n";
+            }
+            std::cout << "]\n";
+        }
+        std::cout << "\n";
+    }
+
 
     setOutputTensors(output_tensors, input_tensors, max_input_length, max_output_seq_len);
     sendTensorsToFirstPipelineNode(output_tensors, input_tensors);

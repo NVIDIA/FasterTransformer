@@ -37,7 +37,6 @@ private:
     const size_t           hidden_units_;
     const size_t           rotary_embedding_dim_;
     const bool             neox_rotary_style_;
-    static constexpr float layernorm_eps_ = 1e-6f;
 
     // fmha runner
     int                        sm_ = getSMVersion();
@@ -72,7 +71,6 @@ protected:
     size_t mixed_gemm_ws_bytes_  = 0;
     char*  int8_gemm_workspace_  = nullptr;
     size_t int8_gemm_ws_bytes_   = 0;
-    T*     decoder_normed_input_ = nullptr;
 
 public:
     LLaMAContextAttentionLayer(size_t           max_batch_size,

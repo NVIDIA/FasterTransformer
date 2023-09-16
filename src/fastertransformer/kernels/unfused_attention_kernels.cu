@@ -1364,8 +1364,8 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
     const int tidx     = threadIdx.x;
 
     const int total_seq_len = param.max_prefix_prompt_length + seq_len;
-
     const bool is_masked = tidx * vec_size >= size_per_head;
+
     // NOTE: blockIdx.x < batch_size * param.max_prefix_prompt_length really handles prefix prompts
     if (PREFIX_PROMPT && token_idx < 0) {
         const int prompt_batch_idx = blockIdx.x / param.max_prefix_prompt_length;
@@ -1406,7 +1406,6 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
     const int src_q_idx = token_idx * 3 * n + hidden_idx;
     const int src_k_idx = token_idx * 3 * n + hidden_idx + n;
     const int src_v_idx = token_idx * 3 * n + hidden_idx + 2 * n;
-
 
     Vec_t q, k, v;
     Vec_t q_bias, k_bias, v_bias;

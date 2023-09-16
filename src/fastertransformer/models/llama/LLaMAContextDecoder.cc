@@ -41,8 +41,8 @@ void LLaMAContextDecoder<T>::initialize()
                                                               false,
                                                               0);
 
-    ffn_layer_ = new GeluFfnLayer<T>(0,  // max_batch_size
-                                     0,
+    ffn_layer_ = new SiluFfnLayer<T>(0,  // max_batch_size
+                                     0,  // max_seq_len
                                      head_num_,
                                      size_per_head_,
                                      0,  // expert_num
@@ -52,8 +52,7 @@ void LLaMAContextDecoder<T>::initialize()
                                      allocator_,
                                      is_free_buffer_after_forward_,
                                      false,
-                                     0,
-                                     false  // use_gated_activation = false
+                                     true  // use_gated_activation = false
     );
 }
 
@@ -66,6 +65,8 @@ void LLaMAContextDecoder<T>::allocateBuffer()
 template<typename T>
 void LLaMAContextDecoder<T>::allocateBuffer(size_t batch_size, size_t seq_len)
 {
+    decoder_normed_input_ = reinterpret_cast<T*>(
+        allocator_->reMalloc(decoder_normed_input_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
     self_attn_output_ = reinterpret_cast<T*>(
         allocator_->reMalloc(self_attn_output_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
     ffn_output_ = reinterpret_cast<T*>(
@@ -83,6 +84,7 @@ template<typename T>
 void LLaMAContextDecoder<T>::freeBuffer()
 {
     if (is_allocate_buffer_ == true) {
+        allocator_->free((void**)(&decoder_normed_input_));
         allocator_->free((void**)(&self_attn_output_));
         allocator_->free((void**)(&ffn_output_));
         allocator_->free((void**)(&decoder_layer_output_));
@@ -291,26 +293,43 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
             ftNcclRecv(layer_input, data_size, pipeline_para_.rank_ - 1, pipeline_para_, stream_);
         }
 
+        invokeGeneralLLaMALayerNorm(decoder_normed_input_,
+                                    layer_input,
+                                    llama_decoder_layer_weight->at(l)->pre_layernorm_weights.gamma,
+                                    llama_decoder_layer_weight->at(l)->pre_layernorm_weights.beta,
+                                    layernorm_eps_,
+                                    h_token_num,
+                                    hidden_units_,
+                                    stream_);
+        sync_check_cuda_error();
+        //    if (l == 0) {
+        //        T* out = (T*)malloc(sizeof(T) * h_token_num * hidden_units_);
+        //        cudaMemcpy(out, decoder_normed_input_, sizeof(T) * h_token_num * hidden_units_,
+        //        cudaMemcpyDeviceToHost); sync_check_cuda_error();
+        //
+        //        for (int b = 0; b < h_token_num; ++b) {
+        //            std::cout << "[";
+        //            int i = 0;
+        //            for (int h = 0; h < hidden_units_; ++h) {
+        //                std::cout << out[b * hidden_units_ + h] << " ";
+        //                ++i;
+        //                if (i == 8)
+        //                    break;
+        //            }
+        //            std::cout << "]\n";
+        //        }
+        //        std::cout << "\n";
+        //    }
+
         TensorMap self_attention_input_tensors{
-            {"input_query", Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, layer_input}},
+            {"input_query", Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, decoder_normed_input_}},
             {"attention_mask",
              Tensor{MEMORY_GPU,
                     data_type,
                     {(size_t)batch_size, (size_t)1, (size_t)seq_len, (size_t)(seq_len + max_prompt_length)},
                     attention_mask}},
             {"attention_type", Tensor{MEMORY_CPU, TYPE_VOID, {1}, &attention_type}},
-            {"is_final_layer", Tensor{MEMORY_CPU, TYPE_BOOL, {(size_t)1}, &is_final}},
-            {"layer_id", Tensor{MEMORY_CPU, TYPE_INT32, {(size_t)1}, &l}},
-            {"pre_layernorm_weights_gamma",
-             Tensor{MEMORY_GPU,
-                    data_type,
-                    {(size_t)hidden_units_},
-                    llama_decoder_layer_weight->at(l)->pre_layernorm_weights.gamma}},
-            {"pre_layernorm_weights_beta",
-             Tensor{MEMORY_GPU,
-                    data_type,
-                    {(size_t)hidden_units_},
-                    llama_decoder_layer_weight->at(l)->pre_layernorm_weights.beta}}};
+            {"layer_id", Tensor{MEMORY_CPU, TYPE_INT32, {(size_t)1}, &l}}};
 
         if (is_unpadded_mha) {
             self_attention_input_tensors.insert("padding_offset",
@@ -332,68 +351,134 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
         self_attention_layer_->forward(&self_attention_output_tensors,
                                        &self_attention_input_tensors,
                                        &llama_decoder_layer_weight->at(l)->self_attention_weights);
+        //        if (l == 0) {
+        //            // shape: [B, L, H]
+        //            T* out = (T*)malloc(sizeof(T) * batch_size * seq_len * hidden_units_);
+        //            cudaMemcpy(
+        //                out, self_attn_output_, sizeof(T) * batch_size * seq_len * hidden_units_,
+        //                cudaMemcpyDeviceToHost);
+        //            sync_check_cuda_error();
+        //
+        //            for (int b = 0; b < batch_size; ++b) {
+        //                std::cout << "[";
+        //                for (int s = 0; s < seq_len; ++s) {
+        //                    std::cout << "[";
+        //                    for (int h = 0; h < 8; ++h) {
+        //                        std::cout << out[b * seq_len * hidden_units_ + s * hidden_units_ + h] << " ";
+        //                    }
+        //                    std::cout << "]\n";
+        //                }
+        //                std::cout << "]\n";
+        //            }
+        //            std::cout << "\n";
+        //        }
 
-        if (is_final == false) {
-            invokeGeneralAddBiasResidualPreLayerNorm(
-                self_attn_output_,
-                layer_input,
-                self_attn_output_,
-                layer_input,
-                llama_decoder_layer_weight->at(l)->post_attention_layernorm_weights.gamma,
-                llama_decoder_layer_weight->at(l)->post_attention_layernorm_weights.beta,
-                llama_decoder_layer_weight->at(l)->self_attention_weights.attention_output_weight.bias,
-                layernorm_eps_,
-                h_token_num,
-                hidden_units_,
-                (float*)nullptr,
-                (float*)nullptr,
-                (float*)nullptr,
-                (float*)nullptr,
-                0,
-                stream_);
+        invokeGeneralLLaMAAddBiasResidualPreLayerNorm(
+            self_attn_output_,
+            layer_input,
+            self_attn_output_,
+            layer_input,
+            llama_decoder_layer_weight->at(l)->post_attention_layernorm_weights.gamma,
+            llama_decoder_layer_weight->at(l)->post_attention_layernorm_weights.beta,
+            llama_decoder_layer_weight->at(l)->self_attention_weights.attention_output_weight.bias,
+            layernorm_eps_,
+            h_token_num,
+            hidden_units_,
+            stream_);
+        sync_check_cuda_error();
 
-            TensorMap ffn_input_tensors(
-                {{"ffn_input", Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, layer_input}}});
-            TensorMap ffn_output_tensors(
-                {{"ffn_output", Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, layer_output}}});
-            ffn_layer_->forward(
-                &ffn_output_tensors, &ffn_input_tensors, &llama_decoder_layer_weight->at(l)->ffn_weights);
+        //        if (l == 0) {
+        //            // shape: [B, L, H]
+        //            T* out = (T*)malloc(sizeof(T) * batch_size * seq_len * hidden_units_);
+        //            cudaMemcpy(
+        //                out, layer_input, sizeof(T) * batch_size * seq_len * hidden_units_, cudaMemcpyDeviceToHost);
+        //            sync_check_cuda_error();
+        //
+        //            for (int b = 0; b < batch_size; ++b) {
+        //                std::cout << "[";
+        //                for (int s = 0; s < seq_len; ++s) {
+        //                    std::cout << "[";
+        //                    for (int h = 0; h < 8; ++h) {
+        //                        std::cout << out[b * seq_len * hidden_units_ + s * hidden_units_ + h] << " ";
+        //                    }
+        //                    std::cout << "]\n";
+        //                }
+        //                std::cout << "]\n";
+        //            }
+        //            std::cout << "\n";
+        //        }
 
-            invokeAddBiasResidual(layer_output,
-                                  self_attn_output_,
-                                  llama_decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
-                                  h_token_num,
-                                  hidden_units_,
-                                  stream_);
+        TensorMap ffn_input_tensors(
+            {{"ffn_input", Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, layer_input}}});
+        TensorMap ffn_output_tensors(
+            {{"ffn_output", Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, layer_output}}});
+        ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &llama_decoder_layer_weight->at(l)->ffn_weights);
 
-            sync_check_cuda_error();
+        invokeAddBiasResidual(layer_output,
+                              self_attn_output_,
+                              llama_decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
+                              h_token_num,
+                              hidden_units_,
+                              stream_);
 
-            if (isLastLayerParallelId(l) && pipeline_para_.rank_ != pipeline_para_.world_size_ - 1
-                && pipeline_para_.world_size_ > 1) {
-                int data_size = h_token_num * hidden_units_;
-                ftNcclSend(layer_output, data_size, pipeline_para_.rank_ + 1, pipeline_para_, stream_);
-            }
+        sync_check_cuda_error();
 
-            if ((l == num_layer_ - 1) && is_unpadded_mha) {
-                invokeRebuildPadding(decoder_output,
-                                     decoder_layer_output_,
-                                     padding_offset_,
-                                     h_token_num,
-                                     head_num_ * size_per_head_,
-                                     stream_);
-            }
+//        if (l == 0) {
+//            // shape: [B, L, H]
+//            T* out = (T*)malloc(sizeof(T) * batch_size * seq_len * hidden_units_);
+//            cudaMemcpy(out, layer_output, sizeof(T) * batch_size * seq_len * hidden_units_, cudaMemcpyDeviceToHost);
+//            sync_check_cuda_error();
+//
+//            for (int b = 0; b < batch_size; ++b) {
+//                std::cout << "[";
+//                for (int s = 0; s < seq_len; ++s) {
+//                    std::cout << "[";
+//                    for (int h = 0; h < 8; ++h) {
+//                        std::cout << out[b * seq_len * hidden_units_ + s * hidden_units_ + h] << " ";
+//                    }
+//                    std::cout << "]\n";
+//                }
+//                std::cout << "]\n";
+//            }
+//            std::cout << "\n";
+//        }
+
+        if (isLastLayerParallelId(l) && pipeline_para_.rank_ != pipeline_para_.world_size_ - 1
+            && pipeline_para_.world_size_ > 1) {
+            int data_size = h_token_num * hidden_units_;
+            ftNcclSend(layer_output, data_size, pipeline_para_.rank_ + 1, pipeline_para_, stream_);
+        }
+
+        if ((l == num_layer_ - 1) && is_unpadded_mha) {
+            invokeRebuildPadding(decoder_output,
+                                 decoder_layer_output_,
+                                 padding_offset_,
+                                 h_token_num,
+                                 head_num_ * size_per_head_,
+                                 stream_);
         }
     }
 
-    // TODO(bhsueh) We could optimize this point by only computing the last token for the last layer
-    invokeLookupHiddenStateOfLastToken(output_tensors->at("last_token_hidden_units").getPtr<T>(),
-                                       output_tensors->at("decoder_output").getPtr<T>(),
-                                       input_tensors->at("input_lengths").getPtr<int>(),
-                                       seq_len,
-                                       batch_size,
-                                       hidden_units_,
-                                       stream_);
-    sync_check_cuda_error();
+//    if (pipeline_para_.rank_ == pipeline_para_.world_size_ -1) {
+//        // shape: [B, L, H]
+//        T* out = (T*)malloc(sizeof(T) * batch_size * seq_len * hidden_units_);
+//        cudaMemcpy(out, decoder_output, sizeof(T) * batch_size * seq_len * hidden_units_, cudaMemcpyDeviceToHost);
+//        sync_check_cuda_error();
+//
+//        for (int b = 0; b < batch_size; ++b) {
+//            std::cout << "[";
+//            for (int s = 0; s < seq_len; ++s) {
+//                std::cout << "[";
+//                for (int h = 0; h < 8; ++h) {
+//                    std::cout << out[b * seq_len * hidden_units_ + s * hidden_units_ + h] << " ";
+//                }
+//                std::cout << "]\n";
+//            }
+//            std::cout << "]\n";
+//        }
+//        std::cout << "\n";
+//    }
+
     if (is_free_buffer_after_forward_ == true) {
         freeBuffer();
     }

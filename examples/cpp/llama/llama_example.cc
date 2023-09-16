@@ -84,7 +84,7 @@ void llama_example(const INIReader reader)
     const size_t max_cache_seq_len    = reader.GetInteger(model_name, "max_cache_seq_len");
 
     const size_t hidden_units = head_num * size_per_head;
-    const size_t inter_size   = multiple_of * ((2 * hidden_units + multiple_of - 1) / multiple_of);
+    const size_t inter_size   = multiple_of * (((8 * hidden_units / 3) + multiple_of - 1) / multiple_of);
 
     const size_t request_batch_size = reader.GetInteger("request", "request_batch_size");
     const int    min_length         = reader.GetInteger("request", "min_length", 0);
