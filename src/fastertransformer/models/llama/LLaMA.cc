@@ -406,24 +406,24 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                 vocab_size_);
         sync_check_cuda_error();
 
-        T* out = (T*)malloc(sizeof(T) * batch_size * max_input_length * vocab_size_);
-        cudaMemcpy(out,
-                   output_logits_,
-                   sizeof(T) * batch_size * max_input_length * vocab_size_,
-                   cudaMemcpyDeviceToHost);
-
-        for (int b = 0; b < batch_size; ++b) {
-            std::cout << "[";
-            for (int s = 0; s < max_input_length; ++s) {
-                std::cout << "[";
-                for (int v = 0; v < 8; ++v) {
-                    std::cout << out[b * max_input_length * vocab_size_ + s * vocab_size_ + v] << " ";
-                }
-                std::cout << "]\n";
-            }
-            std::cout << "]\n";
-        }
-        std::cout << "\n";
+//        T* out = (T*)malloc(sizeof(T) * batch_size * max_input_length * vocab_size_);
+//        cudaMemcpy(out,
+//                   output_logits_,
+//                   sizeof(T) * batch_size * max_input_length * vocab_size_,
+//                   cudaMemcpyDeviceToHost);
+//
+//        for (int b = 0; b < batch_size; ++b) {
+//            std::cout << "[";
+//            for (int s = 0; s < max_input_length; ++s) {
+//                std::cout << "[";
+//                for (int v = 0; v < 8; ++v) {
+//                    std::cout << out[b * max_input_length * vocab_size_ + s * vocab_size_ + v] << " ";
+//                }
+//                std::cout << "]\n";
+//            }
+//            std::cout << "]\n";
+//        }
+//        std::cout << "\n";
     }
 
 
