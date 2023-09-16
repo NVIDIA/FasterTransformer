@@ -160,11 +160,43 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                                    0,  // int8_mode
                                    stream_);
     sync_check_cuda_error();
+    if (layer_id == 0) {
+        // shape: [B, H, L, Dh]
+        T* q_buf = (T*)malloc(sizeof(T) * 3 * request_batch_size * request_seq_len * hidden_units_);
+        T* k_buf = q_buf + request_batch_size * request_seq_len * hidden_units_;
+        T* v_buf = k_buf + request_batch_size * request_seq_len * hidden_units_;
+        cudaMemcpy(q_buf,
+                   q_buf_2_,
+                   sizeof(T) * 3 * request_batch_size * request_seq_len * hidden_units_,
+                   cudaMemcpyDeviceToHost);
+        sync_check_cuda_error();
+
+        for (int b = 0; b < request_batch_size; ++b) {
+            std::cout << "[";
+            for (int h = 0; h < head_num_; ++h) {
+                std::cout << "[";
+                for (int s = 0; s < request_seq_len; ++s) {
+                    std::cout << "[";
+                    for (int e = 0; e < 8; ++e) {
+                        std::cout << k_buf[b * head_num_ * request_seq_len * size_per_head_
+                                           + h * request_seq_len * size_per_head_
+                                           + s * size_per_head_
+                                           + e]
+                                  << " ";
+                    }
+                    std::cout << "]\n";
+                }
+                std::cout << "]\n";
+            }
+            std::cout << "]\n";
+        }
+        std::cout << "\n";
+    }
 
     const int max_seq_len = (int)(output_tensors->at("key_cache").shape[3]);  // max output seq length
     // Use batch major
-    // put k/v_buf from shape [B, H, PL + L, Dh]
-    // to cache [B, H, Dh/x, PL + L, x]  and [B, H, PL + L, Dh/x, x], PL denotes prompt length
+    // put k/v_buf from shape [B, H, L, Dh]
+    // to cache [B, H, Dh/x, L, x]  and [B, H, L, Dh/x, x]
     invokeTranspose4dBatchMajor(output_tensors->getPtr<T>("key_cache"),
                                 output_tensors->getPtr<T>("value_cache"),
                                 k_buf_2_,
@@ -175,7 +207,7 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                                 size_per_head_,
                                 head_num_,
                                 stream_);
-    // IDEA : after this, 
+    // IDEA : after this,
     // k_cache = (batch_size, num_heads, Dh/x, L, x)
     // v_cache = (batch_size, num_heads, L, Dh)
     sync_check_cuda_error();

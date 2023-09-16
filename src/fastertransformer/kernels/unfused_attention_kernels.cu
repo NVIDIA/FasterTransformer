@@ -1407,6 +1407,9 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
     const int src_k_idx = token_idx * 3 * n + hidden_idx + n;
     const int src_v_idx = token_idx * 3 * n + hidden_idx + 2 * n;
 
+    if (threadIdx.x == 0 && blockIdx.x == 0 && blockIdx.y == 0) 
+    printf("is_masked: %d, do_rotary: %d\n", is_masked, do_rotary);
+
     Vec_t q, k, v;
     Vec_t q_bias, k_bias, v_bias;
     if (!is_masked) {

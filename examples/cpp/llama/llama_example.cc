@@ -81,13 +81,14 @@ void llama_example(const INIReader reader)
     const size_t decoder_layers       = reader.GetInteger(model_name, "decoder_layers");
     const size_t rotary_embedding_dim = reader.GetInteger(model_name, "rotary_embedding");
     const int    multiple_of          = reader.GetInteger(model_name, "multiple_of");
+    const size_t max_cache_seq_len    = reader.GetInteger(model_name, "max_cache_seq_len");
 
     const size_t hidden_units = head_num * size_per_head;
     const size_t inter_size   = multiple_of * ((2 * hidden_units + multiple_of - 1) / multiple_of);
 
     const size_t request_batch_size = reader.GetInteger("request", "request_batch_size");
     const int    min_length         = reader.GetInteger("request", "min_length", 0);
-    const int    padding_id           = reader.GetInteger(model_name, "padding_id");
+    const int    padding_id         = reader.GetInteger(model_name, "padding_id");
 
     FT_CHECK(decoder_layers % pipeline_para_size == 0);
 
@@ -224,7 +225,9 @@ void llama_example(const INIReader reader)
         {"output_seq_len",
          Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<size_t>{request_batch_size}, output_seq_len.data()}},
         {"min_length", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{1}, &min_length}},
-        {"random_seed", Tensor{MEMORY_CPU, TYPE_UINT64, std::vector<size_t>{1}, &random_seed}}};
+        {"random_seed", Tensor{MEMORY_CPU, TYPE_UINT64, std::vector<size_t>{1}, &random_seed}},
+        {"max_cache_seq_len", Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<size_t>{1}, &max_cache_seq_len}}
+    };
 
     std::unordered_map<std::string, Tensor> output_tensors = std::unordered_map<std::string, Tensor>{
         {"output_ids",

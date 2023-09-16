@@ -238,6 +238,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     //      output_seq_len [batch_size] on cpu
     //      min_length [1] or [batch_size] on cpu, optional, int
     //      random_seed [1] or [batch_size] on cpu, optional, unsigned long long int.
+    //      max_cache_seq_len [batch_size] on cpu
 
     // output_tensors:
     //      output_ids [batch_size, 1, max_output_seq_len]
@@ -271,7 +272,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     const size_t max_output_seq_len = input_tensors->at("output_seq_len").max<uint32_t>();
     const size_t max_seq_len        = max_output_seq_len;
     // max cache seq len should include max prefix prompt length as it has k/v states
-    const size_t max_cache_seq_len = max_output_seq_len;
+    const size_t max_cache_seq_len = input_tensors->at("max_cache_seq_len").max<uint32_t>();
     if (max_cache_seq_len < max_seq_len) {
         FT_LOG_WARNING("max_cache_seq_len (%d) is less than max_seq_len (%d). "
                        "Note that this reduces the memory cost of k/v cache, but may hurt the accuracy.",
@@ -327,27 +328,27 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                                              hidden_units_,
                                              stream_);
     sync_check_cuda_error();
-//    if (pipeline_para_.rank_ == 0) {
-//        T* out = (T*)malloc(sizeof(T) * batch_size * max_input_length * hidden_units_);
-//        cudaMemcpy(out,
-//                   context_decoder_input_buf_,
-//                   sizeof(T) * batch_size * max_input_length * hidden_units_,
-//                   cudaMemcpyDeviceToHost);
-//        sync_check_cuda_error();
-//
-//        for (int b = 0; b < batch_size; ++b) {
-//            std::cout << "[";
-//            for (int s = 0; s < max_input_length; ++s) {
-//                std::cout << "[";
-//                for (int h = 0; h < 8; ++h) {
-//                    std::cout << out[b * batch_size * hidden_units_  + s * hidden_units_ + h] << " ";
-//                }
-//                std::cout << "]\n";
-//            }
-//            std::cout << "]\n";
-//        }
-//        std::cout << "\n";
-//    }
+    //    if (pipeline_para_.rank_ == 0) {
+    //        T* out = (T*)malloc(sizeof(T) * batch_size * max_input_length * hidden_units_);
+    //        cudaMemcpy(out,
+    //                   context_decoder_input_buf_,
+    //                   sizeof(T) * batch_size * max_input_length * hidden_units_,
+    //                   cudaMemcpyDeviceToHost);
+    //        sync_check_cuda_error();
+    //
+    //        for (int b = 0; b < batch_size; ++b) {
+    //            std::cout << "[";
+    //            for (int s = 0; s < max_input_length; ++s) {
+    //                std::cout << "[";
+    //                for (int h = 0; h < 8; ++h) {
+    //                    std::cout << out[b * batch_size * hidden_units_  + s * hidden_units_ + h] << " ";
+    //                }
+    //                std::cout << "]\n";
+    //            }
+    //            std::cout << "]\n";
+    //        }
+    //        std::cout << "\n";
+    //    }
 
     invokeBuildDecoderAttentionMask(
         input_attention_mask_, tiled_input_lengths_buf_, nullptr, batch_size, max_input_length, 0, stream_);

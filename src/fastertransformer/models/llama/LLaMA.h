@@ -36,7 +36,7 @@ private:
     size_t vocab_size_;
     size_t rotary_embedding_dim_;
 
-    static constexpr bool  neox_rotary_style_ = true;
+    static constexpr bool  neox_rotary_style_ = false;
     static constexpr float layernorm_eps_     = 1e-6f;
 
     size_t hidden_units_;
