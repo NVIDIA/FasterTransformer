@@ -213,10 +213,8 @@ void llama_example(const INIReader reader)
                               &prop,
                               attention_type);
 
-    int* d_output_ids;
-    int* d_sequence_lengths;
-    deviceMalloc(&d_output_ids, request_batch_size * total_output_len, false);
-    deviceMalloc(&d_sequence_lengths, request_batch_size, false);
+    T* d_output_logits;
+    deviceMalloc(&d_output_logits, request_batch_size * total_output_len * vocab_size, false);
     std::vector<uint32_t>                   output_seq_len(request_batch_size, total_output_len);
     std::unordered_map<std::string, Tensor> input_tensors = std::unordered_map<std::string, Tensor>{
         {"input_ids",
@@ -226,18 +224,14 @@ void llama_example(const INIReader reader)
          Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<size_t>{request_batch_size}, output_seq_len.data()}},
         {"min_length", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{1}, &min_length}},
         {"random_seed", Tensor{MEMORY_CPU, TYPE_UINT64, std::vector<size_t>{1}, &random_seed}},
-        {"max_cache_seq_len", Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<size_t>{1}, &max_cache_seq_len}}
-    };
+        {"max_cache_seq_len", Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<size_t>{1}, &max_cache_seq_len}}};
 
     std::unordered_map<std::string, Tensor> output_tensors = std::unordered_map<std::string, Tensor>{
-        {"output_ids",
+        {"output_logits",
          Tensor{MEMORY_GPU,
-                TYPE_INT32,
-                std::vector<size_t>{request_batch_size, 1, (size_t)total_output_len},
-                d_output_ids}},
-        {"sequence_length",
-         Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size}, d_sequence_lengths}},
-    };
+                TYPE_FP16,
+                std::vector<size_t>{request_batch_size, (size_t)total_output_len, vocab_size},
+                d_output_logits}}};
 
     print_mem_usage();
 
@@ -259,6 +253,25 @@ void llama_example(const INIReader reader)
     POP_RANGE;
     ft_nvtx::resetScope();
 
+//    if (rank == world_size-1) {
+//        T* out = (T*)malloc(sizeof(T) * request_batch_size * total_output_len * vocab_size);
+//        cudaMemcpy(
+//            out, d_output_logits, sizeof(T) * request_batch_size * total_output_len * vocab_size, cudaMemcpyDeviceToHost);
+//        for (int b = 0; b < request_batch_size; ++b) {
+//            std::cout << "[";
+//            for (int s = 0; s < total_output_len; ++s) {
+//                std::cout << "[";
+//                for (int v = vocab_size-8; v < vocab_size; ++v) {
+//                    std::cout << out[b * total_output_len * vocab_size + s * vocab_size + v] << " ";
+//                }
+//                std::cout << "]\n";
+//            }
+//            std::cout << "]\n";
+//        }
+//        std::cout << "\n";
+//    }
+
+    /*
     if (rank == 0) {
 
         std::string fName   = "out";
@@ -269,7 +282,7 @@ void llama_example(const INIReader reader)
         else {
             size_t outCount = total_output_len * request_batch_size;
             int*   hBuf     = new int[outCount];
-            cudaD2Hcpy(hBuf, d_output_ids, outCount);
+            cudaD2Hcpy(hBuf, d_output_logits, outCount);
 
             {
                 std::cout << "Writing " << outCount << " elements\n";
@@ -295,6 +308,7 @@ void llama_example(const INIReader reader)
             delete[] hBuf;
         }
     }
+    */
 
     // test time
     struct timeval start, end;
@@ -339,11 +353,8 @@ void llama_example(const INIReader reader)
     if (d_input_lengths != nullptr) {
         cudaFree(d_input_lengths);
     }
-    if (d_output_ids != nullptr) {
-        deviceFree(d_output_ids);
-    }
-    if (d_sequence_lengths != nullptr) {
-        deviceFree(d_sequence_lengths);
+    if (d_output_logits != nullptr) {
+        deviceFree(d_output_logits);
     }
 
     return;

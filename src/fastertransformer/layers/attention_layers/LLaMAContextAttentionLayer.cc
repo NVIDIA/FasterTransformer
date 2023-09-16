@@ -78,26 +78,6 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                           qkv_buf_,
                           3 * hidden_units_ /* n */);
     sync_check_cuda_error();
-    //    if (layer_id == 0) {
-    //        T* qkv_buf = (T*)malloc(sizeof(T) * m * 3 * hidden_units_);
-    //        cudaMemcpy(qkv_buf, qkv_buf_, sizeof(T) * m * 3 * hidden_units_, cudaMemcpyDeviceToHost);
-    //        sync_check_cuda_error();
-    //
-    //        for (int b = 0; b < request_batch_size; ++b) {
-    //            std::cout << "[";
-    //            for (int s = 0; s < request_seq_len; ++s) {
-    //                std::cout << "[";
-    //                for (int h = 0; h < 8; ++h) {
-    //                    std::cout << qkv_buf[((b * request_seq_len) + s) * 3 * hidden_units_ + h + 2 * hidden_units_]
-    //                    << " ";
-    //                }
-    //                std::cout << "]\n";
-    //            }
-    //            std::cout << "]\n";
-    //        }
-    //        std::cout << "\n";
-    //    }
-
     // IDEA: append prefix prompt key value here
     PrefixPromptBatchWeightsParam<T> param{nullptr, nullptr, 0, (size_t)layer_id * 2 * head_num_ * size_per_head_};
 
@@ -123,38 +103,6 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                                    0,  // int8_mode
                                    stream_);
     sync_check_cuda_error();
-    //    if (layer_id == 0) {
-    //        // shape: [B, H, L, Dh]
-    //        T* q_buf = (T*)malloc(sizeof(T) * 3 * request_batch_size * request_seq_len * hidden_units_);
-    //        T* k_buf = q_buf + request_batch_size * request_seq_len * hidden_units_;
-    //        T* v_buf = k_buf + request_batch_size * request_seq_len * hidden_units_;
-    //        cudaMemcpy(q_buf,
-    //                   q_buf_2_,
-    //                   sizeof(T) * 3 * request_batch_size * request_seq_len * hidden_units_,
-    //                   cudaMemcpyDeviceToHost);
-    //        sync_check_cuda_error();
-    //
-    //        for (int b = 0; b < request_batch_size; ++b) {
-    //            std::cout << "[";
-    //            for (int h = 0; h < head_num_; ++h) {
-    //                std::cout << "[";
-    //                for (int s = 0; s < request_seq_len; ++s) {
-    //                    std::cout << "[";
-    //                    for (int e = 0; e < 8; ++e) {
-    //                        std::cout << v_buf[b * head_num_ * request_seq_len * size_per_head_
-    //                                           + h * request_seq_len * size_per_head_
-    //                                           + s * size_per_head_
-    //                                           + e]
-    //                                  << " ";
-    //                    }
-    //                    std::cout << "]\n";
-    //                }
-    //                std::cout << "]\n";
-    //            }
-    //            std::cout << "]\n";
-    //        }
-    //        std::cout << "\n";
-    //    }
 
     const int max_seq_len = (int)(output_tensors->at("key_cache").shape[3]);  // max output seq length
     // Use batch major
@@ -316,32 +264,6 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
     }
     sync_check_cuda_error();
 
-    //    if (layer_id == 0) {
-    //        // shape: [B, L, H]
-    //        T* qkv_buf = (T*)malloc(sizeof(T) * request_batch_size * request_seq_len * hidden_units_);
-    //        cudaMemcpy(qkv_buf,
-    //                   qkv_buf_3_,
-    //                   sizeof(T) * request_batch_size * request_seq_len * hidden_units_,
-    //                   cudaMemcpyDeviceToHost);
-    //        sync_check_cuda_error();
-    //
-    //        for (int b = 0; b < request_batch_size; ++b) {
-    //            std::cout << "[";
-    //            for (int s = 0; s < request_seq_len; ++s) {
-    //                std::cout << "[";
-    //                for (int h = 0; h < 8; ++h) {
-    //                    std::cout << qkv_buf[b * request_seq_len * hidden_units_
-    //                                       + s * hidden_units_
-    //                                       + h]
-    //                              << " ";
-    //                }
-    //                std::cout << "]\n";
-    //            }
-    //            std::cout << "]\n";
-    //        }
-    //        std::cout << "\n";
-    //    }
-
     PUSH_RANGE("proj gemm");
     cublas_wrapper_->Gemm(CUBLAS_OP_N,
                           CUBLAS_OP_N,
@@ -355,31 +277,6 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                           attention_out,
                           hidden_units_);
     POP_RANGE;
-    //    if (layer_id == 0) {
-    //        // shape: [B, L, H]
-    //        T* out = (T*)malloc(sizeof(T) * request_batch_size * request_seq_len * hidden_units_);
-    //        cudaMemcpy(out,
-    //                   attention_out,
-    //                   sizeof(T) * request_batch_size * request_seq_len * hidden_units_,
-    //                   cudaMemcpyDeviceToHost);
-    //        sync_check_cuda_error();
-    //
-    //        for (int b = 0; b < request_batch_size; ++b) {
-    //            std::cout << "[";
-    //            for (int s = 0; s < request_seq_len; ++s) {
-    //                std::cout << "[";
-    //                for (int h = 0; h < 8; ++h) {
-    //                    std::cout << out[b * request_seq_len * hidden_units_
-    //                                       + s * hidden_units_
-    //                                       + h]
-    //                              << " ";
-    //                }
-    //                std::cout << "]\n";
-    //            }
-    //            std::cout << "]\n";
-    //        }
-    //        std::cout << "\n";
-    //    }
 
     if (is_free_buffer_after_forward_ == true) {
         freeBuffer();

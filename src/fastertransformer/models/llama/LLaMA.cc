@@ -83,9 +83,6 @@ void LLaMA<T>::allocateBuffer(size_t batch_size, size_t max_seq_len, size_t max_
     context_decoder_output_buf_ = (T*)(allocator_->reMalloc(
         context_decoder_output_buf_, sizeof(T) * batch_size * max_input_len * hidden_units_, false));
 
-    output_logits_ = (T*)(allocator_->reMalloc(
-        output_logits_, sizeof(T) * batch_size * vocab_size_ * hidden_units_, false));
-
     is_allocate_buffer_ = true;
 }
 
@@ -113,7 +110,6 @@ void LLaMA<T>::freeBuffer()
 
         allocator_->free((void**)(&context_decoder_input_buf_));
         allocator_->free((void**)(&context_decoder_output_buf_));
-        allocator_->free((void**)(&output_logits_));
 
         is_allocate_buffer_ = false;
     }
@@ -245,27 +241,15 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     //      max_cache_seq_len [batch_size] on cpu
 
     // output_tensors:
-    //      output_ids [batch_size, 1, max_output_seq_len]
-    //      sequence_length [batch_size]
-
-    // Step is from max_input_length ~ max_output_seq_len,
-    // When step = k,  we put output ids and caches at step k, and the sequence_length would be k - 1 before
-    // complete this step.
-    // When there is no input_ids, put the start token at step 0 of output_ids_buf_. After forward, only copy
-    // the step 1 ~ max_output_seq_len of output_ids_buf_ to output_tensors->at(0).data
+    //      output_logits [batch_size, max_output_seq_len, vocab_size]
 
     FT_CHECK_WITH_INFO(input_tensors->size() >= 3, "input_tensors->size() >= 3");
-    FT_CHECK_WITH_INFO(output_tensors->size() >= 2, "output_tensors->size() >= 2");
     FT_CHECK(input_tensors->at("input_ids").shape.size() == 2);
     FT_CHECK(input_tensors->at("input_lengths").shape.size() == 1);
     FT_CHECK(input_tensors->find("output_seq_len") != input_tensors->end()
              && input_tensors->at("output_seq_len").shape.size() == 1);
-    FT_CHECK(output_tensors->at("output_ids").shape.size() == 3);
-    FT_CHECK(output_tensors->at("sequence_length").shape.size() == 1);
-    FT_CHECK_WITH_INFO(input_tensors->at("input_ids").shape[0] == output_tensors->at("output_ids").shape[0],
-                       "input_tensors->at(\"input_ids\").shape[0] == output_tensors->at(\"output_ids\").shape[0]");
 
-    const size_t batch_size = output_tensors->at("output_ids").shape[0];
+    const size_t batch_size = input_tensors->at("input_ids").shape[0];
 
     // NOTE: Prefix Prompt PreProcessing
     // get prefix_prompt_weight for each batch --> shape [batch, 1]
@@ -332,27 +316,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                                              hidden_units_,
                                              stream_);
     sync_check_cuda_error();
-    //    if (pipeline_para_.rank_ == 0) {
-    //        T* out = (T*)malloc(sizeof(T) * batch_size * max_input_length * hidden_units_);
-    //        cudaMemcpy(out,
-    //                   context_decoder_input_buf_,
-    //                   sizeof(T) * batch_size * max_input_length * hidden_units_,
-    //                   cudaMemcpyDeviceToHost);
-    //        sync_check_cuda_error();
-    //
-    //        for (int b = 0; b < batch_size; ++b) {
-    //            std::cout << "[";
-    //            for (int s = 0; s < max_input_length; ++s) {
-    //                std::cout << "[";
-    //                for (int h = 0; h < 8; ++h) {
-    //                    std::cout << out[b * batch_size * hidden_units_  + s * hidden_units_ + h] << " ";
-    //                }
-    //                std::cout << "]\n";
-    //            }
-    //            std::cout << "]\n";
-    //        }
-    //        std::cout << "\n";
-    //    }
 
     invokeBuildDecoderAttentionMask(
         input_attention_mask_, tiled_input_lengths_buf_, nullptr, batch_size, max_input_length, 0, stream_);
@@ -384,6 +347,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     sync_check_cuda_error();
 
     if (pipeline_para_.rank_ == pipeline_para_.world_size_ - 1) {
+        T* output_logits = output_tensors->at("output_logits").getPtr<T>();
         invokeGeneralLLaMALayerNorm(context_decoder_input_buf_,
                                     context_decoder_output_buf_,
                                     llama_weights->post_decoder_layernorm.gamma,
@@ -394,41 +358,20 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                                     stream_);
         sync_check_cuda_error();
         cublas_wrapper_->Gemm(CUBLAS_OP_N,
-                CUBLAS_OP_N,
-                vocab_size_,
-                batch_size * max_input_length,
-                hidden_units_,
-                llama_weights->post_decoder_embedding.kernel,
-                vocab_size_,
-                context_decoder_input_buf_,
-                hidden_units_,  // n
-                output_logits_,
-                vocab_size_);
+                              CUBLAS_OP_N,
+                              vocab_size_,
+                              batch_size * max_input_length,
+                              hidden_units_,
+                              llama_weights->post_decoder_embedding.kernel,
+                              vocab_size_,
+                              context_decoder_input_buf_,
+                              hidden_units_,  // n
+                              output_logits,
+                              vocab_size_);
         sync_check_cuda_error();
-
-//        T* out = (T*)malloc(sizeof(T) * batch_size * max_input_length * vocab_size_);
-//        cudaMemcpy(out,
-//                   output_logits_,
-//                   sizeof(T) * batch_size * max_input_length * vocab_size_,
-//                   cudaMemcpyDeviceToHost);
-//
-//        for (int b = 0; b < batch_size; ++b) {
-//            std::cout << "[";
-//            for (int s = 0; s < max_input_length; ++s) {
-//                std::cout << "[";
-//                for (int v = 0; v < 8; ++v) {
-//                    std::cout << out[b * max_input_length * vocab_size_ + s * vocab_size_ + v] << " ";
-//                }
-//                std::cout << "]\n";
-//            }
-//            std::cout << "]\n";
-//        }
-//        std::cout << "\n";
     }
 
-
-    setOutputTensors(output_tensors, input_tensors, max_input_length, max_output_seq_len);
-    sendTensorsToFirstPipelineNode(output_tensors, input_tensors);
+    // sendTensorsToFirstPipelineNode(output_tensors, input_tensors);
 }
 
 template<typename T>
@@ -465,60 +408,6 @@ void LLaMA<T>::sendTensorsToFirstPipelineNode(std::unordered_map<std::string, Te
     ftNcclGroupEnd();
     // throw errors when detected
     ftNcclStreamSynchronize(tensor_para, pipeline_para_, stream_);
-}
-
-template<typename T>
-void LLaMA<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*       output_tensors,
-                                const std::unordered_map<std::string, Tensor>* input_tensors,
-                                const size_t                                   max_input_length,
-                                const size_t                                   max_output_seq_len)
-{
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    if (pipeline_para_.rank_ != pipeline_para_.world_size_ - 1) {
-        return;
-    }
-
-    const size_t batch_size       = output_tensors->at("output_ids").shape[0];
-    uint*        sequence_lengths = output_tensors->at("sequence_length").getPtr<uint>();
-
-    if (input_tensors->at("input_ids").shape[1] == 0) {
-        invokeCudaD2DcpyConvert(
-            sequence_lengths, sequence_lengths_, output_tensors->at("sequence_length").size(), stream_);
-        // TODO: D2D sequence_lenghts
-        // For sampling, only copy the results to output_tensor
-        invokeTransposeAxis01(output_tensors->at("output_ids").getPtr<int>(),
-                              output_ids_buf_ + batch_size,
-                              max_output_seq_len - 1,
-                              batch_size,
-                              1,
-                              stream_);
-    }
-    else {
-
-        // For sampling, it is equivalent to all parent ids are 0.
-        gatherTreeParam param;
-        param.beams                = transposed_output_ids_buf_;
-        param.max_sequence_lengths = sequence_lengths_;
-        // add sequence_length 1 here because the sequence_length of time step t is t - 1
-        param.max_sequence_length_final_step  = 1;
-        param.max_time                        = max_output_seq_len;
-        param.batch_size                      = batch_size;
-        param.beam_width                      = 1;
-        param.step_ids                        = output_ids_buf_;
-        param.parent_ids                      = nullptr;
-        param.end_tokens                      = end_ids_buf_;
-        param.max_input_length                = max_input_length;
-        param.prefix_soft_prompt_lengths      = nullptr;
-        param.input_lengths                   = tiled_input_lengths_buf_;
-        param.max_prefix_soft_prompt_length   = 0;
-        param.max_input_without_prompt_length = max_input_length;
-        param.stream                          = stream_;
-        param.output_ids                      = output_tensors->at("output_ids").getPtr<int>();
-        invokeGatherTree(param);
-        invokeCudaD2DcpyConvert(
-            sequence_lengths, sequence_lengths_, output_tensors->at("sequence_length").size(), stream_);
-        sync_check_cuda_error();
-    }
 }
 
 template<typename T>

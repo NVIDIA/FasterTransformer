@@ -302,24 +302,6 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                                     hidden_units_,
                                     stream_);
         sync_check_cuda_error();
-        //    if (l == 0) {
-        //        T* out = (T*)malloc(sizeof(T) * h_token_num * hidden_units_);
-        //        cudaMemcpy(out, decoder_normed_input_, sizeof(T) * h_token_num * hidden_units_,
-        //        cudaMemcpyDeviceToHost); sync_check_cuda_error();
-        //
-        //        for (int b = 0; b < h_token_num; ++b) {
-        //            std::cout << "[";
-        //            int i = 0;
-        //            for (int h = 0; h < hidden_units_; ++h) {
-        //                std::cout << out[b * hidden_units_ + h] << " ";
-        //                ++i;
-        //                if (i == 8)
-        //                    break;
-        //            }
-        //            std::cout << "]\n";
-        //        }
-        //        std::cout << "\n";
-        //    }
 
         TensorMap self_attention_input_tensors{
             {"input_query", Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, decoder_normed_input_}},
@@ -351,27 +333,6 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
         self_attention_layer_->forward(&self_attention_output_tensors,
                                        &self_attention_input_tensors,
                                        &llama_decoder_layer_weight->at(l)->self_attention_weights);
-        //        if (l == 0) {
-        //            // shape: [B, L, H]
-        //            T* out = (T*)malloc(sizeof(T) * batch_size * seq_len * hidden_units_);
-        //            cudaMemcpy(
-        //                out, self_attn_output_, sizeof(T) * batch_size * seq_len * hidden_units_,
-        //                cudaMemcpyDeviceToHost);
-        //            sync_check_cuda_error();
-        //
-        //            for (int b = 0; b < batch_size; ++b) {
-        //                std::cout << "[";
-        //                for (int s = 0; s < seq_len; ++s) {
-        //                    std::cout << "[";
-        //                    for (int h = 0; h < 8; ++h) {
-        //                        std::cout << out[b * seq_len * hidden_units_ + s * hidden_units_ + h] << " ";
-        //                    }
-        //                    std::cout << "]\n";
-        //                }
-        //                std::cout << "]\n";
-        //            }
-        //            std::cout << "\n";
-        //        }
 
         invokeGeneralLLaMAAddBiasResidualPreLayerNorm(
             self_attn_output_,
@@ -386,27 +347,6 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
             hidden_units_,
             stream_);
         sync_check_cuda_error();
-
-        //        if (l == 0) {
-        //            // shape: [B, L, H]
-        //            T* out = (T*)malloc(sizeof(T) * batch_size * seq_len * hidden_units_);
-        //            cudaMemcpy(
-        //                out, layer_input, sizeof(T) * batch_size * seq_len * hidden_units_, cudaMemcpyDeviceToHost);
-        //            sync_check_cuda_error();
-        //
-        //            for (int b = 0; b < batch_size; ++b) {
-        //                std::cout << "[";
-        //                for (int s = 0; s < seq_len; ++s) {
-        //                    std::cout << "[";
-        //                    for (int h = 0; h < 8; ++h) {
-        //                        std::cout << out[b * seq_len * hidden_units_ + s * hidden_units_ + h] << " ";
-        //                    }
-        //                    std::cout << "]\n";
-        //                }
-        //                std::cout << "]\n";
-        //            }
-        //            std::cout << "\n";
-        //        }
 
         TensorMap ffn_input_tensors(
             {{"ffn_input", Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, layer_input}}});
@@ -423,26 +363,6 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
 
         sync_check_cuda_error();
 
-//        if (l == 0) {
-//            // shape: [B, L, H]
-//            T* out = (T*)malloc(sizeof(T) * batch_size * seq_len * hidden_units_);
-//            cudaMemcpy(out, layer_output, sizeof(T) * batch_size * seq_len * hidden_units_, cudaMemcpyDeviceToHost);
-//            sync_check_cuda_error();
-//
-//            for (int b = 0; b < batch_size; ++b) {
-//                std::cout << "[";
-//                for (int s = 0; s < seq_len; ++s) {
-//                    std::cout << "[";
-//                    for (int h = 0; h < 8; ++h) {
-//                        std::cout << out[b * seq_len * hidden_units_ + s * hidden_units_ + h] << " ";
-//                    }
-//                    std::cout << "]\n";
-//                }
-//                std::cout << "]\n";
-//            }
-//            std::cout << "\n";
-//        }
-
         if (isLastLayerParallelId(l) && pipeline_para_.rank_ != pipeline_para_.world_size_ - 1
             && pipeline_para_.world_size_ > 1) {
             int data_size = h_token_num * hidden_units_;
@@ -458,26 +378,6 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                                  stream_);
         }
     }
-
-//    if (pipeline_para_.rank_ == pipeline_para_.world_size_ -1) {
-//        // shape: [B, L, H]
-//        T* out = (T*)malloc(sizeof(T) * batch_size * seq_len * hidden_units_);
-//        cudaMemcpy(out, decoder_output, sizeof(T) * batch_size * seq_len * hidden_units_, cudaMemcpyDeviceToHost);
-//        sync_check_cuda_error();
-//
-//        for (int b = 0; b < batch_size; ++b) {
-//            std::cout << "[";
-//            for (int s = 0; s < seq_len; ++s) {
-//                std::cout << "[";
-//                for (int h = 0; h < 8; ++h) {
-//                    std::cout << out[b * seq_len * hidden_units_ + s * hidden_units_ + h] << " ";
-//                }
-//                std::cout << "]\n";
-//            }
-//            std::cout << "]\n";
-//        }
-//        std::cout << "\n";
-//    }
 
     if (is_free_buffer_after_forward_ == true) {
         freeBuffer();

@@ -82,17 +82,12 @@ protected:
 
     T*     context_decoder_input_buf_;
     T*     context_decoder_output_buf_;
-    T*     output_logits_;
 
     // function pointer callback
     using callback_sig                 = void(std::unordered_map<std::string, Tensor>*, void*);
     callback_sig* token_generated_cb_  = nullptr;
     void*         token_generated_ctx_ = nullptr;
 
-    void setOutputTensors(std::unordered_map<std::string, Tensor>*       output_tensors,
-                          const std::unordered_map<std::string, Tensor>* input_tensors,
-                          const size_t                                   max_input_length,
-                          const size_t                                   max_seq_len);
     void sendTensorsToFirstPipelineNode(std::unordered_map<std::string, Tensor>*       output_tensors,
                                         const std::unordered_map<std::string, Tensor>* input_tensors);
 
