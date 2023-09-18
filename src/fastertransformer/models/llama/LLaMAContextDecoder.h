@@ -41,16 +41,12 @@ private:
     size_t inter_size_;
     size_t num_layer_;
     size_t rotary_embedding_dim_;
-    bool   neox_rotary_style_;
     float  layernorm_eps_;
 
     // calculated data
     size_t hidden_units_;
 
     NcclParam pipeline_para_;
-
-    std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm_;
-    int                                 enable_custom_all_reduce_;
 
     AttentionType attention_type_;
 
@@ -85,7 +81,6 @@ public:
                         size_t                              inter_size,
                         size_t                              num_layer,
                         size_t                              rotary_embedding_dim,
-                        bool                                neox_rotary_style,
                         float                               layernorm_eps,
                         NcclParam                           pipeline_para,
                         cudaStream_t                        stream,
@@ -93,9 +88,7 @@ public:
                         IAllocator*                         allocator,
                         bool                                is_free_buffer_after_forward,
                         bool                                is_qk_buf_float,
-                        AttentionType                       attention_type            = AttentionType::FUSED_MHA,
-                        std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm    = nullptr,
-                        int                                 enable_custom_all_reduce_ = 0);
+                        AttentionType                       attention_type            = AttentionType::FUSED_MHA);
 
     LLaMAContextDecoder(LLaMAContextDecoder<T> const& decoder);
 

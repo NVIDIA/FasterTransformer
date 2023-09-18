@@ -189,13 +189,30 @@ void llama_example(const INIReader reader)
         mpi::bcast(&random_seed, 1, mpi::MPI_TYPE_UNSIGNED_LONG_LONG, 0, mpi::COMM_WORLD);
     }
 
-    AttentionType attention_type = getAttentionType<T>(size_per_head,
-                                                       getSMVersion(),
-                                                       true,   // remove_padding
-                                                       0,      // llama supports any-seq-length fmha
-                                                       true,   // is_fuse
-                                                       false,  // with_relative_position_bias
-                                                       true);  // causal_mask
+    AttentionType attention_type =
+        getAttentionType<T>(size_per_head,
+                            getSMVersion(),
+                            !((std::getenv("SHONG_PADDING") != nullptr)
+                             && (std::string(std::getenv("SHONG_PADDING")) == "ON")), //true,  // remove_padding
+                            0,      // llama supports any-seq-length fmha
+                            true,   // is_fuse
+                            false,  // with_relative_position_bias
+                            true);  // causal_mask
+
+    switch (attention_type) {
+        case AttentionType::UNFUSED_MHA:
+            std::cout << "UNFUSED_MHA\n";
+            break;
+        case AttentionType::UNFUSED_PADDED_MHA:
+            std::cout << "UNFUSED_PADDED_MHA\n";
+            break;
+        case AttentionType::FUSED_MHA:
+            std::cout << "FUSED_MHA\n";
+            break;
+        case AttentionType::FUSED_PADDED_MHA:
+            std::cout << "FUSED_PADDED_MHA\n";
+            break;
+    }
 
     LLaMA<T> llama = LLaMA<T>(head_num,
                               size_per_head,
@@ -239,7 +256,6 @@ void llama_example(const INIReader reader)
     cudaDeviceSynchronize();
     mpi::barrier();
 
-    cudaProfilerStart();
     // warm up
     ite = 1;
     ft_nvtx::setScope("warmup_time");
@@ -253,71 +269,39 @@ void llama_example(const INIReader reader)
     POP_RANGE;
     ft_nvtx::resetScope();
 
-//    if (rank == world_size-1) {
-//        T* out = (T*)malloc(sizeof(T) * request_batch_size * total_output_len * vocab_size);
-//        cudaMemcpy(
-//            out, d_output_logits, sizeof(T) * request_batch_size * total_output_len * vocab_size, cudaMemcpyDeviceToHost);
-//        for (int b = 0; b < request_batch_size; ++b) {
-//            std::cout << "[";
-//            for (int s = 0; s < total_output_len; ++s) {
-//                std::cout << "[";
-//                for (int v = vocab_size-8; v < vocab_size; ++v) {
-//                    std::cout << out[b * total_output_len * vocab_size + s * vocab_size + v] << " ";
-//                }
-//                std::cout << "]\n";
-//            }
-//            std::cout << "]\n";
-//        }
-//        std::cout << "\n";
-//    }
-
-    /*
-    if (rank == 0) {
-
-        std::string fName   = "out";
-        auto        outFile = std::ofstream(fName, std::ios::out);
-        if (!outFile.is_open()) {
-            printf("[WARNING] Cannot write results into output file %s \n", fName.c_str());
-        }
-        else {
-            size_t outCount = total_output_len * request_batch_size;
-            int*   hBuf     = new int[outCount];
-            cudaD2Hcpy(hBuf, d_output_logits, outCount);
-
-            {
-                std::cout << "Writing " << outCount << " elements\n";
-                int zeroCount = 0;
-                for (size_t i = 0; i < outCount; i++) {
-                    if (hBuf[i] == int(0)) {
-                        zeroCount++;
-                    }
-                    outFile << hBuf[i] << " ";
-                    if ((i + 1) % (total_output_len) == 0) {
-                        outFile << std::endl;
-                    }
-
-                    if (i < 10) {
-                        printf("%5d ", hBuf[i]);
-                    }
-                    if ((i + 1) % (total_output_len) == 0 && i < 10) {
-                        std::cout << std::endl;
-                    }
+    if (rank == world_size - 1) {
+        T* out = (T*)malloc(sizeof(T) * request_batch_size * total_output_len * vocab_size);
+        cudaMemcpy(out,
+                   d_output_logits,
+                   sizeof(T) * request_batch_size * total_output_len * vocab_size,
+                   cudaMemcpyDeviceToHost);
+        for (int b = 0; b < request_batch_size; ++b) {
+            std::cout << "[";
+            for (int s = 0; s < total_output_len; ++s) {
+                std::cout << "[";
+                for (int v = vocab_size - 8; v < vocab_size; ++v) {
+                    std::cout << out[b * total_output_len * vocab_size + s * vocab_size + v] << " ";
                 }
-                std::cout << std::endl << "zeroCount = " << zeroCount << std::endl;
+                std::cout << "]\n";
             }
-            delete[] hBuf;
+            std::cout << "]\n";
         }
+        std::cout << "\n";
+        free(out);
     }
-    */
 
     // test time
+    cudaProfilerStart();
     struct timeval start, end;
-    mpi::barrier();
     cudaDeviceSynchronize();
+    mpi::barrier();
+
     gettimeofday(&start, NULL);
 
     ft_nvtx::setScope("total_time");
     PUSH_RANGE("total time")
+    // warm up
+    ite = 3;
     for (int i = 0; i < ite; ++i) {
         llama.forward(&output_tensors, &input_tensors, &llama_weights);
     }
@@ -328,7 +312,6 @@ void llama_example(const INIReader reader)
     POP_RANGE;
     ft_nvtx::resetScope();
     gettimeofday(&end, NULL);
-
     cudaProfilerStop();
 
     printf("[INFO] request_batch_size %ld head_num %ld size_per_head %ld total_output_len %d"

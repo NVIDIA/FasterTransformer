@@ -36,27 +36,22 @@ private:
     size_t vocab_size_;
     size_t rotary_embedding_dim_;
 
-    static constexpr bool  neox_rotary_style_ = false;
-    static constexpr float layernorm_eps_     = 1e-6f;
+    static constexpr float layernorm_eps_ = 1e-6f;
 
     size_t hidden_units_;
 
     NcclParam tensor_para_;
     NcclParam pipeline_para_;
 
-    std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm_;
-    int                                 enable_custom_all_reduce_;
-
     AttentionType attention_type_;
 
     const bool is_context_qk_buf_float_ = (std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM") == nullptr
                                            || std::string(std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM")) != "ON");
 
-    LLaMAContextDecoder<T>*    llama_context_decoder_;
+    LLaMAContextDecoder<T>* llama_context_decoder_;
 
     void allocateBuffer() override;
-    void allocateBuffer(
-        size_t batch_size, size_t max_seq_len, size_t max_cache_seq_len, size_t max_input_len);
+    void allocateBuffer(size_t batch_size, size_t max_seq_len, size_t max_cache_seq_len, size_t max_input_len);
     void freeBuffer() override;
 
     void initialize();
@@ -67,64 +62,49 @@ protected:
 
     float* logits_buf_;
 
-    int*      sequence_lengths_          = nullptr;
-
     T*   key_cache_;
     T*   value_cache_;
     int* cache_indirections_[2] = {nullptr, nullptr};
 
-    int*  tiled_input_ids_buf_;
-    int*  tiled_input_lengths_buf_;
-    int*  transposed_output_ids_buf_;
-    int*  output_ids_buf_;
-    int*  start_ids_buf_;
-    int*  end_ids_buf_;
+    int* tiled_input_ids_buf_;
+    int* tiled_input_lengths_buf_;
 
-    T*     context_decoder_input_buf_;
-    T*     context_decoder_output_buf_;
-
-    // function pointer callback
-    using callback_sig                 = void(std::unordered_map<std::string, Tensor>*, void*);
-    callback_sig* token_generated_cb_  = nullptr;
-    void*         token_generated_ctx_ = nullptr;
+    T* context_decoder_input_buf_;
+    T* context_decoder_output_buf_;
 
     void sendTensorsToFirstPipelineNode(std::unordered_map<std::string, Tensor>*       output_tensors,
                                         const std::unordered_map<std::string, Tensor>* input_tensors);
 
 public:
-    LLaMA(size_t                              head_num,
-          size_t                              size_per_head,
-          size_t                              inter_size,
-          size_t                              num_layer,
-          size_t                              vocab_size,
-          size_t                              rotary_embedding_dim,
-          unsigned long long                  random_seed,
-          cudaStream_t                        stream,
-          cublasMMWrapper*                    cublas_wrapper,
-          IAllocator*                         allocator,
-          bool                                is_free_buffer_after_forward,
-          cudaDeviceProp*                     cuda_device_prop         = nullptr,
-          AttentionType                       attention_type           = AttentionType::UNFUSED_MHA,
-          std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
-          int                                 enable_custom_all_reduce = 0);
+    LLaMA(size_t             head_num,
+          size_t             size_per_head,
+          size_t             inter_size,
+          size_t             num_layer,
+          size_t             vocab_size,
+          size_t             rotary_embedding_dim,
+          unsigned long long random_seed,
+          cudaStream_t       stream,
+          cublasMMWrapper*   cublas_wrapper,
+          IAllocator*        allocator,
+          bool               is_free_buffer_after_forward,
+          cudaDeviceProp*    cuda_device_prop = nullptr,
+          AttentionType      attention_type   = AttentionType::UNFUSED_MHA);
 
-    LLaMA(size_t                              head_num,
-          size_t                              size_per_head,
-          size_t                              inter_size,
-          size_t                              num_layer,
-          size_t                              vocab_size,
-          size_t                              rotary_embedding_dim,
-          unsigned long long                  random_seed,
-          NcclParam                           tensor_para,
-          NcclParam                           pipeline_para,
-          cudaStream_t                        stream,
-          cublasMMWrapper*                    cublas_wrapper,
-          IAllocator*                         allocator,
-          bool                                is_free_buffer_after_forward,
-          cudaDeviceProp*                     cuda_device_prop         = nullptr,
-          AttentionType                       attention_type           = AttentionType::UNFUSED_MHA,
-          std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
-          int                                 enable_custom_all_reduce = 0);
+    LLaMA(size_t             head_num,
+          size_t             size_per_head,
+          size_t             inter_size,
+          size_t             num_layer,
+          size_t             vocab_size,
+          size_t             rotary_embedding_dim,
+          unsigned long long random_seed,
+          NcclParam          tensor_para,
+          NcclParam          pipeline_para,
+          cudaStream_t       stream,
+          cublasMMWrapper*   cublas_wrapper,
+          IAllocator*        allocator,
+          bool               is_free_buffer_after_forward,
+          cudaDeviceProp*    cuda_device_prop = nullptr,
+          AttentionType      attention_type   = AttentionType::UNFUSED_MHA);
 
     LLaMA(LLaMA<T> const& LLaMA);
 
@@ -143,9 +123,6 @@ public:
     size_t getTensorParallelRank();
     size_t getTensorParallelSize();
     bool*  getFinishBuffer();
-
-    void registerCallback(callback_sig* fn, void* ctx);
-    void unRegisterCallback();
 };
 
 }  // namespace fastertransformer

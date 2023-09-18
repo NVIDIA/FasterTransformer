@@ -32,14 +32,11 @@ void LLaMAContextDecoder<T>::initialize()
                                                               size_per_head_,
                                                               head_num_,
                                                               rotary_embedding_dim_,
-                                                              neox_rotary_style_,
                                                               stream_,
                                                               cublas_wrapper_,
                                                               allocator_,
                                                               is_free_buffer_after_forward_,
-                                                              is_qk_buf_float_,
-                                                              false,
-                                                              0);
+                                                              is_qk_buf_float_);
 
     ffn_layer_ = new SiluFfnLayer<T>(0,  // max_batch_size
                                      0,  // max_seq_len
@@ -130,7 +127,6 @@ LLaMAContextDecoder<T>::LLaMAContextDecoder(size_t                              
                                             size_t                              inter_size,
                                             size_t                              num_layer,
                                             size_t                              rotary_embedding_dim,
-                                            bool                                neox_rotary_style,
                                             float                               layernorm_eps,
                                             NcclParam                           pipeline_para,
                                             cudaStream_t                        stream,
@@ -138,23 +134,18 @@ LLaMAContextDecoder<T>::LLaMAContextDecoder(size_t                              
                                             IAllocator*                         allocator,
                                             bool                                is_free_buffer_after_forward,
                                             bool                                is_qk_buf_float,
-                                            AttentionType                       attention_type,
-                                            std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
-                                            int                                 enable_custom_all_reduce):
+                                            AttentionType                       attention_type):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     head_num_(head_num),
     size_per_head_(size_per_head),
     inter_size_(inter_size),
     num_layer_(num_layer),
     rotary_embedding_dim_(rotary_embedding_dim),
-    neox_rotary_style_(neox_rotary_style),
     layernorm_eps_(layernorm_eps),
     hidden_units_(head_num * size_per_head),
     pipeline_para_(pipeline_para),
     is_qk_buf_float_(is_qk_buf_float),
-    attention_type_(attention_type),
-    custom_all_reduce_comm_(custom_all_reduce_comm),
-    enable_custom_all_reduce_(enable_custom_all_reduce)
+    attention_type_(attention_type)
 {
     initialize();
 }
@@ -167,14 +158,11 @@ LLaMAContextDecoder<T>::LLaMAContextDecoder(LLaMAContextDecoder<T> const& decode
     inter_size_(decoder.inter_size_),
     num_layer_(decoder.num_layer_),
     rotary_embedding_dim_(decoder.rotary_embedding_dim_),
-    neox_rotary_style_(decoder.neox_rotary_style_),
     layernorm_eps_(decoder.layernorm_eps_),
     hidden_units_(decoder.hidden_units_),
     pipeline_para_(decoder.pipeline_para_),
     is_qk_buf_float_(decoder.is_qk_buf_float_),
-    attention_type_(decoder.attention_type_),
-    custom_all_reduce_comm_(decoder.custom_all_reduce_comm_),
-    enable_custom_all_reduce_(decoder.enable_custom_all_reduce_)
+    attention_type_(decoder.attention_type_)
 {
     initialize();
 }
@@ -252,6 +240,7 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
 
     AttentionType attention_type  = attention_type_;
     const bool    is_unpadded_mha = isUnPaddedMHA(attention_type);
+
 
     size_t h_token_num = batch_size * seq_len;
     if (is_unpadded_mha) {

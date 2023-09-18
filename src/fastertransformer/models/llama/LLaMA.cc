@@ -31,7 +31,6 @@ void LLaMA<T>::initialize()
                                                         inter_size_,
                                                         num_layer_,
                                                         rotary_embedding_dim_,
-                                                        neox_rotary_style_,
                                                         layernorm_eps_,
                                                         pipeline_para_,
                                                         stream_,
@@ -39,9 +38,7 @@ void LLaMA<T>::initialize()
                                                         allocator_,
                                                         is_free_buffer_after_forward_,
                                                         is_context_qk_buf_float_,
-                                                        attention_type_,
-                                                        custom_all_reduce_comm_,
-                                                        enable_custom_all_reduce_);
+                                                        attention_type_);
 }
 
 template<typename T>
@@ -61,22 +58,14 @@ void LLaMA<T>::allocateBuffer(size_t batch_size, size_t max_seq_len, size_t max_
         input_attention_mask_, sizeof(T) * batch_size * max_seq_len * max_cache_seq_len, false));
     decoder_output_buf_ =
         (T*)(allocator_->reMalloc(decoder_output_buf_, sizeof(T) * batch_size * hidden_units_, false));
-    logits_buf_       = (float*)(allocator_->reMalloc(logits_buf_, sizeof(float) * batch_size * vocab_size_, false));
-    sequence_lengths_ = (int*)(allocator_->reMalloc(sequence_lengths_, sizeof(int) * batch_size, false));
+    //logits_buf_       = (float*)(allocator_->reMalloc(logits_buf_, sizeof(float) * batch_size * max_seq_len * vocab_size_, false));
 
-    key_cache_   = (T*)(allocator_->reMalloc(key_cache_, sizeof(T) * self_cache_size * 2, true));
+    key_cache_   = (T*)(allocator_->reMalloc(key_cache_, sizeof(T) * self_cache_size * 2, false));
     value_cache_ = key_cache_ + self_cache_size;
 
     tiled_input_ids_buf_ =
-        (int*)(allocator_->reMalloc(tiled_input_ids_buf_, sizeof(int) * batch_size * max_input_len, true));
-    tiled_input_lengths_buf_ = (int*)(allocator_->reMalloc(tiled_input_lengths_buf_, sizeof(int) * batch_size, true));
-
-    transposed_output_ids_buf_ =
-        (int*)(allocator_->reMalloc(transposed_output_ids_buf_, sizeof(int) * batch_size * max_seq_len, true));
-    output_ids_buf_ = (int*)(allocator_->reMalloc(output_ids_buf_, sizeof(int) * batch_size * max_seq_len, true));
-
-    start_ids_buf_ = (int*)(allocator_->reMalloc(start_ids_buf_, sizeof(int) * batch_size, false));
-    end_ids_buf_   = (int*)(allocator_->reMalloc(end_ids_buf_, sizeof(int) * batch_size, false));
+        (int*)(allocator_->reMalloc(tiled_input_ids_buf_, sizeof(int) * batch_size * max_input_len, false));
+    tiled_input_lengths_buf_ = (int*)(allocator_->reMalloc(tiled_input_lengths_buf_, sizeof(int) * batch_size, false));
 
     context_decoder_input_buf_  = (T*)(allocator_->reMalloc(
         context_decoder_input_buf_, sizeof(T) * batch_size * max_input_len * hidden_units_, false));
@@ -92,8 +81,7 @@ void LLaMA<T>::freeBuffer()
     if (is_allocate_buffer_) {
         allocator_->free((void**)(&input_attention_mask_));
         allocator_->free((void**)(&decoder_output_buf_));
-        allocator_->free((void**)(&logits_buf_));
-        allocator_->free((void**)(&sequence_lengths_));
+        //allocator_->free((void**)(&logits_buf_));
 
         allocator_->free((void**)(&key_cache_));
         if (cache_indirections_[0] != nullptr) {
@@ -102,11 +90,6 @@ void LLaMA<T>::freeBuffer()
 
         allocator_->free((void**)(&tiled_input_ids_buf_));
         allocator_->free((void**)(&tiled_input_lengths_buf_));
-
-        allocator_->free((void**)(&transposed_output_ids_buf_));
-        allocator_->free((void**)(&output_ids_buf_));
-        allocator_->free((void**)(&start_ids_buf_));
-        allocator_->free((void**)(&end_ids_buf_));
 
         allocator_->free((void**)(&context_decoder_input_buf_));
         allocator_->free((void**)(&context_decoder_output_buf_));
@@ -128,9 +111,7 @@ LLaMA<T>::LLaMA(size_t                              head_num,
                 IAllocator*                         allocator,
                 bool                                is_free_buffer_after_forward,
                 cudaDeviceProp*                     cuda_device_prop,
-                AttentionType                       attention_type,
-                std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
-                int                                 enable_custom_all_reduce):
+                AttentionType                       attention_type):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, cuda_device_prop),
     head_num_(head_num),
     size_per_head_(size_per_head),
@@ -161,9 +142,7 @@ LLaMA<T>::LLaMA(size_t                              head_num,
                 IAllocator*                         allocator,
                 bool                                is_free_buffer_after_forward,
                 cudaDeviceProp*                     cuda_device_prop,
-                AttentionType                       attention_type,
-                std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
-                int                                 enable_custom_all_reduce):
+                AttentionType                       attention_type):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, cuda_device_prop),
     head_num_(head_num),
     size_per_head_(size_per_head),
@@ -173,8 +152,6 @@ LLaMA<T>::LLaMA(size_t                              head_num,
     rotary_embedding_dim_(rotary_embedding_dim),
     hidden_units_(head_num * size_per_head),
     pipeline_para_(pipeline_para),
-    custom_all_reduce_comm_(custom_all_reduce_comm),
-    enable_custom_all_reduce_(enable_custom_all_reduce),
     attention_type_(attention_type)
 {
     initialize();
@@ -191,8 +168,6 @@ LLaMA<T>::LLaMA(LLaMA<T> const& llama):
     rotary_embedding_dim_(llama.rotary_embedding_dim_),
     hidden_units_(llama.hidden_units_),
     pipeline_para_(llama.pipeline_para_),
-    custom_all_reduce_comm_(llama.custom_all_reduce_comm_),
-    enable_custom_all_reduce_(llama.enable_custom_all_reduce_),
     attention_type_(llama.attention_type_)
 {
     initialize();
@@ -203,20 +178,6 @@ LLaMA<T>::~LLaMA()
 {
     delete llama_context_decoder_;
     freeBuffer();
-}
-
-template<typename T>
-void LLaMA<T>::registerCallback(callback_sig* fn, void* ctx)
-{
-    token_generated_cb_  = fn;
-    token_generated_ctx_ = ctx;
-}
-
-template<typename T>
-void LLaMA<T>::unRegisterCallback()
-{
-    token_generated_cb_  = nullptr;
-    token_generated_ctx_ = nullptr;
 }
 
 template<typename T>
@@ -274,8 +235,8 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                        max_seq_len);
     }
     const cudaDataType_t gemm_data_type = getCudaDataType<T>();
-    allocateBuffer(batch_size, max_seq_len, max_cache_seq_len, max_input_length);
 
+    allocateBuffer(batch_size, max_seq_len, max_cache_seq_len, max_input_length);
     sync_check_cuda_error();
 
     const DataType            data_type          = getTensorType<T>();
@@ -288,11 +249,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     const std::vector<size_t> self_v_cache_shape = {
         num_layer_ / pipeline_para_.world_size_, batch_size, head_num_, max_cache_seq_len, size_per_head_};
 
-    // initialize the output ids and parent ids
-    cudaMemsetAsync(output_ids_buf_, 0, sizeof(int) * batch_size * max_seq_len, stream_);
-    sync_check_cuda_error();
-
-    // handle first step
     invokeTileGptInputs(tiled_input_ids_buf_,
                         tiled_input_lengths_buf_,
                         input_tensors->at("input_ids").getPtr<int>(),
@@ -304,7 +260,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     sync_check_cuda_error();
 
     invokeInputIdsEmbeddingLookupPosEncoding(context_decoder_input_buf_,
-                                             output_ids_buf_,
+                                             nullptr,
                                              llama_weights->pre_decoder_embedding_table,
                                              llama_weights->position_encoding_table,
                                              pPromptTuningParam<T>{},  // no p/prompt tuning
@@ -347,7 +303,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     sync_check_cuda_error();
 
     if (pipeline_para_.rank_ == pipeline_para_.world_size_ - 1) {
-        T* output_logits = output_tensors->at("output_logits").getPtr<T>();
         invokeGeneralLLaMALayerNorm(context_decoder_input_buf_,
                                     context_decoder_output_buf_,
                                     llama_weights->post_decoder_layernorm.gamma,
@@ -357,6 +312,9 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                                     hidden_units_,
                                     stream_);
         sync_check_cuda_error();
+
+        // FIXME: debugging
+        T *output_logits =  output_tensors->at("output_logits").getPtr<T>();
         cublas_wrapper_->Gemm(CUBLAS_OP_N,
                               CUBLAS_OP_N,
                               vocab_size_,
@@ -367,6 +325,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                               context_decoder_input_buf_,
                               hidden_units_,  // n
                               output_logits,
+                              //logits_buf_,
                               vocab_size_);
         sync_check_cuda_error();
     }
