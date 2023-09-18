@@ -399,6 +399,7 @@ void LLaMAContextAttentionLayer<T>::allocateBuffer(size_t batch_size, size_t seq
     }
     else {
         allocator_->free((void**)(&qk_buf_));
+        qk_buf_ = nullptr;
     }
     qkv_buf_2_ = (T*)allocator_->reMalloc(qkv_buf_2_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
     qkv_buf_3_ = (T*)allocator_->reMalloc(qkv_buf_3_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
@@ -410,6 +411,7 @@ void LLaMAContextAttentionLayer<T>::allocateBuffer(size_t batch_size, size_t seq
         }
         else {
             allocator_->free((void**)(&qk_buf_float_));
+            qk_buf_float_ = nullptr;
         }
     }
 
