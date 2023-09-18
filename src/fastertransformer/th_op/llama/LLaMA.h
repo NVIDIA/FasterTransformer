@@ -50,18 +50,18 @@ template<typename T>
 class FTLLaMA: public IFLLaMA {
 public:
     FTLLaMA(const size_t             head_num,
-              const size_t             size_per_head,
-              const size_t             inter_size,
-              const size_t             layer_num,
-              const size_t             vocab_size,
-              const size_t             rotary_embedding_dim,
-              const int                start_id,
-              const int                end_id,
-              const int64_t            tensor_para_size,
-              const int64_t            pipeline_para_size,
-              const size_t             max_seq_len,
-              const bool               use_gptj_residual,
-              const vector<th::Tensor> weights):
+            const size_t             size_per_head,
+            const size_t             inter_size,
+            const size_t             layer_num,
+            const size_t             vocab_size,
+            const size_t             rotary_embedding_dim,
+            const int                start_id,
+            const int                end_id,
+            const int64_t            tensor_para_size,
+            const int64_t            pipeline_para_size,
+            const size_t             max_seq_len,
+            const bool               use_gptj_residual,
+            const vector<th::Tensor> weights):
         head_num_(head_num),
         size_per_head_(size_per_head),
         inter_size_(inter_size),
@@ -114,7 +114,7 @@ public:
         llama_weights_.post_decoder_layernorm.beta   = get_ptr<T>(weights_[12 * layer_num_ + 2]);
         llama_weights_.post_decoder_embedding.kernel = get_ptr<T>(weights_[12 * layer_num_ + 3]);
 
-        llama_weights_.setMaxSeqLen(max_seq_len);
+        //llama_weights_.setMaxSeqLen(max_seq_len);
 
         ft::check_cuda_error(cudaGetDeviceProperties(&prop_, 0));
     }
@@ -172,35 +172,20 @@ public:
                                                                    false,  // with_relative_position_bias
                                                                    true);  // causal_mask
 
-        ft::LLaMA<T> llama = ft::LLaMA<T>(head_num_,
-                                            size_per_head_,
-                                            inter_size_,
-                                            layer_num_,
-                                            vocab_size_,
-                                            rotary_embedding_dim_,
-                                            start_id_,
-                                            end_id_,
-                                            end_id_ + 1,  // p/prompt tuning virtual token start id
-                                            ft::PromptLearningType::no_prompt,
-                                            use_gptj_residual_,
-                                            0.0f,  // beam_search_diversity_rate,
-                                            1,     // top_k,
-                                            0.0,   // top_p,
-                                            0,     // random_seed,
-                                            1.0f,  // temperature,
-                                            1.0f,  // len_penalty,
-                                            1.0f,  // repetition_penalty,
-                                            tensor_para_,
-                                            pipeline_para_,
-                                            stream,
-                                            &cublas_wrapper,
-                                            &allocator,
-                                            false,           // is_free_buffer_after_forward
-                                            &prop_,          // cuda_device_prop
-                                            attention_type,  // attention_type
-                                            nullptr,         // custom_all_reduce_comm
-                                            0);              // enable_custom_all_reduce
-
+        ft::LLaMA<T>          llama = ft::LLaMA<T>(head_num_,
+                                          size_per_head_,
+                                          inter_size_,
+                                          layer_num_,
+                                          vocab_size_,
+                                          rotary_embedding_dim_,
+                                          0,  // random_seed,
+                                          stream,
+                                          &cublas_wrapper,
+                                          &allocator,
+                                          false,          // is_free_buffer_after_forward
+                                          &prop_,         // cuda_device_prop
+                                          attention_type  // attention_type
+                                    );
         std::vector<uint32_t> output_seq_len(request_batch_size, total_output_len);
 
         std::unordered_map<std::string, ft::Tensor> input_tensors = std::unordered_map<std::string, ft::Tensor>{
@@ -297,7 +282,7 @@ private:
     std::mutex*             cublas_wrapper_mutex_;
     ft::cublasAlgoMap*      cublas_algo_map_;
     struct cudaDeviceProp   prop_;
-    ft::LLaMAWeight<T>    llama_weights_;
+    ft::LLaMAWeight<T>      llama_weights_;
 
     ft::NcclParam tensor_para_;
     ft::NcclParam pipeline_para_;
@@ -309,18 +294,18 @@ private:
 class LLaMA: public th::jit::CustomClassHolder {
 public:
     LLaMA(const int64_t            head_num,
-              const int64_t            size_per_head,
-              const int64_t            inter_size,
-              const int64_t            layer_num,
-              const int64_t            vocab_size,
-              const int64_t            rotary_embedding_dim,
-              const int64_t            start_id,
-              const int64_t            end_id,
-              const int64_t            tensor_para_size,
-              const int64_t            pipeline_para_size,
-              const int64_t            max_seq_len,
-              const bool               use_gptj_residual,
-              const vector<th::Tensor> weights);
+          const int64_t            size_per_head,
+          const int64_t            inter_size,
+          const int64_t            layer_num,
+          const int64_t            vocab_size,
+          const int64_t            rotary_embedding_dim,
+          const int64_t            start_id,
+          const int64_t            end_id,
+          const int64_t            tensor_para_size,
+          const int64_t            pipeline_para_size,
+          const int64_t            max_seq_len,
+          const bool               use_gptj_residual,
+          const vector<th::Tensor> weights);
 
     ~LLaMA();
 
@@ -339,7 +324,7 @@ public:
 
 private:
     const at::ScalarType    st_;
-    IFLLaMA*              ftllama;
+    IFLLaMA*                ftllama;
     std::vector<th::Tensor> weights;
 };
 
