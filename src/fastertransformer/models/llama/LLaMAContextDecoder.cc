@@ -122,19 +122,19 @@ int LLaMAContextDecoder<T>::getFirstLayerParallelId()
 }
 
 template<typename T>
-LLaMAContextDecoder<T>::LLaMAContextDecoder(size_t                              head_num,
-                                            size_t                              size_per_head,
-                                            size_t                              inter_size,
-                                            size_t                              num_layer,
-                                            size_t                              rotary_embedding_dim,
-                                            float                               layernorm_eps,
-                                            NcclParam                           pipeline_para,
-                                            cudaStream_t                        stream,
-                                            cublasMMWrapper*                    cublas_wrapper,
-                                            IAllocator*                         allocator,
-                                            bool                                is_free_buffer_after_forward,
-                                            bool                                is_qk_buf_float,
-                                            AttentionType                       attention_type):
+LLaMAContextDecoder<T>::LLaMAContextDecoder(size_t           head_num,
+                                            size_t           size_per_head,
+                                            size_t           inter_size,
+                                            size_t           num_layer,
+                                            size_t           rotary_embedding_dim,
+                                            float            layernorm_eps,
+                                            NcclParam        pipeline_para,
+                                            cudaStream_t     stream,
+                                            cublasMMWrapper* cublas_wrapper,
+                                            IAllocator*      allocator,
+                                            bool             is_free_buffer_after_forward,
+                                            bool             is_qk_buf_float,
+                                            AttentionType    attention_type):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     head_num_(head_num),
     size_per_head_(size_per_head),
@@ -240,7 +240,6 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
 
     AttentionType attention_type  = attention_type_;
     const bool    is_unpadded_mha = isUnPaddedMHA(attention_type);
-
 
     size_t h_token_num = batch_size * seq_len;
     if (is_unpadded_mha) {

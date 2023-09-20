@@ -269,7 +269,6 @@ void llama_example(const INIReader reader)
     POP_RANGE;
     ft_nvtx::resetScope();
 
-    /*
     if (rank == world_size - 1) {
         T* out = (T*)malloc(sizeof(T) * request_batch_size * total_output_len * vocab_size);
         cudaMemcpy(out,
@@ -290,7 +289,6 @@ void llama_example(const INIReader reader)
         std::cout << "\n";
         free(out);
     }
-        */
 
     // test time
     cudaProfilerStart();
