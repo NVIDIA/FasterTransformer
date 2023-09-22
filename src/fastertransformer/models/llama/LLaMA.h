@@ -35,6 +35,8 @@ private:
     size_t num_layer_;
     size_t vocab_size_;
     size_t rotary_embedding_dim_;
+    size_t random_seed_;
+    size_t max_seq_len_;
 
     static constexpr float layernorm_eps_ = 1e-6f;
 
@@ -51,7 +53,7 @@ private:
     LLaMAContextDecoder<T>* llama_context_decoder_;
 
     void allocateBuffer() override;
-    void allocateBuffer(size_t batch_size, size_t max_seq_len, size_t max_cache_seq_len, size_t max_input_len);
+    void allocateBuffer(size_t batch_size, size_t max_seq_len, size_t max_cache_seq_len);
     void freeBuffer() override;
 
     void initialize();
@@ -59,8 +61,9 @@ private:
 protected:
     T* input_attention_mask_;
     T* decoder_output_buf_;
+    T* normed_decoder_output_buf_;
 
-    float* logits_buf_;
+    T* logits_buf_;
 
     T*   key_cache_;
     T*   value_cache_;
@@ -76,35 +79,37 @@ protected:
                                         const std::unordered_map<std::string, Tensor>* input_tensors);
 
 public:
-    LLaMA(size_t             head_num,
-          size_t             size_per_head,
-          size_t             inter_size,
-          size_t             num_layer,
-          size_t             vocab_size,
-          size_t             rotary_embedding_dim,
-          unsigned long long random_seed,
-          cudaStream_t       stream,
-          cublasMMWrapper*   cublas_wrapper,
-          IAllocator*        allocator,
-          bool               is_free_buffer_after_forward,
-          cudaDeviceProp*    cuda_device_prop = nullptr,
-          AttentionType      attention_type   = AttentionType::UNFUSED_MHA);
+    LLaMA(size_t           head_num,
+          size_t           size_per_head,
+          size_t           inter_size,
+          size_t           num_layer,
+          size_t           vocab_size,
+          size_t           rotary_embedding_dim,
+          size_t           random_seed,
+          size_t           max_seq_len,
+          cudaStream_t     stream,
+          cublasMMWrapper* cublas_wrapper,
+          IAllocator*      allocator,
+          bool             is_free_buffer_after_forward,
+          cudaDeviceProp*  cuda_device_prop = nullptr,
+          AttentionType    attention_type   = AttentionType::UNFUSED_MHA);
 
-    LLaMA(size_t             head_num,
-          size_t             size_per_head,
-          size_t             inter_size,
-          size_t             num_layer,
-          size_t             vocab_size,
-          size_t             rotary_embedding_dim,
-          unsigned long long random_seed,
-          NcclParam          tensor_para,
-          NcclParam          pipeline_para,
-          cudaStream_t       stream,
-          cublasMMWrapper*   cublas_wrapper,
-          IAllocator*        allocator,
-          bool               is_free_buffer_after_forward,
-          cudaDeviceProp*    cuda_device_prop = nullptr,
-          AttentionType      attention_type   = AttentionType::UNFUSED_MHA);
+    LLaMA(size_t           head_num,
+          size_t           size_per_head,
+          size_t           inter_size,
+          size_t           num_layer,
+          size_t           vocab_size,
+          size_t           rotary_embedding_dim,
+          size_t           random_seed,
+          size_t           max_seq_len,
+          NcclParam        tensor_para,
+          NcclParam        pipeline_para,
+          cudaStream_t     stream,
+          cublasMMWrapper* cublas_wrapper,
+          IAllocator*      allocator,
+          bool             is_free_buffer_after_forward,
+          cudaDeviceProp*  cuda_device_prop = nullptr,
+          AttentionType    attention_type   = AttentionType::UNFUSED_MHA);
 
     LLaMA(LLaMA<T> const& LLaMA);
 

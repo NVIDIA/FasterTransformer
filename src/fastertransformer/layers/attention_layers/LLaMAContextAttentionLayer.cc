@@ -43,11 +43,12 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
     FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
     FT_CHECK(output_tensors->at("key_cache").shape.size() == 5);
     FT_CHECK(output_tensors->at("value_cache").shape.size() == 4);
-    const int  request_batch_size = input_tensors->at("attention_mask").shape[0];
-    const int  request_seq_len    = input_tensors->at("attention_mask").shape[2];
-    const int  layer_id           = input_tensors->getVal<int>("layer_id");
-    const int* padding_offset     = input_tensors->getPtr<int>("padding_offset", nullptr);
-    int*       cu_seqlens         = input_tensors->getPtr<int>("cu_seqlens", nullptr);
+    const int  batch_size     = input_tensors->at("attention_mask").shape[0];
+    const int  seq_len        = input_tensors->at("attention_mask").shape[2];
+    const int  layer_id       = input_tensors->getVal<int>("layer_id");
+    const int* padding_offset = input_tensors->getPtr<int>("padding_offset", nullptr);
+    int*       cu_seqlens     = input_tensors->getPtr<int>("cu_seqlens", nullptr);
+    size_t     start_pos      = input_tensors->at("start_pos").max<uint32_t>();
 
     T* attention_out   = output_tensors->at("hidden_features").getPtr<T>();
     T* attention_input = input_tensors->at("input_query").getPtr<T>();
@@ -58,11 +59,11 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                        "LLaMA Context FUSED_PADDED_MHA is not supported !");
 
     PUSH_RANGE("attention buffer alloc");
-    allocateBuffer(request_batch_size, request_seq_len, attention_type != AttentionType::FUSED_MHA);
+    allocateBuffer(batch_size, seq_len, attention_type != AttentionType::FUSED_MHA);
     POP_RANGE;
     sync_check_cuda_error();
 
-    const int  m        = input_tensors->at("input_query").shape[0];
+    const int m = input_tensors->at("input_query").shape[0];
 
     PUSH_RANGE("qkv_gemm");
 
@@ -83,7 +84,7 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
 
     if (padding_offset != nullptr) {
         // q_buf_2_, k_buf_2_ and v_buf_2_ are continuous
-        cudaMemsetAsync(q_buf_2_, 0, request_batch_size * request_seq_len * 3 * hidden_units_ * sizeof(T), stream_);
+        cudaMemsetAsync(q_buf_2_, 0, batch_size * seq_len * 3 * hidden_units_ * sizeof(T), stream_);
     }
     invokeAddFusedQKVBiasTranspose(q_buf_2_,
                                    k_buf_2_,
@@ -92,8 +93,8 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                                    qkv_buf_,
                                    attention_weights->query_weight.bias,
                                    padding_offset,
-                                   request_batch_size,
-                                   request_seq_len,
+                                   batch_size,
+                                   seq_len,
                                    m,
                                    head_num_,
                                    size_per_head_,
@@ -108,12 +109,17 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
     // Use batch major
     // put k/v_buf from shape [B, H, L, Dh]
     // to cache [B, H, Dh/x, L, x]  and [B, H, L, Dh/x, x]
+    // TODO: Cache implementation
+    // k_cache: [batch_size, num_heads, L, Dh]
+    // k_buf: [batch_size, num_heads, start_pos + seq_len, Dh]
+    // v_buf: [batch_size, num_heads, L, Dh]
+
     invokeTranspose4dBatchMajor(output_tensors->getPtr<T>("key_cache"),
                                 output_tensors->getPtr<T>("value_cache"),
                                 k_buf_2_,
                                 v_buf_2_,
-                                request_batch_size,
-                                request_seq_len,
+                                batch_size,
+                                seq_len,
                                 max_seq_len,
                                 size_per_head_,
                                 head_num_,
@@ -122,19 +128,16 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
     // k_cache = (batch_size, num_heads, Dh/x, L, x)
     // v_cache = (batch_size, num_heads, L, Dh)
     sync_check_cuda_error();
-
-    // NOTE: qkv buffer shape (batch_size, num_heads,L or prompt_len + L, Dh)
-
     POP_RANGE;
 
     if (attention_type == AttentionType::FUSED_MHA) {
-        dispatcher_fp16->setup_causal_masked_fmha(request_seq_len, request_batch_size);
+        dispatcher_fp16->setup_causal_masked_fmha(seq_len, batch_size);
         dispatcher_fp16->run_causal_masked_fmha(qkv_buf_, cu_seqlens, qkv_buf_3_, true, stream_);
     }
     else {
         const cudaDataType_t gemm_data_type      = getCudaDataType<T>();
-        const int            attention_seq_len_1 = request_seq_len;  // q length
-        const int            attention_seq_len_2 = request_seq_len;  // kv length
+        const int            attention_seq_len_1 = seq_len;              // q length
+        const int            attention_seq_len_2 = start_pos + seq_len;  // kv length
         const T              qk_scale            = static_cast<T>(1.0f / sqrtf(size_per_head_ * 1.0f));
 
         //
@@ -161,7 +164,7 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                                                 CUDA_R_32F,
                                                 attention_seq_len_2,  // n
                                                 attention_seq_len_2 * attention_seq_len_1,
-                                                request_batch_size * head_num_,  // global batch size
+                                                batch_size * head_num_,  // global batch size
                                                 CUDA_R_32F);
 
             sync_check_cuda_error();
@@ -172,7 +175,7 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
             param.attention_score    = qk_buf_;         // (batch_size, head_num, q_length, k_length)
             param.qk                 = qk_buf_float_;   // (batch_size, head_num, q_length, k_length)
             param.attention_mask     = attention_mask;  // (batch_size, q_length, k_length)
-            param.batch_size         = request_batch_size;
+            param.batch_size         = batch_size;
             param.q_length           = attention_seq_len_1;
             param.k_length           = attention_seq_len_2;
             param.num_heads          = head_num_;
@@ -198,7 +201,7 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                                                 qk_buf_,
                                                 attention_seq_len_2,
                                                 attention_seq_len_2 * attention_seq_len_1,
-                                                request_batch_size * head_num_);
+                                                batch_size * head_num_);
 
             POP_RANGE;
             PUSH_RANGE("softmax");
@@ -206,7 +209,7 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
             param.attention_score    = qk_buf_;         // (batch_size, head_num, q_length, k_length)
             param.qk                 = qk_buf_;         // (batch_size, head_num, q_length, k_length)
             param.attention_mask     = attention_mask;  // (batch_size, q_length, k_length)
-            param.batch_size         = request_batch_size;
+            param.batch_size         = batch_size;
             param.q_length           = attention_seq_len_1;
             param.k_length           = attention_seq_len_2;
             param.num_heads          = head_num_;
@@ -232,13 +235,13 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                                             qkv_buf_2_,
                                             size_per_head_,
                                             attention_seq_len_1 * size_per_head_,
-                                            request_batch_size * head_num_);
+                                            batch_size * head_num_);
 
         // transpose (batch_size, num_heads, L, Dh) to (batch_size, L, num_heads * Dh)
         if (padding_offset == nullptr) {
             invokeTransposeQKV(qkv_buf_3_,
                                qkv_buf_2_,
-                               request_batch_size,
+                               batch_size,
                                attention_seq_len_1,
                                head_num_,
                                size_per_head_,
@@ -251,7 +254,7 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
             invokeTransposeAttentionOutRemovePadding(qkv_buf_2_,
                                                      qkv_buf_3_,
                                                      m,
-                                                     request_batch_size,
+                                                     batch_size,
                                                      attention_seq_len_1,
                                                      head_num_,
                                                      size_per_head_,
@@ -286,8 +289,7 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
 }
 
 template<typename T>
-LLaMAContextAttentionLayer<T>::LLaMAContextAttentionLayer(size_t           max_batch_size,
-                                                          size_t           max_seq_len,
+LLaMAContextAttentionLayer<T>::LLaMAContextAttentionLayer(
                                                           size_t           head_num,
                                                           size_t           size_per_head,
                                                           cudaStream_t     stream,
@@ -296,8 +298,6 @@ LLaMAContextAttentionLayer<T>::LLaMAContextAttentionLayer(size_t           max_b
                                                           bool             is_free_buffer_after_forward,
                                                           bool             is_qk_buf_float):
     BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, false),
-    max_batch_size_(max_batch_size),
-    max_seq_len_(max_seq_len),
     head_num_(head_num),
     size_per_head_(size_per_head),
     hidden_units_(head_num * size_per_head),
@@ -307,8 +307,7 @@ LLaMAContextAttentionLayer<T>::LLaMAContextAttentionLayer(size_t           max_b
 }
 
 template<typename T>
-LLaMAContextAttentionLayer<T>::LLaMAContextAttentionLayer(size_t           max_batch_size,
-                                                          size_t           max_seq_len,
+LLaMAContextAttentionLayer<T>::LLaMAContextAttentionLayer(
                                                           size_t           head_num,
                                                           size_t           size_per_head,
                                                           size_t           local_head_num,
@@ -318,8 +317,6 @@ LLaMAContextAttentionLayer<T>::LLaMAContextAttentionLayer(size_t           max_b
                                                           bool             is_free_buffer_after_forward,
                                                           bool             is_qk_buf_float):
     BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, false),
-    max_batch_size_(max_batch_size),
-    max_seq_len_(max_seq_len),
     head_num_(head_num),
     size_per_head_(size_per_head),
     hidden_units_(head_num * size_per_head),
@@ -331,8 +328,7 @@ LLaMAContextAttentionLayer<T>::LLaMAContextAttentionLayer(size_t           max_b
 }
 
 template<typename T>
-LLaMAContextAttentionLayer<T>::LLaMAContextAttentionLayer(size_t           max_batch_size,
-                                                          size_t           max_seq_len,
+LLaMAContextAttentionLayer<T>::LLaMAContextAttentionLayer(
                                                           size_t           head_num,
                                                           size_t           size_per_head,
                                                           size_t           local_head_num,
@@ -343,8 +339,6 @@ LLaMAContextAttentionLayer<T>::LLaMAContextAttentionLayer(size_t           max_b
                                                           bool             is_free_buffer_after_forward,
                                                           bool             is_qk_buf_float):
     BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, false),
-    max_batch_size_(max_batch_size),
-    max_seq_len_(max_seq_len),
     head_num_(head_num),
     size_per_head_(size_per_head),
     hidden_units_(head_num * size_per_head),
@@ -361,8 +355,6 @@ LLaMAContextAttentionLayer<T>::LLaMAContextAttentionLayer(LLaMAContextAttentionL
                           attention_layer.cublas_wrapper_,
                           attention_layer.allocator_,
                           attention_layer.is_free_buffer_after_forward_),
-    max_batch_size_(attention_layer.max_batch_size_),
-    max_seq_len_(attention_layer.max_seq_len_),
     head_num_(attention_layer.head_num_),
     size_per_head_(attention_layer.size_per_head_),
     hidden_units_(attention_layer.hidden_units_),

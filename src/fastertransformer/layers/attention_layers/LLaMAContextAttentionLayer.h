@@ -27,15 +27,11 @@ namespace fastertransformer {
 template<typename T>
 class LLaMAContextAttentionLayer: public BaseAttentionLayer<T> {
 private:
-    // buffer handling
-    size_t max_batch_size_ = 0;
-    size_t max_seq_len_    = 0;
-
     // metadata
-    const size_t           head_num_;
-    const size_t           size_per_head_;
-    const size_t           hidden_units_;
-    const size_t           rotary_embedding_dim_;
+    const size_t head_num_;
+    const size_t size_per_head_;
+    const size_t hidden_units_;
+    const size_t rotary_embedding_dim_;
 
     // fmha runner
     int                        sm_ = getSMVersion();
@@ -54,19 +50,17 @@ private:
 protected:
     using BaseAttentionLayer<T>::allocator_;
     using BaseAttentionLayer<T>::stream_;
-    T*     qkv_buf_              = nullptr;
-    T*     q_buf_2_              = nullptr;
-    T*     k_buf_2_              = nullptr;
-    T*     v_buf_2_              = nullptr;
-    T*     qk_buf_               = nullptr;
-    float* qk_buf_float_         = nullptr;
-    T*     qkv_buf_2_            = nullptr;
-    T*     qkv_buf_3_            = nullptr;
+    T*     qkv_buf_      = nullptr;
+    T*     q_buf_2_      = nullptr;
+    T*     k_buf_2_      = nullptr;
+    T*     v_buf_2_      = nullptr;
+    T*     qk_buf_       = nullptr;
+    float* qk_buf_float_ = nullptr;
+    T*     qkv_buf_2_    = nullptr;
+    T*     qkv_buf_3_    = nullptr;
 
 public:
-    LLaMAContextAttentionLayer(size_t           max_batch_size,
-                               size_t           max_seq_len,
-                               size_t           head_num,
+    LLaMAContextAttentionLayer(size_t           head_num,
                                size_t           size_per_head,
                                cudaStream_t     stream,
                                cublasMMWrapper* cublas_wrapper,
@@ -74,9 +68,7 @@ public:
                                bool             is_free_buffer_after_forward,
                                bool             is_qk_buf_float);
 
-    LLaMAContextAttentionLayer(size_t           max_batch_size,
-                               size_t           max_seq_len,
-                               size_t           head_num,
+    LLaMAContextAttentionLayer(size_t           head_num,
                                size_t           size_per_head,
                                size_t           local_head_num,
                                cudaStream_t     stream,
@@ -85,9 +77,7 @@ public:
                                bool             is_free_buffer_after_forward,
                                bool             is_qk_buf_float);
 
-    LLaMAContextAttentionLayer(size_t           max_batch_size,
-                               size_t           max_seq_len,
-                               size_t           head_num,
+    LLaMAContextAttentionLayer(size_t           head_num,
                                size_t           size_per_head,
                                size_t           local_head_num,
                                size_t           rotary_embedding_dim,

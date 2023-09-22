@@ -81,14 +81,15 @@ void llama_example(const INIReader reader)
     const size_t decoder_layers       = reader.GetInteger(model_name, "decoder_layers");
     const size_t rotary_embedding_dim = reader.GetInteger(model_name, "rotary_embedding");
     const int    multiple_of          = reader.GetInteger(model_name, "multiple_of");
-    const size_t max_cache_seq_len    = reader.GetInteger(model_name, "max_cache_seq_len");
+    const size_t max_seq_len          = reader.GetInteger(model_name, "max_seq_len");
 
     const size_t hidden_units = head_num * size_per_head;
     const size_t inter_size   = multiple_of * (((8 * hidden_units / 3) + multiple_of - 1) / multiple_of);
 
     const size_t request_batch_size = reader.GetInteger("request", "request_batch_size");
-    const int    min_length         = reader.GetInteger("request", "min_length", 0);
     const int    padding_id         = reader.GetInteger(model_name, "padding_id");
+    int          start_pos          = reader.GetInteger("request", "start_pos", 0);
+    unsigned long long random_seed = reader.GetInteger("request", "random_seed", 0);
 
     FT_CHECK(decoder_layers % pipeline_para_size == 0);
 
@@ -181,10 +182,7 @@ void llama_example(const INIReader reader)
 
     model_dir = model_dir + "/" + std::to_string(tensor_para.world_size_) + "-gpu";
     llama_weights.loadModel(model_dir);
-    unsigned long long random_seed;
-    if (rank == 0) {
-        random_seed = (unsigned long long)(0);
-    }
+
     if (world_size > 1) {
         mpi::bcast(&random_seed, 1, mpi::MPI_TYPE_UNSIGNED_LONG_LONG, 0, mpi::COMM_WORLD);
     }
@@ -193,7 +191,7 @@ void llama_example(const INIReader reader)
         getAttentionType<T>(size_per_head,
                             getSMVersion(),
                             !((std::getenv("SHONG_PADDING") != nullptr)
-                             && (std::string(std::getenv("SHONG_PADDING")) == "ON")), //true,  // remove_padding
+                              && (std::string(std::getenv("SHONG_PADDING")) == "ON")),  // true,  // remove_padding
                             0,      // llama supports any-seq-length fmha
                             true,   // is_fuse
                             false,  // with_relative_position_bias
@@ -221,6 +219,7 @@ void llama_example(const INIReader reader)
                               vocab_size,
                               rotary_embedding_dim,
                               random_seed,
+                              max_seq_len,
                               tensor_para,
                               pipeline_para,
                               stream,
@@ -230,23 +229,18 @@ void llama_example(const INIReader reader)
                               &prop,
                               attention_type);
 
-    T* d_output_logits;
+    float* d_output_logits;
     deviceMalloc(&d_output_logits, request_batch_size * total_output_len * vocab_size, false);
-    std::vector<uint32_t>                   output_seq_len(request_batch_size, total_output_len);
     std::unordered_map<std::string, Tensor> input_tensors = std::unordered_map<std::string, Tensor>{
         {"input_ids",
          Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size, (size_t)max_input_len}, d_input_ids}},
         {"input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, std::vector<size_t>{request_batch_size}, d_input_lengths}},
-        {"output_seq_len",
-         Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<size_t>{request_batch_size}, output_seq_len.data()}},
-        {"min_length", Tensor{MEMORY_CPU, TYPE_INT32, std::vector<size_t>{1}, &min_length}},
-        {"random_seed", Tensor{MEMORY_CPU, TYPE_UINT64, std::vector<size_t>{1}, &random_seed}},
-        {"max_cache_seq_len", Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<size_t>{1}, &max_cache_seq_len}}};
+        {"start_pos", Tensor{MEMORY_CPU, TYPE_UINT32, std::vector<size_t>{1}, &start_pos}}};
 
     std::unordered_map<std::string, Tensor> output_tensors = std::unordered_map<std::string, Tensor>{
         {"output_logits",
          Tensor{MEMORY_GPU,
-                TYPE_FP16,
+                TYPE_FP32,
                 std::vector<size_t>{request_batch_size, (size_t)total_output_len, vocab_size},
                 d_output_logits}}};
 
@@ -269,12 +263,14 @@ void llama_example(const INIReader reader)
     POP_RANGE;
     ft_nvtx::resetScope();
 
+    /*
     if (rank == world_size - 1) {
-        T* out = (T*)malloc(sizeof(T) * request_batch_size * total_output_len * vocab_size);
+        float* out = (float*)malloc(sizeof(float) * request_batch_size * total_output_len * vocab_size);
         cudaMemcpy(out,
                    d_output_logits,
-                   sizeof(T) * request_batch_size * total_output_len * vocab_size,
-                   cudaMemcpyDeviceToHost);
+                   sizeof(float) * request_batch_size * total_output_len * vocab_size,
+                   cudaMemcpyDeviceToHost
+                   );
         for (int b = 0; b < request_batch_size; ++b) {
             std::cout << "[";
             for (int s = 0; s < total_output_len; ++s) {
@@ -289,6 +285,7 @@ void llama_example(const INIReader reader)
         std::cout << "\n";
         free(out);
     }
+    */
 
     // test time
     cudaProfilerStart();
