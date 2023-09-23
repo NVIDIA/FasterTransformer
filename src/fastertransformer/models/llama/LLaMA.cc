@@ -23,7 +23,103 @@
 #include <algorithm>
 #include <type_traits>
 
+#include <iomanip>
+
 namespace fastertransformer {
+
+template<typename T>
+static void _print_tensor1(T* out, int dim1, int indent)
+{
+    std::string ind(indent, ' ');
+    int         start0 = 0;
+    int         end0   = (dim1 < 3) ? dim1 : 3;
+    int         start1 = (dim1 < 3) ? 0 : dim1 - 3;
+    int         end1   = (dim1 < 3) ? 0 : dim1;
+
+    std::cout << "[";
+    for (int i = start0; i < end0; ++i) {
+        std::cout << std::fixed << std::setw(7) << std::setprecision(4) << std::setfill(' ') << out[i];
+        if (i != dim1 - 1)
+            std::cout << ", ";
+    }
+    if (end0 != start1) {
+        std::cout << "..., ";
+    }
+    for (int i = start1; i < end1; ++i) {
+        std::cout << std::fixed << std::setw(7) << std::setprecision(4) << std::setfill(' ') << out[i];
+        if (i != end1 - 1)
+            std::cout << ", ";
+    }
+    std::cout << "]";
+}
+
+template<typename T>
+static void _print_tensor2(T* out, int dim1, int dim2, int indent)
+{
+    std::string ind(indent, ' ');
+    int         start0 = 0;
+    int         end0   = (dim1 < 3) ? dim1 : 3;
+    int         start1 = (dim1 < 3) ? 0 : dim1 - 3;
+    int         end1   = (dim1 < 3) ? 0 : dim1;
+    std::cout << "[";
+    for (int i = start0; i < end0; ++i) {
+        if (i != start0)
+            std::cout << ind;
+        _print_tensor1(&out[i * dim2], dim2, indent + 1);
+        if (i != dim1 - 1)
+            std::cout << ",\n";
+    }
+    if (end0 != start1) {
+        std::cout << ind;
+        std::cout << "...,\n";
+    }
+    for (int i = start1; i < end1; ++i) {
+        std::cout << ind;
+        _print_tensor1(&out[i * dim2], dim2, indent + 1);
+        if (i != end1 - 1)
+            std::cout << ",\n";
+    }
+    std::cout << "]";
+}
+
+template<typename T>
+static void _print_tensor3(T* out, int dim1, int dim2, int dim3, int indent)
+{
+    std::string ind(indent, ' ');
+
+    int start0 = 0;
+    int end0   = (dim1 < 3) ? dim1 : 3;
+    int start1 = (dim1 < 3) ? 0 : dim1 - 3;
+    int end1   = (dim1 < 3) ? 0 : dim1;
+    std::cout << "[";
+    for (int i = start0; i < end0; ++i) {
+        if (i != start0)
+            std::cout << ind;
+        _print_tensor2(&out[i * dim2 * dim3], dim2, dim3, indent + 1);
+        if (i != dim1 - 1)
+            std::cout << ",\n\n";
+    }
+    if (start1 != end1) {
+        std::cout << ind;
+        std::cout << "...,\n";
+    }
+    for (int i = start1; i < end1; ++i) {
+        std::cout << ind;
+        _print_tensor2(&out[i * dim2 * dim3], dim2, dim3, indent + 1);
+        if (i != end1 - 1)
+            std::cout << ",\n";
+    }
+    std::cout << "]\n";
+}
+
+template<typename T>
+static void print_tensor3(T* in, int dim1, int dim2, int dim3)
+{
+    T* out = (T*)malloc(sizeof(T) * dim1 * dim2 * dim3);
+    cudaMemcpy(out, in, sizeof(T) * dim1 * dim2 * dim3, cudaMemcpyDeviceToHost);
+    _print_tensor3(out, dim1, dim2, dim3, 1);
+    free(out);
+}
 
 template<typename T>
 void LLaMA<T>::initialize()
@@ -56,7 +152,7 @@ void LLaMA<T>::allocateBuffer(size_t batch_size, size_t seq_len, size_t max_seq_
     const size_t self_cache_size = (num_layer_ / pipeline_para_.world_size_) * batch_size * max_seq_len * hidden_units_;
 
     input_attention_mask_ =
-        (T*)(allocator_->reMalloc(input_attention_mask_, sizeof(T) * batch_size * seq_len * max_seq_len, false));
+        (T*)(allocator_->reMalloc(input_attention_mask_, sizeof(T) * batch_size * seq_len * seq_len, false));
     decoder_output_buf_ =
         (T*)(allocator_->reMalloc(decoder_output_buf_, sizeof(T) * batch_size * hidden_units_, false));
     normed_decoder_output_buf_ =
@@ -204,6 +300,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                        const std::unordered_map<std::string, Tensor>* input_tensors,
                        const LLaMAWeight<T>*                          llama_weights)
 {
+    // Logger::getLogger().setLevel(Logger::Level::TRACE);
     // input_tensors:
     //      input_ids [batch_size, seq_len]
     //      input_lengths [batch_size]
@@ -224,7 +321,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     int seq_len = input_tensors->at("input_ids").shape[1];
 
     // max cache seq len should include max prefix prompt length as it has k/v states
-    const size_t         start_pos      = input_tensors->at("start_pos").max<uint32_t>();
+    const int            start_pos      = input_tensors->at("start_pos").max<int>();
     const cudaDataType_t gemm_data_type = getCudaDataType<T>();
 
     allocateBuffer(batch_size, seq_len, max_seq_len_);
@@ -243,7 +340,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     invokeTileGptInputs(tiled_input_ids_buf_,
                         tiled_input_lengths_buf_,
                         input_tensors->at("input_ids").getPtr<int>(),
-                        input_tensors->at("input_lengths").getPtr<const int>(),
+                        input_tensors->at("input_lengths").getPtr<int>(),
                         batch_size,
                         1,
                         seq_len,
@@ -255,19 +352,18 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     sync_check_cuda_error();
 
     if (pipeline_para_.rank_ == 0) {
-        invokeInputIdsEmbeddingLookupPosEncoding(context_decoder_input_buf_,
-                                                 nullptr,
-                                                 llama_weights->pre_decoder_embedding_table,
-                                                 llama_weights->position_encoding_table,
-                                                 pPromptTuningParam<T>{},  // no p/prompt tuning
-                                                 tiled_input_ids_buf_,
-                                                 1,
-                                                 seq_len,
-                                                 seq_len,  // must be same
-                                                 batch_size,
-                                                 hidden_units_,
-                                                 stream_);
+        invokeInputIdsEmbeddingLookup(context_decoder_input_buf_,
+                                      llama_weights->pre_decoder_embedding_table,
+                                      tiled_input_ids_buf_,
+                                      seq_len,
+                                      batch_size,
+                                      hidden_units_,
+                                      stream_);
         sync_check_cuda_error();
+
+//        std::cout << 0 << "==================" << "EMBEDDING\n";
+//        print_tensor3(context_decoder_input_buf_, batch_size, seq_len, hidden_units_);
+//        std::cout << 0 << "==================" << "EMBEDDING\n";
     }
 
     std::unordered_map<std::string, Tensor> decoder_input_tensors{
@@ -276,7 +372,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         {"attention_mask",
          Tensor{MEMORY_GPU, data_type, {batch_size, 1, (size_t)seq_len, (size_t)(seq_len)}, input_attention_mask_}},
         {"input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size}, tiled_input_lengths_buf_}},
-        {"start_pos", Tensor{MEMORY_CPU, TYPE_UINT32, {1}, &start_pos}}};
+        {"start_pos", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &start_pos}}};
 
     std::unordered_map<std::string, Tensor> decoder_output_tensors{
         {"decoder_output",
@@ -298,6 +394,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                                     hidden_units_,
                                     stream_);
         sync_check_cuda_error();
+
         cublas_wrapper_->Gemm(CUBLAS_OP_N,
                               CUBLAS_OP_N,
                               vocab_size_,

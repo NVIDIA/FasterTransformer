@@ -69,7 +69,6 @@ private:
 protected:
     T*      decoder_normed_input_   = nullptr;
     T*      self_attn_output_       = nullptr;
-    T*      ffn_output_             = nullptr;
     T*      decoder_layer_output_   = nullptr;
     size_t* h_pinned_token_num_ptr_ = nullptr;
     int*    padding_offset_         = nullptr;

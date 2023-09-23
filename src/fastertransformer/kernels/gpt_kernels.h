@@ -60,6 +60,15 @@ struct pPromptTuningParam {
 };
 
 template<typename T>
+void invokeInputIdsEmbeddingLookup(T*                    from_tensor,
+                                   const T*              embedding_table,
+                                   const int*            input_ids,
+                                   const int             length,
+                                   const int             batch_size,
+                                   const int             hidden_units,
+                                   cudaStream_t          stream);
+
+template<typename T>
 void invokeInputIdsEmbeddingLookupPosEncoding(T*                    from_tensor,
                                               int*                  output_ids,
                                               const T*              embedding_table,

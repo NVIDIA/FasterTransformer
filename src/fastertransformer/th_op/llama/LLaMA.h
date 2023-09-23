@@ -30,7 +30,7 @@ class IFLLaMA {
 public:
     virtual ~IFLLaMA() {}
     virtual void
-    forward(th::Tensor& output_logits, th::Tensor& input_ids, th::Tensor& input_lengths, const int64_t start_pos) = 0;
+    forward(th::Tensor& output_logits, th::Tensor& input_ids, th::Tensor& input_lengths, const int start_pos) = 0;
 };
 
 template<typename T>
@@ -117,7 +117,7 @@ public:
     virtual void forward(th::Tensor&   output_logits,
                          th::Tensor&   input_ids,
                          th::Tensor&   input_lengths,
-                         const int64_t start_pos) override
+                         const int start_pos) override
     {
         auto           stream       = at::cuda::getCurrentCUDAStream().stream();
         cublasHandle_t cublasHandle = at::cuda::getCurrentCUDABlasHandle();
@@ -171,7 +171,7 @@ public:
             {"input_lengths",
              ft::Tensor{
                  ft::MEMORY_GPU, ft::TYPE_INT32, std::vector<size_t>{request_batch_size}, get_ptr<int>(input_lengths)}},
-            {"start_pos", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_UINT32, std::vector<size_t>{1}, &start_pos}}};
+            {"start_pos", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &start_pos}}};
 
         std::unordered_map<std::string, ft::Tensor> output_tensors = std::unordered_map<std::string, ft::Tensor>{
             {"output_logits",

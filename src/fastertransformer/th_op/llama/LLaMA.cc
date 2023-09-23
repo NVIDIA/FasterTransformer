@@ -88,7 +88,7 @@ LLaMA::forward(th::Tensor& input_ids, th::Tensor& input_lengths, const int64_t s
     const int  seq_len       = input_ids.size(1);
     th::Tensor output_logits = torch::empty({batch_size, seq_len, (long)vocab_size_},
                                             torch::dtype(torch::kFloat32).device(torch::kCUDA).requires_grad(false));
-    ftllama->forward(output_logits, input_ids, input_lengths, start_pos);
+    ftllama->forward(output_logits, input_ids, input_lengths, (int)start_pos);
     return output_logits;
 }
 

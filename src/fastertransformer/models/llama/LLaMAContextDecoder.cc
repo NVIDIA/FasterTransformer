@@ -21,7 +21,103 @@
 #include "src/fastertransformer/layers/FfnLayer.h"
 #include "src/fastertransformer/layers/attention_layers/LLaMAContextAttentionLayer.h"
 
+#include <iomanip>
+
 namespace fastertransformer {
+
+template<typename T>
+static void _print_tensor1(T* out, int dim1, int indent)
+{
+    std::string ind(indent, ' ');
+    int         start0 = 0;
+    int         end0   = (dim1 < 3) ? dim1 : 3;
+    int         start1 = (dim1 < 3) ? 0 : dim1 - 3;
+    int         end1   = (dim1 < 3) ? 0 : dim1;
+
+    std::cout << "[";
+    for (int i = start0; i < end0; ++i) {
+        std::cout << std::fixed << std::setw(7) << std::setprecision(4) << std::setfill(' ') << out[i];
+        if (i != dim1 - 1)
+            std::cout << ", ";
+    }
+    if (end0 != start1) {
+        std::cout << "..., ";
+    }
+    for (int i = start1; i < end1; ++i) {
+        std::cout << std::fixed << std::setw(7) << std::setprecision(4) << std::setfill(' ') << out[i];
+        if (i != end1 - 1)
+            std::cout << ", ";
+    }
+    std::cout << "]";
+}
+
+template<typename T>
+static void _print_tensor2(T* out, int dim1, int dim2, int indent)
+{
+    std::string ind(indent, ' ');
+    int         start0 = 0;
+    int         end0   = (dim1 < 3) ? dim1 : 3;
+    int         start1 = (dim1 < 3) ? 0 : dim1 - 3;
+    int         end1   = (dim1 < 3) ? 0 : dim1;
+    std::cout << "[";
+    for (int i = start0; i < end0; ++i) {
+        if (i != start0)
+            std::cout << ind;
+        _print_tensor1(&out[i * dim2], dim2, indent + 1);
+        if (i != dim1 - 1)
+            std::cout << ",\n";
+    }
+    if (end0 != start1) {
+        std::cout << ind;
+        std::cout << "...,\n";
+    }
+    for (int i = start1; i < end1; ++i) {
+        std::cout << ind;
+        _print_tensor1(&out[i * dim2], dim2, indent + 1);
+        if (i != end1 - 1)
+            std::cout << ",\n";
+    }
+    std::cout << "]";
+}
+
+template<typename T>
+static void _print_tensor3(T* out, int dim1, int dim2, int dim3, int indent)
+{
+    std::string ind(indent, ' ');
+
+    int start0 = 0;
+    int end0   = (dim1 < 3) ? dim1 : 3;
+    int start1 = (dim1 < 3) ? 0 : dim1 - 3;
+    int end1   = (dim1 < 3) ? 0 : dim1;
+    std::cout << "[";
+    for (int i = start0; i < end0; ++i) {
+        if (i != start0)
+            std::cout << ind;
+        _print_tensor2(&out[i * dim2 * dim3], dim2, dim3, indent + 1);
+        if (i != dim1 - 1)
+            std::cout << ",\n\n";
+    }
+    if (start1 != end1) {
+        std::cout << ind;
+        std::cout << "...,\n";
+    }
+    for (int i = start1; i < end1; ++i) {
+        std::cout << ind;
+        _print_tensor2(&out[i * dim2 * dim3], dim2, dim3, indent + 1);
+        if (i != end1 - 1)
+            std::cout << ",\n";
+    }
+    std::cout << "]\n";
+}
+
+template<typename T>
+static void print_tensor3(T* in, int dim1, int dim2, int dim3)
+{
+    T* out = (T*)malloc(sizeof(T) * dim1 * dim2 * dim3);
+    cudaMemcpy(out, in, sizeof(T) * dim1 * dim2 * dim3, cudaMemcpyDeviceToHost);
+    _print_tensor3(out, dim1, dim2, dim3, 1);
+    free(out);
+}
 
 template<typename T>
 void LLaMAContextDecoder<T>::initialize()
@@ -64,8 +160,6 @@ void LLaMAContextDecoder<T>::allocateBuffer(size_t batch_size, size_t seq_len)
         allocator_->reMalloc(decoder_normed_input_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
     self_attn_output_ = reinterpret_cast<T*>(
         allocator_->reMalloc(self_attn_output_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
-    ffn_output_ = reinterpret_cast<T*>(
-        allocator_->reMalloc(ffn_output_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
     decoder_layer_output_ = reinterpret_cast<T*>(
         allocator_->reMalloc(decoder_layer_output_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
     h_pinned_token_num_ptr_ = (size_t*)allocator_->reMalloc(h_pinned_token_num_ptr_, sizeof(size_t), true, true);
@@ -81,7 +175,6 @@ void LLaMAContextDecoder<T>::freeBuffer()
     if (is_allocate_buffer_ == true) {
         allocator_->free((void**)(&decoder_normed_input_));
         allocator_->free((void**)(&self_attn_output_));
-        allocator_->free((void**)(&ffn_output_));
         allocator_->free((void**)(&decoder_layer_output_));
         allocator_->free((void**)(&h_pinned_token_num_ptr_), true);
         allocator_->free((void**)(&padding_offset_));
@@ -280,6 +373,13 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
             ftNcclRecv(layer_input, data_size, pipeline_para_.rank_ - 1, pipeline_para_, stream_);
             sync_check_cuda_error();
         }
+//        if (isFirstLayerParallelId(l)) {
+//            std::cout << l << "==================" << "RECV\n";
+//            print_tensor3(layer_input, batch_size, seq_len, hidden_units_);
+//            std::cout << l << "==================" << "RECV\n";
+//            std::cout << std::flush;
+//        }
+
 
         invokeGeneralLLaMALayerNorm(decoder_normed_input_,
                                     layer_input,
@@ -351,6 +451,14 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                               stream_);
 
         sync_check_cuda_error();
+
+
+//        if (isLastLayerParallelId(l)) {
+//            std::cout << l << "==================" << "SEND\n";
+//            print_tensor3(layer_input, batch_size, seq_len, hidden_units_);
+//            std::cout << l << "==================" << "SEND\n";
+//            std::cout << std::flush;
+//        }
 
         if (isLastLayerParallelId(l) && pipeline_para_.rank_ != pipeline_para_.world_size_ - 1
             && pipeline_para_.world_size_ > 1) {
