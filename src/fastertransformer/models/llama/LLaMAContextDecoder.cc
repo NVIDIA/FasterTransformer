@@ -20,104 +20,9 @@
 
 #include "src/fastertransformer/layers/FfnLayer.h"
 #include "src/fastertransformer/layers/attention_layers/LLaMAContextAttentionLayer.h"
-
-#include <iomanip>
+#include "src/fastertransformer/utils/llama_utils.h"
 
 namespace fastertransformer {
-
-template<typename T>
-static void _print_tensor1(T* out, int dim1, int indent)
-{
-    std::string ind(indent, ' ');
-    int         start0 = 0;
-    int         end0   = (dim1 < 3) ? dim1 : 3;
-    int         start1 = (dim1 < 3) ? 0 : dim1 - 3;
-    int         end1   = (dim1 < 3) ? 0 : dim1;
-
-    std::cout << "[";
-    for (int i = start0; i < end0; ++i) {
-        std::cout << std::fixed << std::setw(7) << std::setprecision(4) << std::setfill(' ') << out[i];
-        if (i != dim1 - 1)
-            std::cout << ", ";
-    }
-    if (end0 != start1) {
-        std::cout << "..., ";
-    }
-    for (int i = start1; i < end1; ++i) {
-        std::cout << std::fixed << std::setw(7) << std::setprecision(4) << std::setfill(' ') << out[i];
-        if (i != end1 - 1)
-            std::cout << ", ";
-    }
-    std::cout << "]";
-}
-
-template<typename T>
-static void _print_tensor2(T* out, int dim1, int dim2, int indent)
-{
-    std::string ind(indent, ' ');
-    int         start0 = 0;
-    int         end0   = (dim1 < 3) ? dim1 : 3;
-    int         start1 = (dim1 < 3) ? 0 : dim1 - 3;
-    int         end1   = (dim1 < 3) ? 0 : dim1;
-    std::cout << "[";
-    for (int i = start0; i < end0; ++i) {
-        if (i != start0)
-            std::cout << ind;
-        _print_tensor1(&out[i * dim2], dim2, indent + 1);
-        if (i != dim1 - 1)
-            std::cout << ",\n";
-    }
-    if (end0 != start1) {
-        std::cout << ind;
-        std::cout << "...,\n";
-    }
-    for (int i = start1; i < end1; ++i) {
-        std::cout << ind;
-        _print_tensor1(&out[i * dim2], dim2, indent + 1);
-        if (i != end1 - 1)
-            std::cout << ",\n";
-    }
-    std::cout << "]";
-}
-
-template<typename T>
-static void _print_tensor3(T* out, int dim1, int dim2, int dim3, int indent)
-{
-    std::string ind(indent, ' ');
-
-    int start0 = 0;
-    int end0   = (dim1 < 3) ? dim1 : 3;
-    int start1 = (dim1 < 3) ? 0 : dim1 - 3;
-    int end1   = (dim1 < 3) ? 0 : dim1;
-    std::cout << "[";
-    for (int i = start0; i < end0; ++i) {
-        if (i != start0)
-            std::cout << ind;
-        _print_tensor2(&out[i * dim2 * dim3], dim2, dim3, indent + 1);
-        if (i != dim1 - 1)
-            std::cout << ",\n\n";
-    }
-    if (start1 != end1) {
-        std::cout << ind;
-        std::cout << "...,\n";
-    }
-    for (int i = start1; i < end1; ++i) {
-        std::cout << ind;
-        _print_tensor2(&out[i * dim2 * dim3], dim2, dim3, indent + 1);
-        if (i != end1 - 1)
-            std::cout << ",\n";
-    }
-    std::cout << "]\n";
-}
-
-template<typename T>
-static void print_tensor3(T* in, int dim1, int dim2, int dim3)
-{
-    T* out = (T*)malloc(sizeof(T) * dim1 * dim2 * dim3);
-    cudaMemcpy(out, in, sizeof(T) * dim1 * dim2 * dim3, cudaMemcpyDeviceToHost);
-    _print_tensor3(out, dim1, dim2, dim3, 1);
-    free(out);
-}
 
 template<typename T>
 void LLaMAContextDecoder<T>::initialize()
@@ -351,8 +256,7 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
         }
 
         if (l == 0 && is_unpadded_mha) {
-            invokeRemovePadding(
-                decoder_layer_output_, decoder_input, padding_offset_, h_token_num, hidden_units_, stream_);
+            invokeRemovePadding(decoder_layer_output_, decoder_input, padding_offset_, h_token_num, hidden_units_, stream_);
             sync_check_cuda_error();
         }
 
@@ -373,23 +277,22 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
             ftNcclRecv(layer_input, data_size, pipeline_para_.rank_ - 1, pipeline_para_, stream_);
             sync_check_cuda_error();
         }
-//        if (isFirstLayerParallelId(l)) {
-//            std::cout << l << "==================" << "RECV\n";
-//            print_tensor3(layer_input, batch_size, seq_len, hidden_units_);
-//            std::cout << l << "==================" << "RECV\n";
-//            std::cout << std::flush;
-//        }
-
 
         invokeGeneralLLaMALayerNorm(decoder_normed_input_,
                                     layer_input,
                                     llama_decoder_layer_weight->at(l)->pre_layernorm_weights.gamma,
-                                    llama_decoder_layer_weight->at(l)->pre_layernorm_weights.beta,
                                     layernorm_eps_,
                                     h_token_num,
                                     hidden_units_,
                                     stream_);
         sync_check_cuda_error();
+
+        if (true) {
+            std::cout << l << "==================" << "ATTN_NORM\n";
+            print_tensor3(decoder_normed_input_, batch_size, seq_len, hidden_units_);
+            std::cout << l << "==================" << "ATTN_NORM\n";
+            std::cout << std::flush;
+        }
 
         TensorMap self_attention_input_tensors{
             {"input_query", Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, decoder_normed_input_}},
@@ -419,13 +322,24 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
             {"key_cache", Tensor{MEMORY_GPU, data_type, self_k_cache_size, k_cache.getPtrWithOffset(cache_offset)}},
             {"value_cache", Tensor{MEMORY_GPU, data_type, self_v_cache_size, v_cache.getPtrWithOffset(cache_offset)}}};
 
+        std::cout << l << "==================" << "QBUF\n";
         self_attention_layer_->forward(&self_attention_output_tensors,
                                        &self_attention_input_tensors,
                                        &llama_decoder_layer_weight->at(l)->self_attention_weights);
+        std::cout << l << "==================" << "QBUF\n";
+        std::cout << std::flush;
+
+//        if (true) {
+//            std::cout << l << "==================" << "ATTENTION\n";
+//            print_tensor3(self_attn_output_, batch_size, seq_len, hidden_units_);
+//            std::cout << l << "==================" << "ATTENTION\n";
+//            std::cout << std::flush;
+//        }
+
 
         invokeGeneralLLaMAAddBiasResidualPreLayerNorm(
             self_attn_output_,
-            layer_input,
+            decoder_normed_input_,
             self_attn_output_,
             layer_input,
             llama_decoder_layer_weight->at(l)->post_attention_layernorm_weights.gamma,
@@ -438,7 +352,7 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
         sync_check_cuda_error();
 
         TensorMap ffn_input_tensors(
-            {{"ffn_input", Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, layer_input}}});
+            {{"ffn_input", Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, decoder_normed_input_}}});
         TensorMap ffn_output_tensors(
             {{"ffn_output", Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, layer_output}}});
         ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &llama_decoder_layer_weight->at(l)->ffn_weights);
@@ -451,14 +365,6 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                               stream_);
 
         sync_check_cuda_error();
-
-
-//        if (isLastLayerParallelId(l)) {
-//            std::cout << l << "==================" << "SEND\n";
-//            print_tensor3(layer_input, batch_size, seq_len, hidden_units_);
-//            std::cout << l << "==================" << "SEND\n";
-//            std::cout << std::flush;
-//        }
 
         if (isLastLayerParallelId(l) && pipeline_para_.rank_ != pipeline_para_.world_size_ - 1
             && pipeline_para_.world_size_ > 1) {

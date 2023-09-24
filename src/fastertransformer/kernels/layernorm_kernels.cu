@@ -2511,24 +2511,10 @@ template void invokeGeneralT5LayerNorm(__nv_bfloat16*       out,
 /*******************  invokeGeneralLLaMALayerNorm  ***********************/
 
 template<typename T>
-__global__ void generalLLaMALayerNorm(const T* __restrict input,
-                                      const T* __restrict gamma,
-                                      const T* __restrict beta,
-                                      T*          normed_output,
-                                      const float layernorm_eps,
-                                      int         m,
-                                      int         n)
+__global__ void generalLLaMALayerNorm(
+    const T* __restrict input, const T* __restrict gamma, T* normed_output, const float layernorm_eps, int m, int n)
 {
     const int tid = threadIdx.x;
-
-    extern __shared__ __align__(sizeof(float)) char _shmem[];
-    T*                                              shmem = reinterpret_cast<T*>(_shmem);
-
-    __shared__ float s_variance;
-    float            variance = 0.0f;
-
-    using Float_Packed_T = typename packed_as<float, num_elems<T>::value>::type;
-    using Scalar_T       = typename packed_as<T, 1>::type;
 
     float local_var_sum = 0.0f;
     for (int i = tid; i < n; i += blockDim.x) {
@@ -2536,31 +2522,25 @@ __global__ void generalLLaMALayerNorm(const T* __restrict input,
         local_var_sum += val * val;
     }
 
-    variance = blockReduceSum(local_var_sum);
+    float variance = 0.0f;
+    variance       = blockReduceSum(local_var_sum);
 
+    __shared__ float s_variance;
     if (threadIdx.x == 0) {
-        s_variance = rsqrtf(variance / (float)n + layernorm_eps);
+        s_variance = rsqrtf((variance / (float)n) + layernorm_eps);
     }
     __syncthreads();
 
     for (int i = tid; i < n; i += blockDim.x) {
-        const int index    = blockIdx.x * n + i;
-        float     beta_val = (beta == nullptr) ? 0.0f : (float)ldg(&beta[i]);
-        T         val      = (T)(((float)input[index] * s_variance) * (float)(ldg(&gamma[i])) + beta_val);
-
-        normed_output[index] = val;
+        const int index = blockIdx.x * n + i;
+        T         val   = (T) (((float)ldg(&input[index])) * s_variance);
+        normed_output[index] = val * ldg(&gamma[i]);
     }
 }
 
 template<typename T>
-void invokeGeneralLLaMALayerNorm(T*           out,
-                                 const T*     input,
-                                 const T*     gamma,
-                                 const T*     beta,
-                                 const float  layernorm_eps,
-                                 const int    m,
-                                 const int    n,
-                                 cudaStream_t stream)
+void invokeGeneralLLaMALayerNorm(
+    T* out, const T* input, const T* gamma, const float layernorm_eps, const int m, const int n, cudaStream_t stream)
 {
     dim3 grid(m);
     dim3 block(min(n, 1024));
@@ -2572,13 +2552,12 @@ void invokeGeneralLLaMALayerNorm(T*           out,
         block.x = 1024;
     }
 
-    generalLLaMALayerNorm<T><<<grid, block, 0, stream>>>(input, gamma, beta, out, layernorm_eps, m, n);
+    generalLLaMALayerNorm<T><<<grid, block, 0, stream>>>(input, gamma, out, layernorm_eps, m, n);
 }
 
 template void invokeGeneralLLaMALayerNorm(float*       out,
                                           const float* input,
                                           const float* gamma,
-                                          const float* beta,
                                           const float  layernorm_eps,
                                           const int    m,
                                           const int    n,
@@ -2586,7 +2565,6 @@ template void invokeGeneralLLaMALayerNorm(float*       out,
 template void invokeGeneralLLaMALayerNorm(half*        out,
                                           const half*  input,
                                           const half*  gamma,
-                                          const half*  beta,
                                           const float  layernorm_eps,
                                           const int    m,
                                           const int    n,
@@ -2595,7 +2573,6 @@ template void invokeGeneralLLaMALayerNorm(half*        out,
 template void invokeGeneralLLaMALayerNorm(__nv_bfloat16*       out,
                                           const __nv_bfloat16* input,
                                           const __nv_bfloat16* gamma,
-                                          const __nv_bfloat16* beta,
                                           const float          layernorm_eps,
                                           const int            m,
                                           const int            n,

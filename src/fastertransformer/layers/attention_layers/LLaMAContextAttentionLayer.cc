@@ -18,6 +18,7 @@
 #include "src/fastertransformer/layers/attention_layers/LLaMAContextAttentionLayer.h"
 #include "src/fastertransformer/kernels/layernorm_kernels.h"
 #include "src/fastertransformer/kernels/unfused_attention_kernels.h"
+#include "src/fastertransformer/utils/llama_utils.h"
 #include "src/fastertransformer/utils/nvtx_utils.h"
 
 namespace fastertransformer {
@@ -79,58 +80,25 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                           qkv_buf_,
                           3 * hidden_units_ /* n */);
     sync_check_cuda_error();
-    /*
-    if (layer_id < 15) {
-        T* out = (T*)malloc(sizeof(T) * m * 3 * hidden_units_);
-        T *tmp = out;
-        cudaMemcpy(
-            out, qkv_buf_, sizeof(T) * m * 3 * hidden_units_, cudaMemcpyDeviceToHost);
-        for (int i = 0; i < 3; ++i) {
-            for (int b = 0; b < batch_size; ++b) {
-                std::cout << "[\n";
-                for (int s = 0; s < 3; ++s) {
-                    std::cout << "[ ";
-                    for (int h = 0; h < 3; ++h) {
-                        std::cout << out[b * seq_len * 3 * hidden_units_ + s * 3 * hidden_units_ + h] << " ";
-                    }
-                    std::cout << " ... ";
-                    for (int h = hidden_units_-3; h < hidden_units_; ++h) {
-                        std::cout << out[b * seq_len * 3 * hidden_units_ + s * 3 * hidden_units_ + h] << " ";
-                    }
-                    std::cout << "]\n";
-                }
-                std::cout << "...\n";
-                for (int s = seq_len-3; s < seq_len; ++s) {
-                    std::cout << "[ ";
-                    for (int h = 0; h < 3; ++h) {
-                        std::cout << out[b * seq_len * 3 * hidden_units_ + s * 3 * hidden_units_ + h] << " ";
-                    }
-                    std::cout << " ... ";
-                    for (int h = hidden_units_-3; h < hidden_units_; ++h) {
-                        std::cout << out[b * seq_len * 3 * hidden_units_ + s * 3 * hidden_units_ + h] << " ";
-                    }
-                    std::cout << "]\n";
-                }
-                std::cout << "]\n";
-            }
-            std::cout << "\n";
-            out += hidden_units_;
-        }
-
-        free(tmp);
+    if (true) {
+        print_tensor3(qkv_buf_,
+                      batch_size,
+                      seq_len,
+                      hidden_units_,
+                      seq_len * hidden_units_ * 3,
+                      hidden_units_ * 3,
+                      batch_size * seq_len * hidden_units_ * 3,
+                      2*hidden_units_);
     }
-    */
 
     if (padding_offset != nullptr) {
         // q_buf_2_, k_buf_2_ and v_buf_2_ are continuous
         cudaMemsetAsync(q_buf_2_, 0, batch_size * seq_len * 3 * hidden_units_ * sizeof(T), stream_);
         sync_check_cuda_error();
     }
-    PrefixPromptBatchWeightsParam<T> param;
     invokeAddFusedQKVBiasTranspose(q_buf_2_,
                                    k_buf_2_,
                                    v_buf_2_,
-                                   param,  // prefix prompt
                                    qkv_buf_,
                                    attention_weights->query_weight.bias,
                                    padding_offset,
@@ -139,12 +107,31 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                                    m,
                                    head_num_,
                                    size_per_head_,
-                                   rotary_embedding_dim_,
+                                   stream_);
+    /*
+    invokeAddFusedQKVBiasTranspose(q_buf_2_,
+                                   k_buf_2_,
+                                   v_buf_2_,
+                                   PrefixPromptBatchWeightsParam<T>{},
+                                   qkv_buf_,
+                                   attention_weights->query_weight.bias,
+                                   padding_offset,
+                                   batch_size,
+                                   seq_len,
+                                   m,
+                                   head_num_,
+                                   size_per_head_,
+                                   //rotary_embedding_dim_,
+                                   0,
                                    false,
                                    attention_weights->query_weight.scale_out,
                                    0,  // int8_mode
                                    stream_);
+                                   */
     sync_check_cuda_error();
+    //    if (true) {
+    //        print_tensor4(q_buf_2_, batch_size, head_num_, seq_len, size_per_head_);
+    //    }
 
     //    const int max_seq_len = (int)(output_tensors->at("key_cache").shape[3]);  // max output seq length
     //    // Use batch major

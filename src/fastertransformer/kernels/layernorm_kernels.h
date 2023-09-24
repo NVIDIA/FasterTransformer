@@ -180,7 +180,6 @@ template<typename T>
 void invokeGeneralLLaMALayerNorm(T*           out,
                                  const T*     input,
                                  const T*     gamma,
-                                 const T*     beta,
                                  const float  layernorm_eps,
                                  const int    m,
                                  const int    n,

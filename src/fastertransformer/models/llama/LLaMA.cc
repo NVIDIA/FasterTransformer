@@ -20,106 +20,11 @@
 #include "src/fastertransformer/kernels/gpt_kernels.h"
 #include "src/fastertransformer/layers/beam_search_layers/BaseBeamSearchLayer.h"
 #include "src/fastertransformer/utils/memory_utils.h"
+#include "src/fastertransformer/utils/llama_utils.h"
 #include <algorithm>
 #include <type_traits>
 
-#include <iomanip>
-
 namespace fastertransformer {
-
-template<typename T>
-static void _print_tensor1(T* out, int dim1, int indent)
-{
-    std::string ind(indent, ' ');
-    int         start0 = 0;
-    int         end0   = (dim1 < 3) ? dim1 : 3;
-    int         start1 = (dim1 < 3) ? 0 : dim1 - 3;
-    int         end1   = (dim1 < 3) ? 0 : dim1;
-
-    std::cout << "[";
-    for (int i = start0; i < end0; ++i) {
-        std::cout << std::fixed << std::setw(7) << std::setprecision(4) << std::setfill(' ') << out[i];
-        if (i != dim1 - 1)
-            std::cout << ", ";
-    }
-    if (end0 != start1) {
-        std::cout << "..., ";
-    }
-    for (int i = start1; i < end1; ++i) {
-        std::cout << std::fixed << std::setw(7) << std::setprecision(4) << std::setfill(' ') << out[i];
-        if (i != end1 - 1)
-            std::cout << ", ";
-    }
-    std::cout << "]";
-}
-
-template<typename T>
-static void _print_tensor2(T* out, int dim1, int dim2, int indent)
-{
-    std::string ind(indent, ' ');
-    int         start0 = 0;
-    int         end0   = (dim1 < 3) ? dim1 : 3;
-    int         start1 = (dim1 < 3) ? 0 : dim1 - 3;
-    int         end1   = (dim1 < 3) ? 0 : dim1;
-    std::cout << "[";
-    for (int i = start0; i < end0; ++i) {
-        if (i != start0)
-            std::cout << ind;
-        _print_tensor1(&out[i * dim2], dim2, indent + 1);
-        if (i != dim1 - 1)
-            std::cout << ",\n";
-    }
-    if (end0 != start1) {
-        std::cout << ind;
-        std::cout << "...,\n";
-    }
-    for (int i = start1; i < end1; ++i) {
-        std::cout << ind;
-        _print_tensor1(&out[i * dim2], dim2, indent + 1);
-        if (i != end1 - 1)
-            std::cout << ",\n";
-    }
-    std::cout << "]";
-}
-
-template<typename T>
-static void _print_tensor3(T* out, int dim1, int dim2, int dim3, int indent)
-{
-    std::string ind(indent, ' ');
-
-    int start0 = 0;
-    int end0   = (dim1 < 3) ? dim1 : 3;
-    int start1 = (dim1 < 3) ? 0 : dim1 - 3;
-    int end1   = (dim1 < 3) ? 0 : dim1;
-    std::cout << "[";
-    for (int i = start0; i < end0; ++i) {
-        if (i != start0)
-            std::cout << ind;
-        _print_tensor2(&out[i * dim2 * dim3], dim2, dim3, indent + 1);
-        if (i != dim1 - 1)
-            std::cout << ",\n\n";
-    }
-    if (start1 != end1) {
-        std::cout << ind;
-        std::cout << "...,\n";
-    }
-    for (int i = start1; i < end1; ++i) {
-        std::cout << ind;
-        _print_tensor2(&out[i * dim2 * dim3], dim2, dim3, indent + 1);
-        if (i != end1 - 1)
-            std::cout << ",\n";
-    }
-    std::cout << "]\n";
-}
-
-template<typename T>
-static void print_tensor3(T* in, int dim1, int dim2, int dim3)
-{
-    T* out = (T*)malloc(sizeof(T) * dim1 * dim2 * dim3);
-    cudaMemcpy(out, in, sizeof(T) * dim1 * dim2 * dim3, cudaMemcpyDeviceToHost);
-    _print_tensor3(out, dim1, dim2, dim3, 1);
-    free(out);
-}
 
 template<typename T>
 void LLaMA<T>::initialize()
@@ -388,7 +293,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         invokeGeneralLLaMALayerNorm(normed_decoder_output_buf_,
                                     context_decoder_output_buf_,
                                     llama_weights->post_decoder_layernorm.gamma,
-                                    llama_weights->post_decoder_layernorm.beta,
                                     layernorm_eps_,
                                     batch_size * seq_len,
                                     hidden_units_,
