@@ -97,10 +97,6 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                                         size_per_head_,
                                         stream_);
     if (true) {
-        std::cout << "batch_size: " << batch_size << "\n";
-        std::cout << "head_num_: " << head_num_ << "\n";
-        std::cout << "seq_len: " << seq_len << "\n";
-        std::cout << "size_per_head_: " << size_per_head_ << "\n";
         print_tensor4(q_buf_2_, batch_size, head_num_, seq_len, size_per_head_);
     }
 
