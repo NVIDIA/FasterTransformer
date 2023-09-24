@@ -278,14 +278,14 @@ __global__ void softmax_kernel(T*          attn_score,
     // Loop along with Q dimension.
     for (int64_t qi = blockIdx.x; qi < q_length; qi += gridDim.x) {
 
-        float data[ITEMS_PER_THREAD];
-        int64_t   qk_offset;
-        float local_max = -1e20f;
+        float   data[ITEMS_PER_THREAD];
+        int64_t qk_offset;
+        float   local_max = -1e20f;
 
         // Loop along with K dimension.
         for (int64_t i = 0; blockDim.x * i + threadIdx.x < k_length; i++) {
-            int64_t ki    = blockDim.x * i + threadIdx.x;  // Index of K dimension.
-            qk_offset = ((bi * head_num + hi) * q_length + qi) * k_length + ki;
+            int64_t ki = blockDim.x * i + threadIdx.x;  // Index of K dimension.
+            qk_offset  = ((bi * head_num + hi) * q_length + qi) * k_length + ki;
 
             float qk_val  = static_cast<float>(qk[qk_offset]);
             float qk_bias = 0.0f;
@@ -297,8 +297,8 @@ __global__ void softmax_kernel(T*          attn_score,
                 qk_bias += static_cast<float>(linear_bias_slope * (ki - qi));
             }
 
-            int64_t   mask_offset = (bi * q_length + qi) * k_length + ki;
-            float mask_val    = static_cast<float>(ldg(&attn_mask[mask_offset]));
+            int64_t mask_offset = (bi * q_length + qi) * k_length + ki;
+            float   mask_val    = static_cast<float>(ldg(&attn_mask[mask_offset]));
             qk_bias += (1.0f - mask_val) * -10000.0f;
 
             data[i]   = qk_scale * qk_val + qk_bias;
@@ -1363,8 +1363,8 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
     const int head_idx = blockIdx.y;
     const int tidx     = threadIdx.x;
 
-    const int total_seq_len = param.max_prefix_prompt_length + seq_len;
-    const bool is_masked = tidx * vec_size >= size_per_head;
+    const int  total_seq_len = param.max_prefix_prompt_length + seq_len;
+    const bool is_masked     = tidx * vec_size >= size_per_head;
 
     // NOTE: blockIdx.x < batch_size * param.max_prefix_prompt_length really handles prefix prompts
     if (PREFIX_PROMPT && token_idx < 0) {
@@ -1580,6 +1580,109 @@ INSTANTIATEADDFUSEDQKVBIASTRANSPOSE(half);
 INSTANTIATEADDFUSEDQKVBIASTRANSPOSE(__nv_bfloat16);
 #endif
 #undef INSTANTIATEADDFUSEDQKVBIASTRANSPOSE
+
+template<typename T>
+__global__ void llama_add_fusedQKV_bias_transpose_kernel(T*         q_buf,
+                                                         T*         k_buf,
+                                                         T*         v_buf,
+                                                         T*         QKV,
+                                                         const int* padding_offset,
+                                                         const int  batch_size,
+                                                         const int  seq_len,
+                                                         const int  token_num,
+                                                         const int  head_num,
+                                                         const int  size_per_head)
+{
+    // QKV: [token_num, 3, n]
+    // qkv_bias: [3, n]
+    // q_buf, k_buf, v_buf: [batch, head_num, seq_len, size_per_head]
+
+    T*        qkv_ptr[3] = {q_buf, k_buf, v_buf};
+    const int n          = head_num * size_per_head;
+    for (int index = blockDim.x * blockIdx.x + threadIdx.x; index < token_num * 3 * n;
+         index += gridDim.x * blockDim.x) {
+
+        const int token_idx        = index / (3 * n);
+        const int token_padded_idx = token_idx + (padding_offset == nullptr ? 0 : padding_offset[token_idx]);
+        const int target_batch_id  = token_padded_idx / seq_len;
+        const int seq_id           = token_padded_idx % seq_len;
+
+        const int qkv_id  = (index % (3 * n)) / n;
+        const int head_id = (index % n) / size_per_head;
+        const int size_id = index % size_per_head;
+
+        T val                                               = ldg(&QKV[index]);
+        QKV[index]                                          = val;
+        qkv_ptr[qkv_id][target_batch_id * head_num * seq_len * size_per_head + head_id * seq_len * size_per_head
+                        + seq_id * size_per_head + size_id] = val;
+    }
+}
+
+template<typename T>
+void invokeLLaMAAddFusedQKVBiasTranspose(T*           q_buf,
+                                         T*           k_buf,
+                                         T*           v_buf,
+                                         T*           QKV,
+                                         const int*   padding_offset,
+                                         const int    batch_size,
+                                         const int    seq_len,
+                                         const int    token_num,
+                                         const int    head_num,
+                                         const int    size_per_head,
+                                         cudaStream_t stream)
+{
+    const int m = token_num;
+    const int n = head_num * size_per_head;
+    dim3      block(384);
+    dim3      grid((int)(ceil(1.0 * m * n / 384)));
+    llama_add_fusedQKV_bias_transpose_kernel<<<grid, block, 0, stream>>>(q_buf,
+                                                                         k_buf,
+                                                                         v_buf,
+                                                                         QKV,
+                                                                         padding_offset,
+                                                                         batch_size,
+                                                                         seq_len,
+                                                                         token_num,
+                                                                         head_num,
+                                                                         size_per_head);
+}
+
+template void invokeLLaMAAddFusedQKVBiasTranspose(float*       q_buf,
+                                                  float*       k_buf,
+                                                  float*       v_buf,
+                                                  float*       QKV,
+                                                  const int*   padding_offset,
+                                                  const int    batch_size,
+                                                  const int    seq_len,
+                                                  const int    token_num,
+                                                  const int    head_num,
+                                                  const int    size_per_head,
+                                                  cudaStream_t stream);
+
+template void invokeLLaMAAddFusedQKVBiasTranspose(half*        q_buf,
+                                                  half*        k_buf,
+                                                  half*        v_buf,
+                                                  half*        QKV,
+                                                  const int*   padding_offset,
+                                                  const int    batch_size,
+                                                  const int    seq_len,
+                                                  const int    token_num,
+                                                  const int    head_num,
+                                                  const int    size_per_head,
+                                                  cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeLLaMAAddFusedQKVBiasTranspose(__nv_bfloat16* q_buf,
+                                                  __nv_bfloat16* k_buf,
+                                                  __nv_bfloat16* v_buf,
+                                                  __nv_bfloat16* QKV,
+                                                  const int*     padding_offset,
+                                                  const int      batch_size,
+                                                  const int      seq_len,
+                                                  const int      token_num,
+                                                  const int      head_num,
+                                                  const int      size_per_head,
+                                                  cudaStream_t   stream);
+#endif
 
 template<typename T>
 __global__ void transpose_4d(T*        dst,

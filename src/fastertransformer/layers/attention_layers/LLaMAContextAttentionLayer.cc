@@ -80,34 +80,30 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                           qkv_buf_,
                           3 * hidden_units_ /* n */);
     sync_check_cuda_error();
-    if (true) {
-        print_tensor3(qkv_buf_,
-                      batch_size,
-                      seq_len,
-                      hidden_units_,
-                      seq_len * hidden_units_ * 3,
-                      hidden_units_ * 3,
-                      batch_size * seq_len * hidden_units_ * 3,
-                      2*hidden_units_);
-    }
-
     if (padding_offset != nullptr) {
         // q_buf_2_, k_buf_2_ and v_buf_2_ are continuous
         cudaMemsetAsync(q_buf_2_, 0, batch_size * seq_len * 3 * hidden_units_ * sizeof(T), stream_);
         sync_check_cuda_error();
     }
-    invokeAddFusedQKVBiasTranspose(q_buf_2_,
-                                   k_buf_2_,
-                                   v_buf_2_,
-                                   qkv_buf_,
-                                   attention_weights->query_weight.bias,
-                                   padding_offset,
-                                   batch_size,
-                                   seq_len,
-                                   m,
-                                   head_num_,
-                                   size_per_head_,
-                                   stream_);
+    invokeLLaMAAddFusedQKVBiasTranspose(q_buf_2_,                         
+                                        k_buf_2_,
+                                        v_buf_2_,
+                                        qkv_buf_,
+                                        nullptr, // padding_offset,
+                                        batch_size,
+                                        seq_len,
+                                        m,
+                                        head_num_,
+                                        size_per_head_,
+                                        stream_);
+    if (true) {
+        std::cout << "batch_size: " << batch_size << "\n";
+        std::cout << "head_num_: " << head_num_ << "\n";
+        std::cout << "seq_len: " << seq_len << "\n";
+        std::cout << "size_per_head_: " << size_per_head_ << "\n";
+        print_tensor4(q_buf_2_, batch_size, head_num_, seq_len, size_per_head_);
+    }
+
     /*
     invokeAddFusedQKVBiasTranspose(q_buf_2_,
                                    k_buf_2_,
@@ -408,26 +404,26 @@ template<typename T>
 void LLaMAContextAttentionLayer<T>::allocateBuffer(size_t batch_size, size_t seq_len, bool allocate_qk_buf)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * 3 * batch_size * seq_len * hidden_units_, false);
-    q_buf_2_ = (T*)allocator_->reMalloc(q_buf_2_, sizeof(T) * batch_size * seq_len * 3 * hidden_units_, false);
+    qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * 3 * batch_size * seq_len * hidden_units_, true);
+    q_buf_2_ = (T*)allocator_->reMalloc(q_buf_2_, sizeof(T) * batch_size * seq_len * 3 * hidden_units_, true);
     k_buf_2_ = q_buf_2_ + batch_size * seq_len * hidden_units_;
     v_buf_2_ = k_buf_2_ + batch_size * seq_len * hidden_units_;
 
     // save memory usage when using fmha
     if (allocate_qk_buf) {
-        qk_buf_ = (T*)allocator_->reMalloc(qk_buf_, sizeof(T) * batch_size * head_num_ * seq_len * seq_len, false);
+        qk_buf_ = (T*)allocator_->reMalloc(qk_buf_, sizeof(T) * batch_size * head_num_ * seq_len * seq_len, true);
     }
     else {
         allocator_->free((void**)(&qk_buf_));
         qk_buf_ = nullptr;
     }
-    qkv_buf_2_ = (T*)allocator_->reMalloc(qkv_buf_2_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
-    qkv_buf_3_ = (T*)allocator_->reMalloc(qkv_buf_3_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
+    qkv_buf_2_ = (T*)allocator_->reMalloc(qkv_buf_2_, sizeof(T) * batch_size * seq_len * hidden_units_, true);
+    qkv_buf_3_ = (T*)allocator_->reMalloc(qkv_buf_3_, sizeof(T) * batch_size * seq_len * hidden_units_, true);
 
     if (is_qk_buf_float_ == true) {
         if (allocate_qk_buf) {
             qk_buf_float_ = (float*)allocator_->reMalloc(
-                qk_buf_float_, sizeof(float) * batch_size * head_num_ * seq_len * seq_len, false);
+                qk_buf_float_, sizeof(float) * batch_size * head_num_ * seq_len * seq_len, true);
         }
         else {
             allocator_->free((void**)(&qk_buf_float_));

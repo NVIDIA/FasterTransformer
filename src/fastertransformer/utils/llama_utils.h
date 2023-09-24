@@ -145,12 +145,6 @@ static void print_tensor3(T* in, int dim1, int dim2, int dim3)
 }
 
 template<typename T>
-static void print_tensor4(T* in, int dim1, int dim2, int dim3, int dim4)
-{
-    print_tensor4(in, dim1, dim2, dim3, dim4, dim2 * dim3 * dim4, dim3 * dim4, dim4, dim1 * dim2 * dim3 * dim4);
-}
-
-template<typename T>
 static void
 print_tensor4(T* in, int dim1, int dim2, int dim3, int dim4, int stride1, int stride2, int stride3, int size, int start)
 {
@@ -162,6 +156,12 @@ print_tensor4(T* in, int dim1, int dim2, int dim3, int dim4, int stride1, int st
     }
     std::cout << "\n";
     free(out);
+}
+
+template<typename T>
+static void print_tensor4(T* in, int dim1, int dim2, int dim3, int dim4)
+{
+    print_tensor4(in, dim1, dim2, dim3, dim4, dim2 * dim3 * dim4, dim3 * dim4, dim4, dim1 * dim2 * dim3 * dim4, 0);
 }
 
 }  // namespace fastertransformer
