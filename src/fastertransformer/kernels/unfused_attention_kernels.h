@@ -124,6 +124,7 @@ void invokeLLaMAAddFusedQKVBiasTranspose(T*           q_buf,
                                          const int    token_num,
                                          const int    head_num,
                                          const int    size_per_head,
+                                         const int    rotary_embedding_dim,
                                          cudaStream_t stream);
 
 template<typename T>

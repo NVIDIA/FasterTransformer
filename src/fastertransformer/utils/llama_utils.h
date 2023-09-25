@@ -84,9 +84,9 @@ static void _print_tensor3(T* out, int dim1, int dim2, int dim3, int stride1, in
         std::cout << ind;
         _print_tensor2(&out[i * stride1], dim2, dim3, stride2, indent + 1);
         if (i != end1 - 1)
-            std::cout << "\n";
+            std::cout << "\n\n";
     }
-    std::cout << "]\n";
+    std::cout << "]";
 }
 
 template<typename T>
@@ -105,7 +105,7 @@ _print_tensor4(T* out, int dim1, int dim2, int dim3, int dim4, int stride1, int 
             std::cout << ind;
         _print_tensor3(&out[i * stride1], dim2, dim3, dim4, stride2, stride3, indent + 1);
         if (i != dim1 - 1)
-            std::cout << "\n\n";
+            std::cout << "\n\n\n";
     }
     if (start1 != end1) {
         std::cout << ind;
@@ -115,9 +115,9 @@ _print_tensor4(T* out, int dim1, int dim2, int dim3, int dim4, int stride1, int 
         std::cout << ind;
         _print_tensor3(&out[i * stride1], dim2, dim3, dim4, stride2, stride3, indent + 1);
         if (i != end1 - 1)
-            std::cout << "\n";
+            std::cout << "\n\n\n";
     }
-    std::cout << "]\n";
+    std::cout << "]";
 }
 
 template<typename T>
@@ -126,15 +126,7 @@ static void print_tensor3(T* in, int dim1, int dim2, int dim3, int stride1, int 
     T* out = (T*)malloc(sizeof(T) * size);
     cudaMemcpy(out, in, sizeof(T) * size, cudaMemcpyDeviceToHost);
     _print_tensor3(&out[start], dim1, dim2, dim3, stride1, stride2, 1);
-
-    /*
-    if (stride2 != dim3) {
-        for (int i = dim1 * dim2 * 3 * dim3 - 1 * dim3 - 8; i < dim1 * dim2 * 3 * dim3 - 1 * dim3; ++i) {
-            std::cout << out[i] << " ";
-        }
-        std::cout << "\n";
-    }
-    */
+    std::cout << "\n";
     free(out);
 }
 
@@ -151,9 +143,6 @@ print_tensor4(T* in, int dim1, int dim2, int dim3, int dim4, int stride1, int st
     T* out = (T*)malloc(sizeof(T) * size);
     cudaMemcpy(out, in, sizeof(T) * size, cudaMemcpyDeviceToHost);
     _print_tensor4(&out[start], dim1, dim2, dim3, dim4, stride1, stride2, stride3, 1);
-    for (int i = dim1 * dim2 * dim3 * dim4 - 8; i < dim1 * dim2 * dim3 * dim4; ++i) {
-        std::cout << out[i] << " ";
-    }
     std::cout << "\n";
     free(out);
 }

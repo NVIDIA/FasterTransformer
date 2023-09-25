@@ -256,7 +256,8 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
         }
 
         if (l == 0 && is_unpadded_mha) {
-            invokeRemovePadding(decoder_layer_output_, decoder_input, padding_offset_, h_token_num, hidden_units_, stream_);
+            invokeRemovePadding(
+                decoder_layer_output_, decoder_input, padding_offset_, h_token_num, hidden_units_, stream_);
             sync_check_cuda_error();
         }
 
@@ -287,10 +288,12 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                                     stream_);
         sync_check_cuda_error();
 
-        if (true) {
-            std::cout << l << "==================" << "ATTN_NORM\n";
+        if (false) {
+            std::cout << l << "=================="
+                      << "ATTN_NORM\n";
             print_tensor3(decoder_normed_input_, batch_size, seq_len, hidden_units_);
-            std::cout << l << "==================" << "ATTN_NORM\n";
+            std::cout << l << "=================="
+                      << "ATTN_NORM\n";
             std::cout << std::flush;
         }
 
@@ -322,20 +325,21 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
             {"key_cache", Tensor{MEMORY_GPU, data_type, self_k_cache_size, k_cache.getPtrWithOffset(cache_offset)}},
             {"value_cache", Tensor{MEMORY_GPU, data_type, self_v_cache_size, v_cache.getPtrWithOffset(cache_offset)}}};
 
-        std::cout << l << "==================" << "QBUF\n";
+        //        std::cout << l << "==================" << "QBUF\n";
         self_attention_layer_->forward(&self_attention_output_tensors,
                                        &self_attention_input_tensors,
                                        &llama_decoder_layer_weight->at(l)->self_attention_weights);
-        std::cout << l << "==================" << "QBUF\n";
-        std::cout << std::flush;
+        //        std::cout << l << "==================" << "QBUF\n";
+        //        std::cout << std::flush;
 
-//        if (true) {
-//            std::cout << l << "==================" << "ATTENTION\n";
-//            print_tensor3(self_attn_output_, batch_size, seq_len, hidden_units_);
-//            std::cout << l << "==================" << "ATTENTION\n";
-//            std::cout << std::flush;
-//        }
-
+        if (false) {
+            std::cout << l << "=================="
+                      << "ATTENTION\n";
+            print_tensor3(self_attn_output_, batch_size, seq_len, hidden_units_);
+            std::cout << l << "=================="
+                      << "ATTENTION\n";
+            std::cout << std::flush;
+        }
 
         invokeGeneralLLaMAAddBiasResidualPreLayerNorm(
             self_attn_output_,
@@ -352,7 +356,8 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
         sync_check_cuda_error();
 
         TensorMap ffn_input_tensors(
-            {{"ffn_input", Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, decoder_normed_input_}}});
+            {{"ffn_input",
+              Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, decoder_normed_input_}}});
         TensorMap ffn_output_tensors(
             {{"ffn_output", Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, layer_output}}});
         ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &llama_decoder_layer_weight->at(l)->ffn_weights);

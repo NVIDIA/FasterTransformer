@@ -1589,32 +1589,50 @@ __global__ void llama_add_fusedQKV_bias_transpose_kernel(T*         q_buf,
                                                          const int* padding_offset,
                                                          const int  batch_size,
                                                          const int  seq_len,
-                                                         const int  token_num,
                                                          const int  head_num,
-                                                         const int  size_per_head)
+                                                         const int  size_per_head,
+                                                         const int  rotary_embedding_dim)
 {
-    // QKV: [token_num, 3, n]
-    // qkv_bias: [3, n]
-    // q_buf, k_buf, v_buf: [batch, head_num, seq_len, size_per_head]
+    constexpr int vec_size         = Vec_t<T>::size;
+    using Vec_t                    = typename Vec_t<T>::Type;
+    const int token_idx            = blockIdx.x;
+    const int token_padding_offset = (padding_offset == nullptr || token_idx < 0) ? 0 : padding_offset[token_idx];
+    const int tgt_token_idx        = token_idx + token_padding_offset;
 
-    T*        qkv_ptr[3] = {q_buf, k_buf, v_buf};
+    const int batch_idx = tgt_token_idx / seq_len;
+    const int seq_idx   = tgt_token_idx % seq_len;
+
+    const int head_idx = blockIdx.y;
+    const int tidx     = threadIdx.x;
+
+    const bool is_masked = tidx * vec_size >= size_per_head;
+
+    const int hidden_idx = head_idx * size_per_head + tidx * vec_size;
     const int n          = head_num * size_per_head;
-    for (int index = blockDim.x * blockIdx.x + threadIdx.x; index < token_num * 3 * n;
-         index += gridDim.x * blockDim.x) {
 
-        const int token_idx        = index / (3 * n);
-        const int token_padded_idx = token_idx + (padding_offset == nullptr ? 0 : padding_offset[token_idx]);
-        const int target_batch_id  = token_padded_idx / seq_len;
-        const int seq_id           = token_padded_idx % seq_len;
+    const int src_q_idx      = token_idx * 3 * n + hidden_idx;
+    const int src_k_idx      = token_idx * 3 * n + hidden_idx + n;
+    const int src_v_idx      = token_idx * 3 * n + hidden_idx + 2 * n;
 
-        const int qkv_id  = (index % (3 * n)) / n;
-        const int head_id = (index % n) / size_per_head;
-        const int size_id = index % size_per_head;
+    Vec_t q, k, v;
+    if (!is_masked) {
+        q = *reinterpret_cast<const Vec_t*>(&QKV[src_q_idx]);
+        k = *reinterpret_cast<const Vec_t*>(&QKV[src_k_idx]);
+        v = *reinterpret_cast<const Vec_t*>(&QKV[src_v_idx]);
+    }
 
-        T val                                               = ldg(&QKV[index]);
-        QKV[index]                                          = val;
-        qkv_ptr[qkv_id][target_batch_id * head_num * seq_len * size_per_head + head_id * seq_len * size_per_head
-                        + seq_id * size_per_head + size_id] = val;
+    mmha::apply_rotary_embedding(q, k, tidx, rotary_embedding_dim, seq_idx);
+
+    const int dest_q_idx = batch_idx * size_per_head * seq_len * head_num + head_idx * size_per_head * seq_len
+                           + seq_idx * size_per_head + tidx * vec_size;
+
+    const int dest_kv_idx = batch_idx * size_per_head * seq_len * head_num + head_idx * size_per_head * seq_len
+                            + seq_idx * size_per_head + tidx * vec_size;
+
+    if (!is_masked) {
+        *reinterpret_cast<Vec_t*>(&q_buf[dest_q_idx])  = q;
+        *reinterpret_cast<Vec_t*>(&k_buf[dest_kv_idx]) = k;
+        *reinterpret_cast<Vec_t*>(&v_buf[dest_kv_idx]) = v;
     }
 }
 
@@ -1629,22 +1647,13 @@ void invokeLLaMAAddFusedQKVBiasTranspose(T*           q_buf,
                                          const int    token_num,
                                          const int    head_num,
                                          const int    size_per_head,
+                                         const int    rotary_embedding_dim,
                                          cudaStream_t stream)
 {
-    const int m = token_num;
-    const int n = head_num * size_per_head;
-    dim3      block(384);
-    dim3      grid((int)(ceil(1.0 * m * n / 384)));
-    llama_add_fusedQKV_bias_transpose_kernel<<<grid, block, 0, stream>>>(q_buf,
-                                                                         k_buf,
-                                                                         v_buf,
-                                                                         QKV,
-                                                                         padding_offset,
-                                                                         batch_size,
-                                                                         seq_len,
-                                                                         token_num,
-                                                                         head_num,
-                                                                         size_per_head);
+    dim3   block((size_per_head / Vec_t<T>::size + 31) / 32 * 32);
+    dim3   grid(token_num, head_num);
+    llama_add_fusedQKV_bias_transpose_kernel<<<grid, block, 0, stream>>>(
+        q_buf, k_buf, v_buf, QKV, padding_offset, batch_size, seq_len, head_num, size_per_head, rotary_embedding_dim);
 }
 
 template void invokeLLaMAAddFusedQKVBiasTranspose(float*       q_buf,
@@ -1657,6 +1666,7 @@ template void invokeLLaMAAddFusedQKVBiasTranspose(float*       q_buf,
                                                   const int    token_num,
                                                   const int    head_num,
                                                   const int    size_per_head,
+                                                  const int    rotary_embedding_dim,
                                                   cudaStream_t stream);
 
 template void invokeLLaMAAddFusedQKVBiasTranspose(half*        q_buf,
@@ -1669,6 +1679,7 @@ template void invokeLLaMAAddFusedQKVBiasTranspose(half*        q_buf,
                                                   const int    token_num,
                                                   const int    head_num,
                                                   const int    size_per_head,
+                                                  const int    rotary_embedding_dim,
                                                   cudaStream_t stream);
 #ifdef ENABLE_BF16
 template void invokeLLaMAAddFusedQKVBiasTranspose(__nv_bfloat16* q_buf,
@@ -1681,6 +1692,7 @@ template void invokeLLaMAAddFusedQKVBiasTranspose(__nv_bfloat16* q_buf,
                                                   const int      token_num,
                                                   const int      head_num,
                                                   const int      size_per_head,
+                                                  const int      rotary_embedding_dim,
                                                   cudaStream_t   stream);
 #endif
 
