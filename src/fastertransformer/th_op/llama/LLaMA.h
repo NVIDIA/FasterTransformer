@@ -59,6 +59,8 @@ public:
         pipeline_para_size_(pipeline_para_size),
         weights_(weights)
     {
+        ft::Logger::getLogger().setLevel(ft::Logger::WARNING);
+
         ft::check_cuda_error(cublasLtCreate(&cublasltHandle_));
         cublas_algo_map_      = new ft::cublasAlgoMap(GEMM_CONFIG, "");
         cublas_wrapper_mutex_ = new std::mutex();
