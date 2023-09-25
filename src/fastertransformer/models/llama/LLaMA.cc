@@ -199,7 +199,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                        const std::unordered_map<std::string, Tensor>* input_tensors,
                        const LLaMAWeight<T>*                          llama_weights)
 {
-    // Logger::getLogger().setLevel(Logger::Level::DEBUG);
     //
     // input_tensors:
     //      input_ids [batch_size, seq_len]
