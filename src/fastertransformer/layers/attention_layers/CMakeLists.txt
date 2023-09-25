@@ -44,6 +44,11 @@ set_property(TARGET GptContextAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE 
 set_property(TARGET GptContextAttentionLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(GptContextAttentionLayer PUBLIC -lcublas -lcudart cublasMMWrapper memory_utils unfused_attention_kernels trt_fused_multi_head_attention fpA_intB_gemm int8_gemm nvtx_utils)
 
+add_library(LLaMAContextAttentionLayer STATIC LLaMAContextAttentionLayer.cc)
+set_property(TARGET LLaMAContextAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET LLaMAContextAttentionLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+target_link_libraries(LLaMAContextAttentionLayer PUBLIC -lcublas -lcudart cublasMMWrapper memory_utils unfused_attention_kernels trt_fused_multi_head_attention fpA_intB_gemm int8_gemm nvtx_utils)
+
 add_library(DisentangledAttentionLayer STATIC DisentangledAttentionLayer.cc)
 set_property(TARGET DisentangledAttentionLayer PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET DisentangledAttentionLayer PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
