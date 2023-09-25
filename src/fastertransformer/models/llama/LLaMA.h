@@ -59,21 +59,20 @@ private:
     void initialize();
 
 protected:
-    T* input_attention_mask_;
-    T* decoder_output_buf_;
-    T* normed_decoder_output_buf_;
+    T* input_attention_mask_ = nullptr;
+    T* decoder_output_buf_ = nullptr;
+    T* normed_decoder_output_buf_ = nullptr;
 
-    T* logits_buf_;
+    T* logits_buf_ = nullptr;
 
-    T*   key_cache_;
-    T*   value_cache_;
-    int* cache_indirections_[2] = {nullptr, nullptr};
+    T*   key_cache_ = nullptr;
+    T*   value_cache_ = nullptr;
 
-    int* tiled_input_ids_buf_;
-    int* tiled_input_lengths_buf_;
+    int* tiled_input_ids_buf_ = nullptr;
+    int* tiled_input_lengths_buf_ = nullptr;
 
-    T* context_decoder_input_buf_;
-    T* context_decoder_output_buf_;
+    T* context_decoder_input_buf_ = nullptr;
+    T* context_decoder_output_buf_ = nullptr;
 
     void sendTensorsToFirstPipelineNode(std::unordered_map<std::string, Tensor>*       output_tensors,
                                         const std::unordered_map<std::string, Tensor>* input_tensors);

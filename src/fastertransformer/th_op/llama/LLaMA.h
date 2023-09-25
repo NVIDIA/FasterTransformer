@@ -103,10 +103,57 @@ public:
         llama_weights_.post_decoder_embedding.kernel = get_ptr<T>(weights_[14 * num_layers_ + 3]);
 
         ft::check_cuda_error(cudaGetDeviceProperties(&prop_, 0));
+
+        auto           stream       = at::cuda::getCurrentCUDAStream().stream();
+        cublasHandle_t cublasHandle = at::cuda::getCurrentCUDABlasHandle();
+        cublasSetStream(cublasHandle, stream);
+
+        /// ft::Allocator<ft::AllocatorType::CUDA> allocator =
+        // ft::Allocator<ft::AllocatorType::CUDA>(at::cuda::getCurrentCUDAStream().device_index());
+        allocator_      = new ft::Allocator<ft::AllocatorType::TH>();
+        cublas_wrapper_ = new ft::cublasMMWrapper(
+            cublasHandle, cublasltHandle_, stream, cublas_algo_map_, cublas_wrapper_mutex_, allocator_);
+
+        if (std::is_same<T, half>::value) {
+            cublas_wrapper_->setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
+        }
+        else if (std::is_same<T, float>::value) {
+            cublas_wrapper_->setFP32GemmConfig();
+        }
+
+        ft::AttentionType attention_type = ft::getAttentionType<T>(size_per_head_,
+                                                                   ft::getSMVersion(),
+                                                                   true,   // remove_padding
+                                                                   0,      // gpt supports any-seq-length fmha
+                                                                   true,   // is_fuse
+                                                                   false,  // with_relative_position_bias
+                                                                   true);  // causal_mask
+                                                                           //
+        llama_ = new ft::LLaMA<T>(num_heads_,
+                                  size_per_head_,
+                                  inter_size_,
+                                  num_layers_,
+                                  vocab_size_,
+                                  rotary_embedding_dim_,
+                                  random_seed_,
+                                  max_seq_len_,
+                                  tensor_para_,
+                                  pipeline_para_,
+                                  stream,
+                                  cublas_wrapper_,
+                                  allocator_,
+                                  false,          // is_free_buffer_after_forward
+                                  &prop_,         // cuda_device_prop
+                                  attention_type  // attention_type
+        );
     }
 
     ~FTLLaMA() override
     {
+        delete llama_;
+        delete cublas_wrapper_;
+        delete allocator_;
+
         ft::ftNcclParamDestroy(tensor_para_);
         ft::ftNcclParamDestroy(pipeline_para_);
         cublasLtDestroy(cublasltHandle_);
@@ -117,69 +164,27 @@ public:
     virtual void
     forward(th::Tensor& output_logits, th::Tensor& input_ids, th::Tensor& input_lengths, const int start_pos) override
     {
-        auto           stream       = at::cuda::getCurrentCUDAStream().stream();
-        cublasHandle_t cublasHandle = at::cuda::getCurrentCUDABlasHandle();
-        cublasSetStream(cublasHandle, stream);
-        ft::Allocator<ft::AllocatorType::CUDA> allocator =
-            ft::Allocator<ft::AllocatorType::CUDA>(at::cuda::getCurrentCUDAStream().device_index());
-        ft::cublasMMWrapper cublas_wrapper = ft::cublasMMWrapper(
-            cublasHandle, cublasltHandle_, stream, cublas_algo_map_, cublas_wrapper_mutex_, &allocator);
 
-        if (std::is_same<T, half>::value) {
-            cublas_wrapper.setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
-        }
-        else if (std::is_same<T, float>::value) {
-            cublas_wrapper.setFP32GemmConfig();
-        }
-
-        const size_t request_batch_size = (size_t)input_ids.size(0);
-        const size_t seq_len            = (size_t)input_ids.size(1);
-
-        ft::AttentionType attention_type = ft::getAttentionType<T>(size_per_head_,
-                                                                   ft::getSMVersion(),
-                                                                   true,   // remove_padding
-                                                                   0,      // gpt supports any-seq-length fmha
-                                                                   true,   // is_fuse
-                                                                   false,  // with_relative_position_bias
-                                                                   true);  // causal_mask
-
-        ft::LLaMA<T> llama = ft::LLaMA<T>(num_heads_,
-                                          size_per_head_,
-                                          inter_size_,
-                                          num_layers_,
-                                          vocab_size_,
-                                          rotary_embedding_dim_,
-                                          random_seed_,
-                                          max_seq_len_,
-                                          tensor_para_,
-                                          pipeline_para_,
-                                          stream,
-                                          &cublas_wrapper,
-                                          &allocator,
-                                          false,          // is_free_buffer_after_forward
-                                          &prop_,         // cuda_device_prop
-                                          attention_type  // attention_type
-        );
+        const size_t batch_size = (size_t)input_ids.size(0);
+        const size_t seq_len    = (size_t)input_ids.size(1);
 
         std::unordered_map<std::string, ft::Tensor> input_tensors = std::unordered_map<std::string, ft::Tensor>{
             {"input_ids",
-             ft::Tensor{ft::MEMORY_GPU,
-                        ft::TYPE_INT32,
-                        std::vector<size_t>{request_batch_size, seq_len},
-                        get_ptr<int>(input_ids)}},
-            {"input_lengths",
              ft::Tensor{
-                 ft::MEMORY_GPU, ft::TYPE_INT32, std::vector<size_t>{request_batch_size}, get_ptr<int>(input_lengths)}},
+                 ft::MEMORY_GPU, ft::TYPE_INT32, std::vector<size_t>{batch_size, seq_len}, get_ptr<int>(input_ids)}},
+            {"input_lengths",
+             ft::Tensor{ft::MEMORY_GPU, ft::TYPE_INT32, std::vector<size_t>{batch_size}, get_ptr<int>(input_lengths)}},
             {"start_pos", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &start_pos}}};
 
         std::unordered_map<std::string, ft::Tensor> output_tensors = std::unordered_map<std::string, ft::Tensor>{
             {"output_logits",
              ft::Tensor{ft::MEMORY_GPU,
                         ft::TYPE_FP32,
-                        std::vector<size_t>{request_batch_size, seq_len, vocab_size_},
+                        std::vector<size_t>{batch_size, seq_len, vocab_size_},
                         get_ptr<float>(output_logits)}}};
+
         try {
-            llama.forward(&output_tensors, &input_tensors, &llama_weights_);
+            llama_->forward(&output_tensors, &input_tensors, &llama_weights_);
         }
         catch (std::runtime_error& error) {
             std::cout << error.what();
@@ -212,6 +217,10 @@ private:
 
     ft::NcclParam tensor_para_;
     ft::NcclParam pipeline_para_;
+
+    ft::cublasMMWrapper* cublas_wrapper_;
+    ft::IAllocator*      allocator_;
+    ft::LLaMA<T>*        llama_ = nullptr;
 };
 
 class LLaMA: public th::jit::CustomClassHolder {

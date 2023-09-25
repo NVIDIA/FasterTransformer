@@ -17,10 +17,10 @@
 #include "src/fastertransformer/models/llama/LLaMA.h"
 #include "src/fastertransformer/kernels/bert_preprocess_kernels.h"
 #include "src/fastertransformer/kernels/decoding_kernels.h"
-#include "src/fastertransformer/kernels/gpt_kernels.h"
+#include "src/fastertransformer/kernels/llama_kernels.h"
 #include "src/fastertransformer/layers/beam_search_layers/BaseBeamSearchLayer.h"
-#include "src/fastertransformer/utils/memory_utils.h"
 #include "src/fastertransformer/utils/llama_utils.h"
+#include "src/fastertransformer/utils/memory_utils.h"
 #include <algorithm>
 #include <type_traits>
 
@@ -57,7 +57,7 @@ void LLaMA<T>::allocateBuffer(size_t batch_size, size_t seq_len, size_t max_seq_
     const size_t self_cache_size = (num_layer_ / pipeline_para_.world_size_) * batch_size * max_seq_len * hidden_units_;
 
     input_attention_mask_ =
-        (T*)(allocator_->reMalloc(input_attention_mask_, sizeof(T) * batch_size * seq_len * seq_len, false));
+        (T*)(allocator_->reMalloc(input_attention_mask_, sizeof(T) * batch_size * max_seq_len * max_seq_len, false));
     normed_decoder_output_buf_ =
         (T*)(allocator_->reMalloc(normed_decoder_output_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
     logits_buf_ = (T*)(allocator_->reMalloc(logits_buf_, sizeof(T) * batch_size * seq_len * vocab_size_, false));
@@ -85,9 +85,6 @@ void LLaMA<T>::freeBuffer()
         allocator_->free((void**)(&logits_buf_));
 
         allocator_->free((void**)(&key_cache_));
-        if (cache_indirections_[0] != nullptr) {
-            allocator_->free((void**)(&cache_indirections_)[0]);
-        }
 
         allocator_->free((void**)(&tiled_input_ids_buf_));
         allocator_->free((void**)(&tiled_input_lengths_buf_));
@@ -217,11 +214,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     FT_CHECK(input_tensors->at("input_lengths").shape.size() == 1);
 
     const size_t batch_size = input_tensors->at("input_ids").shape[0];
-
-    // NOTE: Prefix Prompt PreProcessing
-    // get prefix_prompt_weight for each batch --> shape [batch, 1]
-    // --> ptrs with shape [num_layers, 2, num_heads, perfix_seq_len, size_per_head]
-    int seq_len = input_tensors->at("input_ids").shape[1];
+    int          seq_len    = input_tensors->at("input_ids").shape[1];
 
     // max cache seq len should include max prefix prompt length as it has k/v states
     const int            start_pos      = input_tensors->at("start_pos").max<int>();
@@ -231,12 +224,8 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     sync_check_cuda_error();
 
     const DataType            data_type          = getTensorType<T>();
-    const std::vector<size_t> self_k_cache_shape = {num_layer_ / pipeline_para_.world_size_,
-                                                    batch_size,
-                                                    head_num_,
-                                                    size_per_head_ / (16 / sizeof(T)),
-                                                    max_seq_len_,
-                                                    16 / sizeof(T)};
+    const std::vector<size_t> self_k_cache_shape = {
+        num_layer_ / pipeline_para_.world_size_, batch_size, head_num_, max_seq_len_, size_per_head_};
     const std::vector<size_t> self_v_cache_shape = {
         num_layer_ / pipeline_para_.world_size_, batch_size, head_num_, max_seq_len_, size_per_head_};
 
@@ -250,8 +239,8 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                         stream_);
     sync_check_cuda_error();
 
-    invokeBuildDecoderAttentionMask(
-        input_attention_mask_, tiled_input_lengths_buf_, nullptr, batch_size, seq_len, 0, stream_);
+    invokeLLaMABuildDecoderAttentionMask(
+        input_attention_mask_, tiled_input_lengths_buf_, batch_size, seq_len, start_pos, stream_);
     sync_check_cuda_error();
 
     if (pipeline_para_.rank_ == 0) {
@@ -269,7 +258,10 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         {"decoder_input",
          Tensor{MEMORY_GPU, data_type, {batch_size, (size_t)seq_len, hidden_units_}, context_decoder_input_buf_}},
         {"attention_mask",
-         Tensor{MEMORY_GPU, data_type, {batch_size, 1, (size_t)seq_len, (size_t)(seq_len)}, input_attention_mask_}},
+         Tensor{MEMORY_GPU,
+                data_type,
+                {batch_size, 1, (size_t)seq_len, (size_t)(start_pos + seq_len)},
+                input_attention_mask_}},
         {"input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size}, tiled_input_lengths_buf_}},
         {"start_pos", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &start_pos}}};
 
@@ -305,7 +297,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                               logits_buf_,
                               vocab_size_);
         sync_check_cuda_error();
-
 
         if (std::is_same<T, half>::value) {
             float* output_logits = output_tensors->at("output_logits").getPtr<float>();

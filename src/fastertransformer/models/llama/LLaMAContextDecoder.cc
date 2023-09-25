@@ -215,6 +215,7 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
     const int      start_pos  = input_tensors->at("start_pos").max<int>();
     const DataType data_type  = getTensorType<T>();
     allocateBuffer(batch_size, seq_len);
+    sync_check_cuda_error();
 
     T*       decoder_input  = input_tensors->at("decoder_input").getPtr<T>();
     T*       decoder_output = output_tensors->at("decoder_output").getPtr<T>();

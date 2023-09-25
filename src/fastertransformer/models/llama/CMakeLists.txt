@@ -27,7 +27,7 @@ target_link_libraries(LLaMAContextDecoder PUBLIC -lcudart cublasMMWrapper
                       FfnLayer
                       layernorm_kernels
                       add_residual_kernels
-                      gpt_kernels
+                      llama_kernels
                       tensor
                       nccl_utils
                       cuda_utils
@@ -45,6 +45,7 @@ target_link_libraries(LLaMA PUBLIC -lcudart
                       LLaMAContextDecoder
                       decoding_kernels
                       gpt_kernels
+                      llama_kernels
                       BaseBeamSearchLayer
                       bert_preprocess_kernels
                       tensor

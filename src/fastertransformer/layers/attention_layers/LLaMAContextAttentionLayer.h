@@ -38,7 +38,7 @@ private:
     std::unique_ptr<MHARunner> dispatcher_fp16;
 
     void allocateBuffer() override;
-    void allocateBuffer(size_t batch_size, size_t seq_len, bool allocate_qk_buf);
+    void allocateBuffer(size_t batch_size, size_t seq_len, size_t max_seq_len, bool allocate_qk_buf);
     void freeBuffer() override;
 
     using BaseAttentionLayer<T>::is_free_buffer_after_forward_;
