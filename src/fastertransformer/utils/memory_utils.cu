@@ -177,7 +177,7 @@ __global__ void cudaCast(T_OUT* dst, T_IN* src, const size_t size)
 template<typename T_OUT, typename T_IN>
 void invokeCudaCast(T_OUT* dst, T_IN const* const src, const size_t size, cudaStream_t stream)
 {
-    cudaCast<<<(size + 255) / 256, 256, 0, stream>>>(dst, src, size);
+    cudaCast<<<256, 256, 0, stream>>>(dst, src, size);
 }
 
 template void invokeCudaCast(float* dst, half const* const src, const size_t size, cudaStream_t stream);

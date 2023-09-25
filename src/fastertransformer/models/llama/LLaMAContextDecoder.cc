@@ -67,7 +67,7 @@ void LLaMAContextDecoder<T>::allocateBuffer(size_t batch_size, size_t seq_len)
         allocator_->reMalloc(self_attn_output_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
     decoder_layer_output_ = reinterpret_cast<T*>(
         allocator_->reMalloc(decoder_layer_output_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
-    h_pinned_token_num_ptr_ = (size_t*)allocator_->reMalloc(h_pinned_token_num_ptr_, sizeof(size_t), true, true);
+    h_pinned_token_num_ptr_ = (size_t*)allocator_->reMalloc(h_pinned_token_num_ptr_, sizeof(size_t), false, false);
     padding_offset_ =
         reinterpret_cast<int*>(allocator_->reMalloc(padding_offset_, sizeof(int) * batch_size * seq_len, false));
     cu_seqlens_ = reinterpret_cast<int*>(allocator_->reMalloc(cu_seqlens_, sizeof(int) * (batch_size + 1), false));
@@ -325,12 +325,12 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
             {"key_cache", Tensor{MEMORY_GPU, data_type, self_k_cache_size, k_cache.getPtrWithOffset(cache_offset)}},
             {"value_cache", Tensor{MEMORY_GPU, data_type, self_v_cache_size, v_cache.getPtrWithOffset(cache_offset)}}};
 
-        //        std::cout << l << "==================" << "QBUF\n";
+        //std::cout << l << "==================" << "ATTENTION\n";
         self_attention_layer_->forward(&self_attention_output_tensors,
                                        &self_attention_input_tensors,
                                        &llama_decoder_layer_weight->at(l)->self_attention_weights);
-        //        std::cout << l << "==================" << "QBUF\n";
-        //        std::cout << std::flush;
+        //std::cout << l << "==================" << "ATTENTION\n";
+        //std::cout << std::flush;
 
         if (false) {
             std::cout << l << "=================="

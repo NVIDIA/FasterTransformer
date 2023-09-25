@@ -68,6 +68,12 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
 
     PUSH_RANGE("qkv_gemm");
 
+    //std::cout << "G1====================================\n";
+    //std::cout << "hidden_units_: " << hidden_units_ << "\n";
+    //std::cout << "m: " << m << "\n";
+    //std::cout << "G1====================================\n";
+    //std::cout << std::flush;
+
     cublas_wrapper_->Gemm(CUBLAS_OP_N,
                           CUBLAS_OP_N,
                           3 * hidden_units_,  // n
@@ -80,62 +86,62 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                           qkv_buf_,
                           3 * hidden_units_ /* n */);
     sync_check_cuda_error();
-//    if (true) {
-//        print_tensor3(qkv_buf_,
-//                      batch_size,
-//                      seq_len,
-//                      hidden_units_,
-//                      seq_len * 3 * hidden_units_,
-//                      3 * hidden_units_,
-//                      batch_size * seq_len * 3 * hidden_units_,
-//                      0);
-//        print_tensor3(qkv_buf_,
-//                      batch_size,
-//                      seq_len,
-//                      hidden_units_,
-//                      seq_len * 3 * hidden_units_,
-//                      3 * hidden_units_,
-//                      batch_size * seq_len * 3 * hidden_units_,
-//                      hidden_units_);
-//        print_tensor3(qkv_buf_,
-//                      batch_size,
-//                      seq_len,
-//                      hidden_units_,
-//                      seq_len * 3 * hidden_units_,
-//                      3 * hidden_units_,
-//                      batch_size * seq_len * 3 * hidden_units_,
-//                      2*hidden_units_);
-//    }
-//    if (true) {
-//        print_tensor4(qkv_buf_,
-//                batch_size, seq_len, head_num_, size_per_head_,
-//                seq_len * 3 * head_num_ * size_per_head_,
-//                3 * head_num_ * size_per_head_,
-//                size_per_head_,
-//                batch_size * seq_len * 3 * head_num_ * size_per_head_,
-//                0
-//                );
-//        print_tensor4(qkv_buf_,
-//                batch_size, seq_len, head_num_, size_per_head_,
-//                seq_len * 3 * head_num_ * size_per_head_,
-//                3 * head_num_ * size_per_head_,
-//                size_per_head_,
-//                batch_size * seq_len * 3 * head_num_ * size_per_head_,
-//                head_num_ * size_per_head_
-//                );
-//        print_tensor4(qkv_buf_,
-//                batch_size, seq_len, head_num_, size_per_head_,
-//                seq_len * 3 * head_num_ * size_per_head_,
-//                3 * head_num_ * size_per_head_,
-//                size_per_head_,
-//                batch_size * seq_len * 3 * head_num_ * size_per_head_,
-//                2 * head_num_ * size_per_head_
-//                );
-//    }
+    //    if (true) {
+    //        print_tensor3(qkv_buf_,
+    //                      batch_size,
+    //                      seq_len,
+    //                      hidden_units_,
+    //                      seq_len * 3 * hidden_units_,
+    //                      3 * hidden_units_,
+    //                      batch_size * seq_len * 3 * hidden_units_,
+    //                      0);
+    //        print_tensor3(qkv_buf_,
+    //                      batch_size,
+    //                      seq_len,
+    //                      hidden_units_,
+    //                      seq_len * 3 * hidden_units_,
+    //                      3 * hidden_units_,
+    //                      batch_size * seq_len * 3 * hidden_units_,
+    //                      hidden_units_);
+    //        print_tensor3(qkv_buf_,
+    //                      batch_size,
+    //                      seq_len,
+    //                      hidden_units_,
+    //                      seq_len * 3 * hidden_units_,
+    //                      3 * hidden_units_,
+    //                      batch_size * seq_len * 3 * hidden_units_,
+    //                      2*hidden_units_);
+    //    }
+    //    if (true) {
+    //        print_tensor4(qkv_buf_,
+    //                batch_size, seq_len, head_num_, size_per_head_,
+    //                seq_len * 3 * head_num_ * size_per_head_,
+    //                3 * head_num_ * size_per_head_,
+    //                size_per_head_,
+    //                batch_size * seq_len * 3 * head_num_ * size_per_head_,
+    //                0
+    //                );
+    //        print_tensor4(qkv_buf_,
+    //                batch_size, seq_len, head_num_, size_per_head_,
+    //                seq_len * 3 * head_num_ * size_per_head_,
+    //                3 * head_num_ * size_per_head_,
+    //                size_per_head_,
+    //                batch_size * seq_len * 3 * head_num_ * size_per_head_,
+    //                head_num_ * size_per_head_
+    //                );
+    //        print_tensor4(qkv_buf_,
+    //                batch_size, seq_len, head_num_, size_per_head_,
+    //                seq_len * 3 * head_num_ * size_per_head_,
+    //                3 * head_num_ * size_per_head_,
+    //                size_per_head_,
+    //                batch_size * seq_len * 3 * head_num_ * size_per_head_,
+    //                2 * head_num_ * size_per_head_
+    //                );
+    //    }
 
     if (padding_offset != nullptr) {
         // q_buf_2_, k_buf_2_ and v_buf_2_ are continuous
-        cudaMemsetAsync(k_buf_2_, 0, batch_size * seq_len * 3 * hidden_units_ * sizeof(T), stream_);
+        cudaMemsetAsync(q_buf_2_, 0, batch_size * seq_len * 3 * hidden_units_ * sizeof(T), stream_);
         sync_check_cuda_error();
     }
     invokeLLaMAAddFusedQKVBiasTranspose(q_buf_2_,
@@ -151,12 +157,11 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                                         rotary_embedding_dim_,
                                         stream_);
     sync_check_cuda_error();
-//    if (true) {
-//        print_tensor4(q_buf_2_, batch_size, head_num_, seq_len, size_per_head_);
-//        print_tensor4(k_buf_2_, batch_size, head_num_, seq_len, size_per_head_);
-//        print_tensor4(v_buf_2_, batch_size, head_num_, seq_len, size_per_head_);
-//    }
-
+    //    if (true) {
+    //        print_tensor4(q_buf_2_, batch_size, head_num_, seq_len, size_per_head_);
+    //        print_tensor4(k_buf_2_, batch_size, head_num_, seq_len, size_per_head_);
+    //        print_tensor4(v_buf_2_, batch_size, head_num_, seq_len, size_per_head_);
+    //    }
 
     //    const int max_seq_len = (int)(output_tensors->at("key_cache").shape[3]);  // max output seq length
     //    // Use batch major
@@ -194,6 +199,15 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
         //
         if (is_qk_buf_float_ == true && gemm_data_type != CUDA_R_32F) {
             PUSH_RANGE("Q*K batch gemm");
+            //std::cout << "G2====================================\n";
+            //std::cout << "attention_seq_len_1: " << attention_seq_len_1 << "\n";
+            //std::cout << "attention_seq_len_2: " << attention_seq_len_2 << "\n";
+            //std::cout << "batch_size: " << batch_size << "\n";
+            //std::cout << "head_num_: " << head_num_ << "\n";
+            //std::cout << "size_per_head_: " << size_per_head_ << "\n";
+            //std::cout << "G2====================================\n";
+            //std::cout << std::flush;
+
             cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_T,
                                                 CUBLAS_OP_N,
                                                 attention_seq_len_2,  // n
@@ -215,7 +229,6 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                                                 attention_seq_len_2 * attention_seq_len_1,
                                                 batch_size * head_num_,  // global batch size
                                                 CUDA_R_32F);
-
             sync_check_cuda_error();
             POP_RANGE;
 
@@ -236,6 +249,14 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
         }
         else {
             PUSH_RANGE("Q*K batch gemm");
+            //std::cout << "G2====================================\n";
+            //std::cout << "attention_seq_len_1: " << attention_seq_len_1 << "\n";
+            //std::cout << "attention_seq_len_2: " << attention_seq_len_2 << "\n";
+            //std::cout << "batch_size: " << batch_size << "\n";
+            //std::cout << "head_num_: " << head_num_ << "\n";
+            //std::cout << "size_per_head_: " << size_per_head_ << "\n";
+            //std::cout << "G2====================================\n";
+            //std::cout << std::flush;
             cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_T,
                                                 CUBLAS_OP_N,
                                                 attention_seq_len_2,
@@ -270,6 +291,14 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
         }
 
         PUSH_RANGE("QK*V batch gemm");
+        //std::cout << "G3====================================\n";
+        //std::cout << "attention_seq_len_1: " << attention_seq_len_1 << "\n";
+        //std::cout << "attention_seq_len_2: " << attention_seq_len_2 << "\n";
+        //std::cout << "batch_size: " << batch_size << "\n";
+        //std::cout << "head_num_: " << head_num_ << "\n";
+        //std::cout << "size_per_head_: " << size_per_head_ << "\n";
+        //std::cout << "G3====================================\n";
+        //std::cout << std::flush;
         cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_N,
                                             CUBLAS_OP_N,
                                             size_per_head_,
@@ -433,26 +462,26 @@ template<typename T>
 void LLaMAContextAttentionLayer<T>::allocateBuffer(size_t batch_size, size_t seq_len, bool allocate_qk_buf)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * 3 * batch_size * seq_len * hidden_units_, true);
-    q_buf_2_ = (T*)allocator_->reMalloc(q_buf_2_, sizeof(T) * batch_size * seq_len * 3 * hidden_units_, true);
+    qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * 3 * batch_size * seq_len * hidden_units_, false);
+    q_buf_2_ = (T*)allocator_->reMalloc(q_buf_2_, sizeof(T) * batch_size * seq_len * 3 * hidden_units_, false);
     k_buf_2_ = q_buf_2_ + batch_size * seq_len * hidden_units_;
     v_buf_2_ = k_buf_2_ + batch_size * seq_len * hidden_units_;
 
     // save memory usage when using fmha
     if (allocate_qk_buf) {
-        qk_buf_ = (T*)allocator_->reMalloc(qk_buf_, sizeof(T) * batch_size * head_num_ * seq_len * seq_len, true);
+        qk_buf_ = (T*)allocator_->reMalloc(qk_buf_, sizeof(T) * batch_size * head_num_ * seq_len * seq_len, false);
     }
     else {
         allocator_->free((void**)(&qk_buf_));
         qk_buf_ = nullptr;
     }
-    qkv_buf_2_ = (T*)allocator_->reMalloc(qkv_buf_2_, sizeof(T) * batch_size * seq_len * hidden_units_, true);
-    qkv_buf_3_ = (T*)allocator_->reMalloc(qkv_buf_3_, sizeof(T) * batch_size * seq_len * hidden_units_, true);
+    qkv_buf_2_ = (T*)allocator_->reMalloc(qkv_buf_2_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
+    qkv_buf_3_ = (T*)allocator_->reMalloc(qkv_buf_3_, sizeof(T) * batch_size * seq_len * hidden_units_, false);
 
     if (is_qk_buf_float_ == true) {
         if (allocate_qk_buf) {
             qk_buf_float_ = (float*)allocator_->reMalloc(
-                qk_buf_float_, sizeof(float) * batch_size * head_num_ * seq_len * seq_len, true);
+                qk_buf_float_, sizeof(float) * batch_size * head_num_ * seq_len * seq_len, false);
         }
         else {
             allocator_->free((void**)(&qk_buf_float_));

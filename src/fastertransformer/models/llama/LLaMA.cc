@@ -58,10 +58,8 @@ void LLaMA<T>::allocateBuffer(size_t batch_size, size_t seq_len, size_t max_seq_
 
     input_attention_mask_ =
         (T*)(allocator_->reMalloc(input_attention_mask_, sizeof(T) * batch_size * seq_len * seq_len, false));
-    decoder_output_buf_ =
-        (T*)(allocator_->reMalloc(decoder_output_buf_, sizeof(T) * batch_size * hidden_units_, false));
     normed_decoder_output_buf_ =
-        (T*)(allocator_->reMalloc(normed_decoder_output_buf_, sizeof(T) * batch_size * hidden_units_, false));
+        (T*)(allocator_->reMalloc(normed_decoder_output_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
     logits_buf_ = (T*)(allocator_->reMalloc(logits_buf_, sizeof(T) * batch_size * seq_len * vocab_size_, false));
 
     key_cache_   = (T*)(allocator_->reMalloc(key_cache_, sizeof(T) * self_cache_size * 2, false));
@@ -84,7 +82,6 @@ void LLaMA<T>::freeBuffer()
 {
     if (is_allocate_buffer_) {
         allocator_->free((void**)(&input_attention_mask_));
-        allocator_->free((void**)(&decoder_output_buf_));
         allocator_->free((void**)(&logits_buf_));
 
         allocator_->free((void**)(&key_cache_));
@@ -205,7 +202,8 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                        const std::unordered_map<std::string, Tensor>* input_tensors,
                        const LLaMAWeight<T>*                          llama_weights)
 {
-    // Logger::getLogger().setLevel(Logger::Level::TRACE);
+    // Logger::getLogger().setLevel(Logger::Level::DEBUG);
+    //
     // input_tensors:
     //      input_ids [batch_size, seq_len]
     //      input_lengths [batch_size]
@@ -265,10 +263,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                                       hidden_units_,
                                       stream_);
         sync_check_cuda_error();
-
-//        std::cout << 0 << "==================" << "EMBEDDING\n";
-//        print_tensor3(context_decoder_input_buf_, batch_size, seq_len, hidden_units_);
-//        std::cout << 0 << "==================" << "EMBEDDING\n";
     }
 
     std::unordered_map<std::string, Tensor> decoder_input_tensors{
@@ -312,10 +306,12 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                               vocab_size_);
         sync_check_cuda_error();
 
+
         if (std::is_same<T, half>::value) {
             float* output_logits = output_tensors->at("output_logits").getPtr<float>();
-            invokeCudaCast<float, T>(output_logits, logits_buf_, batch_size * seq_len * vocab_size_, stream_);
+            invokeCudaCast(output_logits, logits_buf_, batch_size * seq_len * vocab_size_, stream_);
             sync_check_cuda_error();
+            //print_tensor3(output_logits, batch_size, seq_len, vocab_size_);
         }
     }
 }

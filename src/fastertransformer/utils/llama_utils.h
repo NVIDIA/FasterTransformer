@@ -121,6 +121,16 @@ _print_tensor4(T* out, int dim1, int dim2, int dim3, int dim4, int stride1, int 
 }
 
 template<typename T>
+static void print_tensor1(T* in, int dim1)
+{
+    T* out = (T*)malloc(sizeof(T) * dim1);
+    cudaMemcpy(out, in, sizeof(T) * dim1, cudaMemcpyDeviceToHost);
+    _print_tensor1(out, dim1, 1);
+    std::cout << "\n";
+    free(out);
+}
+
+template<typename T>
 static void print_tensor3(T* in, int dim1, int dim2, int dim3, int stride1, int stride2, int size, int start)
 {
     T* out = (T*)malloc(sizeof(T) * size);

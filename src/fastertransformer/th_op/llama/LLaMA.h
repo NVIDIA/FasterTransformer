@@ -114,16 +114,15 @@ public:
         delete cublas_wrapper_mutex_;
     }
 
-    virtual void forward(th::Tensor&   output_logits,
-                         th::Tensor&   input_ids,
-                         th::Tensor&   input_lengths,
-                         const int start_pos) override
+    virtual void
+    forward(th::Tensor& output_logits, th::Tensor& input_ids, th::Tensor& input_lengths, const int start_pos) override
     {
         auto           stream       = at::cuda::getCurrentCUDAStream().stream();
         cublasHandle_t cublasHandle = at::cuda::getCurrentCUDABlasHandle();
         cublasSetStream(cublasHandle, stream);
-        ft::Allocator<ft::AllocatorType::TH> allocator      = ft::Allocator<ft::AllocatorType::TH>();
-        ft::cublasMMWrapper                  cublas_wrapper = ft::cublasMMWrapper(
+        ft::Allocator<ft::AllocatorType::CUDA> allocator =
+            ft::Allocator<ft::AllocatorType::CUDA>(at::cuda::getCurrentCUDAStream().device_index());
+        ft::cublasMMWrapper cublas_wrapper = ft::cublasMMWrapper(
             cublasHandle, cublasltHandle_, stream, cublas_algo_map_, cublas_wrapper_mutex_, &allocator);
 
         if (std::is_same<T, half>::value) {
