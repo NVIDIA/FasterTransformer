@@ -311,7 +311,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
             float* output_logits = output_tensors->at("output_logits").getPtr<float>();
             invokeCudaCast(output_logits, logits_buf_, batch_size * seq_len * vocab_size_, stream_);
             sync_check_cuda_error();
-            //print_tensor3(output_logits, batch_size, seq_len, vocab_size_);
         }
     }
 }
