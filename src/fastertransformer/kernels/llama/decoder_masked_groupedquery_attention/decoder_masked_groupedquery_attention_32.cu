@@ -42,7 +42,6 @@ template<typename T, int Dh, int Dh_MAX, typename KERNEL_PARAMS_TYPE>
 void mgqa_launch_kernel(const KERNEL_PARAMS_TYPE& params, const cudaStream_t& stream)
 {
     constexpr int  THREADS_PER_VALUE  = threads_per_value_t<T, Dh_MAX>::value;
-    constexpr bool DO_CROSS_ATTENTION = false;
     int            tlength            = params.timestep;
     if (params.cache_indir == nullptr) {
         if (tlength < 32) {
