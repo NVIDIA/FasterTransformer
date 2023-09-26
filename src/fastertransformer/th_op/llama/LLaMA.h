@@ -105,16 +105,17 @@ public:
         llama_weights_.post_decoder_embedding.kernel = get_ptr<T>(weights_[14 * num_layers_ + 3]);
 
         ft::check_cuda_error(cudaGetDeviceProperties(&prop_, 0));
+        ft::check_cuda_error(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking));
+        ft::check_cuda_error(cudaEventCreate(&event_));
 
-        auto           stream       = at::cuda::getCurrentCUDAStream().stream();
         cublasHandle_t cublasHandle = at::cuda::getCurrentCUDABlasHandle();
-        cublasSetStream(cublasHandle, stream);
+        cublasSetStream(cublasHandle, stream_);
 
         /// ft::Allocator<ft::AllocatorType::CUDA> allocator =
         // ft::Allocator<ft::AllocatorType::CUDA>(at::cuda::getCurrentCUDAStream().device_index());
         allocator_      = new ft::Allocator<ft::AllocatorType::TH>();
         cublas_wrapper_ = new ft::cublasMMWrapper(
-            cublasHandle, cublasltHandle_, stream, cublas_algo_map_, cublas_wrapper_mutex_, allocator_);
+            cublasHandle, cublasltHandle_, stream_, cublas_algo_map_, cublas_wrapper_mutex_, allocator_);
 
         if (std::is_same<T, half>::value) {
             cublas_wrapper_->setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
@@ -141,7 +142,7 @@ public:
                                   max_seq_len_,
                                   tensor_para_,
                                   pipeline_para_,
-                                  stream,
+                                  stream_,
                                   cublas_wrapper_,
                                   allocator_,
                                   false,          // is_free_buffer_after_forward
@@ -152,6 +153,9 @@ public:
 
     ~FTLLaMA() override
     {
+        ft::check_cuda_error(cudaEventDestroy(event_));
+        ft::check_cuda_error(cudaStreamDestroy(stream_));
+
         delete llama_;
         delete cublas_wrapper_;
         delete allocator_;
@@ -186,7 +190,12 @@ public:
                         get_ptr<float>(output_logits)}}};
 
         try {
+            ft::check_cuda_error(cudaEventSynchronize(event_));
             llama_->forward(&output_tensors, &input_tensors, &llama_weights_);
+            ft::check_cuda_error(cudaEventRecord(event_, stream_));
+
+            auto stream = at::cuda::getCurrentCUDAStream().stream();
+            ft::check_cuda_error(cudaStreamWaitEvent(stream, event_));
         }
         catch (std::runtime_error& error) {
             std::cout << error.what();
@@ -209,6 +218,9 @@ private:
     const size_t max_seq_len_;
     int64_t      tensor_para_size_;
     int64_t      pipeline_para_size_;
+
+    cudaStream_t stream_;
+    cudaEvent_t event_;
 
     std::vector<th::Tensor> weights_;
     cublasLtHandle_t        cublasltHandle_;

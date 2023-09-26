@@ -43,6 +43,10 @@ private:
     size_t rotary_embedding_dim_;
     float  layernorm_eps_;
 
+    cudaEvent_t  kern_event_;
+    cudaEvent_t  comm_event_;
+    cudaStream_t comm_stream_;
+
     // calculated data
     size_t hidden_units_;
 
@@ -56,7 +60,7 @@ private:
     FfnLayer<T>*           ffn_layer_;
 
     void allocateBuffer() override;
-    void allocateBuffer(size_t batch_size, size_t seq_len);
+    void allocateBuffer(size_t batch_size, size_t seq_len, size_t max_seq_len);
     void freeBuffer() override;
 
     bool isValidLayerParallelId(uint l);
@@ -67,6 +71,7 @@ private:
     void initialize();
 
 protected:
+    T*      layer_output_buffer_    = nullptr;
     T*      decoder_normed_input_   = nullptr;
     T*      self_attn_output_       = nullptr;
     T*      decoder_layer_output_   = nullptr;
@@ -75,19 +80,19 @@ protected:
     int*    cu_seqlens_             = nullptr;
 
 public:
-    LLaMAContextDecoder(size_t                              head_num,
-                        size_t                              size_per_head,
-                        size_t                              inter_size,
-                        size_t                              num_layer,
-                        size_t                              rotary_embedding_dim,
-                        float                               layernorm_eps,
-                        NcclParam                           pipeline_para,
-                        cudaStream_t                        stream,
-                        cublasMMWrapper*                    cublas_wrapper,
-                        IAllocator*                         allocator,
-                        bool                                is_free_buffer_after_forward,
-                        bool                                is_qk_buf_float,
-                        AttentionType                       attention_type            = AttentionType::FUSED_MHA);
+    LLaMAContextDecoder(size_t           head_num,
+                        size_t           size_per_head,
+                        size_t           inter_size,
+                        size_t           num_layer,
+                        size_t           rotary_embedding_dim,
+                        float            layernorm_eps,
+                        NcclParam        pipeline_para,
+                        cudaStream_t     stream,
+                        cublasMMWrapper* cublas_wrapper,
+                        IAllocator*      allocator,
+                        bool             is_free_buffer_after_forward,
+                        bool             is_qk_buf_float,
+                        AttentionType    attention_type = AttentionType::FUSED_MHA);
 
     LLaMAContextDecoder(LLaMAContextDecoder<T> const& decoder);
 

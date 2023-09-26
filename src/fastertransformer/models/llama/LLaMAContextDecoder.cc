@@ -27,6 +27,9 @@ namespace fastertransformer {
 template<typename T>
 void LLaMAContextDecoder<T>::initialize()
 {
+    check_cuda_error(cudaStreamCreateWithFlags(&comm_stream_, cudaStreamNonBlocking));
+    check_cuda_error(cudaEventCreate(&kern_event_));
+    check_cuda_error(cudaEventCreate(&comm_event_));
     self_attention_layer_ = new LLaMAContextAttentionLayer<T>(head_num_,
                                                               size_per_head_,
                                                               head_num_,
@@ -59,7 +62,7 @@ void LLaMAContextDecoder<T>::allocateBuffer()
 }
 
 template<typename T>
-void LLaMAContextDecoder<T>::allocateBuffer(size_t batch_size, size_t seq_len)
+void LLaMAContextDecoder<T>::allocateBuffer(size_t batch_size, size_t seq_len, size_t max_seq_len)
 {
     decoder_normed_input_ = reinterpret_cast<T*>(
         allocator_->reMalloc(decoder_normed_input_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
@@ -67,6 +70,10 @@ void LLaMAContextDecoder<T>::allocateBuffer(size_t batch_size, size_t seq_len)
         allocator_->reMalloc(self_attn_output_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
     decoder_layer_output_ = reinterpret_cast<T*>(
         allocator_->reMalloc(decoder_layer_output_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
+    if (layer_output_buffer_ == nullptr) {
+        layer_output_buffer_ = reinterpret_cast<T*>(
+            allocator_->reMalloc(layer_output_buffer_, sizeof(T) * batch_size * max_seq_len * hidden_units_, false));
+    }
     h_pinned_token_num_ptr_ = (size_t*)allocator_->reMalloc(h_pinned_token_num_ptr_, sizeof(size_t), true, true);
     padding_offset_ =
         reinterpret_cast<int*>(allocator_->reMalloc(padding_offset_, sizeof(int) * batch_size * seq_len, false));
@@ -166,6 +173,10 @@ LLaMAContextDecoder<T>::LLaMAContextDecoder(LLaMAContextDecoder<T> const& decode
 template<typename T>
 LLaMAContextDecoder<T>::~LLaMAContextDecoder()
 {
+    check_cuda_error(cudaEventDestroy(kern_event_));
+    check_cuda_error(cudaEventDestroy(comm_event_));
+    check_cuda_error(cudaStreamDestroy(comm_stream_));
+
     delete self_attention_layer_;
     delete ffn_layer_;
     freeBuffer();
@@ -200,8 +211,8 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
 
     // output tensors:
     //      decoder_output [batch_size, seq_len, hidden_dimension],
-    //      key_cache [num_layer, batch, max_seq_len, local_head_num, size_per_head]
-    //      value_cache [num_layer, batch, max_seq_len, local_head_num, size_per_head]
+    //      key_cache [num_layer, batch, local_head_num, max_seq_len, size_per_head]
+    //      value_cache [num_layer, batch, local_head_num, mxa_seq_len, size_per_head]
 
     // To use layer/pipeline parallelism, we view the shape of 'batch_size' to 'ite * batch_size'.
     // For example, the shape of decoder_input becomes [ite, batch_size, seq_len, hidden_dimension] during
@@ -210,11 +221,12 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
     FT_CHECK(input_tensors->size() == 4);
     FT_CHECK(output_tensors->size() == 3);
 
-    const int      batch_size = input_tensors->at("decoder_input").shape[0];
-    const int      seq_len    = input_tensors->at("decoder_input").shape[1];
-    const int      start_pos  = input_tensors->at("start_pos").max<int>();
-    const DataType data_type  = getTensorType<T>();
-    allocateBuffer(batch_size, seq_len);
+    const int      batch_size  = input_tensors->at("decoder_input").shape[0];
+    const int      seq_len     = input_tensors->at("decoder_input").shape[1];
+    const int      start_pos   = input_tensors->at("start_pos").max<int>();
+    const size_t   max_seq_len = output_tensors->at("key_cache").shape[3];
+    const DataType data_type   = getTensorType<T>();
+    allocateBuffer(batch_size, seq_len, max_seq_len);
     sync_check_cuda_error();
 
     T*       decoder_input  = input_tensors->at("decoder_input").getPtr<T>();
@@ -257,6 +269,7 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
         }
 
         if (l == 0 && is_unpadded_mha) {
+            check_cuda_error(cudaEventSynchronize(kern_event_));
             invokeRemovePadding(
                 decoder_layer_output_, decoder_input, padding_offset_, h_token_num, hidden_units_, stream_);
             sync_check_cuda_error();
@@ -354,8 +367,17 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
         if (isLastLayerParallelId(l) && pipeline_para_.rank_ != pipeline_para_.world_size_ - 1
             && pipeline_para_.world_size_ > 1) {
             int data_size = h_token_num * hidden_units_;
-            ftNcclSend(layer_output, data_size, pipeline_para_.rank_ + 1, pipeline_para_, stream_);
+            check_cuda_error(cudaEventSynchronize(comm_event_));
+            check_cuda_error(cudaMemcpyAsync(
+                layer_output_buffer_, layer_output, sizeof(T) * data_size, cudaMemcpyDeviceToDevice, stream_));
+            check_cuda_error(cudaEventRecord(kern_event_, stream_));
+            check_cuda_error(cudaStreamWaitEvent(comm_stream_, kern_event_));
+            ftNcclSend(layer_output_buffer_, data_size, pipeline_para_.rank_ + 1, pipeline_para_, comm_stream_);
             sync_check_cuda_error();
+            check_cuda_error(cudaEventRecord(comm_event_, comm_stream_));
+
+            //ftNcclSend(layer_output, data_size, pipeline_para_.rank_ + 1, pipeline_para_, comm_stream_);
+            //sync_check_cuda_error();
         }
 
         if ((l == num_layer_ - 1) && is_unpadded_mha) {
