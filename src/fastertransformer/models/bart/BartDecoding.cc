@@ -322,6 +322,17 @@ BartDecoding<T>::~BartDecoding()
 }
 
 template<typename T>
+void BartDecoding<T>::registerCallback(callback_sig* fn, void* ctx)
+{
+}
+
+template<typename T>
+void BartDecoding<T>::unRegisterCallback()
+{
+}
+
+
+template<typename T>
 void BartDecoding<T>::forward(TensorMap*                   output_tensors,
                               TensorMap*                   input_tensors,
                               const BartDecodingWeight<T>* decoding_weights)
@@ -723,6 +734,18 @@ void BartDecoding<T>::forward(TensorMap*                   output_tensors,
                      {"local_batch_size", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &tmp_local_batch_size}},
                      {"is_initialize_random_table", Tensor{MEMORY_CPU, TYPE_BOOL, {1}, &is_initialize_random_table}}});
 
+// {
+//                     T* buf;
+//                     int st = batch_size * beam_width * vocab_size_padded_;
+//                     buf = new T[st];
+//                     cudaMemcpy(buf, logits_buf_, sizeof(T) * st, cudaMemcpyDeviceToHost);
+//                     printf("logits_buf_\n");
+//                     for (int i=0; i<50; i++) {
+//                         printf("%f ", double(buf[i]));
+//                     }
+//                     printf("buf last: %f\n", double(buf[st-1]));
+//                     printf("\n");
+// }
                 if (cache_indirections_[src_indir_idx] != nullptr) {
                     dynamic_decode_input_tensors.insert(
                         "src_cache_indirection",
@@ -780,6 +803,17 @@ void BartDecoding<T>::forward(TensorMap*                   output_tensors,
                     }
                     dynamic_decode_output_tensors.insert(*t);
                 }
+    // {
+    //     int* buf;
+    //     int st = batch_size * (max_seq_len+1);
+    //     buf = new int[st];
+    //     cudaMemcpy(buf, output_ids_buf_, sizeof(int) * st, cudaMemcpyDeviceToHost);
+    //     printf("start_ids_buf_ before forward: %d\n", batch_size);
+    //     for (int i=0; i<st; i++) {
+    //         printf("%d ", buf[i]);
+    //     }
+    //     printf("\n");
+    // }
 
                 dynamic_decode_layer_->forward(&dynamic_decode_output_tensors, &dynamic_decode_input_tensors);
             }
@@ -910,6 +944,19 @@ void BartDecoding<T>::forward(TensorMap*                   output_tensors,
         }
     }
 
+    // {
+    //     int* buf;
+    //     int st = batch_size * (max_seq_len+1);
+    //     buf = new int[st];
+    //     cudaMemcpy(buf, output_ids_buf_, sizeof(int) * st, cudaMemcpyDeviceToHost);
+    //     printf("output_ids_buf_ after finalize: %d\n", batch_size);
+    //     for (int i=0; i<st; i++) {
+    //         printf("%d ", buf[i]);
+    //     }
+    //     printf("\n");
+        
+    // }
+
     if (pipeline_para_.world_size_ > 1) {
         ftNcclGroupStart();
         if (pipeline_para_.rank_ == pipeline_para_.world_size_ - 1) {
@@ -976,6 +1023,17 @@ void BartDecoding<T>::forward(TensorMap*                   output_tensors,
     // throw errors when detected
     ftNcclStreamSynchronize(tensor_para_, pipeline_para_, stream_);
 
+    // {
+    //     int* buf;
+    //     int st = 32;
+    //     buf = new int[st];
+    //     cudaMemcpy(buf, output_tensors->at("output_ids").data, sizeof(int) * st, cudaMemcpyDeviceToHost);
+    //     printf("output_ids after finalize: %s %d\n", output_tensors->at("output_ids").toString().c_str(), batch_size);
+    //     for (int i=0; i<st; i++) {
+    //         printf("%d ", buf[i]);
+    //     }
+    //     printf("\n");
+    // }
     if (is_free_buffer_after_forward_) {
         freeBuffer();
     }

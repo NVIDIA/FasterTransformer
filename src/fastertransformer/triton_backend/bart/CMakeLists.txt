@@ -14,18 +14,12 @@
 
 cmake_minimum_required(VERSION 3.8)
 
-add_library(TransformerTritonBackend SHARED transformer_triton_backend.cpp)
-target_link_libraries(TransformerTritonBackend PRIVATE nccl_utils mpi_utils)
+set(bart_triton_backend_files
+    BartTritonModel.cc
+    BartTritonModelInstance.cc
+)
 
-add_subdirectory(gptj)
-add_subdirectory(gptneox)
-add_subdirectory(bart)
-add_subdirectory(t5)
-add_subdirectory(t5-encoder)
-add_subdirectory(multi_gpu_gpt)
-if (ENABLE_FP8)
-    add_subdirectory(multi_gpu_gpt_fp8)
-endif()
-add_subdirectory(bert)
-add_subdirectory(deberta)
-add_subdirectory(llama)
+add_library(BartTritonBackend STATIC ${bart_triton_backend_files})
+set_property(TARGET BartTritonBackend PROPERTY POSITION_INDEPENDENT_CODE  ON)
+target_link_libraries(BartTritonBackend PRIVATE TransformerTritonBackend BartEncoder BartDecoding -lcublasLt)
+target_compile_features(BartTritonBackend PRIVATE cxx_std_14)

@@ -213,7 +213,7 @@ def translate(args_dict):
                                      config.decoder_start_token_id, config.eos_token_id, config.vocab_size,
                                      tensor_para_size=tensor_para_size, pipeline_para_size=pipeline_para_size, 
                                      bart_with_bias=bart_with_bias, mbart=is_mbart,
-                                     position_embedding_type=position_embedding_type, 
+                                     position_embedding_type=position_embedding_type,
                                      activation_type=activation_type, layernorm_type=layernorm_type)
 
         ft_bart = FTBart(ft_encoder, ft_decoding)

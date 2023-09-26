@@ -27,17 +27,6 @@
 
 namespace fastertransformer {
 
-// fallback to fp32 dynamic decoder when bf16 specified
-template<typename T>
-struct fallBackType {
-    using Type = float;
-};
-
-template<>
-struct fallBackType<half> {
-    using Type = half;
-};
-
 template<typename T>
 class BartDecoding: public BaseLayer {
 private:
@@ -128,6 +117,8 @@ protected:
     const bool     using_beam_hyps = true;
     BeamHypotheses beam_hyps_;
 
+    using callback_sig                 = void(TensorMap*, void*);
+
 public:
     BartDecoding(size_t                              max_batch_size,
                  size_t                              max_seq_len,
@@ -170,6 +161,9 @@ public:
     void forward(TensorMap* output_tensors, TensorMap* input_tensors, const BartDecodingWeight<T>* Decoding_weights);
 
     void setStream(cudaStream_t stream) override;
+
+    void registerCallback(callback_sig* fn, void* ctx);
+    void unRegisterCallback();
 };
 
 }  // namespace fastertransformer

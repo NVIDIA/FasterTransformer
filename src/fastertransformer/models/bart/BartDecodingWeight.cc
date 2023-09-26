@@ -256,8 +256,28 @@ void BartDecodingWeight<T>::loadModel(std::string dir_path)
 {
     FT_LOG_DEBUG("BartDecodingWeight " + std::string(__func__) + " start");
 
-    FT_LOG_DEBUG(
-        "Currently only support checkpoint loading from PyTorch interface outside FT. Direct checkpoint .bin loading support TBD");
+    FtCudaDataType model_file_type = getModelFileType(dir_path + "/config.ini", "decoder");
+    FT_CHECK(is_maintain_buffer_ == true);
+
+    loadWeightFromBin<T>(weights_ptr[0], {(size_t)weights_size[0]}, dir_path + "/decoder.embed_positions.weight.bin", model_file_type);
+    loadWeightFromBin<T>(weights_ptr[1], {(size_t)weights_size[1]}, dir_path + "/decoder.embed_tokens.weight.bin", model_file_type);
+    loadWeightFromBin<T>(weights_ptr[2], {(size_t)weights_size[2]}, dir_path + "/decoder.lm_head.weight.bin", model_file_type);
+    loadWeightFromBin<T>(
+        weights_ptr[3], {(size_t)weights_size[3]}, dir_path + "/decoder.final_layer_norm.weight.bin", model_file_type);
+    if (bart_with_bias) {
+        loadWeightFromBin<T>(weights_ptr[4],
+                             {(size_t)weights_size[4]},
+                             dir_path + "/decoder.final_layer_norm.bias.bin",
+                             model_file_type);
+        loadWeightFromBin<T>(weights_ptr[5], {(size_t)weights_size[5]}, dir_path + "/decoder.final_logits_bias.bin", model_file_type);
+    }
+
+    for (int l = 0; l < num_layer_; l++) {
+        if (isValidLayerParallelId(l)) {
+            decoder_layer_weights[l]->loadModel(dir_path + "/decoder." + std::to_string(l) + ".",
+                                                   model_file_type);
+        }
+    }
 
     FT_LOG_DEBUG("BartDecodingWeight " + std::string(__func__) + " end");
 }

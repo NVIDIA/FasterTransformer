@@ -27,17 +27,6 @@
 
 namespace fastertransformer {
 
-// fallback to fp32 dynamic decoder when bf16 specified
-template<typename T>
-struct fallBackType {
-    using Type = float;
-};
-
-template<>
-struct fallBackType<half> {
-    using Type = half;
-};
-
 template<typename T>
 class T5Decoding: public BaseLayer {
 private:

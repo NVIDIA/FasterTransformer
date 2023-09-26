@@ -249,7 +249,26 @@ void BartEncoderWeight<T>::loadModel(std::string dir_path)
 {
     FT_LOG_DEBUG("BartEncoderWeight " + std::string(__func__) + " start");
 
-    FT_LOG_DEBUG("Megatron BART support TBD");
+    FtCudaDataType model_file_type = getModelFileType(dir_path + "/config.ini", "encoder");
+    FT_CHECK(is_maintain_buffer == true);
+
+    loadWeightFromBin<T>(weights_ptr[0], {(size_t)weights_size[0]}, dir_path + "/encoder.embed_positions.weight.bin", model_file_type);
+    loadWeightFromBin<T>(weights_ptr[1], {(size_t)weights_size[1]}, dir_path + "/encoder.embed_tokens.weight.bin", model_file_type);
+    loadWeightFromBin<T>(
+        weights_ptr[2], {(size_t)weights_size[2]}, dir_path + "/encoder.final_layer_norm.weight.bin", model_file_type);
+    if (bart_with_bias) {
+        loadWeightFromBin<T>(weights_ptr[3],
+                             {(size_t)weights_size[3]},
+                             dir_path + "/encoder.final_layer_norm.bias.bin",
+                             model_file_type);
+    }
+
+    for (int l = 0; l < num_layer_; l++) {
+        if (isValidLayerParallelId(l)) {
+            bart_encoder_layer_weights[l]->loadModel(dir_path + "/encoder." + std::to_string(l) + ".",
+                                                   model_file_type);
+        }
+    }
 
     FT_LOG_DEBUG("BartEncoderWeight " + std::string(__func__) + " end");
 }

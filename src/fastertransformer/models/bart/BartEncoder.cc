@@ -413,7 +413,6 @@ void BartEncoder<T>::forward(TensorMap*                  output_tensors,
         size_t d_model_offset = id_offset * request_seq_len * d_model_;
 
         const int* sequence_lengths = input_tensors->at("sequence_length").getPtr<int>() + id_offset;
-
         if (position_embedding_type == PositionEmbeddingType::absolute) {
             invokeInputIdsEmbeddingLookupPosEncoding(
                 bart_encoder_emb_buf_,
@@ -453,6 +452,30 @@ void BartEncoder<T>::forward(TensorMap*                  output_tensors,
 
         sync_check_cuda_error();
 
+// {
+//         T* buf;
+//         int batch_size = 1;
+//         int seq_len = 11;
+//         int st = batch_size * seq_len * d_model_;
+//         printf("st: %d %d %d %d\n",batch_size, seq_len, d_model_, st);
+//         buf = new T[st];
+//         cudaMemcpy(buf, bart_encoder_emb_buf_, sizeof(T) * st, cudaMemcpyDeviceToHost);
+//         printf("bart_encoder_emb_buf_\n");
+//         for (int i=0; i < seq_len; i++) {
+//             for (int j=0; j<d_model_; j++) {
+//                 printf("%f ", double(buf[i+j*seq_len]));
+//                 if (j > 10) {
+//                     break;
+//                 }
+//             }
+//             printf("\n");
+//         }
+//         for (int i=0; i<50; i++) {
+//             printf("%f ", double(buf[i]));
+//         }
+//         printf("buf last: %f\n", double(buf[st-1]));
+//         printf("\n");
+// }
         size_t  h_token_num;
         T*      bart_encoder_input_ptr;
         T*      bart_encoder_output_ptr;
