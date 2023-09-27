@@ -269,7 +269,6 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
         }
 
         if (l == 0 && is_unpadded_mha) {
-            check_cuda_error(cudaEventSynchronize(kern_event_));
             invokeRemovePadding(
                 decoder_layer_output_, decoder_input, padding_offset_, h_token_num, hidden_units_, stream_);
             sync_check_cuda_error();
