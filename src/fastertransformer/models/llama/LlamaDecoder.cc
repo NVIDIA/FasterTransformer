@@ -23,7 +23,6 @@ namespace fastertransformer {
 template<typename T>
 void LlamaDecoder<T>::initialize()
 {
-    printf("rope_theta_: %f\n", rope_theta_);
     self_attention_layer_ = new TensorParallelLlamaDecoderSelfAttentionLayer<T>(0,  // max_batch_size
                                                                            head_num_,
                                                                            kv_head_num_,
