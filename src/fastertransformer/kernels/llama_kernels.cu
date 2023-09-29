@@ -1,11 +1,58 @@
 #include "src/fastertransformer/kernels/llama_kernels.h"
 #include "src/fastertransformer/utils/cuda_fp8_utils.h"
 
+#include <algorithm>
+
 #include <assert.h>
 #include <cuda_fp16.h>
 #include <stdio.h>
 
+using namespace std;
 namespace fastertransformer {
+
+template<typename T>
+__global__ void LLaMAstart_id_embedding_lookups_kernel(
+    T* out, const T* embedding_table, const int* input_ids, const int num_tokens, const int64_t hidden_units)
+{
+    for (int index = blockIdx.x * blockDim.x + threadIdx.x; index < num_tokens * hidden_units;
+         index += blockDim.x * gridDim.x) {
+
+        // embedding lookup from word ids [batch, length] (part of [batch, length]) and [vocab, hidden] to generate
+        // embedding [batch, length, hidden]
+        const int word_index = index / hidden_units;
+        const int col_index  = index % hidden_units;
+        const int input_id   = input_ids[word_index];
+
+        out[index] = embedding_table[input_id * hidden_units + col_index];
+    }
+}
+
+template<typename T>
+void invokeLLaMAInputIdsEmbeddingLookup(T*           out,
+                                        const T*     embedding_table,
+                                        const int*   input_ids,
+                                        const int    num_tokens,
+                                        const int    hidden_units,
+                                        cudaStream_t stream)
+{
+    dim3 grid(min(num_tokens, 65536));
+    dim3 block(min(hidden_units, 512));
+    LLaMAstart_id_embedding_lookups_kernel<T>
+        <<<grid, block, 0, stream>>>(out, embedding_table, input_ids, num_tokens, hidden_units);
+}
+
+template void invokeLLaMAInputIdsEmbeddingLookup(float*       out,
+                                                 const float* embedding_table,
+                                                 const int*   input_ids,
+                                                 const int    num_tokens,
+                                                 const int    hidden_units,
+                                                 cudaStream_t stream);
+template void invokeLLaMAInputIdsEmbeddingLookup(half*        out,
+                                                 const half*  embedding_table,
+                                                 const int*   input_ids,
+                                                 const int    num_tokens,
+                                                 const int    hidden_units,
+                                                 cudaStream_t stream);
 
 __global__ void LLaMAgetPaddingOffsetAndCuSeqLensKernel(
     int* padding_offset, int* cu_seqlens, const int* sequence_length, const int batch_size, const int seq_len)
@@ -44,19 +91,19 @@ __global__ void LLaMAbuildDecoderAttentionMaskKernel(T*         attention_mask,
                                                      const int* context_lengths,
                                                      const int  batch_size,
                                                      const int  seq_len,
-                                                     const int  max_length)
+                                                     const int  attn_len)
 {
     // attention_mask:
-    // [batch_size, 1, seq_len, max_length]
+    // [batch_size, 1, seq_len, attn_len]
     const int batch_idx         = blockIdx.x;
-    const int mask_size_per_seq = seq_len * max_length;
+    const int mask_size_per_seq = seq_len * attn_len;
     attention_mask += batch_idx * mask_size_per_seq;
     const int context_length = context_lengths[batch_idx];
     const int length         = sequence_lengths[batch_idx];
 
     for (int i = threadIdx.x; i < mask_size_per_seq; i += blockDim.x) {
-        int row_id = i / max_length;
-        int col_id = i % max_length;
+        int row_id = i / attn_len;
+        int col_id = i % attn_len;
         if (row_id < length && col_id <= (row_id + context_length)) {
             attention_mask[i] = (T)(1.0f);
         }
@@ -72,11 +119,11 @@ void invokeLLaMABuildDecoderAttentionMask(T*           attention_mask,
                                           const int*   context_lengths,
                                           const int    batch_size,
                                           const int    seq_len,
-                                          const int    max_length,
+                                          const int    attn_len,
                                           cudaStream_t stream)
 {
     LLaMAbuildDecoderAttentionMaskKernel<T><<<batch_size, 256, 0, stream>>>(
-        attention_mask, sequence_length, context_lengths, batch_size, seq_len, max_length);
+        attention_mask, sequence_length, context_lengths, batch_size, seq_len, attn_len);
 }
 
 template void invokeLLaMABuildDecoderAttentionMask(float*       attention_mask,
@@ -84,7 +131,7 @@ template void invokeLLaMABuildDecoderAttentionMask(float*       attention_mask,
                                                    const int*   context_lengths,
                                                    const int    batch_size,
                                                    const int    seq_len,
-                                                   const int    max_length,
+                                                   const int    attn_len,
                                                    cudaStream_t stream);
 
 template void invokeLLaMABuildDecoderAttentionMask(half*        attention_mask,
@@ -92,7 +139,7 @@ template void invokeLLaMABuildDecoderAttentionMask(half*        attention_mask,
                                                    const int*   context_lengths,
                                                    const int    batch_size,
                                                    const int    seq_len,
-                                                   const int    max_length,
+                                                   const int    attn_len,
                                                    cudaStream_t stream);
 
 template<typename T>

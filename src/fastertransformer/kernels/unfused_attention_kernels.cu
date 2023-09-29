@@ -1987,21 +1987,21 @@ __global__ void transpose_4d_load_from_cache(T*         k_dst,
                                              const int  size_per_head,
                                              const int  seq_len,
                                              const int  max_seq_len,
-                                             const int  max_length)
+                                             const int  attn_len)
 {
-    // [batch_size, head_num, max_length, size_per_head]
+    // [batch_size, head_num, attn_len, size_per_head]
     const int batch_id     = blockIdx.y;
     const int head_id      = blockIdx.z;
 
     // 16 byte loads will handle "x" dimension
     auto key_src = reinterpret_cast<const uint4*>(k_src + batch_id * head_num * size_per_head * max_seq_len
                                                   + head_id * size_per_head * max_seq_len);
-    auto key_dst = reinterpret_cast<uint4*>(k_dst + batch_id * head_num * size_per_head * max_length
-                                            + head_id * size_per_head * max_length);
+    auto key_dst = reinterpret_cast<uint4*>(k_dst + batch_id * head_num * size_per_head * attn_len
+                                            + head_id * size_per_head * attn_len);
     auto val_src = reinterpret_cast<const uint4*>(v_src + batch_id * head_num * size_per_head * max_seq_len
                                                   + head_id * size_per_head * max_seq_len);
-    auto val_dst = reinterpret_cast<uint4*>(v_dst + batch_id * head_num * size_per_head * max_length
-                                            + head_id * size_per_head * max_length);
+    auto val_dst = reinterpret_cast<uint4*>(v_dst + batch_id * head_num * size_per_head * attn_len
+                                            + head_id * size_per_head * attn_len);
 
     // idx is over output dimension L * size_per_head / x for values
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -2009,7 +2009,7 @@ __global__ void transpose_4d_load_from_cache(T*         k_dst,
     constexpr int X_ELEMS             = (sizeof(T) == 4) ? 4 : 8;
     const int     size_per_head_div_x = size_per_head / X_ELEMS;
 
-    if (idx >= size_per_head_div_x * max_length) {
+    if (idx >= size_per_head_div_x * attn_len) {
         return;
     }
 
@@ -2027,15 +2027,15 @@ void invokeLLaMALoadFromCache(T*           k_dst,
                               const int    max_seq_len,
                               const int    size_per_head,
                               const int    local_head_num,
-                              const int    max_length,
+                              const int    attn_len,
                               cudaStream_t stream)
 {
     constexpr int block_sz = 128;
     constexpr int x        = (sizeof(T) == 4) ? 4 : 8;
-    dim3          grid((max_length * size_per_head / x + block_sz - 1) / block_sz, local_batch_size, local_head_num);
+    dim3          grid((attn_len * size_per_head / x + block_sz - 1) / block_sz, local_batch_size, local_head_num);
 
     transpose_4d_load_from_cache<<<grid, block_sz, 0, stream>>>(
-        k_dst, k_src, v_dst, v_src, local_head_num, size_per_head, seq_len, max_seq_len, max_length);
+        k_dst, k_src, v_dst, v_src, local_head_num, size_per_head, seq_len, max_seq_len, attn_len);
 }
 
 #define INSTANTIATELOADFROMCACHE(T)                                                                                    \
@@ -2048,7 +2048,7 @@ void invokeLLaMALoadFromCache(T*           k_dst,
                                            const int    max_seq_len,                                                   \
                                            const int    size_per_head,                                                 \
                                            const int    local_head_num,                                                \
-                                           const int    max_length,                                                    \
+                                           const int    attn_len,                                                    \
                                            cudaStream_t stream)
 INSTANTIATELOADFROMCACHE(float);
 INSTANTIATELOADFROMCACHE(half);

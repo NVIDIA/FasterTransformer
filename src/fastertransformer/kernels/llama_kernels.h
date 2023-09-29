@@ -19,6 +19,13 @@ void invokeLLaMABuildDecoderAttentionMask(T*           attention_mask,
                                           const int    seq_len,
                                           const int    max_length,
                                           cudaStream_t stream);
+template<typename T>
+void invokeLLaMAInputIdsEmbeddingLookup(T*           from_tensor,
+                                        const T*     embedding_table,
+                                        const int*   input_ids,
+                                        const int    num_tokens,
+                                        const int    hidden_units,
+                                        cudaStream_t stream);
 
 template<typename T>
 void invokeLLaMACopyKernel(T* dst, T* src, const int count, cudaStream_t stream);

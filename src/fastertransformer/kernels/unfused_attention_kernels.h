@@ -226,7 +226,7 @@ void invokeLLaMALoadFromCache(T*           k_dst,
                               const int    max_seq_len,
                               const int    size_per_head,
                               const int    local_head_num,
-                              const int    max_length,
+                              const int    attn_len,
                               cudaStream_t stream);
 
 template<typename T>

@@ -34,7 +34,8 @@ public:
                          th::Tensor& input_lengths,
                          th::Tensor& context_lengths,
                          const int   num_tokens,
-                         const int   max_length) = 0;
+                         const int   seq_len,
+                         const int   attn_len) = 0;
 };
 
 template<typename T>
@@ -115,8 +116,6 @@ public:
         cublasHandle_t cublasHandle = at::cuda::getCurrentCUDABlasHandle();
         cublasSetStream(cublasHandle, stream_);
 
-        /// ft::Allocator<ft::AllocatorType::CUDA> allocator =
-        // ft::Allocator<ft::AllocatorType::CUDA>(at::cuda::getCurrentCUDAStream().device_index());
         allocator_      = new ft::Allocator<ft::AllocatorType::TH>();
         cublas_wrapper_ = new ft::cublasMMWrapper(
             cublasHandle, cublasltHandle_, stream_, cublas_algo_map_, cublas_wrapper_mutex_, allocator_);
@@ -176,28 +175,31 @@ public:
                          th::Tensor& input_lengths,
                          th::Tensor& context_lengths,
                          const int   num_tokens,
-                         const int   max_length) override
+                         const int   seq_len,
+                         const int   attn_len) override
     {
-
-        const size_t batch_size = (size_t)input_ids.size(0);
-        const size_t seq_len    = (size_t)input_ids.size(1);
+        const size_t batch_size = (size_t)input_lengths.size(0);
 
         std::unordered_map<std::string, ft::Tensor> input_tensors = std::unordered_map<std::string, ft::Tensor>{
             {"input_ids",
-             ft::Tensor{
-                 ft::MEMORY_GPU, ft::TYPE_INT32, std::vector<size_t>{batch_size, seq_len}, get_ptr<int>(input_ids)}},
+             ft::Tensor{ft::MEMORY_GPU,
+                        ft::TYPE_INT32,
+                        std::vector<size_t>{batch_size, (size_t)seq_len},
+                        get_ptr<int>(input_ids)}},
             {"input_lengths",
              ft::Tensor{ft::MEMORY_GPU, ft::TYPE_INT32, std::vector<size_t>{batch_size}, get_ptr<int>(input_lengths)}},
             {"context_lengths",
-             ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{batch_size}, get_ptr<int>(context_lengths)}},
+             ft::Tensor{
+                 ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{batch_size}, get_ptr<int>(context_lengths)}},
             {"num_tokens", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &num_tokens}},
-            {"max_length", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &max_length}}};
+            {"seq_len", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &seq_len}},
+            {"attn_len", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &attn_len}}};
 
         std::unordered_map<std::string, ft::Tensor> output_tensors = std::unordered_map<std::string, ft::Tensor>{
             {"output_logits",
              ft::Tensor{ft::MEMORY_GPU,
                         ft::TYPE_FP32,
-                        std::vector<size_t>{batch_size, seq_len, vocab_size_},
+                        std::vector<size_t>{batch_size, (size_t)seq_len, vocab_size_},
                         get_ptr<float>(output_logits)}}};
 
         try {
@@ -264,12 +266,13 @@ public:
 
     ~LLaMA();
 
-    th::Tensor forward(th::Tensor& output_logits,
-                       th::Tensor& input_ids,
-                       th::Tensor& input_lengths,
-                       th::Tensor& context_lengths,
-                       const int64_t   num_tokens,
-                       const int64_t   max_length);
+    th::Tensor forward(th::Tensor&   output_logits,
+                       th::Tensor&   input_ids,
+                       th::Tensor&   input_lengths,
+                       th::Tensor&   context_lengths,
+                       const int64_t num_tokens,
+                       const int64_t seq_len,
+                       const int64_t attn_len);
 
 private:
     const at::ScalarType    st_;

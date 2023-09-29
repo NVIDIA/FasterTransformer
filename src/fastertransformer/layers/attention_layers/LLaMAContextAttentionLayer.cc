@@ -29,17 +29,17 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                                             const AttentionWeight<T>* attention_weights)
 {
     // input_tensors:
-    //      input_query [token_num, hidden_dimension]
-    //      attention_mask [batch_size, 1, seq_len, max_length]
+    //      input_query [num_tokens, hidden_dimension]
+    //      attention_mask [batch_size, 1, seq_len, attn_len]
     //      attention_type [1]
     //      layer_id [1], int on cpu
     //      context_lengths, int, [batch_size]
-    //      max_length, int, [batch_size] on cpu
-    //      padding_offset, int, [token_num] (optional)
+    //      attn_len, int, [batch_size] on cpu
+    //      padding_offset, int, [num_tokens] (optional)
     //      cu_seqlens, int, [batch_size] (optional)
 
     // output_tensors:
-    //      hidden_features [token_num, hidden_dimension]
+    //      hidden_features [num_tokens, hidden_dimension]
     //      key_cache [batch, local_head_num, max_seq_len, size_per_head]
     //      value_cache [batch, local_head_num, max_seq_len, size_per_head]
 
@@ -47,13 +47,13 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
     FT_CHECK(output_tensors->at("key_cache").shape.size() == 4);
     FT_CHECK(output_tensors->at("value_cache").shape.size() == 4);
     const int  batch_size      = input_tensors->at("attention_mask").shape[0];
-    const int  seq_len         = input_tensors->at("attention_mask").shape[2];
     const int  max_seq_len     = (int)(output_tensors->at("key_cache").shape[2]);
     const int  layer_id        = input_tensors->getVal<int>("layer_id");
     const int* padding_offset  = input_tensors->getPtr<int>("padding_offset", nullptr);
     const int* cu_seqlens      = input_tensors->getPtr<int>("cu_seqlens", nullptr);
     const int* context_lengths = input_tensors->at("context_lengths").getPtr<int>();
-    const int  max_length      = input_tensors->at("max_length").getVal<int>();
+    const int  seq_len         = input_tensors->at("attention_mask").shape[2];
+    const int  attn_len        = input_tensors->at("attention_mask").shape[3];
 
     T* attention_out   = output_tensors->at("hidden_features").getPtr<T>();
     T* attention_input = input_tensors->at("input_query").getPtr<T>();
@@ -68,14 +68,14 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
     POP_RANGE;
     sync_check_cuda_error();
 
-    const int m = input_tensors->at("input_query").shape[0];
+    const int num_tokens = input_tensors->at("input_query").shape[0];
 
     PUSH_RANGE("qkv_gemm");
 
     cublas_wrapper_->Gemm(CUBLAS_OP_N,
                           CUBLAS_OP_N,
                           3 * hidden_units_,  // n
-                          m,
+                          num_tokens,
                           hidden_units_,  // k
                           attention_weights->query_weight.kernel,
                           3 * hidden_units_,  // n
@@ -97,7 +97,7 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                                         padding_offset,
                                         batch_size,
                                         seq_len,
-                                        m,
+                                        num_tokens,
                                         head_num_,
                                         size_per_head_,
                                         rotary_embedding_dim_,
@@ -132,7 +132,7 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                              max_seq_len,
                              size_per_head_,
                              head_num_,
-                             max_length,
+                             attn_len,
                              stream_);
 
     if (attention_type == AttentionType::FUSED_MHA) {
@@ -141,8 +141,8 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
     }
     else {
         const cudaDataType_t gemm_data_type      = getCudaDataType<T>();
-        const int            attention_seq_len_1 = seq_len;     // q length
-        const int            attention_seq_len_2 = max_length;  // kv length
+        const int            attention_seq_len_1 = seq_len;   // q length
+        const int            attention_seq_len_2 = attn_len;  // kv length
         const T              qk_scale            = static_cast<T>(1.0f / sqrtf(size_per_head_ * 1.0f));
 
         //
@@ -174,7 +174,6 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                                                 CUDA_R_32F);
             sync_check_cuda_error();
             POP_RANGE;
-
 
             PUSH_RANGE("softmax");
             MaskedSoftmaxParam<T, float> param;
@@ -264,7 +263,7 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
         else {
             invokeTransposeAttentionOutRemovePadding(qkv_buf_2_,
                                                      qkv_buf_3_,
-                                                     m,
+                                                     num_tokens,
                                                      batch_size,
                                                      attention_seq_len_1,
                                                      head_num_,
@@ -283,7 +282,7 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
     cublas_wrapper_->Gemm(CUBLAS_OP_N,
                           CUBLAS_OP_N,
                           hidden_units_,
-                          m,
+                          num_tokens,
                           hidden_units_,
                           attention_weights->attention_output_weight.kernel,
                           hidden_units_,

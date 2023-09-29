@@ -78,7 +78,8 @@ th::Tensor LLaMA::forward(th::Tensor&   output_logits,
                           th::Tensor&   input_lengths,
                           th::Tensor&   context_lengths,
                           const int64_t num_tokens,
-                          const int64_t max_length)
+                          const int64_t seq_len,
+                          const int64_t attn_len)
 {
     CHECK_TH_CUDA(input_ids);
     CHECK_CONTIGUOUS(input_ids);
@@ -87,9 +88,8 @@ th::Tensor LLaMA::forward(th::Tensor&   output_logits,
     CHECK_CONTIGUOUS(input_lengths);
     TORCH_CHECK(input_lengths.dtype() == torch::kInt32, "input_lengths dtype should be int32");
 
-    const int batch_size = input_ids.size(0);
-    const int seq_len    = input_ids.size(1);
-    ftllama->forward(output_logits, input_ids, input_lengths, context_lengths, num_tokens, max_length);
+    const int batch_size = input_lengths.size(0);
+    ftllama->forward(output_logits, input_ids, input_lengths, context_lengths, num_tokens, seq_len, attn_len);
     return output_logits;
 }
 

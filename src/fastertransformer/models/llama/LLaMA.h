@@ -38,6 +38,12 @@ private:
     size_t random_seed_;
     size_t max_seq_len_;
 
+    static constexpr int num_buffers_ = 5;
+    int                  buf_no_      = 0;
+    cudaStream_t         comm_stream_;
+    cudaEvent_t          kern_event_[num_buffers_];
+    cudaEvent_t          comm_event_[num_buffers_];
+
     static constexpr float layernorm_eps_ = 1e-6f;
 
     size_t hidden_units_;
@@ -59,16 +65,17 @@ private:
     void initialize();
 
 protected:
-    T*   input_attention_mask_ = nullptr;
-    T*   key_cache_            = nullptr;
-    T*   value_cache_          = nullptr;
+    T* input_attention_mask_ = nullptr;
+    T* key_cache_            = nullptr;
+    T* value_cache_          = nullptr;
 
     T* decoder_output_buf_        = nullptr;
     T* normed_decoder_output_buf_ = nullptr;
     T* logits_buf_                = nullptr;
 
-    T* context_decoder_input_buf_  = nullptr;
-    T* context_decoder_output_buf_ = nullptr;
+    T* context_decoder_input_buf_                      = nullptr;
+    T* context_decoder_output_buf_                     = nullptr;
+    T* context_decoder_output_buf_clone_[num_buffers_] = {nullptr};
 
     void sendTensorsToFirstPipelineNode(std::unordered_map<std::string, Tensor>*       output_tensors,
                                         const std::unordered_map<std::string, Tensor>* input_tensors);
