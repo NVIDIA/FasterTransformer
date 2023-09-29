@@ -29,8 +29,12 @@ using std::vector;
 class IFLLaMA {
 public:
     virtual ~IFLLaMA() {}
-    virtual void
-    forward(th::Tensor& output_logits, th::Tensor& input_ids, th::Tensor& input_lengths, const int start_pos) = 0;
+    virtual void forward(th::Tensor& output_logits,
+                         th::Tensor& input_ids,
+                         th::Tensor& input_lengths,
+                         th::Tensor& start_pos,
+                         const int   num_tokens,
+                         const int   max_length) = 0;
 };
 
 template<typename T>
@@ -167,8 +171,12 @@ public:
         delete cublas_wrapper_mutex_;
     }
 
-    virtual void
-    forward(th::Tensor& output_logits, th::Tensor& input_ids, th::Tensor& input_lengths, const int start_pos) override
+    virtual void forward(th::Tensor& output_logits,
+                         th::Tensor& input_ids,
+                         th::Tensor& input_lengths,
+                         th::Tensor& start_pos,
+                         const int   num_tokens,
+                         const int   max_length) override
     {
 
         const size_t batch_size = (size_t)input_ids.size(0);
@@ -180,7 +188,10 @@ public:
                  ft::MEMORY_GPU, ft::TYPE_INT32, std::vector<size_t>{batch_size, seq_len}, get_ptr<int>(input_ids)}},
             {"input_lengths",
              ft::Tensor{ft::MEMORY_GPU, ft::TYPE_INT32, std::vector<size_t>{batch_size}, get_ptr<int>(input_lengths)}},
-            {"start_pos", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &start_pos}}};
+            {"start_pos",
+             ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{batch_size}, get_ptr<int>(start_pos)}},
+            {"num_tokens", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &num_tokens}},
+            {"max_length", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &max_length}}};
 
         std::unordered_map<std::string, ft::Tensor> output_tensors = std::unordered_map<std::string, ft::Tensor>{
             {"output_logits",
@@ -220,7 +231,7 @@ private:
     int64_t      pipeline_para_size_;
 
     cudaStream_t stream_;
-    cudaEvent_t event_;
+    cudaEvent_t  event_;
 
     std::vector<th::Tensor> weights_;
     cublasLtHandle_t        cublasltHandle_;
@@ -253,7 +264,12 @@ public:
 
     ~LLaMA();
 
-    th::Tensor forward(th::Tensor& input_ids, th::Tensor& input_lengths, const int64_t start_pos);
+    th::Tensor forward(th::Tensor& output_logits,
+                       th::Tensor& input_ids,
+                       th::Tensor& input_lengths,
+                       th::Tensor& start_pos,
+                       const int64_t   num_tokens,
+                       const int64_t   max_length);
 
 private:
     const at::ScalarType    st_;

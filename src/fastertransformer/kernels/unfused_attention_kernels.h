@@ -125,7 +125,7 @@ void invokeLLaMAAddFusedQKVBiasTranspose(T*           q_buf,
                                          const int    head_num,
                                          const int    size_per_head,
                                          const int    rotary_embedding_dim,
-                                         const int    start_pos,
+                                         const int*   start_pos,
                                          cudaStream_t stream);
 
 template<typename T>
@@ -214,7 +214,7 @@ void invokeLLaMASaveToCache(T*           k_dst,
                             const int    max_seq_len,
                             const int    size_per_head,
                             const int    local_head_num,
-                            const int    start_pos,
+                            const int*   start_pos,
                             cudaStream_t stream);
 template<typename T>
 void invokeLLaMALoadFromCache(T*           k_dst,
@@ -226,7 +226,7 @@ void invokeLLaMALoadFromCache(T*           k_dst,
                               const int    max_seq_len,
                               const int    size_per_head,
                               const int    local_head_num,
-                              const int    start_pos,
+                              const int    max_length,
                               cudaStream_t stream);
 
 template<typename T>

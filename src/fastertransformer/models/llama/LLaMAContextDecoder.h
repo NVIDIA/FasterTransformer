@@ -43,10 +43,6 @@ private:
     size_t rotary_embedding_dim_;
     float  layernorm_eps_;
 
-    cudaEvent_t  kern_event_;
-    cudaEvent_t  comm_event_;
-    cudaStream_t comm_stream_;
-
     // calculated data
     size_t hidden_units_;
 
@@ -71,13 +67,12 @@ private:
     void initialize();
 
 protected:
-    T*      layer_output_buffer_    = nullptr;
-    T*      decoder_normed_input_   = nullptr;
-    T*      self_attn_output_       = nullptr;
-    T*      decoder_layer_output_   = nullptr;
-    size_t* h_pinned_token_num_ptr_ = nullptr;
-    int*    padding_offset_         = nullptr;
-    int*    cu_seqlens_             = nullptr;
+    int*    padding_offset_                    = nullptr;
+    int*    cu_seqlens_                        = nullptr;
+    T*      decoder_normed_input_              = nullptr;
+    T*      self_attn_output_                  = nullptr;
+    T*      decoder_layer_output_              = nullptr;
+    size_t* h_pinned_token_num_ptr_            = nullptr;
 
 public:
     LLaMAContextDecoder(size_t           head_num,
