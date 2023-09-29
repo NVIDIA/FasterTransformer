@@ -194,7 +194,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     // input_tensors:
     //      input_ids [batch_size, seq_len]
     //      input_lengths [batch_size]
-    //      start_pos [batch_size]
+    //      context_lengths [batch_size]
     //      num_tokens [1] int on cpu
     //      max_length [1] int on cpu
 
@@ -205,20 +205,20 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     FT_CHECK(input_tensors->at("input_ids").shape.size() == 2);
     FT_CHECK(input_tensors->at("input_lengths").shape.size() == 1);
 
-    const DataType data_type     = getTensorType<T>();
-    const size_t   batch_size    = input_tensors->at("input_ids").shape[0];
-    const int      seq_len       = input_tensors->at("input_ids").shape[1];
-    const int*     input_ids     = input_tensors->at("input_ids").getPtr<int>();
-    const int*     start_pos     = input_tensors->at("start_pos").getPtr<int>();
-    const int*     input_lengths = input_tensors->at("input_lengths").getPtr<int>();
-    const int      num_tokens    = input_tensors->at("num_tokens").getVal<int>(0);
-    const int      max_length    = input_tensors->at("max_length").getVal<int>(0);
+    const DataType data_type       = getTensorType<T>();
+    const size_t   batch_size      = input_tensors->at("input_ids").shape[0];
+    const int      seq_len         = input_tensors->at("input_ids").shape[1];
+    const int*     input_ids       = input_tensors->at("input_ids").getPtr<int>();
+    const int*     context_lengths = input_tensors->at("context_lengths").getPtr<int>();
+    const int*     input_lengths   = input_tensors->at("input_lengths").getPtr<int>();
+    const int      num_tokens      = input_tensors->at("num_tokens").getVal<int>(0);
+    const int      max_length      = input_tensors->at("max_length").getVal<int>(0);
 
     allocateBuffer(batch_size, seq_len, max_seq_len_);
     sync_check_cuda_error();
 
     invokeLLaMABuildDecoderAttentionMask(
-        input_attention_mask_, input_lengths, start_pos, batch_size, seq_len, max_length, stream_);
+        input_attention_mask_, input_lengths, context_lengths, batch_size, seq_len, max_length, stream_);
     sync_check_cuda_error();
 
     if (pipeline_para_.rank_ == 0) {
@@ -243,7 +243,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         {"attention_mask",
          Tensor{MEMORY_GPU, data_type, {batch_size, 1, (size_t)seq_len, (size_t)(max_length)}, input_attention_mask_}},
         {"input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size}, input_lengths}},
-        {"start_pos", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size}, start_pos}},
+        {"context_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size}, context_lengths}},
         {"num_tokens", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &num_tokens}},
         {"max_length", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &max_length}}};
 

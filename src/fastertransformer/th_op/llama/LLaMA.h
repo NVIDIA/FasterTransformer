@@ -32,7 +32,7 @@ public:
     virtual void forward(th::Tensor& output_logits,
                          th::Tensor& input_ids,
                          th::Tensor& input_lengths,
-                         th::Tensor& start_pos,
+                         th::Tensor& context_lengths,
                          const int   num_tokens,
                          const int   max_length) = 0;
 };
@@ -174,7 +174,7 @@ public:
     virtual void forward(th::Tensor& output_logits,
                          th::Tensor& input_ids,
                          th::Tensor& input_lengths,
-                         th::Tensor& start_pos,
+                         th::Tensor& context_lengths,
                          const int   num_tokens,
                          const int   max_length) override
     {
@@ -188,8 +188,8 @@ public:
                  ft::MEMORY_GPU, ft::TYPE_INT32, std::vector<size_t>{batch_size, seq_len}, get_ptr<int>(input_ids)}},
             {"input_lengths",
              ft::Tensor{ft::MEMORY_GPU, ft::TYPE_INT32, std::vector<size_t>{batch_size}, get_ptr<int>(input_lengths)}},
-            {"start_pos",
-             ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{batch_size}, get_ptr<int>(start_pos)}},
+            {"context_lengths",
+             ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{batch_size}, get_ptr<int>(context_lengths)}},
             {"num_tokens", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &num_tokens}},
             {"max_length", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &max_length}}};
 
@@ -267,7 +267,7 @@ public:
     th::Tensor forward(th::Tensor& output_logits,
                        th::Tensor& input_ids,
                        th::Tensor& input_lengths,
-                       th::Tensor& start_pos,
+                       th::Tensor& context_lengths,
                        const int64_t   num_tokens,
                        const int64_t   max_length);
 

@@ -33,7 +33,7 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
     //      attention_mask [batch_size, 1, seq_len, max_length]
     //      attention_type [1]
     //      layer_id [1], int on cpu
-    //      start_pos, int, [batch_size]
+    //      context_lengths, int, [batch_size]
     //      max_length, int, [batch_size] on cpu
     //      padding_offset, int, [token_num] (optional)
     //      cu_seqlens, int, [batch_size] (optional)
@@ -42,17 +42,18 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
     //      hidden_features [token_num, hidden_dimension]
     //      key_cache [batch, local_head_num, max_seq_len, size_per_head]
     //      value_cache [batch, local_head_num, max_seq_len, size_per_head]
+    
     FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
     FT_CHECK(output_tensors->at("key_cache").shape.size() == 4);
     FT_CHECK(output_tensors->at("value_cache").shape.size() == 4);
-    const int  batch_size     = input_tensors->at("attention_mask").shape[0];
-    const int  seq_len        = input_tensors->at("attention_mask").shape[2];
-    const int  max_seq_len    = (int)(output_tensors->at("key_cache").shape[2]);
-    const int  layer_id       = input_tensors->getVal<int>("layer_id");
-    const int* padding_offset = input_tensors->getPtr<int>("padding_offset", nullptr);
-    const int* cu_seqlens     = input_tensors->getPtr<int>("cu_seqlens", nullptr);
-    const int* start_pos      = input_tensors->at("start_pos").getPtr<int>();
-    const int  max_length     = input_tensors->at("max_length").getVal<int>();
+    const int  batch_size      = input_tensors->at("attention_mask").shape[0];
+    const int  seq_len         = input_tensors->at("attention_mask").shape[2];
+    const int  max_seq_len     = (int)(output_tensors->at("key_cache").shape[2]);
+    const int  layer_id        = input_tensors->getVal<int>("layer_id");
+    const int* padding_offset  = input_tensors->getPtr<int>("padding_offset", nullptr);
+    const int* cu_seqlens      = input_tensors->getPtr<int>("cu_seqlens", nullptr);
+    const int* context_lengths = input_tensors->at("context_lengths").getPtr<int>();
+    const int  max_length      = input_tensors->at("max_length").getVal<int>();
 
     T* attention_out   = output_tensors->at("hidden_features").getPtr<T>();
     T* attention_input = input_tensors->at("input_query").getPtr<T>();
@@ -100,7 +101,7 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                                         head_num_,
                                         size_per_head_,
                                         rotary_embedding_dim_,
-                                        start_pos,
+                                        context_lengths,
                                         stream_);
     sync_check_cuda_error();
 
@@ -121,7 +122,7 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                            max_seq_len,
                            size_per_head_,
                            head_num_,
-                           start_pos,
+                           context_lengths,
                            stream_);
     sync_check_cuda_error();
     POP_RANGE;
@@ -231,9 +232,9 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
             sync_check_cuda_error();
             POP_RANGE;
         }
-        //std::cout << layer_id << "===============\n";
-        //print_tensor4(qk_buf_, batch_size, head_num_, attention_seq_len_1, attention_seq_len_2);
-        //std::cout << layer_id << "===============\n";
+        // std::cout << layer_id << "===============\n";
+        // print_tensor4(qk_buf_, batch_size, head_num_, attention_seq_len_1, attention_seq_len_2);
+        // std::cout << layer_id << "===============\n";
 
         PUSH_RANGE("QK*V batch gemm");
         cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_N,

@@ -1592,7 +1592,7 @@ __global__ void llama_add_fusedQKV_bias_transpose_kernel(T*         q_buf,
                                                          const int  head_num,
                                                          const int  size_per_head,
                                                          const int  rotary_embedding_dim,
-                                                         const int* start_pos)
+                                                         const int* context_lengths)
 {
     constexpr int vec_size         = Vec_t<T>::size;
     using Vec_t                    = typename Vec_t<T>::Type;
@@ -1622,7 +1622,7 @@ __global__ void llama_add_fusedQKV_bias_transpose_kernel(T*         q_buf,
         v = *reinterpret_cast<const Vec_t*>(&QKV[src_v_idx]);
     }
 
-    mmha::apply_rotary_embedding(q, k, tidx, rotary_embedding_dim, start_pos[batch_idx] + seq_idx);
+    mmha::apply_rotary_embedding(q, k, tidx, rotary_embedding_dim, context_lengths[batch_idx] + seq_idx);
 
     const int dest_q_idx = batch_idx * size_per_head * seq_len * head_num + head_idx * size_per_head * seq_len
                            + seq_idx * size_per_head + tidx * vec_size;
@@ -1649,7 +1649,7 @@ void invokeLLaMAAddFusedQKVBiasTranspose(T*           q_buf,
                                          const int    head_num,
                                          const int    size_per_head,
                                          const int    rotary_embedding_dim,
-                                         const int*   start_pos,
+                                         const int*   context_lengths,
                                          cudaStream_t stream)
 {
     dim3 block((size_per_head / Vec_t<T>::size + 31) / 32 * 32);
@@ -1664,7 +1664,7 @@ void invokeLLaMAAddFusedQKVBiasTranspose(T*           q_buf,
                                                                          head_num,
                                                                          size_per_head,
                                                                          rotary_embedding_dim,
-                                                                         start_pos);
+                                                                         context_lengths);
 }
 
 template void invokeLLaMAAddFusedQKVBiasTranspose(float*       q_buf,
@@ -1678,7 +1678,7 @@ template void invokeLLaMAAddFusedQKVBiasTranspose(float*       q_buf,
                                                   const int    head_num,
                                                   const int    size_per_head,
                                                   const int    rotary_embedding_dim,
-                                                  const int*   start_pos,
+                                                  const int*   context_lengths,
                                                   cudaStream_t stream);
 
 template void invokeLLaMAAddFusedQKVBiasTranspose(half*        q_buf,
@@ -1692,7 +1692,7 @@ template void invokeLLaMAAddFusedQKVBiasTranspose(half*        q_buf,
                                                   const int    head_num,
                                                   const int    size_per_head,
                                                   const int    rotary_embedding_dim,
-                                                  const int*   start_pos,
+                                                  const int*   context_lengths,
                                                   cudaStream_t stream);
 #ifdef ENABLE_BF16
 template void invokeLLaMAAddFusedQKVBiasTranspose(__nv_bfloat16* q_buf,
@@ -1706,7 +1706,7 @@ template void invokeLLaMAAddFusedQKVBiasTranspose(__nv_bfloat16* q_buf,
                                                   const int      head_num,
                                                   const int      size_per_head,
                                                   const int      rotary_embedding_dim,
-                                                  const int*     start_pos,
+                                                  const int*     context_lengths,
                                                   cudaStream_t   stream);
 #endif
 

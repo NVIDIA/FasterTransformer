@@ -53,7 +53,6 @@ __global__ void LLaMAbuildDecoderAttentionMaskKernel(T*         attention_mask,
     attention_mask += batch_idx * mask_size_per_seq;
     const int context_length = context_lengths[batch_idx];
     const int length         = sequence_lengths[batch_idx];
-    const int offset         = max_length - length;
 
     for (int i = threadIdx.x; i < mask_size_per_seq; i += blockDim.x) {
         int row_id = i / max_length;

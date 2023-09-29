@@ -179,7 +179,9 @@ void LLaMAContextDecoder<T>::forward(std::vector<Tensor>*                       
     std::unordered_map<std::string, Tensor> input_tensors_map{{"decoder_input", input_tensors->at(0)},
                                                               {"attention_mask", input_tensors->at(1)},
                                                               {"input_lengths", input_tensors->at(2)},
-                                                              {"start_pos", input_tensors->at(3)}};
+                                                              {"context_lengths", input_tensors->at(3)},
+                                                              {"num_tokens", input_tensors->at(4)},
+                                                              {"max_length", input_tensors->at(5)}};
     std::unordered_map<std::string, Tensor> output_tensors_map{{"decoder_output", output_tensors->at(0)},
                                                                {"key_cache", output_tensors->at(1)},
                                                                {"value_cache", output_tensors->at(2)}};
@@ -196,7 +198,7 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
     //      decoder_input [batch_size, seq_len, hidden_dimension],
     //      attention_mask [batch_size, 1, seq_len, seq_len]
     //      input_lengths [batch_size]
-    //      start_pos [batch_size]
+    //      context_lengths [batch_size]
     //      num_tokens [1] int on cpu
     //      max_length [1] int on cpu
 
@@ -216,7 +218,7 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
     const int      batch_size      = input_tensors->at("decoder_input").shape[0];
     const int      seq_len         = input_tensors->at("decoder_input").shape[1];
     const int*     input_lengths   = input_tensors->at("input_lengths").getPtr<int>();
-    const int*     start_pos       = input_tensors->at("start_pos").getPtr<int>();
+    const int*     context_lengths = input_tensors->at("context_lengths").getPtr<int>();
     const int      max_length      = input_tensors->at("max_length").getVal<int>(0);
 
     const size_t max_seq_len = output_tensors->at("key_cache").shape[3];
@@ -288,7 +290,7 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
             {"attention_type", Tensor{MEMORY_CPU, TYPE_VOID, {1}, &attention_type_}},
             {"layer_id", Tensor{MEMORY_CPU, TYPE_INT32, {(size_t)1}, &l}},
             {"input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {(size_t)batch_size}, input_lengths}},
-            {"start_pos", Tensor{MEMORY_GPU, TYPE_INT32, {(size_t)batch_size}, start_pos}},
+            {"context_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {(size_t)batch_size}, context_lengths}},
             {"max_length", Tensor{MEMORY_CPU, TYPE_INT32, {(size_t)1}, &max_length}},
         };
 
@@ -313,10 +315,9 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                                        &self_attention_input_tensors,
                                        &llama_decoder_layer_weight->at(l)->self_attention_weights);
 
-        //std::cout << l << "===============\n";
-        //print_tensor2(self_attn_output_, h_token_num, hidden_units_);
-        //std::cout << l << "===============\n";
-
+        // std::cout << l << "===============\n";
+        // print_tensor2(self_attn_output_, h_token_num, hidden_units_);
+        // std::cout << l << "===============\n";
 
         invokeGeneralLLaMAAddBiasResidualPreLayerNorm(
             self_attn_output_,

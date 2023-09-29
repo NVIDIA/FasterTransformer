@@ -76,7 +76,7 @@ LLaMA::~LLaMA()
 th::Tensor LLaMA::forward(th::Tensor&   output_logits,
                           th::Tensor&   input_ids,
                           th::Tensor&   input_lengths,
-                          th::Tensor&   start_pos,
+                          th::Tensor&   context_lengths,
                           const int64_t num_tokens,
                           const int64_t max_length)
 {
@@ -89,7 +89,7 @@ th::Tensor LLaMA::forward(th::Tensor&   output_logits,
 
     const int batch_size = input_ids.size(0);
     const int seq_len    = input_ids.size(1);
-    ftllama->forward(output_logits, input_ids, input_lengths, start_pos, num_tokens, max_length);
+    ftllama->forward(output_logits, input_ids, input_lengths, context_lengths, num_tokens, max_length);
     return output_logits;
 }
 
