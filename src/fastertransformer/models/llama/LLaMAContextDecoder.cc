@@ -315,10 +315,6 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                                        &self_attention_input_tensors,
                                        &llama_decoder_layer_weight->at(l)->self_attention_weights);
 
-        // std::cout << l << "===============\n";
-        // print_tensor2(self_attn_output_, h_token_num, hidden_units_);
-        // std::cout << l << "===============\n";
-
         invokeGeneralLLaMAAddBiasResidualPreLayerNorm(
             self_attn_output_,
             decoder_normed_input_,

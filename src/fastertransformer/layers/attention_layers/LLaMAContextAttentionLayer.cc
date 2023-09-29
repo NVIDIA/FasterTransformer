@@ -42,7 +42,7 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
     //      hidden_features [token_num, hidden_dimension]
     //      key_cache [batch, local_head_num, max_seq_len, size_per_head]
     //      value_cache [batch, local_head_num, max_seq_len, size_per_head]
-    
+
     FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
     FT_CHECK(output_tensors->at("key_cache").shape.size() == 4);
     FT_CHECK(output_tensors->at("value_cache").shape.size() == 4);
@@ -105,10 +105,6 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                                         stream_);
     sync_check_cuda_error();
 
-    // std::cout << layer_id << "===============\n";
-    // print_tensor4(k_buf_2_, batch_size, head_num_, seq_len, size_per_head_);
-    // std::cout << layer_id << "===============\n";
-
     // key_cache [batch, local_head_num, max_seq_len, size_per_head]
     // value_cache [batch, local_head_num, max_seq_len, size_per_head]
     T* key_cache   = output_tensors->getPtr<T>("key_cache");
@@ -138,10 +134,6 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                              head_num_,
                              max_length,
                              stream_);
-
-    // std::cout << layer_id << "===============\n";
-    // print_tensor4(k_buf_2_, batch_size, head_num_, max_length, size_per_head_);
-    // std::cout << layer_id << "===============\n";
 
     if (attention_type == AttentionType::FUSED_MHA) {
         dispatcher_fp16->setup_causal_masked_fmha(seq_len, batch_size);
@@ -182,6 +174,7 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                                                 CUDA_R_32F);
             sync_check_cuda_error();
             POP_RANGE;
+
 
             PUSH_RANGE("softmax");
             MaskedSoftmaxParam<T, float> param;
@@ -232,9 +225,6 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
             sync_check_cuda_error();
             POP_RANGE;
         }
-        // std::cout << layer_id << "===============\n";
-        // print_tensor4(qk_buf_, batch_size, head_num_, attention_seq_len_1, attention_seq_len_2);
-        // std::cout << layer_id << "===============\n";
 
         PUSH_RANGE("QK*V batch gemm");
         cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_N,
@@ -257,9 +247,6 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
 
                                             batch_size * head_num_);
         sync_check_cuda_error();
-        //        std::cout << layer_id << "===============\n";
-        //        print_tensor4(qkv_buf_2_, batch_size, head_num_, attention_seq_len_1, size_per_head_);
-        //        std::cout << layer_id << "===============\n";
 
         // transpose (batch_size, num_heads, L, Dh) to (batch_size, L, num_heads * Dh)
         if (padding_offset == nullptr) {

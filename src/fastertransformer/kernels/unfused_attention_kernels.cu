@@ -1906,7 +1906,7 @@ __global__ void transpose_4d_save_to_cache(T*         k_dst,
                                            const int  size_per_head,
                                            const int  seq_len,
                                            const int  max_seq_len,
-                                           const int* start_pos)
+                                           const int* context_lengths)
 {
     // [batch_size, head_num, seq_len, size_per_head]
     const int batch_id = blockIdx.y;
@@ -1917,12 +1917,12 @@ __global__ void transpose_4d_save_to_cache(T*         k_dst,
                                                   + head_id * size_per_head * seq_len);
     auto key_dst =
         reinterpret_cast<uint4*>(k_dst + batch_id * head_num * size_per_head * max_seq_len
-                                 + head_id * size_per_head * max_seq_len + start_pos[batch_id] * size_per_head);
+                                 + head_id * size_per_head * max_seq_len + context_lengths[batch_id] * size_per_head);
     auto val_src = reinterpret_cast<const uint4*>(v_src + batch_id * head_num * size_per_head * seq_len
                                                   + head_id * size_per_head * seq_len);
     auto val_dst =
         reinterpret_cast<uint4*>(v_dst + batch_id * head_num * size_per_head * max_seq_len
-                                 + head_id * size_per_head * max_seq_len + start_pos[batch_id] * size_per_head);
+                                 + head_id * size_per_head * max_seq_len + context_lengths[batch_id] * size_per_head);
 
     // idx is over output dimension L * size_per_head / x for values
     const int idx = blockIdx.x * blockDim.x + threadIdx.x;
@@ -1948,7 +1948,7 @@ void invokeLLaMASaveToCache(T*           k_dst,
                             const int    max_seq_len,
                             const int    size_per_head,
                             const int    local_head_num,
-                            const int*   start_pos,
+                            const int*   context_lengths,
                             cudaStream_t stream)
 {
     constexpr int block_sz = 128;
@@ -1956,7 +1956,7 @@ void invokeLLaMASaveToCache(T*           k_dst,
     dim3          grid((seq_len * size_per_head / x + block_sz - 1) / block_sz, local_batch_size, local_head_num);
 
     transpose_4d_save_to_cache<<<grid, block_sz, 0, stream>>>(
-        k_dst, k_src, v_dst, v_src, local_head_num, size_per_head, seq_len, max_seq_len, start_pos);
+        k_dst, k_src, v_dst, v_src, local_head_num, size_per_head, seq_len, max_seq_len, context_lengths);
 }
 
 #define INSTANTIATESAVETOCACHE(T)                                                                                      \

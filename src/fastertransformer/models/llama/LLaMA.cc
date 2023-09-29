@@ -265,6 +265,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         &decoder_output_tensors, &decoder_input_tensors, &llama_weights->decoder_layer_weights);
     sync_check_cuda_error();
 
+
     if (pipeline_para_.rank_ < pipeline_para_.world_size_ - 1) {
         ftNcclSend(context_decoder_output_buf_,
                    batch_size * seq_len * hidden_units_,
