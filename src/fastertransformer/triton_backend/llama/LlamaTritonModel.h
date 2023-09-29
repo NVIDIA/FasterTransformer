@@ -60,6 +60,7 @@ private:
     size_t vocab_size_;
     size_t rotary_embedding_dim_;
     float  layernorm_eps_;
+    float  rope_theta_;
     int    start_id_;
     int    end_id_;
     size_t tensor_para_size_;

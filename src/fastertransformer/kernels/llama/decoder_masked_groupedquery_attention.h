@@ -33,6 +33,8 @@ struct GroupedQuery_attention_params: public Multihead_attention_params_base<T> 
     int   num_kv_heads      = 0;
     // required in case of masked attention with different length
     const int* length_per_sample = nullptr;
+
+    float rope_theta;
 };
 
 template<class T>

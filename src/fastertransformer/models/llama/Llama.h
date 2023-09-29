@@ -39,6 +39,7 @@ private:
     size_t num_layer_;
     size_t vocab_size_;
     size_t rotary_embedding_dim_;
+    float rope_theta_;
     float layernorm_eps_;
 
     static constexpr bool  neox_rotary_style_ = true;
@@ -155,6 +156,7 @@ public:
           size_t                              num_layer,
           size_t                              vocab_size,
           size_t                              rotary_embedding_dim,
+          float                               rope_theta,
           float                               layernorm_eps,
           int                                 start_id,
           int                                 end_id,
@@ -186,6 +188,7 @@ public:
           size_t                              num_layer,
           size_t                              vocab_size,
           size_t                              rotary_embedding_dim,
+          float                               rope_theta_,
           float                               layernorm_eps,
           int                                 start_id,
           int                                 end_id,

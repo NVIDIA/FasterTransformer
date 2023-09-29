@@ -41,6 +41,7 @@ private:
     const float  q_scaling_;
     const size_t rotary_embedding_dim_;
     const bool   neox_rotary_style_;
+    const float  rope_theta_;
 
     std::shared_ptr<CutlassFpAIntBGemmRunner<T, uint8_t>> weight_only_int8_fc_runner_;
     std::shared_ptr<CutlassInt8GemmRunner<T>>             int8_fc_runner_;
@@ -80,6 +81,7 @@ public:
                               size_t           local_kv_head_num,
                               size_t           rotary_embedding_dim,
                               bool             neox_rotary_style,
+                              float            rope_theta,
                               size_t           d_model,
                               const float      q_scaling,
                               cudaStream_t     stream,
@@ -148,6 +150,7 @@ public:
                               size_t           local_kv_head_num,
                               size_t           rotary_embedding_dim,
                               bool             neox_rotary_style,
+                              float            rope_theta,
                               cudaStream_t     stream,
                               cublasMMWrapper* cublas_wrapper,
                               IAllocator*      allocator,
@@ -181,6 +184,7 @@ void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
                                         const int    size_per_head,
                                         const int    rotary_embedding_dim,
                                         const bool   neox_rotary_style,
+                                        const float  rope_theta,
                                         const int    memory_max_len,
                                         const int*   prefix_prompt_lengths,
                                         const int    max_prefix_prompt_length,

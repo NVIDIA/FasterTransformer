@@ -23,12 +23,14 @@ namespace fastertransformer {
 template<typename T>
 void LlamaDecoder<T>::initialize()
 {
+    printf("rope_theta_: %f\n", rope_theta_);
     self_attention_layer_ = new TensorParallelLlamaDecoderSelfAttentionLayer<T>(0,  // max_batch_size
                                                                            head_num_,
                                                                            kv_head_num_,
                                                                            size_per_head_,
                                                                            rotary_embedding_dim_,
                                                                            neox_rotary_style_,
+                                                                           rope_theta_,
                                                                            tensor_para_,
                                                                            stream_,
                                                                            cublas_wrapper_,
@@ -129,6 +131,7 @@ LlamaDecoder<T>::LlamaDecoder(size_t                              head_num,
                               size_t                              num_layer,
                               size_t                              rotary_embedding_dim,
                               bool                                neox_rotary_style,
+                              float                               rope_theta,
                               bool                                use_gptj_residual,
                               float                               layernorm_eps,
                               NcclParam                           tensor_para,
@@ -148,6 +151,7 @@ LlamaDecoder<T>::LlamaDecoder(size_t                              head_num,
     num_layer_(num_layer),
     rotary_embedding_dim_(rotary_embedding_dim),
     neox_rotary_style_(neox_rotary_style),
+    rope_theta_(rope_theta),
     use_gptj_residual_(use_gptj_residual),
     layernorm_eps_(layernorm_eps),
     hidden_units_(head_num_ * size_per_head),
@@ -170,6 +174,7 @@ LlamaDecoder<T>::LlamaDecoder(LlamaDecoder<T> const& decoder):
     num_layer_(decoder.num_layer_),
     rotary_embedding_dim_(decoder.rotary_embedding_dim_),
     neox_rotary_style_(decoder.neox_rotary_style_),
+    rope_theta_(decoder.rope_theta_),
     use_gptj_residual_(decoder.use_gptj_residual_),
     layernorm_eps_(decoder.layernorm_eps_),
     hidden_units_(decoder.hidden_units_),

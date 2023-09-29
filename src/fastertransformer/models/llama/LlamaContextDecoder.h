@@ -43,6 +43,7 @@ private:
     size_t num_layer_;
     size_t rotary_embedding_dim_;
     bool   neox_rotary_style_;
+    float  rope_theta_;
     bool   use_gptj_residual_;
     float  layernorm_eps_;
 
@@ -98,6 +99,7 @@ public:
                         size_t                              num_layer,
                         size_t                              rotary_embedding_dim,
                         bool                                neox_rotary_style,
+                        float                               rope_theta,
                         bool                                use_gptj_residual,
                         float                               layernorm_eps,
                         NcclParam                           tensor_para,

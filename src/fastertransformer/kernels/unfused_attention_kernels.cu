@@ -1330,13 +1330,14 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
                                                    PrefixPromptBatchWeightsParam<T> param,
                                                    T*                               QKV,
                                                    const T* __restrict qkv_bias,
-                                                   const int* padding_offset,
-                                                   const int  batch_size,
-                                                   const int  seq_len,
-                                                   const int  head_num,
-                                                   const int  size_per_head,
-                                                   const int  rotary_embedding_dim,
-                                                   const bool neox_rotary_style)
+                                                   const int*  padding_offset,
+                                                   const int   batch_size,
+                                                   const int   seq_len,
+                                                   const int   head_num,
+                                                   const int   size_per_head,
+                                                   const int   rotary_embedding_dim,
+                                                   const bool  neox_rotary_style,
+                                                   const float rope_theta)
 {
     // This kernel add bias to QKV, which has shape [batch_size, seq_len, 3, head_num, size_per_head], and
     // QKV split to 3 split buffer q, k, v and transpose them to [batch_size, head_num, seq_len, size_per_head].
@@ -1424,7 +1425,7 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
     v = mmha::add(v, v_bias);
 
     if (!neox_rotary_style) {
-        mmha::apply_rotary_embedding(q, k, tidx, rotary_embedding_dim, dst_kv_seq_idx);
+        mmha::apply_rotary_embedding(q, k, tidx, rotary_embedding_dim, rope_theta, dst_kv_seq_idx);
     }
     else {
         const bool do_rotary = !is_masked && vec_size * tidx < rotary_embedding_dim;
@@ -1450,7 +1451,7 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
             mmha::vec_from_smem_transpose(q, q_smem, transpose_idx, smem_pitch);
             mmha::vec_from_smem_transpose(k, k_smem, transpose_idx, smem_pitch);
 
-            mmha::apply_rotary_embedding(q, k, transpose_idx / tidx_factor, rotary_embedding_dim, dst_kv_seq_idx);
+            mmha::apply_rotary_embedding(q, k, transpose_idx / tidx_factor, rotary_embedding_dim, rope_theta, dst_kv_seq_idx);
 
             mmha::write_smem_transpose(q, q_smem, transpose_idx, smem_pitch);
             mmha::write_smem_transpose(k, k_smem, transpose_idx, smem_pitch);
@@ -1496,7 +1497,8 @@ __global__ void add_fusedQKV_bias_transpose_kernel(T*                           
                                                                                              head_num,                 \
                                                                                              size_per_head,            \
                                                                                              rotary_embedding_dim,     \
-                                                                                             neox_rotary_style);
+                                                                                             neox_rotary_style,        \
+                                                                                             rope_theta);
 
 template<typename T>
 void invokeAddFusedQKVBiasTranspose(T*                               q_buf,
@@ -1513,6 +1515,7 @@ void invokeAddFusedQKVBiasTranspose(T*                               q_buf,
                                     const int                        size_per_head,
                                     const int                        rotary_embedding_dim,
                                     const int                        neox_rotary_style,
+                                    const float                      rope_theta,
                                     const float*                     scale,
                                     const int                        int8_mode,
                                     cudaStream_t                     stream)
@@ -1571,6 +1574,7 @@ void invokeAddFusedQKVBiasTranspose(T*                               q_buf,
                                                  const int                        size_per_head,                       \
                                                  const int                        rotary_embedding_dim,                \
                                                  const int                        neox_rotary_style,                   \
+                                                 const float                      rope_theta,                          \
                                                  const float*                     scale,                               \
                                                  const int                        int8_mode,                           \
                                                  cudaStream_t                     stream)
