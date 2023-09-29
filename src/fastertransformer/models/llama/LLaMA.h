@@ -65,9 +65,11 @@ private:
     void initialize();
 
 protected:
-    T* input_attention_mask_ = nullptr;
-    T* key_cache_            = nullptr;
-    T* value_cache_          = nullptr;
+    int* padding_offset_       = nullptr;
+    int* cu_seqlens_           = nullptr;
+    T*   input_attention_mask_ = nullptr;
+    T*   key_cache_            = nullptr;
+    T*   value_cache_          = nullptr;
 
     T* decoder_output_buf_        = nullptr;
     T* normed_decoder_output_buf_ = nullptr;

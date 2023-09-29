@@ -61,6 +61,10 @@ void LLaMA<T>::allocateBuffer(size_t batch_size, size_t seq_len, size_t max_seq_
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     const size_t self_cache_size = (num_layer_ / pipeline_para_.world_size_) * batch_size * max_seq_len * hidden_units_;
 
+    padding_offset_ =
+        reinterpret_cast<int*>(allocator_->reMalloc(padding_offset_, sizeof(int) * batch_size * seq_len, false));
+    cu_seqlens_ = reinterpret_cast<int*>(allocator_->reMalloc(cu_seqlens_, sizeof(int) * (batch_size + 1), false));
+
     input_attention_mask_ =
         (T*)(allocator_->reMalloc(input_attention_mask_, sizeof(T) * batch_size * max_seq_len * max_seq_len, false));
 
@@ -88,6 +92,8 @@ template<typename T>
 void LLaMA<T>::freeBuffer()
 {
     if (is_allocate_buffer_) {
+        allocator_->free((void**)(&padding_offset_));
+        allocator_->free((void**)(&cu_seqlens_));
         allocator_->free((void**)(&input_attention_mask_));
         allocator_->free((void**)(&key_cache_));
         allocator_->free((void**)(&context_decoder_input_buf_));
@@ -238,6 +244,16 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     allocateBuffer(batch_size, seq_len, max_seq_len_);
     sync_check_cuda_error();
 
+    if (is_unpadded_mha) {
+        invokeLLaMAGetPaddingOffsetAndCuSeqLens(
+            padding_offset_, cu_seqlens_, input_lengths, batch_size, seq_len, stream_);
+        sync_check_cuda_error();
+
+        //       invokeRemovePadding(decoder_layer_output_, decoder_input, padding_offset_, h_token_num, hidden_units_,
+        //       stream_);
+        //        sync_check_cuda_error();
+    }
+
     invokeLLaMABuildDecoderAttentionMask(
         input_attention_mask_, input_lengths, context_lengths, batch_size, seq_len, attn_len, stream_);
     sync_check_cuda_error();
@@ -252,8 +268,10 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         sync_check_cuda_error();
     }
     else {
+        ftNcclGroupStart();
         ftNcclRecv(
             context_decoder_input_buf_, num_tokens * hidden_units_, pipeline_para_.rank_ - 1, pipeline_para_, stream_);
+        ftNcclGroupEnd();
         sync_check_cuda_error();
     }
 
@@ -267,6 +285,13 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         {"num_tokens", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &num_tokens}},
         {"seq_len", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &seq_len}},
         {"attn_len", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &attn_len}}};
+
+    if (is_unpadded_mha) {
+        decoder_input_tensors.insert(
+            {"padding_offset", Tensor{MEMORY_GPU, TYPE_INT32, {(size_t)num_tokens}, padding_offset_}});
+        decoder_input_tensors.insert(
+            {"cu_seqlens", Tensor{MEMORY_GPU, TYPE_INT32, {size_t(batch_size + 1)}, cu_seqlens_}});
+    }
 
     std::unordered_map<std::string, Tensor> decoder_output_tensors{
         {"decoder_output",
@@ -286,6 +311,13 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         &decoder_output_tensors, &decoder_input_tensors, &llama_weights->decoder_layer_weights);
     sync_check_cuda_error();
 
+
+    //    if (is_unpadded_mha) {
+    //        invokeRebuildPadding(
+    //            decoder_output, decoder_layer_output_, padding_offset_, h_token_num, hidden_units_, stream_);
+    //        sync_check_cuda_error();
+    //    }
+
     if (pipeline_para_.rank_ < pipeline_para_.world_size_ - 1) {
         buf_no_ = (buf_no_ + 1) % num_buffers_;
         check_cuda_error(cudaEventSynchronize(comm_event_[buf_no_]));
@@ -296,11 +328,13 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         sync_check_cuda_error();
         check_cuda_error(cudaEventRecord(kern_event_[buf_no_], stream_));
         check_cuda_error(cudaStreamWaitEvent(comm_stream_, kern_event_[buf_no_]));
+        ftNcclGroupStart();
         ftNcclSend(context_decoder_output_buf_clone_[buf_no_],
                    num_tokens * hidden_units_,
                    pipeline_para_.rank_ + 1,
                    pipeline_para_,
                    comm_stream_);
+        ftNcclGroupEnd();
         check_cuda_error(cudaEventRecord(comm_event_[buf_no_], comm_stream_));
         sync_check_cuda_error();
     }

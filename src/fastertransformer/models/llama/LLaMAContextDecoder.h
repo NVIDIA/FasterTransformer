@@ -67,8 +67,6 @@ private:
     void initialize();
 
 protected:
-    int*    padding_offset_                    = nullptr;
-    int*    cu_seqlens_                        = nullptr;
     T*      decoder_normed_input_              = nullptr;
     T*      self_attn_output_                  = nullptr;
     T*      decoder_layer_output_              = nullptr;
