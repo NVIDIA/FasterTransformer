@@ -93,14 +93,22 @@ __global__ void LLaMA_gather_tokens_kernel(float*       out,
     //       t = choice_cum_seq_lens_list[c][b] + i
     //       choice_log_probs[b, c] = choice_log_probs[b, c] +  log_likelihoods[t, choice_tokens_list[c][t+1]]
 
-    for (int b = 0; b < batch_size; ++b) {
-        float val = 0.f;
-        for (int i = 0; i < input_lengths[b] - 1; ++i) {
-            int t = cu_seqlens[b] + i;
-            val += probs[t * vocab_size + input_ids[t + 1]];
-        }
-        out[b] = val;
+    // probs: [T, V]
+    // input_ids: [T]
+    int batch_idx = blockIdx.x;
+
+    if (batch_idx >= batch_size)
+        return;
+
+    float val = 0.f;
+    for (int i = threadIdx.x; i < input_lengths[batch_idx] - 1; i += blockDim.x) {
+        int t = cu_seqlens[batch_idx] + i;
+        val += probs[t * vocab_size + input_ids[t + 1]];
     }
+    float sum = blockReduceSum<float>(val);
+
+    if (threadIdx.x == 0)
+        out[batch_idx] = sum;
 }
 
 void invokeLLaMAGatherTokens(float*       out,
@@ -112,7 +120,7 @@ void invokeLLaMAGatherTokens(float*       out,
                              const int    vocab_size,
                              cudaStream_t stream)
 {
-    LLaMA_gather_tokens_kernel<<<1, 1, 0, stream>>>(
+    LLaMA_gather_tokens_kernel<<<batch_size, 256, 0, stream>>>(
         out, probs, input_ids, input_lengths, cu_seqlens, batch_size, vocab_size);
 }
 

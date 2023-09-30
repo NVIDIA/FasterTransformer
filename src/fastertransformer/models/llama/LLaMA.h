@@ -38,7 +38,7 @@ private:
     size_t random_seed_;
     size_t max_seq_len_;
 
-    static constexpr int num_buffers_ = 5;
+    static constexpr int num_buffers_ = 10;
     int                  buf_no_      = 0;
     cudaStream_t         comm_stream_;
     cudaEvent_t          kern_event_[num_buffers_];

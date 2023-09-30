@@ -31,13 +31,14 @@ public:
     virtual ~IFLLaMA() {}
     virtual void forward(th::Tensor& hidden_vector,
                          th::Tensor& log_probs,
-                         th::Tensor& out_log_probs,
+                         th::Tensor& cum_probs,
                          th::Tensor& input_ids,
                          th::Tensor& input_lengths,
                          th::Tensor& context_lengths,
                          const int   num_tokens,
                          const int   seq_len,
-                         const int   attn_len) = 0;
+                         const int   attn_len,
+                         const int   is_context) = 0;
 };
 
 template<typename T>
@@ -174,13 +175,14 @@ public:
 
     virtual void forward(th::Tensor& hidden_vector,
                          th::Tensor& log_probs,
-                         th::Tensor& out_log_probs,
+                         th::Tensor& cum_probs,
                          th::Tensor& input_ids,
                          th::Tensor& input_lengths,
                          th::Tensor& context_lengths,
                          const int   num_tokens,
                          const int   seq_len,
-                         const int   attn_len) override
+                         const int   attn_len,
+                         const int   is_context) override
     {
         const size_t batch_size = (size_t)input_lengths.size(0);
 
@@ -197,7 +199,8 @@ public:
                  ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{batch_size}, get_ptr<int>(context_lengths)}},
             {"num_tokens", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &num_tokens}},
             {"seq_len", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &seq_len}},
-            {"attn_len", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &attn_len}}};
+            {"attn_len", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &attn_len}},
+            {"is_context", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &is_context}}};
 
         std::unordered_map<std::string, ft::Tensor> output_tensors = std::unordered_map<std::string, ft::Tensor>{
             {"hidden_vector",
@@ -210,9 +213,8 @@ public:
                         ft::TYPE_FP32,
                         std::vector<size_t>{(size_t)num_tokens, vocab_size_},
                         get_ptr<float>(log_probs)}},
-            {"out_log_probs",
-             ft::Tensor{
-                 ft::MEMORY_GPU, ft::TYPE_FP32, std::vector<size_t>{batch_size}, get_ptr<float>(out_log_probs)}}};
+            {"cum_probs",
+             ft::Tensor{ft::MEMORY_GPU, ft::TYPE_FP32, std::vector<size_t>{batch_size}, get_ptr<float>(cum_probs)}}};
 
         try {
             ft::check_cuda_error(cudaEventSynchronize(event_));
@@ -280,13 +282,14 @@ public:
 
     std::vector<th::Tensor> forward(th::Tensor&   hidden_vector,
                                     th::Tensor&   log_probs,
-                                    th::Tensor&   out_log_probs,
+                                    th::Tensor&   cum_probs,
                                     th::Tensor&   input_ids,
                                     th::Tensor&   input_lengths,
                                     th::Tensor&   context_lengths,
                                     const int64_t num_tokens,
                                     const int64_t seq_len,
-                                    const int64_t attn_len);
+                                    const int64_t attn_len,
+                                    const int64_t is_context);
 
 private:
     const at::ScalarType    st_;

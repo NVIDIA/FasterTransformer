@@ -75,13 +75,15 @@ LLaMA::~LLaMA()
 
 std::vector<th::Tensor> LLaMA::forward(th::Tensor&   hidden_vector,
                                        th::Tensor&   log_probs,
-                                       th::Tensor&   out_log_probs,
+                                       th::Tensor&   cum_probs,
                                        th::Tensor&   input_ids,
                                        th::Tensor&   input_lengths,
                                        th::Tensor&   context_lengths,
                                        const int64_t num_tokens,
                                        const int64_t seq_len,
-                                       const int64_t attn_len)
+                                       const int64_t attn_len,
+                                       const int64_t is_context
+                                       )
 {
     CHECK_TH_CUDA(input_ids);
     CHECK_CONTIGUOUS(input_ids);
@@ -92,8 +94,8 @@ std::vector<th::Tensor> LLaMA::forward(th::Tensor&   hidden_vector,
 
     const int batch_size = input_lengths.size(0);
     ftllama->forward(
-        hidden_vector, log_probs, out_log_probs, input_ids, input_lengths, context_lengths, num_tokens, seq_len, attn_len);
-    return std::vector<th::Tensor>{hidden_vector, log_probs, out_log_probs};
+        hidden_vector, log_probs, cum_probs, input_ids, input_lengths, context_lengths, num_tokens, seq_len, attn_len, is_context);
+    return std::vector<th::Tensor>{hidden_vector, log_probs, cum_probs};
 }
 
 }  // namespace torch_ext
