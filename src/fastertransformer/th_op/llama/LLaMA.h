@@ -113,9 +113,12 @@ public:
         llama_weights_.post_decoder_embedding.kernel = get_ptr<T>(weights_[14 * num_layers_ + 3]);
 
         ft::check_cuda_error(cudaGetDeviceProperties(&prop_, 0));
-        //ft::check_cuda_error(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking));
+        // ft::check_cuda_error(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking));
         ft::check_cuda_error(cudaStreamCreate(&stream_));
-        ft::check_cuda_error(cudaEventCreate(&event_));
+
+        for (int i = 0; i < num_events_; ++i) {
+            ft::check_cuda_error(cudaEventCreate(&event_[i]));
+        }
 
         cublasHandle_t cublasHandle = at::cuda::getCurrentCUDABlasHandle();
         cublasSetStream(cublasHandle, stream_);
@@ -160,7 +163,9 @@ public:
 
     ~FTLLaMA() override
     {
-        ft::check_cuda_error(cudaEventDestroy(event_));
+        for (int i = 0; i < num_events_; ++i) {
+            ft::check_cuda_error(cudaEventDestroy(event_[i]));
+        }
         ft::check_cuda_error(cudaStreamDestroy(stream_));
 
         delete llama_;
@@ -218,12 +223,13 @@ public:
              ft::Tensor{ft::MEMORY_GPU, ft::TYPE_FP32, std::vector<size_t>{batch_size}, get_ptr<float>(cum_probs)}}};
 
         try {
-            ft::check_cuda_error(cudaEventSynchronize(event_));
+            ft::check_cuda_error(cudaEventSynchronize(event_[ev_no_]));
             llama_->forward(&output_tensors, &input_tensors, &llama_weights_);
-            ft::check_cuda_error(cudaEventRecord(event_, stream_));
+            ft::check_cuda_error(cudaEventRecord(event_[ev_no_], stream_));
 
             auto stream = at::cuda::getCurrentCUDAStream().stream();
-            ft::check_cuda_error(cudaStreamWaitEvent(stream, event_));
+            ft::check_cuda_error(cudaStreamWaitEvent(stream, event_[ev_no_]));
+            ev_no_ = (ev_no_ + 1) % num_events_;
         }
         catch (std::runtime_error& error) {
             std::cout << error.what();
@@ -247,8 +253,10 @@ private:
     int64_t      tensor_para_size_;
     int64_t      pipeline_para_size_;
 
-    cudaStream_t stream_;
-    cudaEvent_t  event_;
+    static constexpr int num_events_ = 5;
+    int                  ev_no_      = 0;
+    cudaEvent_t          event_[num_events_];
+    cudaStream_t         stream_;
 
     std::vector<th::Tensor> weights_;
     cublasLtHandle_t        cublasltHandle_;
