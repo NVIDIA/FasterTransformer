@@ -85,11 +85,12 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                           3 * hidden_units_ /* n */);
     sync_check_cuda_error();
 
-    if (padding_offset != nullptr) {
-        // q_buf_2_, k_buf_2_ and v_buf_2_ are continuous
-        cudaMemsetAsync(q_buf_2_, 0, batch_size * max_seq_len * 3 * hidden_units_ * sizeof(T), stream_);
-        sync_check_cuda_error();
-    }
+//    if (padding_offset != nullptr) {
+//        // q_buf_2_, k_buf_2_ and v_buf_2_ are continuous
+//        cudaMemsetAsync(q_buf_2_, 0, batch_size * max_seq_len * 3 * hidden_units_ * sizeof(T), stream_);
+//        sync_check_cuda_error();
+//    }
+
     invokeLLaMAAddFusedQKVBiasTranspose(q_buf_2_,
                                         k_buf_2_,
                                         v_buf_2_,
