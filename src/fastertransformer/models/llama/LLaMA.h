@@ -23,7 +23,7 @@
 #include "src/fastertransformer/models/llama/LLaMAWeight.h"
 #include "src/fastertransformer/utils/custom_ar_comm.h"
 
-#define USE_NCCL
+//#define USE_NCCL
 
 namespace fastertransformer {
 

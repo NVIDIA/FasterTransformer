@@ -113,7 +113,8 @@ public:
         llama_weights_.post_decoder_embedding.kernel = get_ptr<T>(weights_[14 * num_layers_ + 3]);
 
         ft::check_cuda_error(cudaGetDeviceProperties(&prop_, 0));
-        ft::check_cuda_error(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking));
+        //ft::check_cuda_error(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking));
+        ft::check_cuda_error(cudaStreamCreate(&stream_));
         ft::check_cuda_error(cudaEventCreate(&event_));
 
         cublasHandle_t cublasHandle = at::cuda::getCurrentCUDABlasHandle();

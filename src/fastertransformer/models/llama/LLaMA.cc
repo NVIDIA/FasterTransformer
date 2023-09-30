@@ -284,10 +284,8 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     }
     else {
 #ifdef USE_NCCL
-        ftNcclGroupStart();
         ftNcclRecv(
             context_decoder_input_buf_, num_tokens * hidden_units_, pipeline_para_.rank_ - 1, pipeline_para_, stream_);
-        ftNcclGroupEnd();
         sync_check_cuda_error();
 #endif
     }
@@ -346,24 +344,29 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
 
     if (pipeline_para_.rank_ < pipeline_para_.world_size_ - 1) {
 #ifdef USE_NCCL
-        buf_no_ = (buf_no_ + 1) % num_buffers_;
-        check_cuda_error(cudaEventSynchronize(comm_event_[buf_no_]));
-        invokeLLaMACopyKernel(context_decoder_output_buf_clone_[buf_no_],
-                              context_decoder_output_buf_,
-                              num_tokens * hidden_units_,
-                              stream_);
-        sync_check_cuda_error();
-        check_cuda_error(cudaEventRecord(kern_event_[buf_no_], stream_));
-        check_cuda_error(cudaStreamWaitEvent(comm_stream_, kern_event_[buf_no_]));
+        //        buf_no_ = (buf_no_ + 1) % num_buffers_;
+        //        check_cuda_error(cudaEventSynchronize(comm_event_[buf_no_]));
+        //        invokeLLaMACopyKernel(context_decoder_output_buf_clone_[buf_no_],
+        //                              context_decoder_output_buf_,
+        //                              num_tokens * hidden_units_,
+        //                              stream_);
+        //        sync_check_cuda_error();
+        //        check_cuda_error(cudaEventRecord(kern_event_[buf_no_], stream_));
+        //        check_cuda_error(cudaStreamWaitEvent(comm_stream_, kern_event_[buf_no_]));
+        //        ftNcclGroupStart();
+        //        ftNcclSend(context_decoder_output_buf_clone_[buf_no_],
+        //                   num_tokens * hidden_units_,
+        //                   pipeline_para_.rank_ + 1,
+        //                   pipeline_para_,
+        //                   comm_stream_);
+        //        ftNcclGroupEnd();
+        //        check_cuda_error(cudaEventRecord(comm_event_[buf_no_], comm_stream_));
+        //        sync_check_cuda_error();
+
         ftNcclGroupStart();
-        ftNcclSend(context_decoder_output_buf_clone_[buf_no_],
-                   num_tokens * hidden_units_,
-                   pipeline_para_.rank_ + 1,
-                   pipeline_para_,
-                   comm_stream_);
+        ftNcclSend(
+            context_decoder_output_buf_, num_tokens * hidden_units_, pipeline_para_.rank_ + 1, pipeline_para_, stream_);
         ftNcclGroupEnd();
-        check_cuda_error(cudaEventRecord(comm_event_[buf_no_], comm_stream_));
-        sync_check_cuda_error();
 #endif
     }
     else if (!is_context) {
