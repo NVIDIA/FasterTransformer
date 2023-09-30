@@ -29,7 +29,9 @@ using std::vector;
 class IFLLaMA {
 public:
     virtual ~IFLLaMA() {}
-    virtual void forward(th::Tensor& output_logits,
+    virtual void forward(th::Tensor& hidden_vector,
+                         th::Tensor& log_probs,
+                         th::Tensor& out_log_probs,
                          th::Tensor& input_ids,
                          th::Tensor& input_lengths,
                          th::Tensor& context_lengths,
@@ -170,7 +172,9 @@ public:
         delete cublas_wrapper_mutex_;
     }
 
-    virtual void forward(th::Tensor& output_logits,
+    virtual void forward(th::Tensor& hidden_vector,
+                         th::Tensor& log_probs,
+                         th::Tensor& out_log_probs,
                          th::Tensor& input_ids,
                          th::Tensor& input_lengths,
                          th::Tensor& context_lengths,
@@ -196,11 +200,19 @@ public:
             {"attn_len", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &attn_len}}};
 
         std::unordered_map<std::string, ft::Tensor> output_tensors = std::unordered_map<std::string, ft::Tensor>{
-            {"output_logits",
+            {"hidden_vector",
+             ft::Tensor{ft::MEMORY_GPU,
+                        (std::is_same<T, half>::value) ? ft::TYPE_FP16 : ft::TYPE_FP32,
+                        std::vector<size_t>{(size_t)num_tokens, num_heads_ * size_per_head_},
+                        get_ptr<T>(hidden_vector)}},
+            {"log_probs",
              ft::Tensor{ft::MEMORY_GPU,
                         ft::TYPE_FP32,
-                        std::vector<size_t>{batch_size, (size_t)seq_len, vocab_size_},
-                        get_ptr<float>(output_logits)}}};
+                        std::vector<size_t>{(size_t)num_tokens, vocab_size_},
+                        get_ptr<float>(log_probs)}},
+            {"out_log_probs",
+             ft::Tensor{
+                 ft::MEMORY_GPU, ft::TYPE_FP32, std::vector<size_t>{batch_size}, get_ptr<float>(out_log_probs)}}};
 
         try {
             ft::check_cuda_error(cudaEventSynchronize(event_));
@@ -266,13 +278,15 @@ public:
 
     ~LLaMA();
 
-    th::Tensor forward(th::Tensor&   output_logits,
-                       th::Tensor&   input_ids,
-                       th::Tensor&   input_lengths,
-                       th::Tensor&   context_lengths,
-                       const int64_t num_tokens,
-                       const int64_t seq_len,
-                       const int64_t attn_len);
+    std::vector<th::Tensor> forward(th::Tensor&   hidden_vector,
+                                    th::Tensor&   log_probs,
+                                    th::Tensor&   out_log_probs,
+                                    th::Tensor&   input_ids,
+                                    th::Tensor&   input_lengths,
+                                    th::Tensor&   context_lengths,
+                                    const int64_t num_tokens,
+                                    const int64_t seq_len,
+                                    const int64_t attn_len);
 
 private:
     const at::ScalarType    st_;

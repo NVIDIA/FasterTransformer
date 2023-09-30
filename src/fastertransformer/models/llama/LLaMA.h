@@ -71,9 +71,10 @@ protected:
     T*   key_cache_            = nullptr;
     T*   value_cache_          = nullptr;
 
-    T* decoder_output_buf_        = nullptr;
-    T* normed_decoder_output_buf_ = nullptr;
-    T* logits_buf_                = nullptr;
+    T*     decoder_output_buf_        = nullptr;
+    T*     normed_decoder_output_buf_ = nullptr;
+    float* logits_buf_                = nullptr;
+    float* log_likelihood_buf_        = nullptr;
 
     T* context_decoder_input_buf_                      = nullptr;
     T* context_decoder_output_buf_                     = nullptr;

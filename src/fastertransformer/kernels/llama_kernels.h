@@ -29,4 +29,16 @@ void invokeLLaMAInputIdsEmbeddingLookup(T*           from_tensor,
 
 template<typename T>
 void invokeLLaMACopyKernel(T* dst, T* src, const int count, cudaStream_t stream);
+
+void invokeLLaMAGatherTokens(float*       out,
+                             const float* probs,
+                             const int*   input_ids,
+                             const int*   input_lengths,
+                             const int*   cu_seqlens,
+                             const int    batch_size,
+                             const int    vocab_size,
+                             cudaStream_t stream);
+
+void invokeLLaMALogSoftmax(
+    float* out, const float* logits, const int num_tokens, const int vocab_size, cudaStream_t stream);
 }  // namespace fastertransformer
