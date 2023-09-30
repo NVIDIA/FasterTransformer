@@ -233,7 +233,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     //      log_probs [num_tokens, vocab_size]
     //      cum_probs [batch_size]
 
-    FT_CHECK_WITH_INFO(input_tensors->size() == 6, "input_tensors->size() == 6");
+    FT_CHECK_WITH_INFO(input_tensors->size() == 7, "input_tensors->size() == 6");
     FT_CHECK(input_tensors->at("input_ids").shape.size() == 2);
     FT_CHECK(input_tensors->at("input_lengths").shape.size() == 1);
 
