@@ -29,11 +29,14 @@ namespace fastertransformer {
 template<typename T>
 void LLaMA<T>::initialize()
 {
+#ifdef USE_NCCL
     check_cuda_error(cudaStreamCreateWithFlags(&comm_stream_, cudaStreamNonBlocking));
     for (int i = 0; i < num_buffers_; ++i) {
         check_cuda_error(cudaEventCreate(&kern_event_[i]));
         check_cuda_error(cudaEventCreate(&comm_event_[i]));
     }
+#endif
+
     llama_context_decoder_ = new LLaMAContextDecoder<T>(head_num_,
                                                         size_per_head_,
                                                         inter_size_,
@@ -76,10 +79,12 @@ void LLaMA<T>::allocateBuffer(size_t batch_size, size_t seq_len, size_t max_seq_
     context_decoder_output_buf_ = (T*)(allocator_->reMalloc(
         context_decoder_output_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
 
+#ifdef USE_NCCL
     for (int i = 0; i < num_buffers_; ++i) {
         context_decoder_output_buf_clone_[i] = (T*)(allocator_->reMalloc(
             context_decoder_output_buf_clone_[i], sizeof(T) * batch_size * max_seq_len * hidden_units_, false));
     }
+#endif
 
     normed_decoder_output_buf_ =
         (T*)(allocator_->reMalloc(normed_decoder_output_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
@@ -101,9 +106,11 @@ void LLaMA<T>::freeBuffer()
         allocator_->free((void**)(&key_cache_));
         allocator_->free((void**)(&context_decoder_input_buf_));
         allocator_->free((void**)(&context_decoder_output_buf_));
+#ifdef USE_NCCL
         for (int i = 0; i < num_buffers_; ++i) {
             allocator_->free((void**)(&context_decoder_output_buf_clone_[i]));
         }
+#endif
         allocator_->free((void**)(&logits_buf_));
         is_allocate_buffer_ = false;
     }
@@ -195,11 +202,13 @@ LLaMA<T>::LLaMA(LLaMA<T> const& llama):
 template<typename T>
 LLaMA<T>::~LLaMA()
 {
+#ifdef USE_NCCL
     check_cuda_error(cudaStreamDestroy(comm_stream_));
     for (int i = 0; i < num_buffers_; ++i) {
         check_cuda_error(cudaEventDestroy(kern_event_[i]));
         check_cuda_error(cudaEventDestroy(comm_event_[i]));
     }
+#endif
 
     delete llama_context_decoder_;
     freeBuffer();
@@ -258,10 +267,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         invokeLLaMAGetPaddingOffsetAndCuSeqLens(
             padding_offset_, cu_seqlens_, input_lengths, batch_size, seq_len, stream_);
         sync_check_cuda_error();
-
-        //       invokeRemovePadding(decoder_layer_output_, decoder_input, padding_offset_, h_token_num, hidden_units_,
-        //       stream_);
-        //        sync_check_cuda_error();
     }
 
     invokeLLaMABuildDecoderAttentionMask(
@@ -278,12 +283,13 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         sync_check_cuda_error();
     }
     else {
-        //        ftNcclGroupStart();
-        //        ftNcclRecv(
-        //            context_decoder_input_buf_, num_tokens * hidden_units_, pipeline_para_.rank_ - 1, pipeline_para_,
-        //            stream_);
-        //        ftNcclGroupEnd();
-        //        sync_check_cuda_error();
+#ifdef USE_NCCL
+        ftNcclGroupStart();
+        ftNcclRecv(
+            context_decoder_input_buf_, num_tokens * hidden_units_, pipeline_para_.rank_ - 1, pipeline_para_, stream_);
+        ftNcclGroupEnd();
+        sync_check_cuda_error();
+#endif
     }
 
     std::unordered_map<std::string, Tensor> decoder_input_tensors{
@@ -291,7 +297,12 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
          Tensor{MEMORY_GPU,
                 data_type,
                 {(size_t)num_tokens, hidden_units_},
-                pipeline_para_.rank_ == 0 ? context_decoder_input_buf_ : hidden_vector}},
+#ifdef USE_NCCL
+                context_decoder_input_buf_
+#else
+                pipeline_para_.rank_ == 0                                ? context_decoder_input_buf_ : hidden_vector
+#endif
+         }},
         {"attention_mask",
          Tensor{MEMORY_GPU, data_type, {batch_size, 1, (size_t)seq_len, (size_t)(attn_len)}, input_attention_mask_}},
         {"input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size}, input_lengths}},
@@ -312,8 +323,12 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
          Tensor{MEMORY_GPU,
                 data_type,
                 {(size_t)num_tokens, hidden_units_},
-                (pipeline_para_.rank_ == pipeline_para_.world_size_ - 1) ? context_decoder_output_buf_ :
-                                                                           hidden_vector}},
+#ifdef USE_NCCL
+                context_decoder_output_buf_
+#else
+                (pipeline_para_.rank_ == pipeline_para_.world_size_ - 1) ? context_decoder_output_buf_ : hidden_vector
+#endif
+         }},
         {"key_cache",
          Tensor{MEMORY_GPU,
                 data_type,
@@ -329,32 +344,29 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         &decoder_output_tensors, &decoder_input_tensors, &llama_weights->decoder_layer_weights);
     sync_check_cuda_error();
 
-    //    if (is_unpadded_mha) {
-    //        invokeRebuildPadding(
-    //            decoder_output, decoder_layer_output_, padding_offset_, h_token_num, hidden_units_, stream_);
-    //        sync_check_cuda_error();
-    //    }
-
     if (pipeline_para_.rank_ < pipeline_para_.world_size_ - 1) {
-        //        buf_no_ = (buf_no_ + 1) % num_buffers_;
-        //        check_cuda_error(cudaEventSynchronize(comm_event_[buf_no_]));
-        //        invokeLLaMACopyKernel(
-        //            context_decoder_output_buf_clone_[buf_no_], context_decoder_output_buf_, num_tokens *
-        //            hidden_units_, stream_);
-        //        sync_check_cuda_error();
-        //        check_cuda_error(cudaEventRecord(kern_event_[buf_no_], stream_));
-        //        check_cuda_error(cudaStreamWaitEvent(comm_stream_, kern_event_[buf_no_]));
-        //        ftNcclGroupStart();
-        //        ftNcclSend(context_decoder_output_buf_clone_[buf_no_],
-        //                   num_tokens * hidden_units_,
-        //                   pipeline_para_.rank_ + 1,
-        //                   pipeline_para_,
-        //                   comm_stream_);
-        //        ftNcclGroupEnd();
-        //        check_cuda_error(cudaEventRecord(comm_event_[buf_no_], comm_stream_));
-        //        sync_check_cuda_error();
+#ifdef USE_NCCL
+        buf_no_ = (buf_no_ + 1) % num_buffers_;
+        check_cuda_error(cudaEventSynchronize(comm_event_[buf_no_]));
+        invokeLLaMACopyKernel(context_decoder_output_buf_clone_[buf_no_],
+                              context_decoder_output_buf_,
+                              num_tokens * hidden_units_,
+                              stream_);
+        sync_check_cuda_error();
+        check_cuda_error(cudaEventRecord(kern_event_[buf_no_], stream_));
+        check_cuda_error(cudaStreamWaitEvent(comm_stream_, kern_event_[buf_no_]));
+        ftNcclGroupStart();
+        ftNcclSend(context_decoder_output_buf_clone_[buf_no_],
+                   num_tokens * hidden_units_,
+                   pipeline_para_.rank_ + 1,
+                   pipeline_para_,
+                   comm_stream_);
+        ftNcclGroupEnd();
+        check_cuda_error(cudaEventRecord(comm_event_[buf_no_], comm_stream_));
+        sync_check_cuda_error();
+#endif
     }
-    else if (!is_context){
+    else if (!is_context) {
         invokeGeneralLLaMALayerNorm(normed_decoder_output_buf_,
                                     context_decoder_output_buf_,
                                     llama_weights->post_decoder_layernorm.gamma,
