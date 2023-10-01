@@ -42,14 +42,10 @@ private:
     size_t num_layer_;
     size_t rotary_embedding_dim_;
     float  layernorm_eps_;
-
-    // calculated data
     size_t hidden_units_;
-
-    NcclParam pipeline_para_;
-
+    size_t rank_;
+    size_t world_size_;
     AttentionType attention_type_;
-
     bool is_qk_buf_float_;
 
     BaseAttentionLayer<T>* self_attention_layer_;
@@ -78,7 +74,8 @@ public:
                         size_t           num_layer,
                         size_t           rotary_embedding_dim,
                         float            layernorm_eps,
-                        NcclParam        pipeline_para,
+                        size_t           rank,
+                        size_t           world_size,
                         cudaStream_t     stream,
                         cublasMMWrapper* cublas_wrapper,
                         IAllocator*      allocator,

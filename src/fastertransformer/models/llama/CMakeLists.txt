@@ -44,10 +44,7 @@ set_property(TARGET LLaMA PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(LLaMA PUBLIC -lcudart
                       LLaMAContextDecoder
                       decoding_kernels
-                      gpt_kernels
                       llama_kernels
-                      BaseBeamSearchLayer
-                      bert_preprocess_kernels
                       tensor
                       LLaMAWeight
                       cuda_utils
