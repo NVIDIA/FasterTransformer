@@ -31,12 +31,10 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
     // input_tensors:
     //      input_query [num_tokens, hidden_dimension]
     //      attention_mask [batch_size, 1, seq_len, attn_len]
-    //      attention_type [1]
-    //      layer_id [1], int on cpu
     //      context_lengths, int, [batch_size]
-    //      attn_len, int, [batch_size] on cpu
-    //      padding_offset, int, [num_tokens] (optional)
-    //      cu_seqlens, int, [batch_size] (optional)
+    //      attention_type [1]
+    //      padding_offset [num_tokens] (optional)
+    //      cu_seqlens [batch_size+1] (optional)
 
     // output_tensors:
     //      hidden_features [num_tokens, hidden_dimension]
@@ -46,25 +44,27 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
     FT_LOG_DEBUG("%s start", __PRETTY_FUNCTION__);
     FT_CHECK(output_tensors->at("key_cache").shape.size() == 4);
     FT_CHECK(output_tensors->at("value_cache").shape.size() == 4);
-    const int  batch_size      = input_tensors->at("attention_mask").shape[0];
-    const int  max_seq_len     = (int)(output_tensors->at("key_cache").shape[2]);
-    const int  layer_id        = input_tensors->getVal<int>("layer_id");
-    const int* padding_offset  = input_tensors->getPtr<int>("padding_offset", nullptr);
-    const int* cu_seqlens      = input_tensors->getPtr<int>("cu_seqlens", nullptr);
-    const int* context_lengths = input_tensors->at("context_lengths").getPtr<int>();
-    const int  seq_len         = input_tensors->at("attention_mask").shape[2];
-    const int  attn_len        = input_tensors->at("attention_mask").shape[3];
+    const int batch_size  = input_tensors->at("attention_mask").shape[0];
+    const int seq_len     = input_tensors->at("attention_mask").shape[2];
+    const int attn_len    = input_tensors->at("attention_mask").shape[3];
+    const int max_seq_len = output_tensors->at("key_cache").shape[2];
 
-    T* attention_out   = output_tensors->at("hidden_features").getPtr<T>();
-    T* attention_input = input_tensors->at("input_query").getPtr<T>();
-    T* attention_mask  = input_tensors->at("attention_mask").getPtr<T>();
+    T*                  attention_input = input_tensors->at("input_query").getPtr<T>();
+    T*                  attention_mask  = input_tensors->at("attention_mask").getPtr<T>();
+    const int*          context_lengths = input_tensors->at("context_lengths").getPtr<int>();
+    const int*          padding_offset  = input_tensors->getPtr<int>("padding_offset", nullptr);
+    const int*          cu_seqlens      = input_tensors->getPtr<int>("cu_seqlens", nullptr);
+    const AttentionType attention_type  = input_tensors->getVal<AttentionType>("attention_type");
+    T*                  attention_out   = output_tensors->at("hidden_features").getPtr<T>();
+    T*                  key_cache       = output_tensors->getPtr<T>("key_cache");
+    T*                  value_cache     = output_tensors->getPtr<T>("value_cache");
 
-    const AttentionType attention_type = input_tensors->getVal<AttentionType>("attention_type");
+    FT_CHECK_WITH_INFO(seq_len <= attn_len, "seq_len must be larger than or equal to attn_len");
     FT_CHECK_WITH_INFO(attention_type != AttentionType::FUSED_PADDED_MHA,
                        "LLaMA Context FUSED_PADDED_MHA is not supported !");
 
     PUSH_RANGE("attention buffer alloc");
-    allocateBuffer(batch_size, seq_len, max_seq_len, attention_type != AttentionType::FUSED_MHA);
+    allocateBuffer(batch_size, seq_len, attn_len, max_seq_len, attention_type != AttentionType::FUSED_MHA);
     POP_RANGE;
     sync_check_cuda_error();
 
@@ -85,11 +85,11 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                           3 * hidden_units_ /* n */);
     sync_check_cuda_error();
 
-//    if (padding_offset != nullptr) {
-//        // q_buf_2_, k_buf_2_ and v_buf_2_ are continuous
-//        cudaMemsetAsync(q_buf_2_, 0, batch_size * max_seq_len * 3 * hidden_units_ * sizeof(T), stream_);
-//        sync_check_cuda_error();
-//    }
+    if (padding_offset != nullptr) {
+        // q_buf_2_, k_buf_2_ and v_buf_2_ are continuous
+        cudaMemsetAsync(q_buf_2_, 0, batch_size * (seq_len + 2 * attn_len) * hidden_units_ * sizeof(T), stream_);
+        sync_check_cuda_error();
+    }
 
     invokeLLaMAAddFusedQKVBiasTranspose(q_buf_2_,
                                         k_buf_2_,
@@ -106,177 +106,169 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
                                         stream_);
     sync_check_cuda_error();
 
-    // key_cache [batch, local_head_num, max_seq_len, size_per_head]
-    // value_cache [batch, local_head_num, max_seq_len, size_per_head]
-    T* key_cache   = output_tensors->getPtr<T>("key_cache");
-    T* value_cache = output_tensors->getPtr<T>("value_cache");
     invokeLLaMASaveToCache(key_cache,
                            value_cache,
                            k_buf_2_,
                            v_buf_2_,
+                           context_lengths,
                            batch_size,
+                           head_num_,
+                           size_per_head_,
                            seq_len,
                            max_seq_len,
-                           size_per_head_,
-                           head_num_,
-                           context_lengths,
                            stream_);
     sync_check_cuda_error();
-    POP_RANGE;
 
     invokeLLaMALoadFromCache(k_buf_2_,
                              v_buf_2_,
                              key_cache,
                              value_cache,
                              batch_size,
-                             seq_len,
-                             max_seq_len,
-                             size_per_head_,
                              head_num_,
+                             size_per_head_,
+                             seq_len,
                              attn_len,
+                             max_seq_len,
                              stream_);
+    sync_check_cuda_error();
 
-    if (attention_type == AttentionType::FUSED_MHA) {
-        dispatcher_fp16->setup_causal_masked_fmha(seq_len, batch_size);
-        dispatcher_fp16->run_causal_masked_fmha(qkv_buf_, cu_seqlens, qkv_buf_3_, true, stream_);
-    }
-    else {
-        const cudaDataType_t gemm_data_type      = getCudaDataType<T>();
-        const int            attention_seq_len_1 = seq_len;   // q length
-        const int            attention_seq_len_2 = attn_len;  // kv length
-        const T              qk_scale            = static_cast<T>(1.0f / sqrtf(size_per_head_ * 1.0f));
+    POP_RANGE;
 
-        //
-        // softmax(Q*K^T)
-        //
-        if (is_qk_buf_float_ == true && gemm_data_type != CUDA_R_32F) {
-            PUSH_RANGE("Q*K batch gemm");
+    const cudaDataType_t gemm_data_type      = getCudaDataType<T>();
+    const int            attention_seq_len_1 = seq_len;   // q length
+    const int            attention_seq_len_2 = attn_len;  // kv length
+    const T              qk_scale            = static_cast<T>(1.0f / sqrtf(size_per_head_ * 1.0f));
 
-            cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_T,
-                                                CUBLAS_OP_N,
-                                                attention_seq_len_2,  // n
-                                                attention_seq_len_1,  // m
-                                                size_per_head_,       // k
-                                                1.0f,
-                                                k_buf_2_,
-                                                gemm_data_type,
-                                                size_per_head_,                        // k
-                                                attention_seq_len_2 * size_per_head_,  // n * k
-                                                q_buf_2_,
-                                                gemm_data_type,
-                                                size_per_head_,                        // k
-                                                attention_seq_len_1 * size_per_head_,  // m * k
-                                                0.0f,
-                                                qk_buf_float_,
-                                                CUDA_R_32F,
-                                                attention_seq_len_2,  // n
-                                                attention_seq_len_2 * attention_seq_len_1,
-                                                batch_size * head_num_,  // global batch size
-                                                CUDA_R_32F);
-            sync_check_cuda_error();
-            POP_RANGE;
+    //
+    // softmax(Q*K^T)
+    //
+    if (is_qk_buf_float_ == true && gemm_data_type != CUDA_R_32F) {
+        PUSH_RANGE("Q*K batch gemm");
 
-            PUSH_RANGE("softmax");
-            MaskedSoftmaxParam<T, float> param;
-            param.attention_score    = qk_buf_;         // (batch_size, head_num, q_length, k_length)
-            param.qk                 = qk_buf_float_;   // (batch_size, head_num, q_length, k_length)
-            param.attention_mask     = attention_mask;  // (batch_size, q_length, k_length)
-            param.batch_size         = batch_size;
-            param.q_length           = attention_seq_len_1;
-            param.k_length           = attention_seq_len_2;
-            param.num_heads          = head_num_;
-            param.qk_scale           = qk_scale;
-            param.linear_bias_slopes = nullptr;
-            invokeMaskedSoftmax(param, stream_);
-            sync_check_cuda_error();
-            POP_RANGE;
-        }
-        else {
-            PUSH_RANGE("Q*K batch gemm");
-            cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_T,
-                                                CUBLAS_OP_N,
-                                                attention_seq_len_2,
-                                                attention_seq_len_1,
-                                                size_per_head_,
-                                                k_buf_2_,
-                                                size_per_head_,
-                                                attention_seq_len_2 * size_per_head_,
-                                                q_buf_2_,
-                                                size_per_head_,
-                                                attention_seq_len_1 * size_per_head_,
-                                                qk_buf_,
-                                                attention_seq_len_2,
-                                                attention_seq_len_2 * attention_seq_len_1,
-                                                batch_size * head_num_);
-
-            POP_RANGE;
-            PUSH_RANGE("softmax");
-            MaskedSoftmaxParam<T, T> param;
-            param.attention_score    = qk_buf_;         // (batch_size, head_num, q_length, k_length)
-            param.qk                 = qk_buf_;         // (batch_size, head_num, q_length, k_length)
-            param.attention_mask     = attention_mask;  // (batch_size, q_length, k_length)
-            param.batch_size         = batch_size;
-            param.q_length           = attention_seq_len_1;
-            param.k_length           = attention_seq_len_2;
-            param.num_heads          = head_num_;
-            param.qk_scale           = qk_scale;
-            param.linear_bias_slopes = nullptr;
-            invokeMaskedSoftmax(param, stream_);
-            sync_check_cuda_error();
-            POP_RANGE;
-        }
-
-        PUSH_RANGE("QK*V batch gemm");
-        cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_N,
+        cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_T,
                                             CUBLAS_OP_N,
-                                            size_per_head_,
-                                            attention_seq_len_1,
-                                            attention_seq_len_2,
-
-                                            v_buf_2_,
-                                            size_per_head_,
-                                            attention_seq_len_2 * size_per_head_,
-
-                                            qk_buf_,
-                                            attention_seq_len_2,
-                                            attention_seq_len_1 * attention_seq_len_2,
-
-                                            qkv_buf_2_,
-                                            size_per_head_,
-                                            attention_seq_len_1 * size_per_head_,
-
-                                            batch_size * head_num_);
+                                            attention_seq_len_2,  // n
+                                            attention_seq_len_1,  // m
+                                            size_per_head_,       // k
+                                            1.0f,
+                                            k_buf_2_,
+                                            gemm_data_type,
+                                            size_per_head_,                        // k
+                                            attention_seq_len_2 * size_per_head_,  // n * k
+                                            q_buf_2_,
+                                            gemm_data_type,
+                                            size_per_head_,                        // k
+                                            attention_seq_len_1 * size_per_head_,  // m * k
+                                            0.0f,
+                                            qk_buf_float_,
+                                            CUDA_R_32F,
+                                            attention_seq_len_2,  // n
+                                            attention_seq_len_2 * attention_seq_len_1,
+                                            batch_size * head_num_,  // global batch size
+                                            CUDA_R_32F);
         sync_check_cuda_error();
+        POP_RANGE;
 
-        // transpose (batch_size, num_heads, L, Dh) to (batch_size, L, num_heads * Dh)
-        if (padding_offset == nullptr) {
-            invokeTransposeQKV(qkv_buf_3_,
-                               qkv_buf_2_,
-                               batch_size,
-                               attention_seq_len_1,
-                               head_num_,
-                               size_per_head_,
-                               attention_weights->attention_output_weight.scale,
-                               0,  // int8_mode
-                               stream_);
-            sync_check_cuda_error();
-        }
-        else {
-            invokeTransposeAttentionOutRemovePadding(qkv_buf_2_,
-                                                     qkv_buf_3_,
-                                                     num_tokens,
-                                                     batch_size,
-                                                     attention_seq_len_1,
-                                                     head_num_,
-                                                     size_per_head_,
-                                                     padding_offset,
-                                                     attention_weights->attention_output_weight.scale,
-                                                     0,  // int8_mode
-                                                     stream_);
-            sync_check_cuda_error();
-        }
+        PUSH_RANGE("softmax");
+        MaskedSoftmaxParam<T, float> param;
+        param.attention_score    = qk_buf_;         // (batch_size, head_num, q_length, k_length)
+        param.qk                 = qk_buf_float_;   // (batch_size, head_num, q_length, k_length)
+        param.attention_mask     = attention_mask;  // (batch_size, q_length, k_length)
+        param.batch_size         = batch_size;
+        param.q_length           = attention_seq_len_1;
+        param.k_length           = attention_seq_len_2;
+        param.num_heads          = head_num_;
+        param.qk_scale           = qk_scale;
+        param.linear_bias_slopes = nullptr;
+        invokeMaskedSoftmax(param, stream_);
+        sync_check_cuda_error();
         POP_RANGE;
     }
+    else {
+        PUSH_RANGE("Q*K batch gemm");
+        cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_T,
+                                            CUBLAS_OP_N,
+                                            attention_seq_len_2,
+                                            attention_seq_len_1,
+                                            size_per_head_,
+                                            k_buf_2_,
+                                            size_per_head_,
+                                            attention_seq_len_2 * size_per_head_,
+                                            q_buf_2_,
+                                            size_per_head_,
+                                            attention_seq_len_1 * size_per_head_,
+                                            qk_buf_,
+                                            attention_seq_len_2,
+                                            attention_seq_len_2 * attention_seq_len_1,
+                                            batch_size * head_num_);
+
+        POP_RANGE;
+        PUSH_RANGE("softmax");
+        MaskedSoftmaxParam<T, T> param;
+        param.attention_score    = qk_buf_;         // (batch_size, head_num, q_length, k_length)
+        param.qk                 = qk_buf_;         // (batch_size, head_num, q_length, k_length)
+        param.attention_mask     = attention_mask;  // (batch_size, q_length, k_length)
+        param.batch_size         = batch_size;
+        param.q_length           = attention_seq_len_1;
+        param.k_length           = attention_seq_len_2;
+        param.num_heads          = head_num_;
+        param.qk_scale           = qk_scale;
+        param.linear_bias_slopes = nullptr;
+        invokeMaskedSoftmax(param, stream_);
+        sync_check_cuda_error();
+        POP_RANGE;
+    }
+
+    PUSH_RANGE("QK*V batch gemm");
+    cublas_wrapper_->stridedBatchedGemm(CUBLAS_OP_N,
+                                        CUBLAS_OP_N,
+                                        size_per_head_,
+                                        attention_seq_len_1,
+                                        attention_seq_len_2,
+
+                                        v_buf_2_,
+                                        size_per_head_,
+                                        attention_seq_len_2 * size_per_head_,
+
+                                        qk_buf_,
+                                        attention_seq_len_2,
+                                        attention_seq_len_1 * attention_seq_len_2,
+
+                                        qkv_buf_2_,
+                                        size_per_head_,
+                                        attention_seq_len_1 * size_per_head_,
+
+                                        batch_size * head_num_);
+    sync_check_cuda_error();
+
+    // transpose (batch_size, num_heads, L, Dh) to (batch_size, L, num_heads * Dh)
+    if (padding_offset == nullptr) {
+        invokeTransposeQKV(qkv_buf_3_,
+                           qkv_buf_2_,
+                           batch_size,
+                           attention_seq_len_1,
+                           head_num_,
+                           size_per_head_,
+                           attention_weights->attention_output_weight.scale,
+                           0,  // int8_mode
+                           stream_);
+        sync_check_cuda_error();
+    }
+    else {
+        invokeTransposeAttentionOutRemovePadding(qkv_buf_2_,
+                                                 qkv_buf_3_,
+                                                 num_tokens,
+                                                 batch_size,
+                                                 attention_seq_len_1,
+                                                 head_num_,
+                                                 size_per_head_,
+                                                 padding_offset,
+                                                 attention_weights->attention_output_weight.scale,
+                                                 0,  // int8_mode
+                                                 stream_);
+        sync_check_cuda_error();
+    }
+    POP_RANGE;
     sync_check_cuda_error();
 
     PUSH_RANGE("proj gemm");
@@ -387,21 +379,18 @@ void LLaMAContextAttentionLayer<T>::allocateBuffer()
 }
 
 template<typename T>
-void LLaMAContextAttentionLayer<T>::allocateBuffer(size_t batch_size,
-                                                   size_t seq_len,
-                                                   size_t max_seq_len,
-                                                   bool   allocate_qk_buf)
+void LLaMAContextAttentionLayer<T>::allocateBuffer(
+    size_t batch_size, size_t seq_len, size_t attn_len, size_t max_seq_len, bool allocate_qk_buf)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
     qkv_buf_ = (T*)allocator_->reMalloc(qkv_buf_, sizeof(T) * 3 * batch_size * seq_len * hidden_units_, false);
-    q_buf_2_ = (T*)allocator_->reMalloc(q_buf_2_, sizeof(T) * batch_size * max_seq_len * 3 * hidden_units_, false);
-    k_buf_2_ = q_buf_2_ + batch_size * max_seq_len * hidden_units_;
-    v_buf_2_ = k_buf_2_ + batch_size * max_seq_len * hidden_units_;
+    q_buf_2_ = (T*)allocator_->reMalloc(q_buf_2_, sizeof(T) * batch_size * (seq_len + 2 * attn_len) * hidden_units_, false);
+    k_buf_2_ = q_buf_2_ + batch_size * seq_len * hidden_units_;
+    v_buf_2_ = k_buf_2_ + batch_size * attn_len * hidden_units_;
 
     // save memory usage when using fmha
     if (allocate_qk_buf) {
-        qk_buf_ =
-            (T*)allocator_->reMalloc(qk_buf_, sizeof(T) * batch_size * head_num_ * max_seq_len * max_seq_len, false);
+        qk_buf_ = (T*)allocator_->reMalloc(qk_buf_, sizeof(T) * batch_size * head_num_ * seq_len * attn_len, false);
     }
     else {
         allocator_->free((void**)(&qk_buf_));
@@ -413,7 +402,7 @@ void LLaMAContextAttentionLayer<T>::allocateBuffer(size_t batch_size,
     if (is_qk_buf_float_ == true) {
         if (allocate_qk_buf) {
             qk_buf_float_ = (float*)allocator_->reMalloc(
-                qk_buf_float_, sizeof(float) * batch_size * head_num_ * max_seq_len * max_seq_len, false);
+                qk_buf_float_, sizeof(float) * batch_size * head_num_ * seq_len * attn_len, false);
         }
         else {
             allocator_->free((void**)(&qk_buf_float_));
@@ -431,6 +420,8 @@ void LLaMAContextAttentionLayer<T>::freeBuffer()
         FT_LOG_DEBUG(__PRETTY_FUNCTION__);
         allocator_->free((void**)(&qkv_buf_));
         allocator_->free((void**)(&q_buf_2_));
+        allocator_->free((void**)(&k_buf_2_));
+        allocator_->free((void**)(&v_buf_2_));
         allocator_->free((void**)(&qk_buf_));
         allocator_->free((void**)(&qkv_buf_2_));
         allocator_->free((void**)(&qkv_buf_3_));

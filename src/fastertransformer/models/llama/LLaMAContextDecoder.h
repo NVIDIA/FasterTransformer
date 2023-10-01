@@ -56,7 +56,7 @@ private:
     FfnLayer<T>*           ffn_layer_;
 
     void allocateBuffer() override;
-    void allocateBuffer(size_t batch_size, size_t seq_len, size_t max_seq_len);
+    void allocateBuffer(size_t batch_size, size_t seq_len);
     void freeBuffer() override;
 
     bool isValidLayerParallelId(uint l);
@@ -67,10 +67,9 @@ private:
     void initialize();
 
 protected:
-    T*      decoder_normed_input_              = nullptr;
-    T*      self_attn_output_                  = nullptr;
-    T*      decoder_layer_output_              = nullptr;
-    size_t* h_pinned_token_num_ptr_            = nullptr;
+    T* decoder_normed_input_ = nullptr;
+    T* self_attn_output_     = nullptr;
+    T* decoder_layer_output_ = nullptr;
 
 public:
     LLaMAContextDecoder(size_t           head_num,

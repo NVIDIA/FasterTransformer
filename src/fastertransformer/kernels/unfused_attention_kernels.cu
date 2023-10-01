@@ -1902,11 +1902,11 @@ __global__ void transpose_4d_save_to_cache(T*         k_dst,
                                            const T*   k_src,
                                            T*         v_dst,
                                            const T*   v_src,
+                                           const int* context_lengths,
                                            const int  head_num,
                                            const int  size_per_head,
                                            const int  seq_len,
-                                           const int  max_seq_len,
-                                           const int* context_lengths)
+                                           const int  max_seq_len)
 {
     // [batch_size, head_num, seq_len, size_per_head]
     const int batch_id = blockIdx.y;
@@ -1943,20 +1943,20 @@ void invokeLLaMASaveToCache(T*           k_dst,
                             T*           v_dst,
                             const T*     k_src,
                             const T*     v_src,
-                            const int    local_batch_size,
+                            const int*   context_lengths,
+                            const int    batch_size,
+                            const int    head_num,
+                            const int    size_per_head,
                             const int    seq_len,
                             const int    max_seq_len,
-                            const int    size_per_head,
-                            const int    local_head_num,
-                            const int*   context_lengths,
                             cudaStream_t stream)
 {
     constexpr int block_sz = 128;
     constexpr int x        = (sizeof(T) == 4) ? 4 : 8;
-    dim3          grid((seq_len * size_per_head / x + block_sz - 1) / block_sz, local_batch_size, local_head_num);
+    dim3          grid((seq_len * size_per_head / x + block_sz - 1) / block_sz, batch_size, head_num);
 
     transpose_4d_save_to_cache<<<grid, block_sz, 0, stream>>>(
-        k_dst, k_src, v_dst, v_src, local_head_num, size_per_head, seq_len, max_seq_len, context_lengths);
+        k_dst, k_src, v_dst, v_src, context_lengths, head_num, size_per_head, seq_len, max_seq_len);
 }
 
 #define INSTANTIATESAVETOCACHE(T)                                                                                      \
@@ -1964,12 +1964,12 @@ void invokeLLaMASaveToCache(T*           k_dst,
                                          T*           v_dst,                                                           \
                                          const T*     k_src,                                                           \
                                          const T*     v_src,                                                           \
-                                         const int    local_batch_size,                                                \
+                                         const int*   context_lengths,                                                 \
+                                         const int    batch_size,                                                      \
+                                         const int    head_num,                                                        \
+                                         const int    size_per_head,                                                   \
                                          const int    seq_len,                                                         \
                                          const int    max_seq_len,                                                     \
-                                         const int    size_per_head,                                                   \
-                                         const int    local_head_num,                                                  \
-                                         const int*   start_pos,                                                       \
                                          cudaStream_t stream)
 INSTANTIATESAVETOCACHE(float);
 INSTANTIATESAVETOCACHE(half);
@@ -1979,19 +1979,19 @@ INSTANTIATESAVETOCACHE(__nv_bfloat16);
 #undef INSTANTIATESAVETOCACHE
 
 template<typename T>
-__global__ void transpose_4d_load_from_cache(T*         k_dst,
-                                             const T*   k_src,
-                                             T*         v_dst,
-                                             const T*   v_src,
-                                             const int  head_num,
-                                             const int  size_per_head,
-                                             const int  seq_len,
-                                             const int  max_seq_len,
-                                             const int  attn_len)
+__global__ void transpose_4d_load_from_cache(T*        k_dst,
+                                             T*        v_dst,
+                                             const T*  k_src,
+                                             const T*  v_src,
+                                             const int head_num,
+                                             const int size_per_head,
+                                             const int seq_len,
+                                             const int attn_len,
+                                             const int max_seq_len)
 {
     // [batch_size, head_num, attn_len, size_per_head]
-    const int batch_id     = blockIdx.y;
-    const int head_id      = blockIdx.z;
+    const int batch_id = blockIdx.y;
+    const int head_id  = blockIdx.z;
 
     // 16 byte loads will handle "x" dimension
     auto key_src = reinterpret_cast<const uint4*>(k_src + batch_id * head_num * size_per_head * max_seq_len
@@ -2022,20 +2022,20 @@ void invokeLLaMALoadFromCache(T*           k_dst,
                               T*           v_dst,
                               const T*     k_src,
                               const T*     v_src,
-                              const int    local_batch_size,
-                              const int    seq_len,
-                              const int    max_seq_len,
+                              const int    batch_size,
+                              const int    head_num,
                               const int    size_per_head,
-                              const int    local_head_num,
+                              const int    seq_len,
                               const int    attn_len,
+                              const int    max_seq_len,
                               cudaStream_t stream)
 {
     constexpr int block_sz = 128;
     constexpr int x        = (sizeof(T) == 4) ? 4 : 8;
-    dim3          grid((attn_len * size_per_head / x + block_sz - 1) / block_sz, local_batch_size, local_head_num);
+    dim3          grid((attn_len * size_per_head / x + block_sz - 1) / block_sz, batch_size, head_num);
 
     transpose_4d_load_from_cache<<<grid, block_sz, 0, stream>>>(
-        k_dst, k_src, v_dst, v_src, local_head_num, size_per_head, seq_len, max_seq_len, attn_len);
+        k_dst, v_dst, k_src, v_src, head_num, size_per_head, seq_len, attn_len, max_seq_len);
 }
 
 #define INSTANTIATELOADFROMCACHE(T)                                                                                    \
@@ -2043,12 +2043,12 @@ void invokeLLaMALoadFromCache(T*           k_dst,
                                            T*           v_dst,                                                         \
                                            const T*     k_src,                                                         \
                                            const T*     v_src,                                                         \
-                                           const int    local_batch_size,                                              \
-                                           const int    seq_len,                                                       \
-                                           const int    max_seq_len,                                                   \
+                                           const int    batch_size,                                                    \
+                                           const int    head_num,                                                      \
                                            const int    size_per_head,                                                 \
-                                           const int    local_head_num,                                                \
-                                           const int    attn_len,                                                    \
+                                           const int    seq_len,                                                       \
+                                           const int    attn_len,                                                      \
+                                           const int    max_seq_len,                                                   \
                                            cudaStream_t stream)
 INSTANTIATELOADFROMCACHE(float);
 INSTANTIATELOADFROMCACHE(half);

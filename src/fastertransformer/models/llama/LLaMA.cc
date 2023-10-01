@@ -59,32 +59,28 @@ void LLaMA<T>::allocateBuffer()
 }
 
 template<typename T>
-void LLaMA<T>::allocateBuffer(size_t batch_size, size_t seq_len, size_t max_seq_len)
+void LLaMA<T>::allocateBuffer(size_t batch_size, size_t seq_len, size_t attn_len, int is_context)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    const size_t self_cache_size = (num_layer_ / pipeline_para_.world_size_) * batch_size * max_seq_len * hidden_units_;
 
     padding_offset_ =
         reinterpret_cast<int*>(allocator_->reMalloc(padding_offset_, sizeof(int) * batch_size * seq_len, false));
     cu_seqlens_ = reinterpret_cast<int*>(allocator_->reMalloc(cu_seqlens_, sizeof(int) * (batch_size + 1), false));
 
     input_attention_mask_ =
-        (T*)(allocator_->reMalloc(input_attention_mask_, sizeof(T) * batch_size * max_seq_len * max_seq_len, false));
+        (T*)(allocator_->reMalloc(input_attention_mask_, sizeof(T) * batch_size * seq_len * attn_len, false));
 
-    key_cache_   = (T*)(allocator_->reMalloc(key_cache_, sizeof(T) * self_cache_size * 2, false));
-    value_cache_ = key_cache_ + self_cache_size;
+    if (is_context) {
+        const size_t self_cache_size =
+            (num_layer_ / pipeline_para_.world_size_) * batch_size * max_seq_len_ * hidden_units_;
+        key_cache_   = (T*)(allocator_->reMalloc(key_cache_, sizeof(T) * self_cache_size * 2, false));
+        value_cache_ = key_cache_ + self_cache_size;
+    }
 
     context_decoder_input_buf_ =
         (T*)(allocator_->reMalloc(context_decoder_input_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
     context_decoder_output_buf_ = (T*)(allocator_->reMalloc(
         context_decoder_output_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
-
-#ifdef USE_NCCL
-    for (int i = 0; i < num_buffers_; ++i) {
-        context_decoder_output_buf_clone_[i] = (T*)(allocator_->reMalloc(
-            context_decoder_output_buf_clone_[i], sizeof(T) * batch_size * max_seq_len * hidden_units_, false));
-    }
-#endif
 
     context_output_buf_ =
         (T*)(allocator_->reMalloc(context_output_buf_, sizeof(T) * batch_size * hidden_units_, false));
@@ -94,6 +90,13 @@ void LLaMA<T>::allocateBuffer(size_t batch_size, size_t seq_len, size_t max_seq_
         (float*)(allocator_->reMalloc(logits_buf_, sizeof(float) * batch_size * seq_len * vocab_size_, false));
     log_likelihood_buf_ =
         (float*)(allocator_->reMalloc(log_likelihood_buf_, sizeof(float) * batch_size * seq_len * vocab_size_, false));
+
+#ifdef USE_NCCL
+    for (int i = 0; i < num_buffers_; ++i) {
+        context_decoder_output_buf_clone_[i] = (T*)(allocator_->reMalloc(
+            context_decoder_output_buf_clone_[i], sizeof(T) * batch_size * max_seq_len * hidden_units_, false));
+    }
+#endif
 
     is_allocate_buffer_ = true;
 }
@@ -109,12 +112,14 @@ void LLaMA<T>::freeBuffer()
         allocator_->free((void**)(&context_decoder_input_buf_));
         allocator_->free((void**)(&context_decoder_output_buf_));
         allocator_->free((void**)(&context_output_buf_));
+        allocator_->free((void**)(&normed_decoder_output_buf_));
+        allocator_->free((void**)(&logits_buf_));
+        allocator_->free((void**)(&log_likelihood_buf_));
 #ifdef USE_NCCL
         for (int i = 0; i < num_buffers_; ++i) {
             allocator_->free((void**)(&context_decoder_output_buf_clone_[i]));
         }
 #endif
-        allocator_->free((void**)(&logits_buf_));
         is_allocate_buffer_ = false;
     }
 }
@@ -268,7 +273,9 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     float*     log_probs       = output_tensors->at("log_probs").getPtr<float>();
     float*     cum_probs       = output_tensors->at("cum_probs").getPtr<float>();
 
-    allocateBuffer(batch_size, seq_len, max_seq_len_);
+    FT_CHECK_WITH_INFO(seq_len <= attn_len, "seq_len must be larger than or equal to attn_len");
+
+    allocateBuffer(batch_size, seq_len, attn_len, is_context);
     sync_check_cuda_error();
 
     if (is_unpadded_mha) {

@@ -327,4 +327,30 @@ void invokeLLaMACopyKernel(T* dst, T* src, const int count, cudaStream_t stream)
 template void invokeLLaMACopyKernel(float* dst, float* src, const int count, cudaStream_t stream);
 template void invokeLLaMACopyKernel(half* dst, half* src, const int count, cudaStream_t stream);
 
+template<typename T>
+__global__ void LLaMAMemset0Kernel(T* dst, const int count)
+{
+    int           idx     = blockIdx.x * blockDim.x + threadIdx.x;
+    constexpr int X_ELEMS = (sizeof(T) == 4) ? 4 : 8;
+    if (idx * X_ELEMS >= count) {
+        return;
+    }
+
+    auto v_dst = reinterpret_cast<uint4*>(dst);
+    v_dst[idx] = {0};
+}
+
+template<typename T>
+void invokeLLaMAMemset0(T* dst, const int count, cudaStream_t stream)
+{
+    constexpr int block_sz = 128;
+    constexpr int x        = (sizeof(T) == 4) ? 4 : 8;
+    assert(count % x == 0);
+    int grid_sz = (count / x + block_sz - 1) / block_sz;
+    LLaMAMemset0Kernel<<<grid_sz, block_sz, 0, stream>>>(dst, count);
+}
+
+template void invokeLLaMAMemset0(float* dst, const int count, cudaStream_t stream);
+template void invokeLLaMAMemset0(half* dst, const int count, cudaStream_t stream);
+
 }  // namespace fastertransformer

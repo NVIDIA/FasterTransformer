@@ -64,26 +64,23 @@ private:
     LLaMAContextDecoder<T>* llama_context_decoder_;
 
     void allocateBuffer() override;
-    void allocateBuffer(size_t batch_size, size_t max_seq_len, size_t max_cache_seq_len);
+    void allocateBuffer(size_t batch_size, size_t seq_len, size_t attn_len, int is_context);
     void freeBuffer() override;
 
     void initialize();
 
 protected:
-    int* padding_offset_       = nullptr;
-    int* cu_seqlens_           = nullptr;
-    T*   input_attention_mask_ = nullptr;
-    T*   key_cache_            = nullptr;
-    T*   value_cache_          = nullptr;
-
-    T*     decoder_output_buf_        = nullptr;
-    T*     context_output_buf_        = nullptr;
-    T*     normed_decoder_output_buf_ = nullptr;
-    float* logits_buf_                = nullptr;
-    float* log_likelihood_buf_        = nullptr;
-
-    T* context_decoder_input_buf_  = nullptr;
-    T* context_decoder_output_buf_ = nullptr;
+    int*   padding_offset_             = nullptr;
+    int*   cu_seqlens_                 = nullptr;
+    T*     input_attention_mask_       = nullptr;
+    T*     key_cache_                  = nullptr;
+    T*     value_cache_                = nullptr;
+    T*     context_output_buf_         = nullptr;
+    T*     normed_decoder_output_buf_  = nullptr;
+    float* logits_buf_                 = nullptr;
+    float* log_likelihood_buf_         = nullptr;
+    T*     context_decoder_input_buf_  = nullptr;
+    T*     context_decoder_output_buf_ = nullptr;
 
     void sendTensorsToFirstPipelineNode(std::unordered_map<std::string, Tensor>*       output_tensors,
                                         const std::unordered_map<std::string, Tensor>* input_tensors);

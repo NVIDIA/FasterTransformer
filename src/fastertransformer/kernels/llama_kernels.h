@@ -29,6 +29,8 @@ void invokeLLaMAInputIdsEmbeddingLookup(T*           from_tensor,
 
 template<typename T>
 void invokeLLaMACopyKernel(T* dst, T* src, const int count, cudaStream_t stream);
+template<typename T>
+void invokeLLaMAMemset0(T* dst, const int count, cudaStream_t stream);
 
 void invokeLLaMAGatherTokens(float*       out,
                              const float* probs,
