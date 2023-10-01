@@ -32,8 +32,7 @@ void LLaMAContextDecoder<T>::initialize()
                                                               stream_,
                                                               cublas_wrapper_,
                                                               allocator_,
-                                                              is_free_buffer_after_forward_,
-                                                              is_qk_buf_float_);
+                                                              is_free_buffer_after_forward_);
 
     ffn_layer_ = new SiluFfnLayer<T>(0,  // max_batch_size
                                      0,  // max_seq_len
@@ -121,7 +120,6 @@ LLaMAContextDecoder<T>::LLaMAContextDecoder(size_t           head_num,
                                             cublasMMWrapper* cublas_wrapper,
                                             IAllocator*      allocator,
                                             bool             is_free_buffer_after_forward,
-                                            bool             is_qk_buf_float,
                                             AttentionType    attention_type):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
     head_num_(head_num),
@@ -133,7 +131,6 @@ LLaMAContextDecoder<T>::LLaMAContextDecoder(size_t           head_num,
     hidden_units_(head_num * size_per_head),
     rank_(rank),
     world_size_(world_size),
-    is_qk_buf_float_(is_qk_buf_float),
     attention_type_(attention_type)
 {
     initialize();
@@ -151,7 +148,6 @@ LLaMAContextDecoder<T>::LLaMAContextDecoder(LLaMAContextDecoder<T> const& decode
     hidden_units_(decoder.hidden_units_),
     rank_(decoder.rank_),
     world_size_(decoder.world_size_),
-    is_qk_buf_float_(decoder.is_qk_buf_float_),
     attention_type_(decoder.attention_type_)
 {
     initialize();

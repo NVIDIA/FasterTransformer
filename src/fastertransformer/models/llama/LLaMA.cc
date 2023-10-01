@@ -39,7 +39,6 @@ void LLaMA<T>::initialize()
                                                         cublas_wrapper_,
                                                         allocator_,
                                                         is_free_buffer_after_forward_,
-                                                        is_context_qk_buf_float_,
                                                         attention_type_);
 }
 
@@ -188,7 +187,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
 
     // output_tensors:
     //      hidden_vector [num_tokens, hidden_size]
-    //      log_probs [num_tokens, vocab_size]
     //      cum_probs [beam_width, batch_size]
 
     FT_CHECK_WITH_INFO(input_tensors->size() == 7, "input_tensors->size() == 7");
@@ -211,7 +209,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     const int  attn_len        = input_tensors->at("attn_len").getVal<int>();
     const int  is_context      = input_tensors->at("is_context").getVal<int>();
     T*         hidden_vector   = output_tensors->at("hidden_vector").getPtr<T>();
-    float*     log_probs       = output_tensors->at("log_probs").getPtr<float>();
     float*     cum_probs       = output_tensors->at("cum_probs").getPtr<float>();
 
     FT_CHECK_WITH_INFO(seq_len <= attn_len, "seq_len must be larger than or equal to attn_len");
@@ -311,11 +308,11 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         sync_check_cuda_error();
         cublas_wrapper_->setFP16GemmConfig();
 
-        invokeLLaMALogSoftmax(log_probs, logits_buf_, batch_size, vocab_size_, stream_);
+        invokeLLaMALogSoftmax(log_likelihood_buf_, logits_buf_, batch_size, vocab_size_, stream_);
         sync_check_cuda_error();
 
         invokeLLaMAExtractTargets(
-            cum_probs, log_probs, target_ids, cu_seqlens_, beam_width, batch_size, vocab_size_, num_tokens, stream_);
+            cum_probs, log_likelihood_buf_, target_ids, cu_seqlens_, beam_width, batch_size, vocab_size_, num_tokens, stream_);
         sync_check_cuda_error();
     }
     else {
@@ -345,11 +342,11 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         sync_check_cuda_error();
         cublas_wrapper_->setFP16GemmConfig();
 
-        invokeLLaMALogSoftmax(log_probs, logits_buf_, num_tokens, vocab_size_, stream_);
+        invokeLLaMALogSoftmax(log_likelihood_buf_, logits_buf_, num_tokens, vocab_size_, stream_);
         sync_check_cuda_error();
 
         invokeLLaMAGatherTokens(
-            cum_probs, log_probs, input_lengths, target_ids, cu_seqlens_, batch_size, vocab_size_, num_tokens, stream_);
+            cum_probs, log_likelihood_buf_, input_lengths, target_ids, cu_seqlens_, batch_size, vocab_size_, num_tokens, stream_);
         sync_check_cuda_error();
     }
 }

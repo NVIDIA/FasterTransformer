@@ -30,7 +30,6 @@ class IFLLaMA {
 public:
     virtual ~IFLLaMA() {}
     virtual void forward(th::Tensor& hidden_vector,
-                         th::Tensor& log_probs,
                          th::Tensor& cum_probs,
                          th::Tensor& input_ids,
                          th::Tensor& input_lengths,
@@ -175,7 +174,6 @@ public:
     }
 
     virtual void forward(th::Tensor& hidden_vector,
-                         th::Tensor& log_probs,
                          th::Tensor& cum_probs,
                          th::Tensor& input_ids,
                          th::Tensor& input_lengths,
@@ -212,11 +210,6 @@ public:
                         (std::is_same<T, half>::value) ? ft::TYPE_FP16 : ft::TYPE_FP32,
                         std::vector<size_t>{num_tokens, num_heads_ * size_per_head_},
                         get_ptr<T>(hidden_vector)}},
-            {"log_probs",
-             ft::Tensor{ft::MEMORY_GPU,
-                        ft::TYPE_FP32,
-                        std::vector<size_t>{num_tokens, vocab_size_},
-                        get_ptr<float>(log_probs)}},
             {"cum_probs",
              ft::Tensor{ft::MEMORY_GPU,
                         ft::TYPE_FP32,
@@ -288,7 +281,6 @@ public:
     ~LLaMA();
 
     std::vector<th::Tensor> forward(th::Tensor&   hidden_vector,
-                                    th::Tensor&   log_probs,
                                     th::Tensor&   cum_probs,
                                     th::Tensor&   input_ids,
                                     th::Tensor&   input_lengths,

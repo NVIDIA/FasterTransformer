@@ -34,16 +34,13 @@ private:
     const size_t rotary_embedding_dim_;
 
     // fmha runner
-    int  sm_ = getSMVersion();
     void allocateBuffer() override;
-    void allocateBuffer(size_t batch_size, size_t seq_len, size_t attn_len, size_t max_seq_len, bool allocate_qk_buf);
+    void allocateBuffer(size_t batch_size, size_t seq_len, size_t attn_len);
     void freeBuffer() override;
 
     using BaseAttentionLayer<T>::is_free_buffer_after_forward_;
     using BaseAttentionLayer<T>::is_allocate_buffer_;
     using BaseAttentionLayer<T>::cublas_wrapper_;
-
-    bool is_qk_buf_float_;
 
 protected:
     using BaseAttentionLayer<T>::allocator_;
@@ -65,8 +62,7 @@ public:
                                cudaStream_t     stream,
                                cublasMMWrapper* cublas_wrapper,
                                IAllocator*      allocator,
-                               bool             is_free_buffer_after_forward,
-                               bool             is_qk_buf_float);
+                               bool             is_free_buffer_after_forward);
 
     LLaMAContextAttentionLayer(LLaMAContextAttentionLayer<T> const& attention_layer);
 

@@ -74,7 +74,6 @@ LLaMA::~LLaMA()
 }
 
 std::vector<th::Tensor> LLaMA::forward(th::Tensor&   hidden_vector,
-                                       th::Tensor&   log_probs,
                                        th::Tensor&   cum_probs,
                                        th::Tensor&   input_ids,
                                        th::Tensor&   input_lengths,
@@ -92,7 +91,6 @@ std::vector<th::Tensor> LLaMA::forward(th::Tensor&   hidden_vector,
     TORCH_CHECK(input_lengths.dtype() == torch::kInt32, "input_lengths dtype should be int32");
 
     ftllama->forward(hidden_vector,
-                     log_probs,
                      cum_probs,
                      input_ids,
                      input_lengths,
@@ -101,7 +99,7 @@ std::vector<th::Tensor> LLaMA::forward(th::Tensor&   hidden_vector,
                      seq_len,
                      attn_len,
                      is_context);
-    return std::vector<th::Tensor>{hidden_vector, log_probs, cum_probs};
+    return std::vector<th::Tensor>{hidden_vector, cum_probs};
 }
 
 }  // namespace torch_ext

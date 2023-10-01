@@ -42,8 +42,6 @@ private:
     size_t                 world_size_;
     static constexpr float layernorm_eps_ = 1e-6f;
     AttentionType          attention_type_;
-    const bool             is_context_qk_buf_float_ = (std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM") == nullptr
-                                           || std::string(std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM")) != "ON");
 
     LLaMAContextDecoder<T>* llama_context_decoder_;
 
