@@ -30,8 +30,7 @@ LLaMA::LLaMA(const int64_t            num_heads,
              const int64_t            tensor_para_size,
              const int64_t            pipeline_para_size,
              const vector<th::Tensor> weights):
-    vocab_size_(vocab_size),
-    st_(weights[0].scalar_type())
+    vocab_size_(vocab_size), st_(weights[0].scalar_type())
 {
     for (auto t : weights) {
         CHECK_INPUT(t, st_);
@@ -74,8 +73,16 @@ LLaMA::~LLaMA()
     delete ftllama;
 }
 
-th::Tensor
-LLaMA::forward(th::Tensor& input_ids, th::Tensor& input_lengths, const int64_t start_pos)
+std::vector<th::Tensor> LLaMA::forward(th::Tensor&   hidden_vector,
+                                       th::Tensor&   log_probs,
+                                       th::Tensor&   cum_probs,
+                                       th::Tensor&   input_ids,
+                                       th::Tensor&   input_lengths,
+                                       th::Tensor&   target_ids,
+                                       th::Tensor&   context_lengths,
+                                       const int64_t seq_len,
+                                       const int64_t attn_len,
+                                       const int64_t is_context)
 {
     CHECK_TH_CUDA(input_ids);
     CHECK_CONTIGUOUS(input_ids);
@@ -84,12 +91,17 @@ LLaMA::forward(th::Tensor& input_ids, th::Tensor& input_lengths, const int64_t s
     CHECK_CONTIGUOUS(input_lengths);
     TORCH_CHECK(input_lengths.dtype() == torch::kInt32, "input_lengths dtype should be int32");
 
-    const int  batch_size    = input_ids.size(0);
-    const int  seq_len       = input_ids.size(1);
-    th::Tensor output_logits = torch::empty({batch_size, seq_len, (long)vocab_size_},
-                                            torch::dtype(torch::kFloat32).device(torch::kCUDA).requires_grad(false));
-    ftllama->forward(output_logits, input_ids, input_lengths, (int)start_pos);
-    return output_logits;
+    ftllama->forward(hidden_vector,
+                     log_probs,
+                     cum_probs,
+                     input_ids,
+                     input_lengths,
+                     target_ids,
+                     context_lengths,
+                     seq_len,
+                     attn_len,
+                     is_context);
+    return std::vector<th::Tensor>{hidden_vector, log_probs, cum_probs};
 }
 
 }  // namespace torch_ext

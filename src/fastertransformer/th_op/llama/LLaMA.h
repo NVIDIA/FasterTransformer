@@ -29,8 +29,16 @@ using std::vector;
 class IFLLaMA {
 public:
     virtual ~IFLLaMA() {}
-    virtual void
-    forward(th::Tensor& output_logits, th::Tensor& input_ids, th::Tensor& input_lengths, const int start_pos) = 0;
+    virtual void forward(th::Tensor& hidden_vector,
+                         th::Tensor& log_probs,
+                         th::Tensor& cum_probs,
+                         th::Tensor& input_ids,
+                         th::Tensor& input_lengths,
+                         th::Tensor& target_ids,
+                         th::Tensor& context_lengths,
+                         const int   seq_len,
+                         const int   attn_len,
+                         const int   is_context) = 0;
 };
 
 template<typename T>
@@ -59,6 +67,8 @@ public:
         pipeline_para_size_(pipeline_para_size),
         weights_(weights)
     {
+        ft::Logger::getLogger().setLevel(ft::Logger::WARNING);
+
         ft::check_cuda_error(cublasLtCreate(&cublasltHandle_));
         cublas_algo_map_      = new ft::cublasAlgoMap(GEMM_CONFIG, "");
         cublas_wrapper_mutex_ = new std::mutex();
@@ -103,16 +113,19 @@ public:
         llama_weights_.post_decoder_embedding.kernel = get_ptr<T>(weights_[14 * num_layers_ + 3]);
 
         ft::check_cuda_error(cudaGetDeviceProperties(&prop_, 0));
+        // ft::check_cuda_error(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking));
+        ft::check_cuda_error(cudaStreamCreate(&stream_));
 
-        auto           stream       = at::cuda::getCurrentCUDAStream().stream();
+        for (int i = 0; i < num_events_; ++i) {
+            ft::check_cuda_error(cudaEventCreate(&event_[i]));
+        }
+
         cublasHandle_t cublasHandle = at::cuda::getCurrentCUDABlasHandle();
-        cublasSetStream(cublasHandle, stream);
+        cublasSetStream(cublasHandle, stream_);
 
-        /// ft::Allocator<ft::AllocatorType::CUDA> allocator =
-        // ft::Allocator<ft::AllocatorType::CUDA>(at::cuda::getCurrentCUDAStream().device_index());
         allocator_      = new ft::Allocator<ft::AllocatorType::TH>();
         cublas_wrapper_ = new ft::cublasMMWrapper(
-            cublasHandle, cublasltHandle_, stream, cublas_algo_map_, cublas_wrapper_mutex_, allocator_);
+            cublasHandle, cublasltHandle_, stream_, cublas_algo_map_, cublas_wrapper_mutex_, allocator_);
 
         if (std::is_same<T, half>::value) {
             cublas_wrapper_->setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_16F, CUDA_R_32F);
@@ -139,7 +152,7 @@ public:
                                   max_seq_len_,
                                   tensor_para_,
                                   pipeline_para_,
-                                  stream,
+                                  stream_,
                                   cublas_wrapper_,
                                   allocator_,
                                   false,          // is_free_buffer_after_forward
@@ -150,6 +163,11 @@ public:
 
     ~FTLLaMA() override
     {
+        for (int i = 0; i < num_events_; ++i) {
+            ft::check_cuda_error(cudaEventDestroy(event_[i]));
+        }
+        ft::check_cuda_error(cudaStreamDestroy(stream_));
+
         delete llama_;
         delete cublas_wrapper_;
         delete allocator_;
@@ -161,30 +179,63 @@ public:
         delete cublas_wrapper_mutex_;
     }
 
-    virtual void
-    forward(th::Tensor& output_logits, th::Tensor& input_ids, th::Tensor& input_lengths, const int start_pos) override
+    virtual void forward(th::Tensor& hidden_vector,
+                         th::Tensor& log_probs,
+                         th::Tensor& cum_probs,
+                         th::Tensor& input_ids,
+                         th::Tensor& input_lengths,
+                         th::Tensor& target_ids,
+                         th::Tensor& context_lengths,
+                         const int   seq_len,
+                         const int   attn_len,
+                         const int   is_context) override
     {
-
-        const size_t batch_size = (size_t)input_ids.size(0);
-        const size_t seq_len    = (size_t)input_ids.size(1);
+        const size_t batch_size = (size_t)input_lengths.size(0);
+        const size_t num_tokens = (size_t)input_ids.size(0);
+        const size_t beam_width = (size_t)target_ids.size(0);
 
         std::unordered_map<std::string, ft::Tensor> input_tensors = std::unordered_map<std::string, ft::Tensor>{
             {"input_ids",
-             ft::Tensor{
-                 ft::MEMORY_GPU, ft::TYPE_INT32, std::vector<size_t>{batch_size, seq_len}, get_ptr<int>(input_ids)}},
+             ft::Tensor{ft::MEMORY_GPU, ft::TYPE_INT32, std::vector<size_t>{num_tokens}, get_ptr<int>(input_ids)}},
             {"input_lengths",
              ft::Tensor{ft::MEMORY_GPU, ft::TYPE_INT32, std::vector<size_t>{batch_size}, get_ptr<int>(input_lengths)}},
-            {"start_pos", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &start_pos}}};
+            {"target_ids",
+             ft::Tensor{ft::MEMORY_GPU,
+                        ft::TYPE_INT32,
+                        std::vector<size_t>{beam_width, num_tokens},
+                        get_ptr<int>(target_ids)}},
+            {"context_lengths",
+             ft::Tensor{
+                 ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{batch_size}, get_ptr<int>(context_lengths)}},
+            {"seq_len", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &seq_len}},
+            {"attn_len", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &attn_len}},
+            {"is_context", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &is_context}}};
 
         std::unordered_map<std::string, ft::Tensor> output_tensors = std::unordered_map<std::string, ft::Tensor>{
-            {"output_logits",
+            {"hidden_vector",
+             ft::Tensor{ft::MEMORY_GPU,
+                        (std::is_same<T, half>::value) ? ft::TYPE_FP16 : ft::TYPE_FP32,
+                        std::vector<size_t>{num_tokens, num_heads_ * size_per_head_},
+                        get_ptr<T>(hidden_vector)}},
+            {"log_probs",
              ft::Tensor{ft::MEMORY_GPU,
                         ft::TYPE_FP32,
-                        std::vector<size_t>{batch_size, seq_len, vocab_size_},
-                        get_ptr<float>(output_logits)}}};
+                        std::vector<size_t>{num_tokens, vocab_size_},
+                        get_ptr<float>(log_probs)}},
+            {"cum_probs",
+             ft::Tensor{ft::MEMORY_GPU,
+                        ft::TYPE_FP32,
+                        std::vector<size_t>{beam_width, batch_size},
+                        get_ptr<float>(cum_probs)}}};
 
         try {
+            ft::check_cuda_error(cudaEventSynchronize(event_[ev_no_]));
             llama_->forward(&output_tensors, &input_tensors, &llama_weights_);
+            ft::check_cuda_error(cudaEventRecord(event_[ev_no_], stream_));
+
+            auto stream = at::cuda::getCurrentCUDAStream().stream();
+            ft::check_cuda_error(cudaStreamWaitEvent(stream, event_[ev_no_]));
+            ev_no_ = (ev_no_ + 1) % num_events_;
         }
         catch (std::runtime_error& error) {
             std::cout << error.what();
@@ -207,6 +258,11 @@ private:
     const size_t max_seq_len_;
     int64_t      tensor_para_size_;
     int64_t      pipeline_para_size_;
+
+    static constexpr int num_events_ = 5;
+    int                  ev_no_      = 0;
+    cudaEvent_t          event_[num_events_];
+    cudaStream_t         stream_;
 
     std::vector<th::Tensor> weights_;
     cublasLtHandle_t        cublasltHandle_;
@@ -239,7 +295,16 @@ public:
 
     ~LLaMA();
 
-    th::Tensor forward(th::Tensor& input_ids, th::Tensor& input_lengths, const int64_t start_pos);
+    std::vector<th::Tensor> forward(th::Tensor&   hidden_vector,
+                                    th::Tensor&   log_probs,
+                                    th::Tensor&   cum_probs,
+                                    th::Tensor&   input_ids,
+                                    th::Tensor&   input_lengths,
+                                    th::Tensor&   target_ids,
+                                    th::Tensor&   context_lengths,
+                                    const int64_t seq_len,
+                                    const int64_t attn_len,
+                                    const int64_t is_context);
 
 private:
     const at::ScalarType    st_;

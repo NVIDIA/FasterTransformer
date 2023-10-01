@@ -67,27 +67,24 @@ private:
     void initialize();
 
 protected:
-    T*      decoder_normed_input_   = nullptr;
-    T*      self_attn_output_       = nullptr;
-    T*      decoder_layer_output_   = nullptr;
-    size_t* h_pinned_token_num_ptr_ = nullptr;
-    int*    padding_offset_         = nullptr;
-    int*    cu_seqlens_             = nullptr;
+    T* decoder_normed_input_ = nullptr;
+    T* self_attn_output_     = nullptr;
+    T* decoder_layer_output_ = nullptr;
 
 public:
-    LLaMAContextDecoder(size_t                              head_num,
-                        size_t                              size_per_head,
-                        size_t                              inter_size,
-                        size_t                              num_layer,
-                        size_t                              rotary_embedding_dim,
-                        float                               layernorm_eps,
-                        NcclParam                           pipeline_para,
-                        cudaStream_t                        stream,
-                        cublasMMWrapper*                    cublas_wrapper,
-                        IAllocator*                         allocator,
-                        bool                                is_free_buffer_after_forward,
-                        bool                                is_qk_buf_float,
-                        AttentionType                       attention_type            = AttentionType::FUSED_MHA);
+    LLaMAContextDecoder(size_t           head_num,
+                        size_t           size_per_head,
+                        size_t           inter_size,
+                        size_t           num_layer,
+                        size_t           rotary_embedding_dim,
+                        float            layernorm_eps,
+                        NcclParam        pipeline_para,
+                        cudaStream_t     stream,
+                        cublasMMWrapper* cublas_wrapper,
+                        IAllocator*      allocator,
+                        bool             is_free_buffer_after_forward,
+                        bool             is_qk_buf_float,
+                        AttentionType    attention_type = AttentionType::FUSED_MHA);
 
     LLaMAContextDecoder(LLaMAContextDecoder<T> const& decoder);
 

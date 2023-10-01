@@ -23,6 +23,8 @@
 #include "src/fastertransformer/models/llama/LLaMAWeight.h"
 #include "src/fastertransformer/utils/custom_ar_comm.h"
 
+//#define USE_NCCL
+
 namespace fastertransformer {
 
 template<typename T>
@@ -37,6 +39,15 @@ private:
     size_t rotary_embedding_dim_;
     size_t random_seed_;
     size_t max_seq_len_;
+
+#ifdef USE_NCCL
+    static constexpr int num_buffers_ = 5;
+    int                  buf_no_      = 0;
+    cudaStream_t         comm_stream_;
+    cudaEvent_t          kern_event_[num_buffers_];
+    cudaEvent_t          comm_event_[num_buffers_];
+    T*                   context_decoder_output_buf_clone_[num_buffers_] = {nullptr};
+#endif
 
     static constexpr float layernorm_eps_ = 1e-6f;
 
@@ -53,26 +64,23 @@ private:
     LLaMAContextDecoder<T>* llama_context_decoder_;
 
     void allocateBuffer() override;
-    void allocateBuffer(size_t batch_size, size_t max_seq_len, size_t max_cache_seq_len);
+    void allocateBuffer(size_t batch_size, size_t seq_len, size_t attn_len, int is_context);
     void freeBuffer() override;
 
     void initialize();
 
 protected:
-    T* input_attention_mask_ = nullptr;
-    T* decoder_output_buf_ = nullptr;
-    T* normed_decoder_output_buf_ = nullptr;
-
-    T* logits_buf_ = nullptr;
-
-    T*   key_cache_ = nullptr;
-    T*   value_cache_ = nullptr;
-
-    int* tiled_input_ids_buf_ = nullptr;
-    int* tiled_input_lengths_buf_ = nullptr;
-
-    T* context_decoder_input_buf_ = nullptr;
-    T* context_decoder_output_buf_ = nullptr;
+    int*   padding_offset_             = nullptr;
+    int*   cu_seqlens_                 = nullptr;
+    T*     input_attention_mask_       = nullptr;
+    T*     key_cache_                  = nullptr;
+    T*     value_cache_                = nullptr;
+    T*     context_output_buf_         = nullptr;
+    T*     normed_decoder_output_buf_  = nullptr;
+    float* logits_buf_                 = nullptr;
+    float* log_likelihood_buf_         = nullptr;
+    T*     context_decoder_input_buf_  = nullptr;
+    T*     context_decoder_output_buf_ = nullptr;
 
     void sendTensorsToFirstPipelineNode(std::unordered_map<std::string, Tensor>*       output_tensors,
                                         const std::unordered_map<std::string, Tensor>* input_tensors);
