@@ -86,6 +86,8 @@ void LLaMA<T>::allocateBuffer(size_t batch_size, size_t seq_len, size_t max_seq_
     }
 #endif
 
+    context_output_buf_ =
+        (T*)(allocator_->reMalloc(context_output_buf_, sizeof(T) * batch_size * hidden_units_, false));
     normed_decoder_output_buf_ =
         (T*)(allocator_->reMalloc(normed_decoder_output_buf_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
     logits_buf_ =
@@ -106,6 +108,7 @@ void LLaMA<T>::freeBuffer()
         allocator_->free((void**)(&key_cache_));
         allocator_->free((void**)(&context_decoder_input_buf_));
         allocator_->free((void**)(&context_decoder_output_buf_));
+        allocator_->free((void**)(&context_output_buf_));
 #ifdef USE_NCCL
         for (int i = 0; i < num_buffers_; ++i) {
             allocator_->free((void**)(&context_decoder_output_buf_clone_[i]));
@@ -231,8 +234,8 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     // input_tensors:
     //      input_ids [num_tokens]
     //      input_lengths [batch_size]
+    //      target_ids [beam_width, num_tokens]
     //      context_lengths [batch_size]
-    //      num_tokens [1] int on cpu
     //      seq_len [1] int on cpu
     //      attn_len [1] int on cpu
     //      is_context [1] int on cpu
@@ -240,25 +243,30 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
     // output_tensors:
     //      hidden_vector [num_tokens, hidden_size]
     //      log_probs [num_tokens, vocab_size]
-    //      cum_probs [batch_size]
+    //      cum_probs [beam_width, batch_size]
 
-    FT_CHECK_WITH_INFO(input_tensors->size() == 7, "input_tensors->size() == 6");
-    FT_CHECK(input_tensors->at("input_ids").shape.size() == 2);
+    FT_CHECK_WITH_INFO(input_tensors->size() == 7, "input_tensors->size() == 7");
+    FT_CHECK(input_tensors->at("input_ids").shape.size() == 1);
     FT_CHECK(input_tensors->at("input_lengths").shape.size() == 1);
+    FT_CHECK(input_tensors->at("target_ids").shape.size() == 2);
+    FT_CHECK(input_tensors->at("context_lengths").shape.size() == 1);
 
     const DataType data_type       = getTensorType<T>();
     const bool     is_unpadded_mha = isUnPaddedMHA(attention_type_);
     const size_t   batch_size      = input_tensors->at("input_lengths").shape[0];
-    const int*     input_ids       = input_tensors->at("input_ids").getPtr<int>();
-    const int*     context_lengths = input_tensors->at("context_lengths").getPtr<int>();
-    const int*     input_lengths   = input_tensors->at("input_lengths").getPtr<int>();
-    const int      num_tokens      = input_tensors->at("num_tokens").getVal<int>();
-    const int      seq_len         = input_tensors->at("seq_len").getVal<int>();
-    const int      attn_len        = input_tensors->at("attn_len").getVal<int>();
-    const int      is_context      = input_tensors->at("is_context").getVal<int>();
-    T*             hidden_vector   = output_tensors->at("hidden_vector").getPtr<T>();
-    float*         log_probs       = output_tensors->at("log_probs").getPtr<float>();
-    float*         cum_probs       = output_tensors->at("cum_probs").getPtr<float>();
+    const size_t   num_tokens      = input_tensors->at("input_ids").shape[0];
+    const size_t   beam_width      = input_tensors->at("target_ids").shape[0];
+
+    const int* input_ids       = input_tensors->at("input_ids").getPtr<int>();
+    const int* input_lengths   = input_tensors->at("input_lengths").getPtr<int>();
+    const int* target_ids      = input_tensors->at("target_ids").getPtr<int>();
+    const int* context_lengths = input_tensors->at("context_lengths").getPtr<int>();
+    const int  seq_len         = input_tensors->at("seq_len").getVal<int>();
+    const int  attn_len        = input_tensors->at("attn_len").getVal<int>();
+    const int  is_context      = input_tensors->at("is_context").getVal<int>();
+    T*         hidden_vector   = output_tensors->at("hidden_vector").getPtr<T>();
+    float*     log_probs       = output_tensors->at("log_probs").getPtr<float>();
+    float*     cum_probs       = output_tensors->at("cum_probs").getPtr<float>();
 
     allocateBuffer(batch_size, seq_len, max_seq_len_);
     sync_check_cuda_error();
@@ -294,7 +302,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         {"decoder_input",
          Tensor{MEMORY_GPU,
                 data_type,
-                {(size_t)num_tokens, hidden_units_},
+                {num_tokens, hidden_units_},
 #ifdef USE_NCCL
                 context_decoder_input_buf_
 #else
@@ -305,22 +313,19 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
          Tensor{MEMORY_GPU, data_type, {batch_size, 1, (size_t)seq_len, (size_t)(attn_len)}, input_attention_mask_}},
         {"input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size}, input_lengths}},
         {"context_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size}, context_lengths}},
-        {"num_tokens", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &num_tokens}},
         {"seq_len", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &seq_len}},
         {"attn_len", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &attn_len}}};
 
     if (is_unpadded_mha) {
-        decoder_input_tensors.insert(
-            {"padding_offset", Tensor{MEMORY_GPU, TYPE_INT32, {(size_t)num_tokens}, padding_offset_}});
-        decoder_input_tensors.insert(
-            {"cu_seqlens", Tensor{MEMORY_GPU, TYPE_INT32, {size_t(batch_size + 1)}, cu_seqlens_}});
+        decoder_input_tensors.insert({"padding_offset", Tensor{MEMORY_GPU, TYPE_INT32, {num_tokens}, padding_offset_}});
+        decoder_input_tensors.insert({"cu_seqlens", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size + 1}, cu_seqlens_}});
     }
 
     std::unordered_map<std::string, Tensor> decoder_output_tensors{
         {"decoder_output",
          Tensor{MEMORY_GPU,
                 data_type,
-                {(size_t)num_tokens, hidden_units_},
+                {num_tokens, hidden_units_},
 #ifdef USE_NCCL
                 context_decoder_output_buf_
 #else
@@ -369,7 +374,45 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         ftNcclGroupEnd();
 #endif
     }
-    else if (!is_context) {
+    else if (is_context) {
+        invokeLLaMAGetLastTokens(
+            context_output_buf_, context_decoder_output_buf_, cu_seqlens_, batch_size, hidden_units_, stream_);
+        sync_check_cuda_error();
+
+        invokeGeneralLLaMALayerNorm(normed_decoder_output_buf_,
+                                    context_output_buf_,
+                                    llama_weights->post_decoder_layernorm.gamma,
+                                    layernorm_eps_,
+                                    batch_size,
+                                    hidden_units_,
+                                    stream_);
+        sync_check_cuda_error();
+
+        float alpha = 1.0f;
+        float beta  = 0.0f;
+        cublas_wrapper_->setGemmConfig(CUDA_R_16F, CUDA_R_16F, CUDA_R_32F, CUDA_R_32F);
+        cublas_wrapper_->Gemm(CUBLAS_OP_N,
+                              CUBLAS_OP_N,
+                              vocab_size_,
+                              batch_size,
+                              hidden_units_,
+                              llama_weights->post_decoder_embedding.kernel,
+                              vocab_size_,
+                              normed_decoder_output_buf_,
+                              hidden_units_,  // n
+                              logits_buf_,
+                              vocab_size_);
+        sync_check_cuda_error();
+        cublas_wrapper_->setFP16GemmConfig();
+
+        invokeLLaMALogSoftmax(log_probs, logits_buf_, batch_size, vocab_size_, stream_);
+        sync_check_cuda_error();
+
+        invokeLLaMAExtractTargets(
+            cum_probs, log_probs, target_ids, cu_seqlens_, beam_width, batch_size, vocab_size_, num_tokens, stream_);
+        sync_check_cuda_error();
+    }
+    else {
         invokeGeneralLLaMALayerNorm(normed_decoder_output_buf_,
                                     context_decoder_output_buf_,
                                     llama_weights->post_decoder_layernorm.gamma,
@@ -400,7 +443,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         sync_check_cuda_error();
 
         invokeLLaMAGatherTokens(
-            cum_probs, log_probs, input_ids, input_lengths, cu_seqlens_, batch_size, vocab_size_, stream_);
+            cum_probs, log_probs, input_lengths, target_ids, cu_seqlens_, batch_size, vocab_size_, num_tokens, stream_);
         sync_check_cuda_error();
     }
 }

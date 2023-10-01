@@ -46,7 +46,7 @@ private:
     cudaStream_t         comm_stream_;
     cudaEvent_t          kern_event_[num_buffers_];
     cudaEvent_t          comm_event_[num_buffers_];
-    T* context_decoder_output_buf_clone_[num_buffers_] = {nullptr};
+    T*                   context_decoder_output_buf_clone_[num_buffers_] = {nullptr};
 #endif
 
     static constexpr float layernorm_eps_ = 1e-6f;
@@ -77,12 +77,13 @@ protected:
     T*   value_cache_          = nullptr;
 
     T*     decoder_output_buf_        = nullptr;
+    T*     context_output_buf_        = nullptr;
     T*     normed_decoder_output_buf_ = nullptr;
     float* logits_buf_                = nullptr;
     float* log_likelihood_buf_        = nullptr;
 
-    T* context_decoder_input_buf_                      = nullptr;
-    T* context_decoder_output_buf_                     = nullptr;
+    T* context_decoder_input_buf_  = nullptr;
+    T* context_decoder_output_buf_ = nullptr;
 
     void sendTensorsToFirstPipelineNode(std::unordered_map<std::string, Tensor>*       output_tensors,
                                         const std::unordered_map<std::string, Tensor>* input_tensors);

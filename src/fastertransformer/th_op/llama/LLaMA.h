@@ -34,8 +34,8 @@ public:
                          th::Tensor& cum_probs,
                          th::Tensor& input_ids,
                          th::Tensor& input_lengths,
+                         th::Tensor& target_ids,
                          th::Tensor& context_lengths,
-                         const int   num_tokens,
                          const int   seq_len,
                          const int   attn_len,
                          const int   is_context) = 0;
@@ -184,26 +184,29 @@ public:
                          th::Tensor& cum_probs,
                          th::Tensor& input_ids,
                          th::Tensor& input_lengths,
+                         th::Tensor& target_ids,
                          th::Tensor& context_lengths,
-                         const int   num_tokens,
                          const int   seq_len,
                          const int   attn_len,
                          const int   is_context) override
     {
         const size_t batch_size = (size_t)input_lengths.size(0);
+        const size_t num_tokens = (size_t)input_ids.size(0);
+        const size_t beam_width = (size_t)target_ids.size(0);
 
         std::unordered_map<std::string, ft::Tensor> input_tensors = std::unordered_map<std::string, ft::Tensor>{
             {"input_ids",
-             ft::Tensor{ft::MEMORY_GPU,
-                        ft::TYPE_INT32,
-                        std::vector<size_t>{batch_size, (size_t)seq_len},
-                        get_ptr<int>(input_ids)}},
+             ft::Tensor{ft::MEMORY_GPU, ft::TYPE_INT32, std::vector<size_t>{num_tokens}, get_ptr<int>(input_ids)}},
             {"input_lengths",
              ft::Tensor{ft::MEMORY_GPU, ft::TYPE_INT32, std::vector<size_t>{batch_size}, get_ptr<int>(input_lengths)}},
+            {"target_ids",
+             ft::Tensor{ft::MEMORY_GPU,
+                        ft::TYPE_INT32,
+                        std::vector<size_t>{beam_width, num_tokens},
+                        get_ptr<int>(target_ids)}},
             {"context_lengths",
              ft::Tensor{
                  ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{batch_size}, get_ptr<int>(context_lengths)}},
-            {"num_tokens", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &num_tokens}},
             {"seq_len", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &seq_len}},
             {"attn_len", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &attn_len}},
             {"is_context", ft::Tensor{ft::MEMORY_CPU, ft::TYPE_INT32, std::vector<size_t>{1}, &is_context}}};
@@ -212,15 +215,18 @@ public:
             {"hidden_vector",
              ft::Tensor{ft::MEMORY_GPU,
                         (std::is_same<T, half>::value) ? ft::TYPE_FP16 : ft::TYPE_FP32,
-                        std::vector<size_t>{(size_t)num_tokens, num_heads_ * size_per_head_},
+                        std::vector<size_t>{num_tokens, num_heads_ * size_per_head_},
                         get_ptr<T>(hidden_vector)}},
             {"log_probs",
              ft::Tensor{ft::MEMORY_GPU,
                         ft::TYPE_FP32,
-                        std::vector<size_t>{(size_t)num_tokens, vocab_size_},
+                        std::vector<size_t>{num_tokens, vocab_size_},
                         get_ptr<float>(log_probs)}},
             {"cum_probs",
-             ft::Tensor{ft::MEMORY_GPU, ft::TYPE_FP32, std::vector<size_t>{batch_size}, get_ptr<float>(cum_probs)}}};
+             ft::Tensor{ft::MEMORY_GPU,
+                        ft::TYPE_FP32,
+                        std::vector<size_t>{beam_width, batch_size},
+                        get_ptr<float>(cum_probs)}}};
 
         try {
             ft::check_cuda_error(cudaEventSynchronize(event_[ev_no_]));
@@ -294,8 +300,8 @@ public:
                                     th::Tensor&   cum_probs,
                                     th::Tensor&   input_ids,
                                     th::Tensor&   input_lengths,
+                                    th::Tensor&   target_ids,
                                     th::Tensor&   context_lengths,
-                                    const int64_t num_tokens,
                                     const int64_t seq_len,
                                     const int64_t attn_len,
                                     const int64_t is_context);

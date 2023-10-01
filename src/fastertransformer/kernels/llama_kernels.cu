@@ -11,6 +11,70 @@
 using namespace std;
 namespace fastertransformer {
 
+template<typename T>
+__global__ void LLaMA_get_last_tokens(T* out, T* in, const int* cu_seqlens, int batch_size, int hidden_size)
+{
+    // in [num_tokens, hidden_size]
+    // out [batch_size, hidden_size]
+    int batch_idx = blockIdx.x;
+
+    if (batch_idx >= batch_size)
+        return;
+
+    int pos = cu_seqlens[batch_idx + 1] - 1;
+
+    for (int idx = threadIdx.x; idx < hidden_size; idx += blockDim.x) {
+        out[batch_idx * hidden_size + idx] = in[pos * hidden_size + idx];
+    }
+}
+
+template<typename T>
+void invokeLLaMAGetLastTokens(
+    T* out, T* in, const int* cu_seqlens, int batch_size, int hidden_size, cudaStream_t stream)
+{
+    dim3 grid(batch_size);
+    dim3 block(256);
+    LLaMA_get_last_tokens<<<grid, block, 0, stream>>>(out, in, cu_seqlens, batch_size, hidden_size);
+}
+
+template void invokeLLaMAGetLastTokens(
+    float* out, float* in, const int* cu_seqlens, int batch_size, int hidden_size, cudaStream_t stream);
+template void invokeLLaMAGetLastTokens(
+    half* out, half* in, const int* cu_seqlens, int batch_size, int hidden_size, cudaStream_t stream);
+
+__global__ void LLaMA_extract_targets(
+    float* out, float* in, const int* target_ids, const int* cu_seqlens, int beam_width, int batch_size, int vocab_size, int num_tokens)
+{
+    // in [batch_size, vocab_size]
+    // target_ids [ beam_width, num_tokens ]
+    // out [beam_width, batch_size]
+    int batch_idx = blockIdx.x * blockDim.x + threadIdx.x;
+    int beam_idx  = blockIdx.y * blockDim.y + threadIdx.y;
+
+    if (batch_idx >= batch_size || beam_idx >= beam_width)
+        return;
+
+    int pos                                = cu_seqlens[batch_idx + 1] - 1;
+    int target_idx                         = target_ids[beam_idx * num_tokens + pos];
+    out[beam_idx * batch_size + batch_idx] = in[batch_idx * vocab_size + target_idx];
+}
+
+void invokeLLaMAExtractTargets(float*       out,
+                               float*       in,
+                               const int*   target_ids,
+                               const int*   cu_seqlens,
+                               int          beam_width,
+                               int          batch_size,
+                               int          vocab_size,
+                               int          num_tokens,
+                               cudaStream_t stream)
+{
+    dim3 block(32, 4);
+    dim3 grid((batch_size + block.x - 1) / block.x, (beam_width + block.y - 1) / block.y);
+    LLaMA_extract_targets<<<grid, block, 0, stream>>>(
+        out, in, target_ids, cu_seqlens, beam_width, batch_size, vocab_size, num_tokens);
+}
+
 __global__ void LLaMA_log_softmax(float* out, const float* logits, const int num_tokens, const int vocab_size)
 {
     // logits [T, V]
@@ -61,49 +125,26 @@ void invokeLLaMALogSoftmax(
 
 __global__ void LLaMA_gather_tokens_kernel(float*       out,
                                            const float* probs,
-                                           const int*   input_ids,
                                            const int*   input_lengths,
+                                           const int*   target_ids,
                                            const int*   cu_seqlens,
                                            const int    batch_size,
-                                           const int    vocab_size)
+                                           const int    vocab_size,
+                                           const int    num_tokens)
 {
-    /*
     // probs: [T, V]
-    // input_ids: [T]
+    // target_ids: [T]
+    // out: [batch_size]
     int batch_idx = blockIdx.x;
 
     if (batch_idx >= batch_size)
         return;
 
     float val = 0.f;
-    //    for (int i = cu_seqlens[batch_idx] + threadIdx.x; i < cu_seqlens[batch_idx + 1] - 1; i += blockDim.x) {
-    //        int input_idx = input_ids[i + 1];
-    //        val += probs[i * vocab_size + input_idx];
-    //    }
-    for (int t = cu_seqlens[batch_idx]; t < cu_seqlens[batch_idx + 1] - 1; ++t) {
-        val += probs[t * vocab_size + input_ids[t + 1]];
-    }
-    //float sum = blockReduceSum<float>(val);
-
-    if (threadIdx.x == 0)
-        out[batch_idx] = val;
-        */
-    // for b in range(bsz):
-    //     for i in range(choice_seq_lens_list[c][b]-1):
-    //       t = choice_cum_seq_lens_list[c][b] + i
-    //       choice_log_probs[b, c] = choice_log_probs[b, c] +  log_likelihoods[t, choice_tokens_list[c][t+1]]
-
-    // probs: [T, V]
-    // input_ids: [T]
-    int batch_idx = blockIdx.x;
-
-    if (batch_idx >= batch_size)
-        return;
-
-    float val = 0.f;
-    for (int i = threadIdx.x; i < input_lengths[batch_idx] - 1; i += blockDim.x) {
-        int t = cu_seqlens[batch_idx] + i;
-        val += probs[t * vocab_size + input_ids[t + 1]];
+    for (int i = threadIdx.x; i < input_lengths[batch_idx]; i += blockDim.x) {
+        int pos        = cu_seqlens[batch_idx] + i;
+        int target_pos = target_ids[pos];
+        val += (target_pos > 0) ? probs[pos * vocab_size + target_pos] : 0.f;
     }
     float sum = blockReduceSum<float>(val);
 
@@ -113,15 +154,18 @@ __global__ void LLaMA_gather_tokens_kernel(float*       out,
 
 void invokeLLaMAGatherTokens(float*       out,
                              const float* probs,
-                             const int*   input_ids,
                              const int*   input_lengths,
+                             const int*   target_ids,
                              const int*   cu_seqlens,
                              const int    batch_size,
                              const int    vocab_size,
+                             const int    num_tokens,
                              cudaStream_t stream)
 {
-    LLaMA_gather_tokens_kernel<<<batch_size, 256, 0, stream>>>(
-        out, probs, input_ids, input_lengths, cu_seqlens, batch_size, vocab_size);
+    dim3 grid(batch_size);
+    dim3 block(256);
+    LLaMA_gather_tokens_kernel<<<grid, block, 0, stream>>>(
+        out, probs, input_lengths, target_ids, cu_seqlens, batch_size, vocab_size, num_tokens);
 }
 
 template<typename T>

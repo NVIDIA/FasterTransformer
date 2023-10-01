@@ -175,9 +175,8 @@ void LLaMAContextDecoder<T>::forward(std::vector<Tensor>*                       
                                                               {"attention_mask", input_tensors->at(1)},
                                                               {"input_lengths", input_tensors->at(2)},
                                                               {"context_lengths", input_tensors->at(3)},
-                                                              {"num_tokens", input_tensors->at(4)},
-                                                              {"seq_len", input_tensors->at(5)},
-                                                              {"attn_len", input_tensors->at(6)}};
+                                                              {"seq_len", input_tensors->at(4)},
+                                                              {"attn_len", input_tensors->at(5)}};
     std::unordered_map<std::string, Tensor> output_tensors_map{{"decoder_output", output_tensors->at(0)},
                                                                {"key_cache", output_tensors->at(1)},
                                                                {"value_cache", output_tensors->at(2)}};
@@ -195,7 +194,6 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
     //      attention_mask [batch_size, 1, seq_len, attn_len]
     //      input_lengths [batch_size]
     //      context_lengths [batch_size]
-    //      num_tokens [1] int on cpu
     //      seq_len [1] int on cpu
     //      attn_len [1] int on cpu
     //      padding_offset [batch_size] int on cpu
@@ -210,20 +208,20 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
     FT_CHECK(output_tensors->size() == 3);
     const DataType data_type       = getTensorType<T>();
     const bool     is_unpadded_mha = isUnPaddedMHA(attention_type_);
-    const int      batch_size      = input_tensors->at("input_lengths").shape[0];
-    const int*     input_lengths   = input_tensors->at("input_lengths").getPtr<int>();
-    const int*     context_lengths = input_tensors->at("context_lengths").getPtr<int>();
-    const int      num_tokens      = input_tensors->at("num_tokens").getVal<int>();
-    const int      seq_len         = input_tensors->at("attention_mask").shape[2];
-    const int      attn_len        = input_tensors->at("attention_mask").shape[3];
-    const int*     padding_offset  = nullptr;
-    const int*     cu_seqlens      = nullptr;
+    const size_t   batch_size      = input_tensors->at("input_lengths").shape[0];
+    const size_t   num_tokens      = input_tensors->at("decoder_input").shape[0];
+    const size_t   max_seq_len     = output_tensors->at("key_cache").shape[3];
+
+    const int* input_lengths   = input_tensors->at("input_lengths").getPtr<int>();
+    const int* context_lengths = input_tensors->at("context_lengths").getPtr<int>();
+    const int  seq_len         = input_tensors->at("attention_mask").shape[2];
+    const int  attn_len        = input_tensors->at("attention_mask").shape[3];
+    const int* padding_offset  = nullptr;
+    const int* cu_seqlens      = nullptr;
     if (is_unpadded_mha) {
         padding_offset = input_tensors->at("padding_offset").getPtr<int>();
         cu_seqlens     = input_tensors->at("cu_seqlens").getPtr<int>();
     }
-
-    const size_t max_seq_len = output_tensors->at("key_cache").shape[3];
     allocateBuffer(batch_size, seq_len, max_seq_len);
     sync_check_cuda_error();
 
@@ -242,11 +240,6 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
     self_v_cache_size.push_back(batch_size);
     for (auto t = v_cache.shape.begin() + 2; t != v_cache.shape.end(); ++t) {
         self_v_cache_size.push_back(*t);
-    }
-
-    size_t h_token_num = batch_size * seq_len;
-    if (is_unpadded_mha) {
-        h_token_num = num_tokens;
     }
 
     for (int l = 0; l < num_layer_; l++) {
@@ -270,13 +263,13 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                                     layer_input,
                                     llama_decoder_layer_weight->at(l)->pre_layernorm_weights.gamma,
                                     layernorm_eps_,
-                                    h_token_num,
+                                    num_tokens,
                                     hidden_units_,
                                     stream_);
         sync_check_cuda_error();
 
         TensorMap self_attention_input_tensors{
-            {"input_query", Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, decoder_normed_input_}},
+            {"input_query", Tensor{MEMORY_GPU, data_type, {num_tokens, (size_t)hidden_units_}, decoder_normed_input_}},
             {"attention_mask",
              Tensor{MEMORY_GPU,
                     data_type,
@@ -291,7 +284,7 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
 
         if (is_unpadded_mha) {
             self_attention_input_tensors.insert("padding_offset",
-                                                Tensor{MEMORY_GPU, TYPE_INT32, {h_token_num}, padding_offset});
+                                                Tensor{MEMORY_GPU, TYPE_INT32, {num_tokens}, padding_offset});
             self_attention_input_tensors.insert("cu_seqlens",
                                                 Tensor{MEMORY_GPU, TYPE_INT32, {size_t(batch_size + 1)}, cu_seqlens});
         }
@@ -302,7 +295,7 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
         };
 
         TensorMap self_attention_output_tensors{
-            {"hidden_features", Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, self_attn_output_}},
+            {"hidden_features", Tensor{MEMORY_GPU, data_type, {num_tokens, (size_t)hidden_units_}, self_attn_output_}},
             {"key_cache", Tensor{MEMORY_GPU, data_type, self_k_cache_size, k_cache.getPtrWithOffset(cache_offset)}},
             {"value_cache", Tensor{MEMORY_GPU, data_type, self_v_cache_size, v_cache.getPtrWithOffset(cache_offset)}}};
 
@@ -319,22 +312,21 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
             llama_decoder_layer_weight->at(l)->post_attention_layernorm_weights.beta,
             llama_decoder_layer_weight->at(l)->self_attention_weights.attention_output_weight.bias,
             layernorm_eps_,
-            h_token_num,
+            num_tokens,
             hidden_units_,
             stream_);
         sync_check_cuda_error();
 
         TensorMap ffn_input_tensors(
-            {{"ffn_input",
-              Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, decoder_normed_input_}}});
+            {{"ffn_input", Tensor{MEMORY_GPU, data_type, {num_tokens, (size_t)hidden_units_}, decoder_normed_input_}}});
         TensorMap ffn_output_tensors(
-            {{"ffn_output", Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, layer_output}}});
+            {{"ffn_output", Tensor{MEMORY_GPU, data_type, {num_tokens, (size_t)hidden_units_}, layer_output}}});
         ffn_layer_->forward(&ffn_output_tensors, &ffn_input_tensors, &llama_decoder_layer_weight->at(l)->ffn_weights);
 
         invokeAddBiasResidual(layer_output,
                               self_attn_output_,
                               llama_decoder_layer_weight->at(l)->ffn_weights.output_weight.bias,
-                              h_token_num,
+                              num_tokens,
                               hidden_units_,
                               stream_);
 

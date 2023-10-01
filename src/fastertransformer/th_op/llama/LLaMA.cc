@@ -78,12 +78,11 @@ std::vector<th::Tensor> LLaMA::forward(th::Tensor&   hidden_vector,
                                        th::Tensor&   cum_probs,
                                        th::Tensor&   input_ids,
                                        th::Tensor&   input_lengths,
+                                       th::Tensor&   target_ids,
                                        th::Tensor&   context_lengths,
-                                       const int64_t num_tokens,
                                        const int64_t seq_len,
                                        const int64_t attn_len,
-                                       const int64_t is_context
-                                       )
+                                       const int64_t is_context)
 {
     CHECK_TH_CUDA(input_ids);
     CHECK_CONTIGUOUS(input_ids);
@@ -92,9 +91,16 @@ std::vector<th::Tensor> LLaMA::forward(th::Tensor&   hidden_vector,
     CHECK_CONTIGUOUS(input_lengths);
     TORCH_CHECK(input_lengths.dtype() == torch::kInt32, "input_lengths dtype should be int32");
 
-    const int batch_size = input_lengths.size(0);
-    ftllama->forward(
-        hidden_vector, log_probs, cum_probs, input_ids, input_lengths, context_lengths, num_tokens, seq_len, attn_len, is_context);
+    ftllama->forward(hidden_vector,
+                     log_probs,
+                     cum_probs,
+                     input_ids,
+                     input_lengths,
+                     target_ids,
+                     context_lengths,
+                     seq_len,
+                     attn_len,
+                     is_context);
     return std::vector<th::Tensor>{hidden_vector, log_probs, cum_probs};
 }
 
