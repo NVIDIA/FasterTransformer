@@ -27,8 +27,8 @@ LLaMA::LLaMA(const int64_t            num_heads,
              const int64_t            rotary_embedding_dim,
              const int64_t            random_seed,
              const int64_t            max_seq_len,
-             const int64_t            tensor_para_size,
-             const int64_t            pipeline_para_size,
+             const int64_t            rank,
+             const int64_t            world_size,
              const vector<th::Tensor> weights):
     vocab_size_(vocab_size), st_(weights[0].scalar_type())
 {
@@ -46,8 +46,8 @@ LLaMA::LLaMA(const int64_t            num_heads,
                                          (size_t)rotary_embedding_dim,
                                          (size_t)random_seed,
                                          (size_t)max_seq_len,
-                                         tensor_para_size,
-                                         pipeline_para_size,
+                                         (size_t)rank,
+                                         (size_t)world_size,
                                          weights);
             break;
         case at::ScalarType::Half:
@@ -59,8 +59,8 @@ LLaMA::LLaMA(const int64_t            num_heads,
                                         (size_t)rotary_embedding_dim,
                                         (size_t)random_seed,
                                         (size_t)max_seq_len,
-                                        tensor_para_size,
-                                        pipeline_para_size,
+                                        (size_t)rank,
+                                        (size_t)world_size,
                                         weights);
             break;
         default:

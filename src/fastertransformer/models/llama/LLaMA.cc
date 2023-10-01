@@ -15,10 +15,8 @@
  */
 
 #include "src/fastertransformer/models/llama/LLaMA.h"
-#include "src/fastertransformer/kernels/bert_preprocess_kernels.h"
 #include "src/fastertransformer/kernels/decoding_kernels.h"
 #include "src/fastertransformer/kernels/llama_kernels.h"
-#include "src/fastertransformer/layers/beam_search_layers/BaseBeamSearchLayer.h"
 #include "src/fastertransformer/utils/llama_utils.h"
 #include "src/fastertransformer/utils/memory_utils.h"
 #include <algorithm>
@@ -29,21 +27,14 @@ namespace fastertransformer {
 template<typename T>
 void LLaMA<T>::initialize()
 {
-#ifdef USE_NCCL
-    check_cuda_error(cudaStreamCreateWithFlags(&comm_stream_, cudaStreamNonBlocking));
-    for (int i = 0; i < num_buffers_; ++i) {
-        check_cuda_error(cudaEventCreate(&kern_event_[i]));
-        check_cuda_error(cudaEventCreate(&comm_event_[i]));
-    }
-#endif
-
     llama_context_decoder_ = new LLaMAContextDecoder<T>(head_num_,
                                                         size_per_head_,
                                                         inter_size_,
                                                         num_layer_,
                                                         rotary_embedding_dim_,
                                                         layernorm_eps_,
-                                                        pipeline_para_,
+                                                        rank_,
+                                                        world_size_,
                                                         stream_,
                                                         cublas_wrapper_,
                                                         allocator_,
@@ -72,7 +63,7 @@ void LLaMA<T>::allocateBuffer(size_t batch_size, size_t seq_len, size_t attn_len
 
     if (is_context) {
         const size_t self_cache_size =
-            (num_layer_ / pipeline_para_.world_size_) * batch_size * max_seq_len_ * hidden_units_;
+            (num_layer_ / world_size_) * batch_size * max_seq_len_ * hidden_units_;
         key_cache_   = (T*)(allocator_->reMalloc(key_cache_, sizeof(T) * self_cache_size * 2, false));
         value_cache_ = key_cache_ + self_cache_size;
     }
@@ -91,13 +82,6 @@ void LLaMA<T>::allocateBuffer(size_t batch_size, size_t seq_len, size_t attn_len
     log_likelihood_buf_ =
         (float*)(allocator_->reMalloc(log_likelihood_buf_, sizeof(float) * batch_size * seq_len * vocab_size_, false));
 
-#ifdef USE_NCCL
-    for (int i = 0; i < num_buffers_; ++i) {
-        context_decoder_output_buf_clone_[i] = (T*)(allocator_->reMalloc(
-            context_decoder_output_buf_clone_[i], sizeof(T) * batch_size * max_seq_len * hidden_units_, false));
-    }
-#endif
-
     is_allocate_buffer_ = true;
 }
 
@@ -115,11 +99,6 @@ void LLaMA<T>::freeBuffer()
         allocator_->free((void**)(&normed_decoder_output_buf_));
         allocator_->free((void**)(&logits_buf_));
         allocator_->free((void**)(&log_likelihood_buf_));
-#ifdef USE_NCCL
-        for (int i = 0; i < num_buffers_; ++i) {
-            allocator_->free((void**)(&context_decoder_output_buf_clone_[i]));
-        }
-#endif
         is_allocate_buffer_ = false;
     }
 }
@@ -133,6 +112,8 @@ LLaMA<T>::LLaMA(size_t           head_num,
                 size_t           rotary_embedding_dim,
                 size_t           random_seed,
                 size_t           max_seq_len,
+                size_t           rank,
+                size_t           world_size,
                 cudaStream_t     stream,
                 cublasMMWrapper* cublas_wrapper,
                 IAllocator*      allocator,
@@ -149,41 +130,8 @@ LLaMA<T>::LLaMA(size_t           head_num,
     random_seed_(random_seed),
     max_seq_len_(max_seq_len),
     hidden_units_(head_num * size_per_head),
-    attention_type_(attention_type)
-{
-    pipeline_para_.world_size_ = 1;
-    pipeline_para_.rank_       = 0;
-    initialize();
-}
-
-template<typename T>
-LLaMA<T>::LLaMA(size_t           head_num,
-                size_t           size_per_head,
-                size_t           inter_size,
-                size_t           num_layer,
-                size_t           vocab_size,
-                size_t           rotary_embedding_dim,
-                size_t           random_seed,
-                size_t           max_seq_len,
-                NcclParam        tensor_para,
-                NcclParam        pipeline_para,
-                cudaStream_t     stream,
-                cublasMMWrapper* cublas_wrapper,
-                IAllocator*      allocator,
-                bool             is_free_buffer_after_forward,
-                cudaDeviceProp*  cuda_device_prop,
-                AttentionType    attention_type):
-    BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, cuda_device_prop),
-    head_num_(head_num),
-    size_per_head_(size_per_head),
-    inter_size_(inter_size),
-    num_layer_(num_layer),
-    vocab_size_(vocab_size),
-    rotary_embedding_dim_(rotary_embedding_dim),
-    random_seed_(random_seed),
-    max_seq_len_(max_seq_len),
-    hidden_units_(head_num * size_per_head),
-    pipeline_para_(pipeline_para),
+    rank_(rank),
+    world_size_(world_size),
     attention_type_(attention_type)
 {
     initialize();
@@ -201,7 +149,8 @@ LLaMA<T>::LLaMA(LLaMA<T> const& llama):
     random_seed_(llama.random_seed_),
     max_seq_len_(llama.max_seq_len_),
     hidden_units_(llama.hidden_units_),
-    pipeline_para_(llama.pipeline_para_),
+    rank_(llama.rank_),
+    world_size_(llama.world_size_),
     attention_type_(llama.attention_type_)
 {
     initialize();
@@ -210,14 +159,6 @@ LLaMA<T>::LLaMA(LLaMA<T> const& llama):
 template<typename T>
 LLaMA<T>::~LLaMA()
 {
-#ifdef USE_NCCL
-    check_cuda_error(cudaStreamDestroy(comm_stream_));
-    for (int i = 0; i < num_buffers_; ++i) {
-        check_cuda_error(cudaEventDestroy(kern_event_[i]));
-        check_cuda_error(cudaEventDestroy(comm_event_[i]));
-    }
-#endif
-
     delete llama_context_decoder_;
     freeBuffer();
 }
@@ -288,7 +229,7 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         input_attention_mask_, input_lengths, context_lengths, batch_size, seq_len, attn_len, stream_);
     sync_check_cuda_error();
 
-    if (pipeline_para_.rank_ == 0) {
+    if (rank_ == 0) {
         invokeLLaMAInputIdsEmbeddingLookup(context_decoder_input_buf_,
                                            llama_weights->pre_decoder_embedding_table,
                                            input_ids,
@@ -297,24 +238,13 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
                                            stream_);
         sync_check_cuda_error();
     }
-    else {
-#ifdef USE_NCCL
-        ftNcclRecv(
-            context_decoder_input_buf_, num_tokens * hidden_units_, pipeline_para_.rank_ - 1, pipeline_para_, stream_);
-        sync_check_cuda_error();
-#endif
-    }
 
     std::unordered_map<std::string, Tensor> decoder_input_tensors{
         {"decoder_input",
          Tensor{MEMORY_GPU,
                 data_type,
                 {num_tokens, hidden_units_},
-#ifdef USE_NCCL
-                context_decoder_input_buf_
-#else
-                pipeline_para_.rank_ == 0                                ? context_decoder_input_buf_ : hidden_vector
-#endif
+                rank_ == 0                 ? context_decoder_input_buf_ : hidden_vector
          }},
         {"attention_mask",
          Tensor{MEMORY_GPU, data_type, {batch_size, 1, (size_t)seq_len, (size_t)(attn_len)}, input_attention_mask_}},
@@ -333,55 +263,24 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
          Tensor{MEMORY_GPU,
                 data_type,
                 {num_tokens, hidden_units_},
-#ifdef USE_NCCL
-                context_decoder_output_buf_
-#else
-                (pipeline_para_.rank_ == pipeline_para_.world_size_ - 1) ? context_decoder_output_buf_ : hidden_vector
-#endif
+                (rank_ == world_size_ - 1) ? context_decoder_output_buf_ : hidden_vector
          }},
         {"key_cache",
          Tensor{MEMORY_GPU,
                 data_type,
-                {num_layer_ / pipeline_para_.world_size_, batch_size, head_num_, max_seq_len_, size_per_head_},
+                {num_layer_ / world_size_, batch_size, head_num_, max_seq_len_, size_per_head_},
                 key_cache_}},
         {"value_cache",
          Tensor{MEMORY_GPU,
                 data_type,
-                {num_layer_ / pipeline_para_.world_size_, batch_size, head_num_, max_seq_len_, size_per_head_},
+                {num_layer_ / world_size_, batch_size, head_num_, max_seq_len_, size_per_head_},
                 value_cache_}}};
 
     llama_context_decoder_->forward(
         &decoder_output_tensors, &decoder_input_tensors, &llama_weights->decoder_layer_weights);
     sync_check_cuda_error();
 
-    if (pipeline_para_.rank_ < pipeline_para_.world_size_ - 1) {
-#ifdef USE_NCCL
-        //        buf_no_ = (buf_no_ + 1) % num_buffers_;
-        //        check_cuda_error(cudaEventSynchronize(comm_event_[buf_no_]));
-        //        invokeLLaMACopyKernel(context_decoder_output_buf_clone_[buf_no_],
-        //                              context_decoder_output_buf_,
-        //                              num_tokens * hidden_units_,
-        //                              stream_);
-        //        sync_check_cuda_error();
-        //        check_cuda_error(cudaEventRecord(kern_event_[buf_no_], stream_));
-        //        check_cuda_error(cudaStreamWaitEvent(comm_stream_, kern_event_[buf_no_]));
-        //        ftNcclGroupStart();
-        //        ftNcclSend(context_decoder_output_buf_clone_[buf_no_],
-        //                   num_tokens * hidden_units_,
-        //                   pipeline_para_.rank_ + 1,
-        //                   pipeline_para_,
-        //                   comm_stream_);
-        //        ftNcclGroupEnd();
-        //        check_cuda_error(cudaEventRecord(comm_event_[buf_no_], comm_stream_));
-        //        sync_check_cuda_error();
-
-        ftNcclGroupStart();
-        ftNcclSend(
-            context_decoder_output_buf_, num_tokens * hidden_units_, pipeline_para_.rank_ + 1, pipeline_para_, stream_);
-        ftNcclGroupEnd();
-#endif
-    }
-    else if (is_context) {
+    if (is_context) {
         invokeLLaMAGetLastTokens(
             context_output_buf_, context_decoder_output_buf_, cu_seqlens_, batch_size, hidden_units_, stream_);
         sync_check_cuda_error();
@@ -453,18 +352,6 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
             cum_probs, log_probs, input_lengths, target_ids, cu_seqlens_, batch_size, vocab_size_, num_tokens, stream_);
         sync_check_cuda_error();
     }
-}
-
-template<typename T>
-size_t LLaMA<T>::getPipelineParallelRank()
-{
-    return pipeline_para_.rank_;
-}
-
-template<typename T>
-size_t LLaMA<T>::getPipelineParallelSize()
-{
-    return pipeline_para_.world_size_;
 }
 
 template class LLaMA<float>;

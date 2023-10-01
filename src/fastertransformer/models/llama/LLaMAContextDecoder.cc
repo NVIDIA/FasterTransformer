@@ -15,10 +15,7 @@
  */
 
 #include "src/fastertransformer/models/llama/LLaMAContextDecoder.h"
-#include "src/fastertransformer/kernels/bert_preprocess_kernels.h"
-#include "src/fastertransformer/kernels/gpt_kernels.h"
 #include "src/fastertransformer/kernels/llama_kernels.h"
-
 #include "src/fastertransformer/layers/FfnLayer.h"
 #include "src/fastertransformer/layers/attention_layers/LLaMAContextAttentionLayer.h"
 #include "src/fastertransformer/utils/llama_utils.h"
@@ -86,30 +83,29 @@ void LLaMAContextDecoder<T>::freeBuffer()
 template<typename T>
 bool LLaMAContextDecoder<T>::isValidLayerParallelId(uint l)
 {
-    int local_num_layer = (int)(ceil(num_layer_ * 1.0f / pipeline_para_.world_size_));
-    return l < num_layer_ && (l >= local_num_layer * pipeline_para_.rank_)
-           && (l < local_num_layer * (pipeline_para_.rank_ + 1));
+    int local_num_layer = (int)(ceil(num_layer_ * 1.0f / world_size_));
+    return l < num_layer_ && (l >= local_num_layer * rank_) && (l < local_num_layer * (rank_ + 1));
 }
 
 template<typename T>
 bool LLaMAContextDecoder<T>::isFirstLayerParallelId(uint l)
 {
-    int local_num_layer = (int)(ceil(num_layer_ * 1.0f / pipeline_para_.world_size_));
-    return l < num_layer_ && (l == local_num_layer * pipeline_para_.rank_);
+    int local_num_layer = (int)(ceil(num_layer_ * 1.0f / world_size_));
+    return l < num_layer_ && (l == local_num_layer * rank_);
 }
 
 template<typename T>
 bool LLaMAContextDecoder<T>::isLastLayerParallelId(uint l)
 {
-    int local_num_layer = (int)(ceil(num_layer_ * 1.0f / pipeline_para_.world_size_));
-    return l < num_layer_ && (l == local_num_layer * (pipeline_para_.rank_ + 1) - 1);
+    int local_num_layer = (int)(ceil(num_layer_ * 1.0f / world_size_));
+    return l < num_layer_ && (l == local_num_layer * (rank_ + 1) - 1);
 }
 
 template<typename T>
 int LLaMAContextDecoder<T>::getFirstLayerParallelId()
 {
-    int local_num_layer = (int)(ceil(num_layer_ * 1.0f / pipeline_para_.world_size_));
-    return local_num_layer * pipeline_para_.rank_;
+    int local_num_layer = (int)(ceil(num_layer_ * 1.0f / world_size_));
+    return local_num_layer * rank_;
 }
 
 template<typename T>
@@ -119,7 +115,8 @@ LLaMAContextDecoder<T>::LLaMAContextDecoder(size_t           head_num,
                                             size_t           num_layer,
                                             size_t           rotary_embedding_dim,
                                             float            layernorm_eps,
-                                            NcclParam        pipeline_para,
+                                            size_t           rank,
+                                            size_t           world_size,
                                             cudaStream_t     stream,
                                             cublasMMWrapper* cublas_wrapper,
                                             IAllocator*      allocator,
@@ -134,7 +131,8 @@ LLaMAContextDecoder<T>::LLaMAContextDecoder(size_t           head_num,
     rotary_embedding_dim_(rotary_embedding_dim),
     layernorm_eps_(layernorm_eps),
     hidden_units_(head_num * size_per_head),
-    pipeline_para_(pipeline_para),
+    rank_(rank),
+    world_size_(world_size),
     is_qk_buf_float_(is_qk_buf_float),
     attention_type_(attention_type)
 {
@@ -151,7 +149,8 @@ LLaMAContextDecoder<T>::LLaMAContextDecoder(LLaMAContextDecoder<T> const& decode
     rotary_embedding_dim_(decoder.rotary_embedding_dim_),
     layernorm_eps_(decoder.layernorm_eps_),
     hidden_units_(decoder.hidden_units_),
-    pipeline_para_(decoder.pipeline_para_),
+    rank_(decoder.rank_),
+    world_size_(decoder.world_size_),
     is_qk_buf_float_(decoder.is_qk_buf_float_),
     attention_type_(decoder.attention_type_)
 {

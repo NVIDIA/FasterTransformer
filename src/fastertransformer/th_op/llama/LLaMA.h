@@ -52,8 +52,8 @@ public:
             const size_t             rotary_embedding_dim,
             const size_t             random_seed,
             const size_t             max_seq_len,
-            const int64_t            tensor_para_size,
-            const int64_t            pipeline_para_size,
+            const int64_t            rank,
+            const int64_t            world_size,
             const vector<th::Tensor> weights):
         num_heads_(num_heads),
         size_per_head_(size_per_head),
@@ -63,8 +63,8 @@ public:
         rotary_embedding_dim_(rotary_embedding_dim),
         random_seed_(random_seed),
         max_seq_len_(max_seq_len),
-        tensor_para_size_(tensor_para_size),
-        pipeline_para_size_(pipeline_para_size),
+        rank_(rank),
+        world_size_(world_size),
         weights_(weights)
     {
         ft::Logger::getLogger().setLevel(ft::Logger::WARNING);
@@ -72,8 +72,6 @@ public:
         ft::check_cuda_error(cublasLtCreate(&cublasltHandle_));
         cublas_algo_map_      = new ft::cublasAlgoMap(GEMM_CONFIG, "");
         cublas_wrapper_mutex_ = new std::mutex();
-
-        ftNcclInitialize(tensor_para_, pipeline_para_, tensor_para_size, pipeline_para_size);
 
         llama_weights_.resizeLayer(num_layers_);
         for (int i = 0; i < (int)num_layers_; i++) {
@@ -113,7 +111,6 @@ public:
         llama_weights_.post_decoder_embedding.kernel = get_ptr<T>(weights_[14 * num_layers_ + 3]);
 
         ft::check_cuda_error(cudaGetDeviceProperties(&prop_, 0));
-        // ft::check_cuda_error(cudaStreamCreateWithFlags(&stream_, cudaStreamNonBlocking));
         ft::check_cuda_error(cudaStreamCreate(&stream_));
 
         for (int i = 0; i < num_events_; ++i) {
@@ -150,8 +147,8 @@ public:
                                   rotary_embedding_dim_,
                                   random_seed_,
                                   max_seq_len_,
-                                  tensor_para_,
-                                  pipeline_para_,
+                                  rank_,
+                                  world_size_,
                                   stream_,
                                   cublas_wrapper_,
                                   allocator_,
@@ -172,8 +169,6 @@ public:
         delete cublas_wrapper_;
         delete allocator_;
 
-        ft::ftNcclParamDestroy(tensor_para_);
-        ft::ftNcclParamDestroy(pipeline_para_);
         cublasLtDestroy(cublasltHandle_);
         delete cublas_algo_map_;
         delete cublas_wrapper_mutex_;
@@ -256,8 +251,8 @@ private:
     const size_t rotary_embedding_dim_;
     const size_t random_seed_;
     const size_t max_seq_len_;
-    int64_t      tensor_para_size_;
-    int64_t      pipeline_para_size_;
+    const size_t rank_;
+    const size_t world_size_;
 
     static constexpr int num_events_ = 5;
     int                  ev_no_      = 0;
@@ -270,9 +265,6 @@ private:
     ft::cublasAlgoMap*      cublas_algo_map_;
     struct cudaDeviceProp   prop_;
     ft::LLaMAWeight<T>      llama_weights_;
-
-    ft::NcclParam tensor_para_;
-    ft::NcclParam pipeline_para_;
 
     ft::cublasMMWrapper* cublas_wrapper_;
     ft::IAllocator*      allocator_;
@@ -289,8 +281,8 @@ public:
           const int64_t            rotary_embedding_dim,
           const int64_t            random_seed,
           const int64_t            max_seq_len,
-          const int64_t            tensor_para_size,
-          const int64_t            pipeline_para_size,
+          const int64_t            rank,
+          const int64_t            world_size,
           const vector<th::Tensor> weights);
 
     ~LLaMA();

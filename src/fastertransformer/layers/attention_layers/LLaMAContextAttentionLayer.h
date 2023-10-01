@@ -34,9 +34,7 @@ private:
     const size_t rotary_embedding_dim_;
 
     // fmha runner
-    int                        sm_ = getSMVersion();
-    std::unique_ptr<MHARunner> dispatcher_fp16;
-
+    int  sm_ = getSMVersion();
     void allocateBuffer() override;
     void allocateBuffer(size_t batch_size, size_t seq_len, size_t attn_len, size_t max_seq_len, bool allocate_qk_buf);
     void freeBuffer() override;
@@ -60,23 +58,6 @@ protected:
     T*     qkv_buf_3_    = nullptr;
 
 public:
-    LLaMAContextAttentionLayer(size_t           head_num,
-                               size_t           size_per_head,
-                               cudaStream_t     stream,
-                               cublasMMWrapper* cublas_wrapper,
-                               IAllocator*      allocator,
-                               bool             is_free_buffer_after_forward,
-                               bool             is_qk_buf_float);
-
-    LLaMAContextAttentionLayer(size_t           head_num,
-                               size_t           size_per_head,
-                               size_t           local_head_num,
-                               cudaStream_t     stream,
-                               cublasMMWrapper* cublas_wrapper,
-                               IAllocator*      allocator,
-                               bool             is_free_buffer_after_forward,
-                               bool             is_qk_buf_float);
-
     LLaMAContextAttentionLayer(size_t           head_num,
                                size_t           size_per_head,
                                size_t           local_head_num,

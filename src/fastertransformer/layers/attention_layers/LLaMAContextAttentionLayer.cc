@@ -296,43 +296,6 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
 template<typename T>
 LLaMAContextAttentionLayer<T>::LLaMAContextAttentionLayer(size_t           head_num,
                                                           size_t           size_per_head,
-                                                          cudaStream_t     stream,
-                                                          cublasMMWrapper* cublas_wrapper,
-                                                          IAllocator*      allocator,
-                                                          bool             is_free_buffer_after_forward,
-                                                          bool             is_qk_buf_float):
-    BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, false),
-    head_num_(head_num),
-    size_per_head_(size_per_head),
-    hidden_units_(head_num * size_per_head),
-    rotary_embedding_dim_(0),
-    is_qk_buf_float_(is_qk_buf_float)
-{
-}
-
-template<typename T>
-LLaMAContextAttentionLayer<T>::LLaMAContextAttentionLayer(size_t           head_num,
-                                                          size_t           size_per_head,
-                                                          size_t           local_head_num,
-                                                          cudaStream_t     stream,
-                                                          cublasMMWrapper* cublas_wrapper,
-                                                          IAllocator*      allocator,
-                                                          bool             is_free_buffer_after_forward,
-                                                          bool             is_qk_buf_float):
-    BaseAttentionLayer<T>(stream, cublas_wrapper, allocator, is_free_buffer_after_forward, false),
-    head_num_(head_num),
-    size_per_head_(size_per_head),
-    hidden_units_(head_num * size_per_head),
-    rotary_embedding_dim_(0),
-    is_qk_buf_float_(is_qk_buf_float)
-{
-    FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    dispatcher_fp16.reset(new FusedMHARunnerFP16v2(head_num_, size_per_head_, sm_, 1.0f));
-}
-
-template<typename T>
-LLaMAContextAttentionLayer<T>::LLaMAContextAttentionLayer(size_t           head_num,
-                                                          size_t           size_per_head,
                                                           size_t           local_head_num,
                                                           size_t           rotary_embedding_dim,
                                                           cudaStream_t     stream,
@@ -348,7 +311,6 @@ LLaMAContextAttentionLayer<T>::LLaMAContextAttentionLayer(size_t           head_
     is_qk_buf_float_(is_qk_buf_float)
 {
     FT_LOG_DEBUG(__PRETTY_FUNCTION__);
-    dispatcher_fp16.reset(new FusedMHARunnerFP16v2(head_num_, size_per_head_, sm_, 1.0f));
 }
 
 template<typename T>
