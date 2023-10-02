@@ -24,7 +24,8 @@
 
 namespace fastertransformer {
 
-enum class LayerNormType {
+enum class LayerNormType
+{
     pre_layernorm,
     post_layernorm,
     InvalidType
@@ -60,6 +61,20 @@ void invokeAddBiasResidualLayerNorm(T*           out,
                                     const int    m,
                                     const int    n,
                                     cudaStream_t stream);
+
+template<typename T>
+void invokeGeneralLLaMAAddBiasResidualPreLayerNorm(T*           output,
+                                                   T*           norm_output,
+                                                   const T*     input,
+                                                   const T*     residual1,
+                                                   const T*     gamma,
+                                                   const T*     beta,
+                                                   const T*     bias,
+                                                   const float  layernorm_eps,
+                                                   int          m,
+                                                   int          n,
+                                                   cudaStream_t stream,
+                                                   int          opt_version = 2);
 
 template<typename T>
 void invokeGeneralAddBiasResidualPreLayerNorm(T*           output,
@@ -160,6 +175,15 @@ void invokeGeneralT5LayerNorm(T*           out,
                               const int    m,
                               const int    n,
                               cudaStream_t stream);
+
+template<typename T>
+void invokeGeneralLLaMALayerNorm(T*           out,
+                                 const T*     input,
+                                 const T*     gamma,
+                                 const float  layernorm_eps,
+                                 const int    m,
+                                 const int    n,
+                                 cudaStream_t stream);
 
 template<typename T>
 void invokeGeneralAddResidualT5PreLayerNorm(T*           output,

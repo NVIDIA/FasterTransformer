@@ -114,6 +114,21 @@ struct PrefixPromptBatchWeightsParam {
 };
 
 template<typename T>
+void invokeLLaMAAddFusedQKVBiasTranspose(T*           q_buf,
+                                         T*           k_buf,
+                                         T*           v_buf,
+                                         T*           QKV,
+                                         const int*   padding_offset,
+                                         const int    batch_size,
+                                         const int    seq_len,
+                                         const int    token_num,
+                                         const int    head_num,
+                                         const int    size_per_head,
+                                         const int    rotary_embedding_dim,
+                                         const int*   start_pos,
+                                         cudaStream_t stream);
+
+template<typename T>
 void invokeAddFusedQKVBiasTranspose(T*           q_buf,
                                     T*           k_buf,
                                     T*           v_buf,
@@ -188,6 +203,31 @@ void invokeTranspose4dBatchMajor(T*           k_dst,
                                  const int    size_per_head,
                                  const int    local_head_num,
                                  cudaStream_t stream);
+
+template<typename T>
+void invokeLLaMASaveToCache(T*           k_dst,
+                            T*           v_dst,
+                            const T*     k_src,
+                            const T*     v_src,
+                            const int*   context_lengths,
+                            const int    batch_size,
+                            const int    head_num,
+                            const int    size_per_head,
+                            const int    seq_len,
+                            const int    max_seq_len,
+                            cudaStream_t stream);
+template<typename T>
+void invokeLLaMALoadFromCache(T*           k_dst,
+                              T*           v_dst,
+                              const T*     k_src,
+                              const T*     v_src,
+                              const int    batch_size,
+                              const int    head_num,
+                              const int    size_per_head,
+                              const int    seq_len,
+                              const int    attn_len,
+                              const int    max_seq_len,
+                              cudaStream_t stream);
 
 template<typename T>
 void invokeAddRelativeAttentionBias(T*           qk_buf,

@@ -114,7 +114,70 @@ __global__ void start_id_embedding_position_lookups_kernel(T*                   
                                                                                                      length,           \
                                                                                                      max_length,       \
                                                                                                      batch_size,       \
-                                                                                                     hidden_units);
+                                                                                                     hidden_units)
+template<typename T>
+__global__ void start_id_embedding_lookups_kernel(T*            from_tensor,
+                                                  const T*      embedding_table,
+                                                  const int*    input_ids,
+                                                  const int     length,
+                                                  const int     batch_size,
+                                                  const int64_t hidden_units)
+{
+    for (int index = blockIdx.x * blockDim.x + threadIdx.x; index < batch_size * length * hidden_units;
+         index += blockDim.x * gridDim.x) {
+
+        // embedding lookup from word ids [batch, length] (part of [batch, length]) and [vocab, hidden] to generate
+        // embedding [batch, length, hidden]
+        const int word_index      = index / hidden_units;
+        const int word_index_row  = word_index / length;  // batch_id
+        const int word_index_col  = word_index % length;
+        const int real_word_index = word_index_row * length + word_index_col;
+        const int col_index       = index % hidden_units;
+        const int input_id        = input_ids == nullptr ? real_word_index : input_ids[real_word_index];
+
+        from_tensor[index] = embedding_table[input_id * hidden_units + col_index];
+    }
+}
+
+template<typename T>
+void invokeInputIdsEmbeddingLookup(T*           from_tensor,
+                                   const T*     embedding_table,
+                                   const int*   input_ids,
+                                   const int    length,
+                                   const int    batch_size,
+                                   const int    hidden_units,
+                                   cudaStream_t stream)
+{
+    dim3 grid(min(batch_size * length, 65536));
+    dim3 block(min(hidden_units, 512));
+    start_id_embedding_lookups_kernel<T>
+        <<<grid, block, 0, stream>>>(from_tensor, embedding_table, input_ids, length, batch_size, hidden_units);
+}
+
+template void invokeInputIdsEmbeddingLookup(float*       from_tensor,
+                                            const float* embedding_table,
+                                            const int*   input_ids,
+                                            const int    length,
+                                            const int    batch_size,
+                                            const int    hidden_units,
+                                            cudaStream_t stream);
+template void invokeInputIdsEmbeddingLookup(half*        from_tensor,
+                                            const half*  embedding_table,
+                                            const int*   input_ids,
+                                            const int    length,
+                                            const int    batch_size,
+                                            const int    hidden_units,
+                                            cudaStream_t stream);
+
+#ifdef ENABLE_BF16
+template void invokeInputIdsEmbeddingLookup(__nv_bfloat16*       from_tensor,
+                                            const __nv_bfloat16* embedding_table,
+                                            const int*           input_ids,
+                                            const int            length,
+                                            const int            batch_size,
+                                            const int            hidden_units,
+                                            cudaStream_t         stream);
+#endif
 
 template<typename T>
 void invokeInputIdsEmbeddingLookupPosEncoding(T*                    from_tensor,
@@ -203,27 +266,89 @@ template void invokeInputIdsEmbeddingLookupPosEncoding(__nv_bfloat16*           
 template<typename T>
 __global__ void inputIdsEmbeddingLookupPosEncodingSoftPrompt(inputIdsEmbeddingLookupPosEncodingSoftPromptParam<T> param)
 {
-    // 1. Copy the input ids to output ids and transpose output ids to [seq_len, batch_size, beam_width].
-    // 2. Embedding lookup by input ids and concat with soft prompt. The axis of concatenation is on axis of seq_len.
+    // 1. Copy the
+    // input ids to
+    // output ids
+    // and
+    // transpose
+    // output ids
+    // to [seq_len,
+    // batch_size,
+    // beam_width].
+    // 2. Embedding
+    // lookup by
+    // input ids
+    // and concat
+    // with soft
+    // prompt. The
+    // axis of
+    // concatenation
+    // is on axis
+    // of seq_len.
 
-    // Assume batch size is 2 and prompts are [[t1, t2], [t3], [t4, t5]], input_ids are [[s1, s2], [s3], [s4]]
-    // then the order of output_ids is
-    // [ [?, ?, s1, s2]
-    //   [?, s3, padding, padding]
-    //   [?, ?, s4, padding] ]
-    // and the order of embedding is
-    // [ [t1, t2, s1, s2]
-    //   [t3, s3, padding, padding]
-    //   [t4, t5, s4, padding] ]
-    // where "?" means undefined values and we should attach it.
+    // Assume batch
+    // size is 2
+    // and prompts
+    // are [[t1,
+    // t2], [t3],
+    // [t4, t5]],
+    // input_ids
+    // are [[s1,
+    // s2], [s3],
+    // [s4]] then
+    // the order of
+    // output_ids
+    // is [ [?, ?,
+    // s1, s2]
+    //   [?, s3,
+    //   padding,
+    //   padding]
+    //   [?, ?, s4,
+    //   padding] ]
+    // and the
+    // order of
+    // embedding is
+    // [ [t1, t2,
+    // s1, s2]
+    //   [t3, s3,
+    //   padding,
+    //   padding]
+    //   [t4, t5,
+    //   s4,
+    //   padding] ]
+    // where "?"
+    // means
+    // undefined
+    // values and
+    // we should
+    // attach it.
 
     for (int index = blockIdx.x * blockDim.x + threadIdx.x;
          index < param.batch_size * param.beam_width * (param.max_prefix_soft_prompt_length + param.max_input_length)
                      * param.hidden_units;
          index += blockDim.x * gridDim.x) {
-        // transpose the input_ids [batch, length] (part of [batch, beam, max_input_length]) to
-        // output_ids [length, batch, beam].
-        // ouptut_ids need to add padding in the beginning for soft prompting.
+        // transpose
+        // the
+        // input_ids
+        // [batch,
+        // length]
+        // (part of
+        // [batch,
+        // beam,
+        // max_input_length])
+        // to
+        // output_ids
+        // [length,
+        // batch,
+        // beam].
+        // ouptut_ids
+        // need to
+        // add
+        // padding
+        // in the
+        // beginning
+        // for soft
+        // prompting.
 
         if (index < param.batch_size * param.beam_width * param.max_input_length) {
             int       tmp_index = index;
@@ -239,21 +364,43 @@ __global__ void inputIdsEmbeddingLookupPosEncodingSoftPrompt(inputIdsEmbeddingLo
             }
         }
 
-        // embedding lookup from word ids [batch, beam, length] (part of [batch, beam, max_input_length]), [vocab,
-        // hidden] and [batch, max_prefix_soft_prompt_length, hidden] to generate embedding [batch, beam, length +
-        // max_prefix_soft_prompt_length, hidden]
-        int       tmp_index = index;
-        const int hidden_id = tmp_index % param.hidden_units;
-        tmp_index           = (tmp_index - hidden_id) / param.hidden_units;
-        const int seq_id    = tmp_index % (param.max_prefix_soft_prompt_length + param.max_input_length);
-        tmp_index           = (tmp_index - seq_id) / (param.max_prefix_soft_prompt_length + param.max_input_length);
-        const int beam_id   = tmp_index % param.beam_width;
-        tmp_index           = (tmp_index - beam_id) / param.beam_width;
-        const int batch_id  = tmp_index % param.batch_size;
+        // embedding
+        // lookup
+        // from
+        // word ids
+        // [batch,
+        // beam,
+        // length]
+        // (part of
+        // [batch,
+        // beam,
+        // max_input_length]),
+        // [vocab,
+        // hidden]
+        // and
+        // [batch,
+        // max_prefix_soft_prompt_length,
+        // hidden]
+        // to
+        // generate
+        // embedding
+        // [batch,
+        // beam,
+        // length +
+        // max_prefix_soft_prompt_length,
+        // hidden]
+        int       tmp_index    = index;
+        const int hidden_id    = tmp_index % param.hidden_units;
+        tmp_index              = (tmp_index - hidden_id) / param.hidden_units;
+        const int seq_id       = tmp_index % (param.max_prefix_soft_prompt_length + param.max_input_length);
+        tmp_index              = (tmp_index - seq_id) / (param.max_prefix_soft_prompt_length + param.max_input_length);
+        const int beam_id      = tmp_index % param.beam_width;
+        tmp_index              = (tmp_index - beam_id) / param.beam_width;
+        const int     batch_id = tmp_index % param.batch_size;
         const int64_t hidden_units = param.hidden_units;
-        T         embedding =
+        T             embedding =
             (seq_id < param.prefix_soft_prompt_lengths[batch_id]) ?
-                        (T)param.prefix_soft_prompt_embedding[batch_id * param.max_prefix_soft_prompt_length * hidden_units
+                            (T)param.prefix_soft_prompt_embedding[batch_id * param.max_prefix_soft_prompt_length * hidden_units
                                                       + seq_id * hidden_units + hidden_id] :
                             param.embedding_table[param.input_ids[batch_id * param.beam_width * param.max_input_length
                                                       + beam_id * param.max_input_length
@@ -292,7 +439,8 @@ template void invokeInputIdsEmbeddingLookupPosEncodingSoftPrompt(
     inputIdsEmbeddingLookupPosEncodingSoftPromptParam<__nv_bfloat16> param);
 #endif
 
-// TODO Add half2 implementation
+// TODO Add half2
+// implementation
 template<typename T>
 __global__ void transposeAxis01(T* out, T* in, const int dim0, const int dim1, const int dim2)
 {
@@ -329,9 +477,11 @@ invokeTransposeAxis01(int* out, int* in, const int dim0, const int dim1, const i
 template<typename T>
 __global__ void transposeAxis01(T* out, T* in, const int* in_skipping_dim1, const int dim0, const int dim1)
 {
-    // out: [dim1, dim0]
-    // in: [dim0, dim1]
-    // in_skipping_dim1: [dim1]
+    // out: [dim1,
+    // dim0] in:
+    // [dim0, dim1]
+    // in_skipping_dim1:
+    // [dim1]
 
     int index = threadIdx.x + blockIdx.x * blockDim.x;
     if (index < dim0 * dim1) {
@@ -363,8 +513,15 @@ __global__ void buildDecoderAttentionMaskKernel(T*         attention_mask,
                                                 const int  max_seq_len,
                                                 const int  max_prompt_length)
 {
-    // sequence_lengths: [batch_size]
-    // attention_mask: [batch_size, 1, max_seq_len, max_seq_len + max_prompt_length]
+    // sequence_lengths:
+    // [batch_size]
+    // attention_mask:
+    // [batch_size,
+    // 1,
+    // max_seq_len,
+    // max_seq_len
+    // +
+    // max_prompt_length]
     const int max_prompt_seq_length = max_seq_len + max_prompt_length;
     const int mask_size_per_seq     = max_seq_len * max_prompt_seq_length;
     attention_mask += blockIdx.x * mask_size_per_seq;
@@ -581,29 +738,100 @@ template<int TB_SIZE>
 __global__ void
 find_context_dups(int* shared_contexts, const int* input_ids, const size_t batch_size, const size_t input_seq_len)
 {
-    /* We compare all context pairs (i, j), with i (tgt) < j (src) , to detect duplicate
-     * inputs. If there's a match between i and j, we store i at the
-     * j-th position of shared_context. So that we know that j can be
-     * represented by i. shared_contexts is initialized like shared_contexts[i] = i
-     * and when there's a match, we actually use shared_contexts[j] = min(shared_contexts[j], i)
-     * so that in the end, shared_contexts effectively contains an index
-     * to the match with the lowest index context.
-     * Note that shared_contexts[i] <= i, a property that will be used when uncompacting
+    /* We compare
+     * all context
+     * pairs (i,
+     * j), with i
+     * (tgt) < j
+     * (src) , to
+     * detect
+     * duplicate
+     * inputs. If
+     * there's a
+     * match
+     * between i
+     * and j, we
+     * store i at
+     * the j-th
+     * position of
+     * shared_context.
+     * So that we
+     * know that j
+     * can be
+     * represented
+     * by i.
+     * shared_contexts
+     * is
+     * initialized
+     * like
+     * shared_contexts[i]
+     * = i and when
+     * there's a
+     * match, we
+     * actually use
+     * shared_contexts[j]
+     * =
+     * min(shared_contexts[j],
+     * i) so that
+     * in the end,
+     * shared_contexts
+     * effectively
+     * contains an
+     * index to the
+     * match with
+     * the lowest
+     * index
+     * context.
+     * Note that
+     * shared_contexts[i]
+     * <= i, a
+     * property
+     * that will be
+     * used when
+     * uncompacting
      * inputs.
      */
     typedef cub::BlockReduce<int, TB_SIZE>       BlockReduce;
     __shared__ typename BlockReduce::TempStorage temp_storage;
     __shared__ bool                              match;
 
-    /* Each block is responsible for a (i, j) pair. To map the block space to
-     * the i < j space, we need to convert a linear addressing to a triangle, of
-     * size (batch_size * (batch_size - 1)) / 2
-     * For more information, check https://en.wikipedia.org/wiki/Triangular_number
+    /* Each block
+     * is
+     * responsible
+     * for a (i, j)
+     * pair. To map
+     * the block
+     * space to the
+     * i < j space,
+     * we need to
+     * convert a
+     * linear
+     * addressing
+     * to a
+     * triangle, of
+     * size
+     * (batch_size
+     * * (batch_size - 1)) / 2
+     * For more
+     * information,
+     * check
+     * https://en.wikipedia.org/wiki/Triangular_number
      */
 
-    // blockIdx = [0, 1, 2, ... n(n-1)/2] -> base_index = [0, 1, 1, 2, 2, 2, 3, 3, 3, 3, ..., n - 2]
+    // blockIdx =
+    // [0, 1, 2,
+    // ...
+    // n(n-1)/2] ->
+    // base_index =
+    // [0, 1, 1, 2,
+    // 2, 2, 3, 3,
+    // 3, 3, ..., n
+    // - 2]
     const int base_index = floorf(0.5f * (sqrtf(1 + 8 * blockIdx.x) - 1));
-    const int src_idx    = base_index + 1;  // base_index \in [1, batch_size)
+    const int src_idx    = base_index + 1;  // base_index
+                                            // \in
+                                            // [1,
+                                            // batch_size)
 
     const int rev_base_index = base_index * (base_index + 1) / 2;
     const int tgt_idx        = blockIdx.x - rev_base_index;  // tgt_idx \in [0, src_idx)
@@ -659,9 +887,19 @@ __global__ void generate_dups_indices(int*         batch_to_compact,
 
         if (!masked && is_first_occur) {
             int compact_idx = scan + (first_iter ? 0 : scan_offset);
-            // Context rep. writes initial index
+            // Context
+            // rep.
+            // writes
+            // initial
+            // index
             batch_to_compact[seq_idx * beam_width] = compact_idx;
-            // input ids are tiled in context part
+            // input
+            // ids
+            // are
+            // tiled
+            // in
+            // context
+            // part
             compact_to_batch[compact_idx] = seq_idx * beam_width;
         }
 
@@ -674,13 +912,27 @@ __global__ void generate_dups_indices(int*         batch_to_compact,
         __syncthreads();
 
         if (!masked && !is_first_occur) {
-            // Fill the rest of batch_to_compact based on what rep. wrote
+            // Fill
+            // the
+            // rest
+            // of
+            // batch_to_compact
+            // based
+            // on
+            // what
+            // rep.
+            // wrote
             const int src_idx                      = batch_to_compact[shared_contexts[seq_idx] * beam_width];
             batch_to_compact[seq_idx * beam_width] = src_idx;
         }
 
         if (!masked) {
-            // set same compact idx for beams
+            // set
+            // same
+            // compact
+            // idx
+            // for
+            // beams
             for (int beam_id = 1; beam_id < beam_width; ++beam_id) {
                 batch_to_compact[seq_idx * beam_width + beam_id] = batch_to_compact[seq_idx * beam_width];
             }
@@ -713,11 +965,20 @@ void invokeFindContextDups(int*         shared_contexts,
 {
     dim3 block{512};
     dim3 grid{((int)batch_size + block.x - 1) / block.x};
-    // set shared_context[i] = i
+    // set
+    // shared_context[i] =
+    // i
     init_shared_contexts<<<grid, block, 0, stream>>>(shared_contexts, batch_size);
 
     grid = dim3{(unsigned int)(batch_size * (batch_size - 1)) / 2};
-    // set shared_contexts[i] = j, where j = min{k, such that input_ids[k] == input_ids[i]}
+    // set
+    // shared_contexts[i]
+    // = j, where j
+    // = min{k,
+    // such that
+    // input_ids[k]
+    // ==
+    // input_ids[i]}
     if (input_seq_len <= 128) {
         block = 128;
         find_context_dups<128><<<grid, block, 0, stream>>>(shared_contexts, input_ids, batch_size, input_seq_len);
@@ -727,8 +988,21 @@ void invokeFindContextDups(int*         shared_contexts,
         find_context_dups<256><<<grid, block, 0, stream>>>(shared_contexts, input_ids, batch_size, input_seq_len);
     }
 
-    // set batch_to_compact[i] = j, where j is the position of input_ids[i] in the compact_batch
-    // set compact_to_batch[i] = j, where j is such that compact_to_batch[i] = input_ids[j]
+    // set
+    // batch_to_compact[i]
+    // = j, where j
+    // is the
+    // position of
+    // input_ids[i]
+    // in the
+    // compact_batch
+    // set
+    // compact_to_batch[i]
+    // = j, where j
+    // is such that
+    // compact_to_batch[i]
+    // =
+    // input_ids[j]
     generate_dups_indices<<<1, DUPS_INDICES_BLOCK_SIZE, 0, stream>>>(
         batch_to_compact, compact_to_batch, compact_size, shared_contexts, batch_size, beam_width, input_seq_len);
 }
@@ -782,10 +1056,29 @@ void invokeCompactInputs(T*           compact_input,
                          size_t       hidden_dimension,
                          cudaStream_t stream)
 {
-    /* Compact relevant decoder_layer inputs based on the identical contexts.
-     * For example, decoder_input is [batch_size, seq_len, H]. It's compacted
-     * into compact_input [compact_size, seq_len, H] such that
-     * compact_input[i, ...] = decoder_input[compact_idx[i], ...] */
+    /* Compact
+     * relevant
+     * decoder_layer
+     * inputs based
+     * on the
+     * identical
+     * contexts.
+     * For example,
+     * decoder_input
+     * is
+     * [batch_size,
+     * seq_len, H].
+     * It's
+     * compacted
+     * into
+     * compact_input
+     * [compact_size,
+     * seq_len, H]
+     * such that
+     * compact_input[i,
+     * ...] =
+     * decoder_input[compact_idx[i],
+     * ...] */
     const size_t elems_n = compact_size * seq_len * max(hidden_dimension, seq_len);
     const dim3   blockDim(512);
     const dim3   gridDim((elems_n + 512 - 1) / 512);
@@ -828,8 +1121,19 @@ __global__ void uncompact_outputs(T*         uncompact_buffer,
                                   size_t     batch_size,
                                   size_t     buffer_stride)
 {
-    /* Uncompact a buffer IN of size [Compact, Stride] into OUT of size [Batch, Stride]
-     * so that \forall i, OUT[i, :] = IN[batch_to_compact_idx[i], :]
+    /* Uncompact a
+     * buffer IN of
+     * size
+     * [Compact,
+     * Stride] into
+     * OUT of size
+     * [Batch,
+     * Stride] so
+     * that \forall
+     * i, OUT[i, :]
+     * =
+     * IN[batch_to_compact_idx[i],
+     * :]
      */
     const int global_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -1124,4 +1428,5 @@ INSTANTIATE_INVOKE_SUM_LENGTH_DIMENSION(__nv_bfloat16);
 #endif
 #undef INSTANTIATE_INVOKE_SUM_LENGTH_DIMENSION
 
-}  // namespace fastertransformer
+}  // namespace
+   // fastertransformer
