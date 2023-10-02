@@ -69,8 +69,8 @@ std::unordered_map<std::string, ft::Tensor> ParallelGptTritonModelInstance<T>::c
     move_tensor_H2D(input_tensors->at("input_ids"), d_input_ids_, &allocator_);
     move_tensor_H2D(input_tensors->at("input_lengths"), d_input_lengths_, &allocator_);
 
+    h_total_output_lengths_ = (uint32_t*)std::realloc((void*)h_total_output_lengths_, request_batch_size * sizeof(uint32_t));
     const int input_data_len = input_tensors->at("input_ids").shape[1];
-    h_total_output_lengths_  = reinterpret_cast<uint32_t*>(malloc(request_batch_size * sizeof(uint32_t)));
     const bool continue_interactive =
         input_tensors->count("START") && reinterpret_cast<const int32_t*>(input_tensors->at("START").data)[0] == 0;
     for (int i = 0; i < request_batch_size; ++i) {
@@ -293,6 +293,7 @@ void ParallelGptTritonModelInstance<T>::freeBuffer()
     allocator_->free((void**)(&d_output_ctx_emb_));
     allocator_->free((void**)(&d_cum_log_probs_));
     allocator_->free((void**)(&d_is_finished_));
+    std::free(h_total_output_lengths_);
 }
 
 template struct ParallelGptTritonModelInstance<float>;
