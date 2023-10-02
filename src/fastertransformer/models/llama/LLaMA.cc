@@ -248,7 +248,9 @@ void LLaMA<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
         {"input_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size}, input_lengths}},
         {"context_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {batch_size}, context_lengths}},
         {"seq_len", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &seq_len}},
-        {"attn_len", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &attn_len}}};
+        {"attn_len", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &attn_len}},
+        {"is_context", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &is_context}},
+    };
 
     if (is_unpadded_mha) {
         decoder_input_tensors.insert({"padding_offset", Tensor{MEMORY_GPU, TYPE_INT32, {num_tokens}, padding_offset_}});

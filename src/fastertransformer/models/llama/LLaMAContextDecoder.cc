@@ -189,6 +189,8 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
     //      input_lengths [batch_size]
     //      context_lengths [batch_size]
     //      seq_len [1] int on cpu
+    //      attn_len [1] int on cpu
+    //      is_context [1] int on cpu
     //      padding_offset [batch_size] int on cpu
     //      cu_seqlens [batch_size+1] int on cpu
 
@@ -208,6 +210,7 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
     const int* context_lengths = input_tensors->at("context_lengths").getPtr<int>();
     const int  seq_len         = input_tensors->at("attention_mask").shape[2];
     const int  attn_len        = input_tensors->at("attention_mask").shape[3];
+    const int  is_context      = input_tensors->at("is_context").getVal<int>();
     const int* padding_offset  = nullptr;
     const int* cu_seqlens      = nullptr;
     if (is_unpadded_mha) {
@@ -267,6 +270,7 @@ void LLaMAContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*   
                     attention_mask}},
             {"context_lengths", Tensor{MEMORY_GPU, TYPE_INT32, {(size_t)batch_size}, context_lengths}},
             {"attention_type", Tensor{MEMORY_CPU, TYPE_VOID, {1}, &attention_type_}},
+            {"is_context", Tensor{MEMORY_CPU, TYPE_INT32, {1}, &is_context}},
         };
 
         if (is_unpadded_mha) {

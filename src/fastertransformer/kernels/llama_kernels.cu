@@ -41,9 +41,19 @@ template void invokeLLaMAGetLastTokens(
     float* out, float* in, const int* cu_seqlens, int batch_size, int hidden_size, cudaStream_t stream);
 template void invokeLLaMAGetLastTokens(
     half* out, half* in, const int* cu_seqlens, int batch_size, int hidden_size, cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeLLaMAGetLastTokens(
+    __nv_bfloat16* out, __nv_bfloat16* in, const int* cu_seqlens, int batch_size, int hidden_size, cudaStream_t stream);
+#endif
 
-__global__ void LLaMA_extract_targets(
-    float* out, float* in, const int* target_ids, const int* cu_seqlens, int beam_width, int batch_size, int vocab_size, int num_tokens)
+__global__ void LLaMA_extract_targets(float*     out,
+                                      float*     in,
+                                      const int* target_ids,
+                                      const int* cu_seqlens,
+                                      int        beam_width,
+                                      int        batch_size,
+                                      int        vocab_size,
+                                      int        num_tokens)
 {
     // in [batch_size, vocab_size]
     // target_ids [ beam_width, num_tokens ]
@@ -211,6 +221,14 @@ template void invokeLLaMAInputIdsEmbeddingLookup(half*        out,
                                                  const int    num_tokens,
                                                  const int    hidden_units,
                                                  cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeLLaMAInputIdsEmbeddingLookup(__nv_bfloat16*       out,
+                                                 const __nv_bfloat16* embedding_table,
+                                                 const int*           input_ids,
+                                                 const int            num_tokens,
+                                                 const int            hidden_units,
+                                                 cudaStream_t         stream);
+#endif
 
 __global__ void LLaMAgetPaddingOffsetAndCuSeqLensKernel(
     int* padding_offset, int* cu_seqlens, const int* sequence_length, const int batch_size, const int seq_len)
@@ -299,6 +317,15 @@ template void invokeLLaMABuildDecoderAttentionMask(half*        attention_mask,
                                                    const int    seq_len,
                                                    const int    attn_len,
                                                    cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeLLaMABuildDecoderAttentionMask(__nv_bfloat16* attention_mask,
+                                                   const int*     sequence_length,
+                                                   const int*     context_lengths,
+                                                   const int      batch_size,
+                                                   const int      seq_len,
+                                                   const int      attn_len,
+                                                   cudaStream_t   stream);
+#endif
 
 template<typename T>
 __global__ void LLaMACopyKernel(T* dst, T* src, const int count)
@@ -326,6 +353,9 @@ void invokeLLaMACopyKernel(T* dst, T* src, const int count, cudaStream_t stream)
 
 template void invokeLLaMACopyKernel(float* dst, float* src, const int count, cudaStream_t stream);
 template void invokeLLaMACopyKernel(half* dst, half* src, const int count, cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeLLaMACopyKernel(__nv_bfloat16* dst, __nv_bfloat16* src, const int count, cudaStream_t stream);
+#endif
 
 template<typename T>
 __global__ void LLaMAMemset0Kernel(T* dst, const int count)
@@ -352,5 +382,8 @@ void invokeLLaMAMemset0(T* dst, const int count, cudaStream_t stream)
 
 template void invokeLLaMAMemset0(float* dst, const int count, cudaStream_t stream);
 template void invokeLLaMAMemset0(half* dst, const int count, cudaStream_t stream);
+#ifdef ENABLE_BF16
+template void invokeLLaMAMemset0(__nv_bfloat16* dst, const int count, cudaStream_t stream);
+#endif
 
 }  // namespace fastertransformer

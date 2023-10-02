@@ -18,6 +18,7 @@
 #include "src/fastertransformer/layers/attention_layers/LLaMAContextAttentionLayer.h"
 #include "src/fastertransformer/kernels/layernorm_kernels.h"
 #include "src/fastertransformer/kernels/unfused_attention_kernels.h"
+#include "src/fastertransformer/kernels/llama_kernels.h"
 #include "src/fastertransformer/utils/llama_utils.h"
 #include "src/fastertransformer/utils/nvtx_utils.h"
 
@@ -87,7 +88,8 @@ void LLaMAContextAttentionLayer<T>::forward(TensorMap*                output_ten
 
     if (padding_offset != nullptr) {
         // q_buf_2_, k_buf_2_ and v_buf_2_ are continuous
-        cudaMemsetAsync(q_buf_2_, 0, batch_size * (seq_len + 2 * attn_len) * hidden_units_ * sizeof(T), stream_);
+        //cudaMemsetAsync(q_buf_2_, 0, batch_size * (seq_len + 2 * attn_len) * hidden_units_ * sizeof(T), stream_);
+        invokeLLaMAMemset0(q_buf_2_, batch_size * (seq_len + 2 * attn_len) * hidden_units_, stream_);
         sync_check_cuda_error();
     }
 
