@@ -265,11 +265,28 @@ void BartDecodingWeight<T>::loadModel(std::string dir_path)
     loadWeightFromBin<T>(
         weights_ptr[3], {(size_t)weights_size[3]}, dir_path + "/decoder.final_layer_norm.weight.bin", model_file_type);
     if (bart_with_bias) {
-        loadWeightFromBin<T>(weights_ptr[4],
-                             {(size_t)weights_size[4]},
-                             dir_path + "/decoder.final_layer_norm.bias.bin",
-                             model_file_type);
-        loadWeightFromBin<T>(weights_ptr[5], {(size_t)weights_size[5]}, dir_path + "/decoder.final_logits_bias.bin", model_file_type);
+        if (mbart) {
+            loadWeightFromBin<T>(weights_ptr[4],
+                                {(size_t)weights_size[4]},
+                                dir_path + "/decoder.layer_norm.weight.bin",
+                                model_file_type);
+            loadWeightFromBin<T>(weights_ptr[5],
+                                {(size_t)weights_size[5]},
+                                dir_path + "/decoder.final_layer_norm.bias.bin",
+                                model_file_type);
+            loadWeightFromBin<T>(weights_ptr[6],
+                                {(size_t)weights_size[6]},
+                                dir_path + "/decoder.layer_norm.bias.bin",
+                                model_file_type);
+            loadWeightFromBin<T>(weights_ptr[7], {(size_t)weights_size[7]}, dir_path + "/decoder.final_logits_bias.bin", model_file_type);
+
+        } else {
+            loadWeightFromBin<T>(weights_ptr[4],
+                                {(size_t)weights_size[4]},
+                                dir_path + "/decoder.final_layer_norm.bias.bin",
+                                model_file_type);
+            loadWeightFromBin<T>(weights_ptr[5], {(size_t)weights_size[5]}, dir_path + "/decoder.final_logits_bias.bin", model_file_type);
+        }
     }
 
     for (int l = 0; l < num_layer_; l++) {

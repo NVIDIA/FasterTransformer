@@ -183,11 +183,14 @@ BartTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::stri
 //         buf = new T[st];
 //         cudaMemcpy(buf, d_encoder_outputs_, sizeof(T) * st, cudaMemcpyDeviceToHost);
 //         printf("cudaMemcpy\n");
-//         for (int i=0; i<10; i++) {
-//             printf("%f ", double(buf[i]));
-//             if (i % 500 == 10 ) {
-//                 printf("\n");
+//         for (int i=0; i<mem_max_seq_len; i++) {
+//             for (int j=0; j<bart_encoder_->getDModel(); j++) {
+//                 if (j<10 || j >bart_encoder_->getDModel()-10) {
+//                     printf("%f ", double(buf[i*bart_encoder_->getDModel()+j]));
+//                 }
 //             }
+//             printf("\n");
+
 //         }
 //         printf("\n");
 // }

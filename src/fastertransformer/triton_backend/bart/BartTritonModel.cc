@@ -23,6 +23,7 @@ namespace ft = fastertransformer;
 
 std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createBartModel(std::string model_dir)
 {
+    printf("createBartModel\n");
     INIReader reader = INIReader(model_dir + "/config.ini");
     if (reader.ParseError() < 0) {
         std::cout << "[ERROR] Can't load '" << model_dir << "/config.ini"
@@ -30,7 +31,7 @@ std::shared_ptr<AbstractTransformerModel> AbstractTransformerModel::createBartMo
         return nullptr;
     }
 
-    const std::string data_type = reader.Get("ft_instance_hyperparameter", "data_type");
+    const std::string data_type = "fp32"; // reader.Get("ft_instance_hyperparameter", "data_type");
     if (data_type == "fp16") {
         // return std::make_shared<BartTritonModel<half>>(reader, model_dir);
         return std::make_shared<BartTritonModel<half>>(1, 1, 0, model_dir, 0);
@@ -60,6 +61,12 @@ BartTritonModel<T>::BartTritonModel(INIReader reader, std::string model_dir): mo
     encoder_num_layer_     = reader.GetInteger("encoder", "num_layers");
     encoder_vocab_size_    = reader.GetInteger("encoder", "vocab_size");
     encoder_max_pos_seq_len_ = reader.GetInteger("encoder", "max_pos_seq_len");
+    mbart_para_              = reader.GetBoolean("encoder", "mbart", false);
+    if (mbart_para_) {
+        layernorm_type_ = ft::LayerNormType::pre_layernorm;
+    } else {
+        layernorm_type_ = ft::LayerNormType::post_layernorm;
+    }
 
     // decoding
     decoding_head_num_      = reader.GetInteger("decoder", "num_heads");
@@ -111,7 +118,13 @@ BartTritonModel<T>::BartTritonModel(size_t      tensor_para_size,
     encoder_vocab_size_    = reader.GetInteger("encoder", "vocab_size");
     encoder_max_pos_seq_len_ =
         reader.GetInteger("encoder", "max_pos_seq_len");
-
+    mbart_para_              = reader.GetBoolean("encoder", "mbart", false);
+    if (mbart_para_) {
+        layernorm_type_ = ft::LayerNormType::pre_layernorm;
+    } else {
+        layernorm_type_ = ft::LayerNormType::post_layernorm;
+    }
+    
     // decoding
     decoding_head_num_      = reader.GetInteger("decoder", "num_heads");
     decoding_size_per_head_ = reader.GetInteger("decoder", "d_kv");

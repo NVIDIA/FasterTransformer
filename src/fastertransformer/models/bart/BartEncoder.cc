@@ -455,7 +455,7 @@ void BartEncoder<T>::forward(TensorMap*                  output_tensors,
 // {
 //         T* buf;
 //         int batch_size = 1;
-//         int seq_len = 11;
+//         int seq_len = 13;
 //         int st = batch_size * seq_len * d_model_;
 //         printf("st: %d %d %d %d\n",batch_size, seq_len, d_model_, st);
 //         buf = new T[st];
@@ -463,7 +463,7 @@ void BartEncoder<T>::forward(TensorMap*                  output_tensors,
 //         printf("bart_encoder_emb_buf_\n");
 //         for (int i=0; i < seq_len; i++) {
 //             for (int j=0; j<d_model_; j++) {
-//                 printf("%f ", double(buf[i+j*seq_len]));
+//                 printf("%f ", double(buf[i * d_model_+ j]));
 //                 if (j > 10) {
 //                     break;
 //                 }

@@ -228,7 +228,7 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
         ft::FT_CHECK(false);
     }
 
-    const size_t request_batch_size = reader.GetInteger("request", "request_batch_size");
+    const size_t request_batch_size = 1; //reader.GetInteger("request", "request_batch_size");
 
     const int start_id = reader.GetInteger("decoder", "start_id");
     const int end_id   = reader.GetInteger("decoder", "end_id");
@@ -251,6 +251,7 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
 
     RequestParam param;
     param.beam_width                 = reader.GetInteger("request", "beam_width");
+    // param.beam_width                 = 5;
     param.request_output_len         = reader.GetInteger("request", "request_output_len");
     param.beam_search_diversity_rate = reader.GetFloat("request", "beam_search_diversity_rate");
     param.runtime_top_k              = reader.GetInteger("request", "top_k");
@@ -261,7 +262,7 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
     param.presence_penalty           = reader.GetFloat("request", "presence_penalty", 0.0f);
     param.min_length                 = reader.GetInteger("request", "min_length", 0);
     param.random_seed                = (unsigned long long int)0;
-    param.start_id                   = start_id;
+    param.start_id                   = 250025;
     param.end_id                     = end_id;
 
     auto request_list =
@@ -381,10 +382,11 @@ int main(int argc, char* argv[])
     }
 
     const int* d_output_ids = (const int*)output_tensors_lists[0].get()->at("output_ids").data;
-    const int  batch_size   = output_tensors_lists[0].get()->at("output_ids").shape[0];
+    const int  batch_size   = 1; // output_tensors_lists[0].get()->at("output_ids").shape[0];
     const int  beam_width   = output_tensors_lists[0].get()->at("output_ids").shape[1];
     const int  seq_len      = output_tensors_lists[0].get()->at("output_ids").shape[2];
     const int* d_input_lengths = (const int*)output_tensors_lists[0].get()->at("input_sequence_lengths").data;
+    printf("batch_size: %d beam_width: %d seq_len: %d\n", batch_size, beam_width, seq_len);
     // step 6: check results
     if (node_id == 0) {
 

@@ -16,6 +16,7 @@ import torch
 import torch.nn as nn
 import torch.distributed as dist
 import numpy as np
+from transformers import MBartForConditionalGeneration, BartModel
 
 class FTBartEncoderWeight(object):
     def __init__(

@@ -91,7 +91,6 @@ private:
 
     // bart structure difference
     bool                      bart_with_bias_ = true;
-    // TODO(zhwang): support mbart.
     bool                      mbart_para_ = false;
     bool                      use_gated_activation_ = false;
     ft::PositionEmbeddingType position_embedding_type_ = ft::PositionEmbeddingType::absolute;

@@ -546,35 +546,33 @@ void BartDecoder<T>::forward(std::vector<Tensor>*                           outp
                                                        stream_);
         }
         sync_check_cuda_error();
-// {
-//     {
-//                     T* buf;
-//                     int st = local_batch_size * d_model_;
-//                     buf = new T[st];
-//                     cudaMemcpy(buf, decoder_output, sizeof(T) * st, cudaMemcpyDeviceToHost);
-//                     auto step_ptr = input_tensors->at(4).data;
-//                     int step = ((int*)step_ptr)[0];
-//                     if (step == 1) {
-//                         printf("decoder_output at layer %d step %d\n", l, step);
-//                         for (int i=0; i<50; i++) {
-//                             printf("%f ", double(buf[i]));
-//                         }
-//                         printf("buf last: %f\n", double(buf[st-1]));
-//                         printf("\n");
-//                     }
-//     }
-// }
+
         if (isLastLayerParallelId(l) == true && pipeline_para_.rank_ != pipeline_para_.world_size_ - 1
             && pipeline_para_.world_size_ > 1) {
             // ftNcclSend(decoder_output, local_batch_size * d_model_, pipeline_para_.rank_ + 1,
             // pipeline_para_, stream_);
-
             ftNcclSend(decoder_output + local_batch_size * d_model_ / tensor_para_.world_size_ * tensor_para_.rank_,
                        local_batch_size * d_model_ / tensor_para_.world_size_,
                        pipeline_para_.rank_ + 1,
                        pipeline_para_,
                        stream_);
         }
+        // {
+        //             T* buf;
+        //             int st = local_batch_size * d_model_;
+        //             buf = new T[st];
+        //             cudaMemcpy(buf, decoder_output, sizeof(T) * st, cudaMemcpyDeviceToHost);
+        //             auto step_ptr = input_tensors->at(4).data;
+        //             int step = ((int*)step_ptr)[0];
+        //             if (step == 1) {
+        //                 printf("decoder_output at layer %d step %d\n", l, step);
+        //                 for (int i=0; i<50; i++) {
+        //                     printf("%f ", double(buf[i]));
+        //                 }
+        //                 printf("buf last: %f\n", double(buf[st-1]));
+        //                 printf("\n");
+        //             }
+        // }
     }
 
     if (is_free_buffer_after_forward_ == true) {
