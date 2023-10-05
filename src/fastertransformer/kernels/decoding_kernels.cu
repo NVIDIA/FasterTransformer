@@ -64,6 +64,34 @@ void invokeDecodingInitialize(bool*        finished,
         finished, sequence_length, word_ids, cum_log_probs, sentence_ids, batch_size, beam_width, max_input_length);
 }
 
+__global__ void forceId(int*       word_ids,
+                        const int* force_bos_ids,
+                        const int  batch_size,
+                        const int  beam_width,
+                        const int  step)
+{
+    for (int index = blockIdx.x * blockDim.x + threadIdx.x; index < batch_size * beam_width;
+         index += blockDim.x * gridDim.x) {
+        if (word_ids != nullptr) {
+            word_ids[index+step*batch_size*beam_width] = force_bos_ids[index / beam_width];
+        }
+    }
+}
+
+void invokeForceId(int*         word_ids,
+                   const int*   force_bos_ids,
+                   const int    batch_size,
+                   const int    beam_width,
+                   const int    step,
+                   cudaStream_t stream)
+{
+    dim3 grid((int)ceil(batch_size * beam_width * 1.0 / 256));
+    dim3 block(256);
+
+    forceId<<<grid, block, 0, stream>>>(
+        word_ids, force_bos_ids, batch_size, beam_width, step);
+}
+
 template void invokeDecodingInitialize(bool*        finished,
                                        int*         sequence_length,
                                        int*         word_ids,

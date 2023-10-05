@@ -94,8 +94,9 @@ protected:
     bool*              finished_buf_              = nullptr;
     bool*              h_finished_buf_            = nullptr;
 
-    int* start_ids_buf_ = nullptr;
-    int* end_ids_buf_   = nullptr;
+    int* start_ids_buf_         = nullptr;
+    int* forced_bos_ids_buf_    = nullptr;
+    int* end_ids_buf_           = nullptr;
 
     T*   key_cache_             = nullptr;
     T*   value_cache_           = nullptr;

@@ -33,6 +33,13 @@ void invokeDecodingInitialize(bool*        finished,
                               const int    max_input_length,
                               cudaStream_t stream);
 
+void invokeForceId(int*         word_ids,
+                   const int*   force_bos_ids,
+                   const int    batch_size,
+                   const int    beam_width,
+                   const int    step,
+                   cudaStream_t stream);
+
 // get token from all_ids at step, then lookup from the embedding table
 // by the token
 template<typename T>
