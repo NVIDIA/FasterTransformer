@@ -25,10 +25,13 @@
 ////////////////////////////////////////////////////////////////////////////////////////////////////
 
 #define MGQA_LAUNCH_KERNEL(                                                                                            \
-    T, Dh, Dh_MAX, THDS_PER_KEY, THDS_PER_VALUE, THDS_PER_BLOCK, HAS_BEAMS, stream)                \
-    size_t smem_sz = mmha::smem_size_in_bytes<T>(params, THDS_PER_VALUE, THDS_PER_BLOCK);          \
+    T, Dh, Dh_MAX, THDS_PER_KEY, THDS_PER_VALUE, THDS_PER_BLOCK, HAS_BEAMS, stream)                                    \
+    size_t smem_sz = mmha::smem_size_in_bytes<T>(params, THDS_PER_VALUE, THDS_PER_BLOCK);                              \
     dim3   grid(params.num_heads, params.batch_size);                                                                  \
-    mmha::masked_groupedquery_attention_kernel<T,                                                                         \
+    cudaFuncSetAttribute(mmha::masked_groupedquery_attention_kernel<T,                                                 \
+        Dh, Dh_MAX, THDS_PER_KEY, THDS_PER_VALUE, THDS_PER_BLOCK, HAS_BEAMS>,                                          \
+        cudaFuncAttributeMaxDynamicSharedMemorySize, smem_sz);                                                         \
+    mmha::masked_groupedquery_attention_kernel<T,                                                                      \
                                             Dh,                                                                        \
                                             Dh_MAX,                                                                    \
                                             THDS_PER_KEY,                                                              \
@@ -43,7 +46,6 @@ void mgqa_launch_kernel(const KERNEL_PARAMS_TYPE& params, const cudaStream_t& st
 {
     constexpr int  THREADS_PER_VALUE  = threads_per_value_t<T, Dh_MAX>::value;
     int            tlength            = params.timestep;
-    // printf("tlength, CROSS_ATTENTION = %d, %d\n", tlength);
     if (params.cache_indir == nullptr) {
         if (tlength < 32) {
             MGQA_LAUNCH_KERNEL(T, Dh, Dh_MAX, 4, THREADS_PER_VALUE, 64, false, stream);
