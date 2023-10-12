@@ -121,6 +121,12 @@ void invokeTileGptInputs(int*         tiled_input_ids,
                          const int    max_input_length,
                          cudaStream_t stream);
 
+void invokeCalculateNewTokenLength(int*         output_lengths,
+                                   const int*   input_lengths,
+                                   const int    batch_size,
+                                   const int    beam_width,
+                                   cudaStream_t stream);
+
 void invokeFindContextDups(int*         shared_contexts,
                            int*         batch_to_compact,
                            int*         compact_to_batch,

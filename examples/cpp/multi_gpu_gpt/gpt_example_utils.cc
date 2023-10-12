@@ -45,7 +45,6 @@ int read_start_ids(size_t            batch_size,
             int               i1 = 0;
             std::vector<int>  tmp_vec;
             while (std::getline(lineStream, vals, ',')) {
-                printf("vals: %s\n", vals.c_str());
                 tmp_vec.push_back(std::stoi(vals));
                 i1++;
             }

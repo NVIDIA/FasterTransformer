@@ -568,6 +568,30 @@ void invokeTileGptInputs(int*         tiled_input_ids,
                               stream);
 }
 
+__global__ void calculateNewTokenLength(int*       output_lengths,
+                                        const int* input_lengths,
+                                        const int  batch_size,
+                                        const int  beam_width)
+{
+    for (int index = blockIdx.x * blockDim.x + threadIdx.x; index < batch_size * beam_width;
+         index += blockDim.x * gridDim.x) {
+        output_lengths[index] -= input_lengths[index / beam_width];
+    }
+}
+
+void invokeCalculateNewTokenLength(int*         output_lengths,
+                                   const int*   input_lengths,
+                                   const int    batch_size,
+                                   const int    beam_width,
+                                   cudaStream_t stream) {
+    dim3 grid((int)ceil(batch_size * beam_width * 1.0 / 256));
+    dim3 block(256);
+
+    calculateNewTokenLength<<<grid, block, 0, stream>>>(
+        output_lengths, input_lengths, batch_size, beam_width);
+}
+
+
 void setSeqLimitLen(uint32_t* seq_len_d, Tensor seq_len, int limit_len_offset, int batch_size)
 {
     std::vector<uint32_t> seq_len_h(batch_size);
