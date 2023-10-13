@@ -1255,7 +1255,7 @@ void Llama<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*       o
         cudaAutoCpy(cum_log_probs.getPtr<float>(), cum_log_probs_, cum_log_probs.size(), stream_);
     }
     invokeCalculateNewTokenLength(sequence_lengths,
-                                  input_lengths,
+                                  max_input_length,
                                   batch_size,
                                   beam_width,
                                   stream_);
