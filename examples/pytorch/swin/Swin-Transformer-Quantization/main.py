@@ -216,10 +216,10 @@ def main(config, args):
         for epoch in range(args.num_epochs):
             data_loader_train.sampler.set_epoch(epoch)
 
-            train_one_epoch(config, model, criterion, data_loader_train, optimizer, epoch, 
+            train_loss = train_one_epoch(config, model, criterion, data_loader_train, optimizer, epoch, 
                 mixup_fn, teacher, distillation_loss)
             if dist.get_rank() == 0 and (epoch % config.SAVE_FREQ == 0 or epoch == (config.TRAIN.EPOCHS - 1)):
-                save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, logger)
+                save_checkpoint(config, epoch, model_without_ddp, max_accuracy, optimizer, lr_scheduler, train_loss, logger)
 
             acc1, acc5, loss = validate(config, data_loader_val, model)
             logger.info(f"Accuracy of the network on the {len(dataset_val)} test images: {acc1:.1f}%")
@@ -294,6 +294,7 @@ def train_one_epoch(config, model, criterion, data_loader_train, optimizer, epoc
                 f'mem {memory_used:.0f}MB')
     epoch_time = time.time() - start
     logger.info(f"EPOCH {epoch} training takes {datetime.timedelta(seconds=int(epoch_time))}")
+    return loss_meter.avg
 
 
 @torch.no_grad()

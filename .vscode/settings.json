@@ -68,5 +68,7 @@
         "future": "cpp",
         "cfenv": "cpp",
         "typeindex": "cpp"
-    }
+    },
+    "editor.suggest.snippetsPreventQuickSuggestions": false,
+    "aiXcoder.showTrayIcon": true
 }
