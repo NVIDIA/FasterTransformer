@@ -315,6 +315,14 @@ void llama_example(const INIReader reader)
                                                        false,  // with_relative_position_bias
                                                        true);  // causal_mask
 
+    float shared_contexts_ratio = 1.f;
+
+    char * ft_shared_contexts_ratio = std::getenv("FT_SHARED_CONTEXTS_RATIO");
+    if (ft_shared_contexts_ratio != nullptr) {
+        shared_contexts_ratio = atof(ft_shared_contexts_ratio);
+        printf("Override shared_contexts_ratio as: %f\n", shared_contexts_ratio);
+    }
+
     Llama<T> gpt = Llama<T>(head_num,
                             kv_head_num,
                             size_per_head,
@@ -347,7 +355,7 @@ void llama_example(const INIReader reader)
                             int8_mode,
                             nullptr,
                             0,
-                            1.0f);
+                            shared_contexts_ratio);
 
     int* d_output_ids;
     int* d_sequence_lengths;

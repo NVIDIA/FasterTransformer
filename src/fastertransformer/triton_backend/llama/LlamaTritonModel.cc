@@ -155,6 +155,13 @@ std::unique_ptr<AbstractTransformerModelInstance> LlamaTritonModel<T>::createMod
 
     ft::NcclParam tensor_para   = nccl_params.first[comms_rank];
     ft::NcclParam pipeline_para = nccl_params.second[comms_rank];
+    float shared_contexts_ratio = 1.f;
+
+    char * ft_shared_contexts_ratio = std::getenv("FT_SHARED_CONTEXTS_RATIO");
+    if (ft_shared_contexts_ratio != nullptr) {
+        shared_contexts_ratio = atof(ft_shared_contexts_ratio);
+        printf("Override shared_contexts_ratio as: %f\n", shared_contexts_ratio);
+    }
 
     auto              gpt            = std::make_unique<ft::Llama<T>>(
         ft::Llama<T>(head_num_,
@@ -188,7 +195,8 @@ std::unique_ptr<AbstractTransformerModelInstance> LlamaTritonModel<T>::createMod
                      ft::AttentionType::FUSED_MHA,
                      int8_mode_,
                      custom_all_reduce_comm,
-                     enable_custom_all_reduce_));
+                     enable_custom_all_reduce_,
+                     shared_contexts_ratio));
 
     return std::unique_ptr<LlamaTritonModelInstance<T>>(
         new LlamaTritonModelInstance<T>(std::move(gpt),
