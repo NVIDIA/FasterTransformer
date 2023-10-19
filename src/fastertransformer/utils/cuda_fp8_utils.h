@@ -20,6 +20,7 @@
 #include <cuda_fp8.h>
 #include <cuda_runtime.h>
 #include <stdint.h>
+#include <stdio.h>
 
 // #define FP8_MHA
 #if defined(__CUDA_ARCH__) && __CUDA_ARCH__ == 900
