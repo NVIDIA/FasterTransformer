@@ -101,7 +101,7 @@ if(USE_TRITONSERVER_DATATYPE)
   add_definitions("-DUSE_TRITONSERVER_DATATYPE")
 endif()
 
-set(CXX_STD "14" CACHE STRING "C++ standard")
+set(CXX_STD "17" CACHE STRING "C++ standard")
 
 set(CUDA_PATH ${CUDA_TOOLKIT_ROOT_DIR})
 
@@ -238,7 +238,7 @@ if(BUILD_TF2)
   add_definitions(-D_GLIBCXX_USE_CXX11_ABI=1)
 endif()
 
-set(PYTHON_PATH "python" CACHE STRING "Python path")
+set(PYTHON_PATH "python3" CACHE STRING "Python path")
 if(BUILD_PYT)
   execute_process(COMMAND ${PYTHON_PATH} "-c" "from __future__ import print_function; import torch; print(torch.__version__,end='');"
                   RESULT_VARIABLE _PYTHON_SUCCESS
@@ -348,6 +348,12 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:ParallelGptDecoderLayerWeight>
   $<TARGET_OBJECTS:ParallelGptTritonBackend>
   $<TARGET_OBJECTS:ParallelGptWeight>
+  $<TARGET_OBJECTS:LlamaFiD>
+  $<TARGET_OBJECTS:LlamaContextDecoder>
+  $<TARGET_OBJECTS:LlamaDecoder>
+  $<TARGET_OBJECTS:LlamaDecoderLayerWeight>
+  $<TARGET_OBJECTS:LlamaTritonBackend>
+  $<TARGET_OBJECTS:LlamaWeight>
   $<TARGET_OBJECTS:T5Common>
   $<TARGET_OBJECTS:T5Decoder>
   $<TARGET_OBJECTS:T5Decoding>
@@ -428,9 +434,9 @@ target_link_libraries(transformer-shared PUBLIC
   -lnvToolsExt
 )
 endif()
-  
+
 if (ENABLE_FP8)
-target_link_libraries(transformer-shared PUBLIC 
+target_link_libraries(transformer-shared PUBLIC
   $<TARGET_OBJECTS:BertFP8>
   $<TARGET_OBJECTS:BertFP8Weight>
   $<TARGET_OBJECTS:DecoderSelfAttentionFP8Layer>

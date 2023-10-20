@@ -50,7 +50,7 @@
 
 template<typename T>
 struct Multihead_attention_params_base {
-
+    int rotary_position = 0;
     // The output buffer. Dimensions B x D.
     T* out = nullptr;
 
@@ -132,7 +132,7 @@ struct Multihead_attention_params: public Multihead_attention_params_base<T> {
     // required in case of cross attention
     // will need it here till if constexpr in c++17
     int* memory_length_per_sample = nullptr;
-
+    
     // required in case of masked attention with different length
     const int* length_per_sample = nullptr;
 };
@@ -149,7 +149,7 @@ struct Multihead_attention_params<T, true>: public Multihead_attention_params_ba
 
     // required in case of cross attention
     int* memory_length_per_sample = nullptr;
-
+    
     // required in case of masked attention with different length
     const int* length_per_sample = nullptr;
 };

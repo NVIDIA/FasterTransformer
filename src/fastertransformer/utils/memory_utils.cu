@@ -22,6 +22,7 @@
 #include <curand_kernel.h>
 #include <sys/stat.h>
 #include <unordered_map>
+#include "cuda_fp16.h"
 
 namespace fastertransformer {
 
@@ -748,6 +749,55 @@ __global__ void transpose0213(T_OUT* dst, T_IN* src, const int dim0, const int d
     }
 }
 
+template<typename T_OUT, typename T_IN>
+__global__ void flattenKV(T_OUT* dst, T_IN* src, const int dim0, const int dim1, const int dim2, const int dim3, const int dim4, const int n_context, const int dim3_diff)
+{
+    // src permutation: [dim0, dim1, dim2, dim3, dim4]
+    // dst permutation: [dim0, dim1/n_context, dim2, dim3*n_context + dim3_diff, dim4]
+    for (size_t tid = threadIdx.x + blockIdx.x * blockDim.x; tid < dim0 * dim1 * dim2 * dim3 * dim4;
+         tid += blockDim.x * gridDim.x) {
+        
+        int       tmp_idx   = tid;
+        const int new_dim1 = dim1 / n_context;
+        const int new_dim3 = dim3 * n_context + dim3_diff;
+
+        const int dim_4_idx = tmp_idx % dim4;
+        tmp_idx             = (tmp_idx - dim_4_idx) / dim4;
+        const int dim_3_idx = tmp_idx % dim3;
+        tmp_idx             = (tmp_idx - dim_3_idx) / dim3;
+        const int dim_2_idx = tmp_idx % dim2;
+        tmp_idx             = (tmp_idx - dim_2_idx) / dim2;
+        const int dim_1_idx = tmp_idx % dim1;
+        tmp_idx             = (tmp_idx - dim_1_idx) / dim1;
+        const int dim_0_idx = tmp_idx % dim0;
+
+        const int new_dim_1_idx = dim_1_idx / n_context;
+        const int new_dim_3_idx = dim3 * (dim_1_idx % n_context) + dim_3_idx;
+        //dst[dim_0_idx * dim2 * dim1 * dim3 * dim4 + dim_2_idx * (dim1 * dim3 * dim4) + dim_1_idx * dim3 * dim4 + dim_3_idx * dim4 + dim_3_idx] = src[tid];
+        dst[dim_0_idx * new_dim1 * dim2 * new_dim3 * dim4 + 
+            new_dim_1_idx * dim2 * new_dim3 * dim4 + 
+            dim_2_idx * new_dim3 * dim4 +
+            new_dim_3_idx * dim4 +
+            dim_4_idx
+        ] = src[tid];
+    }
+}
+template<typename T>
+void invokeFlattenKV(T* dst, T* src, const int dim0, const int dim1, const int dim2, const int dim3, const int dim4, const int n_context, const int dim3_diff)
+{
+    flattenKV<<<256, 256>>>(dst, src, dim0, dim1, dim2, dim3, dim4, n_context, dim3_diff);
+}
+#ifdef ENABLE_FP8
+template void invokeFlattenKV(
+    __nv_fp8_e4m3* dst, __nv_fp8_e4m3* src, const int dim0, const int dim1, const int dim2, const int dim3, const int dim4, const int n_context, const int dim3_diff);
+#endif  // ENABLE_FP8
+#ifdef ENABLE_BF16
+template void invokeFlattenKV(
+    __nv_bfloat16* dst, __nv_bfloat16* src, const int dim0, const int dim1, const int dim2, const int dim3, const int dim4, const int n_context, const int dim3_diff);
+#endif  // ENABLE_BF16
+template void invokeFlattenKV(float* dst, float* src, const int dim0, const int dim1, const int dim2, const int dim3, const int dim4, const int n_context, const int dim3_diff);
+template void invokeFlattenKV(__half* dst, __half* src, const int dim0, const int dim1, const int dim2, const int dim3, const int dim4, const int n_context, const int dim3_diff);
+
 template<typename T>
 void invokeInPlaceTranspose0213(T* data, T* workspace, const int dim0, const int dim1, const int dim2, const int dim3)
 {
@@ -767,6 +817,7 @@ template void invokeInPlaceTranspose0213(
 #endif  // ENABLE_BF16
 template void invokeInPlaceTranspose0213(
     float* data, float* workspace, const int dim0, const int dim1, const int dim2, const int dim3);
+
 
 template<typename T_OUT, typename T_IN>
 __global__ void transpose102(T_OUT* dst, T_IN* src, const int dim0, const int dim1, const int dim2)
