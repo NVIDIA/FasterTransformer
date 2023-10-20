@@ -78,7 +78,8 @@ TensorParallelSiluFfnLayer<T>::TensorParallelSiluFfnLayer(size_t           max_b
                                                           bool             is_sparse,
                                                           bool             use_gated_activation,
                                                           std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
-                                                          int                                 enable_custom_all_reduce):
+                                                          int                                 enable_custom_all_reduce,
+                                                          int              int8_mode):
     SiluFfnLayer<T>(max_batch_size,
                     max_seq_len,
                     head_num,
@@ -90,6 +91,7 @@ TensorParallelSiluFfnLayer<T>::TensorParallelSiluFfnLayer(size_t           max_b
                     allocator,
                     is_free_buffer_after_forward,
                     is_sparse,
+                    int8_mode,
                     use_gated_activation),
     tensor_para_(tensor_para),
     custom_all_reduce_comm_(custom_all_reduce_comm),
