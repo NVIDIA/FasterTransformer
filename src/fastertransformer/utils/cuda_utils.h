@@ -27,6 +27,7 @@
 #include <iostream>
 #include <string>
 #include <vector>
+#include <stdio.h>
 #ifdef SPARSITY_ENABLED
 #include <cusparseLt.h>
 #endif
