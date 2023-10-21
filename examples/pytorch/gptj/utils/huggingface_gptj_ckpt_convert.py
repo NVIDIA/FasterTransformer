@@ -101,7 +101,7 @@ if __name__ == "__main__":
         "--output-dir", help="Folder where binary files are stored", default="gpt-j-6B/c-models/"
     )
     parser.add_argument(
-        "--ckpt-dir", help="File of GPT-J huggingface checkpoint", default="gpt-j-6B/"
+        "--ckpt-dir", help="File of GPT-J huggingface checkpoint", default="gpt-j-6B"
     )
     parser.add_argument(
         "--n-inference-gpus", help="Number of GPUs used for inference runtime", default=1, type=int
