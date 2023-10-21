@@ -20,6 +20,7 @@
 #include "src/fastertransformer/utils/cuda_fp8_utils.h"
 #include "src/fastertransformer/utils/cuda_type_utils.cuh"
 #include <stdint.h>
+#include <stdio.h>
 
 using namespace fastertransformer;
 
