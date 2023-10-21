@@ -7,11 +7,13 @@
   - [Introduction](#introduction)
     - [Inference Options](#inference-options)
     - [Supported features](#supported-features)
-  - [Setup](#setup)
+  - [Setup from EleutherAI checkpoint](#setup-from-eleutherai-checkpoint)
     - [Requirements](#requirements)
     - [Download the model](#download-the-model)
     - [Tokenizer](#tokenizer)
+  - [Setup from HuggingFace checkpoint](#setup-from-huggingface-checkpoint)
     - [Run GPT-NeoX](#run-gpt-neox)
+
 
 ## Introduction
 
