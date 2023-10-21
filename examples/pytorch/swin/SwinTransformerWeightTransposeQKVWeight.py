@@ -146,7 +146,9 @@ class SwinTransformerWeightTransposeQKVWeight(object):
                     if version == 2:
                         logit_scale_name = 'layers.{}.blocks.{}.attn.logit_scale'.format(layer_idx, block_idx)
                         if logit_scale_name in weights:
-                            self.weights.append(torch.clamp(weights[logit_scale_name], max=torch.log(torch.tensor(1. / 0.01))).exp())
+                            device = weights[logit_scale_name].device
+                            max_value = torch.log(torch.tensor(1. / 0.01)).to(device)
+                            self.weights.append(torch.clamp(weights[logit_scale_name], max=max_value).exp())
                         else:
                             print("[ERROR][SwinTransformerWeights::__init__] missing weight {}.".format(logit_scale_name))
                             exit(-1)
