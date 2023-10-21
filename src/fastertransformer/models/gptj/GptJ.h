@@ -53,11 +53,14 @@ private:
     int                                 enable_custom_all_reduce_;
 
     AttentionType attention_type_;
+    const int int8_mode_ = 0;
 
     size_t     vocab_size_padded_;
     const bool is_context_qk_buf_float_ =
         (std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM") == nullptr ||
          std::string(std::getenv("CONTEXT_ATTENTION_BMM1_HALF_ACCUM")) != "ON");
+    
+    float shared_contexts_ratio_;
 
     // Prompt Learning Parameters
     PromptLearningType prompt_learning_type_;
@@ -117,6 +120,11 @@ protected:
 
     bool* generation_should_stop_ = nullptr;
 
+    int* shared_contexts_idx_  = nullptr;
+    int* compact_idx_          = nullptr;
+    int* batch_to_compact_idx_ = nullptr;
+    int* compact_size_         = nullptr;
+
     T*     context_decoder_input_buf_;
     T*     context_decoder_output_buf_;
     float* output_log_probs_buf_;
@@ -161,8 +169,10 @@ public:
          bool                                is_free_buffer_after_forward,
          cudaDeviceProp*                     cuda_device_prop         = nullptr,
          AttentionType                       attention_type           = AttentionType::UNFUSED_MHA,
+         int                                 int8_mode                = 0,
          std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
-         int                                 enable_custom_all_reduce = 0);
+         int                                 enable_custom_all_reduce = 0,
+         float                               shared_contexts_ratio    = 1.0f);
 
     GptJ(size_t                              max_batch_size,
          size_t                              max_seq_len,
@@ -193,8 +203,10 @@ public:
          bool                                is_free_buffer_after_forward,
          cudaDeviceProp*                     cuda_device_prop         = nullptr,
          AttentionType                       attention_type           = AttentionType::UNFUSED_MHA,
+         int                                 int8_mode                = 0,
          std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm   = nullptr,
-         int                                 enable_custom_all_reduce = 0);
+         int                                 enable_custom_all_reduce = 0,
+         float                               shared_contexts_ratio    = 1.0f);
 
     GptJ(GptJ<T> const& GptJ);
 

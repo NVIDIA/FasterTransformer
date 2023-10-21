@@ -40,7 +40,7 @@ void GptJContextDecoder<T>::initialize()
                                                                           is_free_buffer_after_forward_,
                                                                           is_qk_buf_float_,
                                                                           false,
-                                                                          0,
+                                                                          int8_mode_,
                                                                           custom_all_reduce_comm_,
                                                                           enable_custom_all_reduce_);
 
@@ -57,7 +57,7 @@ void GptJContextDecoder<T>::initialize()
                                                    true,
                                                    is_free_buffer_after_forward_,
                                                    false,
-                                                   0,
+                                                   int8_mode_,
                                                    false,  // use_gated_activation = false;
                                                    custom_all_reduce_comm_,
                                                    enable_custom_all_reduce_);
@@ -70,7 +70,7 @@ void GptJContextDecoder<T>::allocateBuffer()
 }
 
 template<typename T>
-void GptJContextDecoder<T>::allocateBuffer(size_t batch_size, size_t seq_len)
+void GptJContextDecoder<T>::allocateBuffer(size_t batch_size, size_t seq_len, bool use_shared_contexts)
 {
     decoder_normed_input_ = reinterpret_cast<T*>(
         allocator_->reMalloc(decoder_normed_input_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
@@ -84,6 +84,18 @@ void GptJContextDecoder<T>::allocateBuffer(size_t batch_size, size_t seq_len)
     padding_offset_ =
         reinterpret_cast<int*>(allocator_->reMalloc(padding_offset_, sizeof(int) * batch_size * seq_len, false));
     cu_seqlens_ = reinterpret_cast<int*>(allocator_->reMalloc(cu_seqlens_, sizeof(int) * (batch_size + 1), false));
+    if (use_shared_contexts) {
+        compact_decoder_features_ = reinterpret_cast<T*>(
+            allocator_->reMalloc(compact_decoder_features_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
+        compact_attention_mask_ = reinterpret_cast<T*>(
+            allocator_->reMalloc(compact_attention_mask_, sizeof(T) * batch_size * seq_len * seq_len, false));
+        compact_input_lengths_ =
+            reinterpret_cast<int*>(allocator_->reMalloc(compact_input_lengths_, sizeof(int) * batch_size, false));
+        k_cache_layer_ = reinterpret_cast<T*>(
+            allocator_->reMalloc(k_cache_layer_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
+        v_cache_layer_ = reinterpret_cast<T*>(
+            allocator_->reMalloc(v_cache_layer_, sizeof(T) * batch_size * seq_len * hidden_units_, false));
+    }
     is_allocate_buffer_ = true;
 }
 
@@ -98,6 +110,13 @@ void GptJContextDecoder<T>::freeBuffer()
         allocator_->free((void**)(&h_pinned_token_num_ptr_), true);
         allocator_->free((void**)(&padding_offset_));
         allocator_->free((void**)(&cu_seqlens_));
+        if (compact_decoder_features_ != nullptr) {
+            allocator_->free((void**)(&compact_decoder_features_));
+            allocator_->free((void**)(&compact_attention_mask_));
+            allocator_->free((void**)(&compact_input_lengths_));
+            allocator_->free((void**)(&k_cache_layer_));
+            allocator_->free((void**)(&v_cache_layer_));
+        }
         is_allocate_buffer_ = false;
     }
 }
@@ -149,6 +168,7 @@ GptJContextDecoder<T>::GptJContextDecoder(size_t                              ma
                                           bool                                is_free_buffer_after_forward,
                                           bool                                is_qk_buf_float,
                                           AttentionType                       attention_type,
+                                          int                                 int8_mode,
                                           std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
                                           int                                 enable_custom_all_reduce):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
@@ -166,6 +186,7 @@ GptJContextDecoder<T>::GptJContextDecoder(size_t                              ma
     pipeline_para_(pipeline_para),
     is_qk_buf_float_(is_qk_buf_float),
     attention_type_(attention_type),
+    int8_mode_(int8_mode),
     custom_all_reduce_comm_(custom_all_reduce_comm),
     enable_custom_all_reduce_(enable_custom_all_reduce)
 {
@@ -188,6 +209,7 @@ GptJContextDecoder<T>::GptJContextDecoder(GptJContextDecoder<T> const& decoder):
     pipeline_para_(decoder.pipeline_para_),
     is_qk_buf_float_(decoder.is_qk_buf_float_),
     attention_type_(decoder.attention_type_),
+    int8_mode_(decoder.int8_mode_),
     custom_all_reduce_comm_(decoder.custom_all_reduce_comm_),
     enable_custom_all_reduce_(decoder.enable_custom_all_reduce_)
 {
@@ -241,21 +263,43 @@ void GptJContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*    
     // For example, the shape of decoder_input becomes [ite, batch_size, seq_len, hidden_dimension] during
     // computing.
 
-    FT_CHECK(input_tensors->size() == 5);
+    FT_CHECK(input_tensors->size() >= 5);
     FT_CHECK(output_tensors->size() == 4);
 
-    const int batch_size = input_tensors->at("decoder_input").shape[0];
-    const int seq_len    = input_tensors->at("decoder_input").shape[1];  // max_input_len
+    const bool use_shared_contexts = input_tensors->find("compact_idx") != input_tensors->end();
+    FT_CHECK(!use_shared_contexts || (input_tensors->find("batch_to_compact_idx") != input_tensors->end()));
+    const size_t request_batch_size = input_tensors->at("decoder_input").shape[0];
+    // compacted batch size.
+    const size_t batch_size =
+        use_shared_contexts ? input_tensors->at("compact_idx").shape[0] : input_tensors->at("decoder_input").shape[0];
+    const int seq_len = input_tensors->at("decoder_input").shape[1];  // max_input_len
+    // The maximum length of generation.
+    const size_t max_seq_len = output_tensors->at("value_cache").shape[3];
+
     const int max_prompt_length =
         input_tensors->at("attention_mask").shape[3] - input_tensors->at("attention_mask").shape[2];
     const DataType data_type = getTensorType<T>();
-    allocateBuffer(batch_size, seq_len);
+    allocateBuffer(batch_size, seq_len, use_shared_contexts);
 
     T*         decoder_input           = input_tensors->at("decoder_input").getPtr<T>();
     T*         decoder_output          = output_tensors->at("decoder_output").getPtr<T>();
     const T*   attention_mask          = input_tensors->at("attention_mask").getPtr<const T>();
     const T**  d_prefix_prompt_batch   = input_tensors->at("d_prefix_prompt_batch").getPtr<const T*>();
     const int* d_prefix_prompt_lengths = input_tensors->at("d_prefix_prompt_lengths").getPtr<const int>();
+
+    if (use_shared_contexts) {
+        invokeCompactInputs(compact_decoder_features_,
+                            compact_attention_mask_,
+                            compact_input_lengths_,
+                            decoder_input,
+                            attention_mask,
+                            input_tensors->at("input_lengths").getPtr<int>(),
+                            input_tensors->at("compact_idx").getPtr<int>(),
+                            batch_size,
+                            seq_len,
+                            hidden_units_,
+                            stream_);
+    }
 
     const int local_batch_size = getLocalBatchSize(batch_size, seq_len, pipeline_para_.world_size_);
     FT_CHECK(batch_size % local_batch_size == 0);
@@ -274,6 +318,12 @@ void GptJContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*    
         self_v_cache_size.push_back(*t);
     }
 
+    if (use_shared_contexts) {
+        // we use k_cache_layer_ and v_cache_layer_
+        self_k_cache_size[3] = seq_len;
+        self_v_cache_size[2] = seq_len;
+    }
+
     AttentionType attention_type  = (d_prefix_prompt_lengths != nullptr) ?
                                         getUnfusedAttentionType(attention_type_) :
                                         attention_type_;
@@ -282,7 +332,8 @@ void GptJContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*    
     for (int ite = 0; ite < iteration_num; ite++) {
         size_t h_token_num = local_batch_size * seq_len;
         if (is_unpadded_mha) {
-            const int* base_input_lengths = input_tensors->at("input_lengths").getPtr<int>();
+            const int* base_input_lengths =
+                use_shared_contexts ? compact_input_lengths_ : input_tensors->at("input_lengths").getPtr<int>();
             invokeGetPaddingOffsetAndCuSeqLens(h_pinned_token_num_ptr_,
                                                &h_token_num,
                                                padding_offset_,
@@ -298,8 +349,9 @@ void GptJContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*    
             }
 
             if (l == 0 && is_unpadded_mha) {
+                const T* base_input = (use_shared_contexts ? compact_decoder_features_ : decoder_input);
                 invokeRemovePadding(decoder_layer_output_,
-                                    decoder_input + ite * local_batch_size * seq_len * hidden_units_,
+                                    base_input + ite * local_batch_size * seq_len * hidden_units_,
                                     padding_offset_,
                                     h_token_num,
                                     hidden_units_,
@@ -310,11 +362,11 @@ void GptJContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*    
             T* layer_output = decoder_layer_output_;
             if (!is_unpadded_mha) {
                 if (l == 0) {
-                    layer_input = decoder_input;
+                    layer_input = use_shared_contexts ? compact_decoder_features_ : decoder_input;
                     layer_input += ite * local_batch_size * seq_len * hidden_units_;
                 }
                 if (l == num_layer_ - 1) {
-                    layer_output = decoder_output;
+                    layer_output = use_shared_contexts ? compact_decoder_features_ : decoder_output;
                     layer_output += ite * local_batch_size * seq_len * hidden_units_;
                 }
             }
@@ -339,11 +391,13 @@ void GptJContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*    
                                    h_token_num,
                                    hidden_units_,
                                    (float*)nullptr,
-                                   0,
+                                   int8_mode_,
                                    stream_);
             sync_check_cuda_error();
 
             const bool is_final = false;  // TODO(bhsueh) remove this flag
+
+            const T* attention_ptr = use_shared_contexts ? compact_attention_mask_ : attention_mask;
 
             TensorMap self_attention_input_tensors{
                 {"input_query",
@@ -352,7 +406,7 @@ void GptJContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*    
                  Tensor{MEMORY_GPU,
                         data_type,
                         {(size_t)local_batch_size, (size_t)1, (size_t)seq_len, (size_t)(seq_len + max_prompt_length)},
-                        attention_mask + local_batch_size * ite * seq_len * (seq_len + max_prompt_length)}},
+                        attention_ptr + local_batch_size * ite * seq_len * (seq_len + max_prompt_length)}},
                 {"attention_type", Tensor{MEMORY_CPU, TYPE_VOID, {1}, &attention_type}},
                 {"is_final_layer", Tensor{MEMORY_CPU, TYPE_BOOL, {(size_t)1}, &is_final}},
                 {"layer_id", Tensor{MEMORY_CPU, TYPE_INT32, {(size_t)1}, &l}}};
@@ -388,16 +442,42 @@ void GptJContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*    
             }
             cache_offset += ite_cache_offset;
 
+            T* k_cache_ptr = use_shared_contexts ? k_cache_layer_ : k_cache.getPtrWithOffset<T>(cache_offset);
+            T* v_cache_ptr = use_shared_contexts ? v_cache_layer_ : v_cache.getPtrWithOffset<T>(cache_offset);
+
             TensorMap self_attention_output_tensors{
                 {"hidden_features",
                  Tensor{MEMORY_GPU, data_type, {h_token_num, (size_t)hidden_units_}, self_attn_output_}},
-                {"key_cache", Tensor{MEMORY_GPU, data_type, self_k_cache_size, k_cache.getPtrWithOffset(cache_offset)}},
-                {"value_cache",
-                 Tensor{MEMORY_GPU, data_type, self_v_cache_size, v_cache.getPtrWithOffset(cache_offset)}}};
+                {"key_cache", Tensor{MEMORY_GPU, data_type, self_k_cache_size, k_cache_ptr}},
+                {"value_cache", Tensor{MEMORY_GPU, data_type, self_v_cache_size, v_cache_ptr}}};
 
             self_attention_layer_->forward(&self_attention_output_tensors,
                                            &self_attention_input_tensors,
                                            &gpt_decoder_layer_weight->at(l).self_attention_weights);
+
+            if (use_shared_contexts) {
+                // Even with local batches, we must process the whole K/V caches as any
+                // element in batch_idx_to_compact_idx may reference the local batch
+                // we're processing. We also need to discard references that aren't in
+                // that particular local batch.
+                const size_t cache_stride_per_batch = hidden_units_ / tensor_para_.world_size_ * max_seq_len;
+                const size_t cache_layer_offset =
+                    (l - getFirstLayerParallelId()) * request_batch_size * cache_stride_per_batch;
+                invokeUnCompactCaches(k_cache.getPtrWithOffset<T>(cache_layer_offset),
+                                      v_cache.getPtrWithOffset<T>(cache_layer_offset),
+                                      k_cache_layer_,
+                                      v_cache_layer_,
+                                      input_tensors->at("batch_to_compact_idx").getPtr<int>(),
+                                      request_batch_size,  // batch_size (uncompact)
+                                      v_cache.shape[2],    // local_head_num
+                                      max_seq_len,
+                                      seq_len,
+                                      size_per_head_,
+                                      local_batch_size,
+                                      ite,
+                                      stream_);
+                sync_check_cuda_error();
+            }
 
             if (is_final == false) {
                 TensorMap ffn_input_tensors(
@@ -429,7 +509,8 @@ void GptJContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*    
                 }
 
                 if ((l == num_layer_ - 1) && is_unpadded_mha) {
-                    invokeRebuildPadding(decoder_output + ite * local_batch_size * seq_len * hidden_units_,
+                    T* base_ptr = use_shared_contexts ? compact_decoder_features_ : decoder_output;
+                    invokeRebuildPadding(base_ptr + ite * local_batch_size * seq_len * hidden_units_,
                                          decoder_layer_output_,
                                          padding_offset_,
                                          h_token_num,
@@ -440,12 +521,22 @@ void GptJContextDecoder<T>::forward(std::unordered_map<std::string, Tensor>*    
         }
     }
 
+    if (use_shared_contexts) {
+        invokeUnCompactOutputs(decoder_output,
+                               compact_decoder_features_,
+                               input_tensors->at("batch_to_compact_idx").getPtr<int>(),
+                               request_batch_size,  // batch
+                               seq_len * hidden_units_,
+                               stream_);
+        sync_check_cuda_error();
+    }
+
     // TODO(bhsueh) We could optimize this point by only computing the last token for the last layer
     invokeLookupHiddenStateOfLastToken(output_tensors->at("last_token_hidden_units").getPtr<T>(),
                                        output_tensors->at("decoder_output").getPtr<T>(),
                                        input_tensors->at("input_lengths").getPtr<int>(),
                                        seq_len,
-                                       batch_size,
+                                       request_batch_size,
                                        hidden_units_,
                                        stream_);
     sync_check_cuda_error();

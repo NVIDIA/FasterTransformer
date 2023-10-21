@@ -43,12 +43,14 @@ struct GptJTritonModel: public AbstractTransformerModel {
                     size_t                                     pipeline_para_size,
                     int                                        enable_custom_all_reduce,
                     std::string                                model_name,
-                    std::string                                model_dir);
+                    std::string                                model_dir,
+                    int                                        int8_mode);
 
     GptJTritonModel(size_t      tensor_para_size,
                     size_t      pipeline_para_size,
                     int         enable_custom_all_reduce,
-                    std::string model_dir);
+                    std::string model_dir,
+                    int         int8_mode);
 
     ~GptJTritonModel() = default;
 
@@ -83,6 +85,8 @@ private:
 
     bool is_fp16_;
     int  enable_custom_all_reduce_ = 0;
+
+    int  int8_mode_ = 0;
 
     // shared weights for each device
     std::vector<std::shared_ptr<ft::GptJWeight<T>>> shared_weights_;

@@ -37,6 +37,7 @@ struct GptJWeight {
         const int                                  tensor_para_rank     = 0,
         const int                                  layer_para_size      = 1,
         const int                                  layer_para_rank      = 0,
+        const int                                  int8_mode            = 0,
         PromptLearningType                         prompt_learning_type = PromptLearningType::no_prompt,
         std::map<std::string, std::pair<int, int>> prompt_learning_pair = std::map<std::string, std::pair<int, int>>{});
 
@@ -79,6 +80,8 @@ private:
     int tensor_para_rank_;
     int layer_para_size_;
     int layer_para_rank_;
+
+    size_t int8_mode_    = 0;
 
     // prompt learning pair (task_name, (task_name_id, prompt_len))
     PromptLearningType                         prompt_learning_type_;

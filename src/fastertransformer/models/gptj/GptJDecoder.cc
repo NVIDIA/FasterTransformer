@@ -35,7 +35,7 @@ void GptJDecoder<T>::initialize()
                                                                            true,
                                                                            is_free_buffer_after_forward_,
                                                                            false,
-                                                                           0,
+                                                                           int8_mode_,
                                                                            custom_all_reduce_comm_,
                                                                            enable_custom_all_reduce_);
 
@@ -52,7 +52,7 @@ void GptJDecoder<T>::initialize()
                                                    true,
                                                    is_free_buffer_after_forward_,
                                                    false,
-                                                   0,
+                                                   int8_mode_,
                                                    false,  // use_gated_activation = false;
                                                    custom_all_reduce_comm_,
                                                    enable_custom_all_reduce_);
@@ -134,6 +134,7 @@ GptJDecoder<T>::GptJDecoder(size_t                              max_batch_size,
                             cublasMMWrapper*                    cublas_wrapper,
                             IAllocator*                         allocator,
                             bool                                is_free_buffer_after_forward,
+                            int                                 int8_mode,
                             std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
                             int                                 enable_custom_all_reduce):
     BaseLayer(stream, cublas_wrapper, allocator, is_free_buffer_after_forward),
@@ -148,6 +149,7 @@ GptJDecoder<T>::GptJDecoder(size_t                              max_batch_size,
     hidden_units_(head_num_ * size_per_head),
     tensor_para_(tensor_para),
     pipeline_para_(pipeline_para),
+    int8_mode_(int8_mode),
     custom_all_reduce_comm_(custom_all_reduce_comm),
     enable_custom_all_reduce_(enable_custom_all_reduce)
 {
@@ -167,6 +169,7 @@ GptJDecoder<T>::GptJDecoder(GptJDecoder<T> const& decoder):
     hidden_units_(decoder.hidden_units_),
     tensor_para_(decoder.tensor_para_),
     pipeline_para_(decoder.pipeline_para_),
+    int8_mode_(decoder.int8_mode_),
     custom_all_reduce_comm_(decoder.custom_all_reduce_comm_),
     enable_custom_all_reduce_(decoder.enable_custom_all_reduce_)
 {
@@ -268,7 +271,7 @@ void GptJDecoder<T>::forward(std::unordered_map<std::string, Tensor>*       outp
                                local_batch_size,
                                hidden_units_,
                                (float*)nullptr,
-                               0,
+                               int8_mode_,
                                stream_);
         sync_check_cuda_error();
 

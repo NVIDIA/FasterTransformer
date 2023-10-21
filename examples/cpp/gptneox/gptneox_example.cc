@@ -47,6 +47,8 @@ int main(int argc, char* argv[])
         ini_name = "../examples/cpp/gptneox/gptneox_config.ini";
     }
 
+    std::cout << "Ini file name: " << ini_name << std::endl;
+
     INIReader reader = INIReader(ini_name);
     if (reader.ParseError() < 0) {
         std::cout << "[ERROR] Can't load '" << ini_name << "'\n";
@@ -76,6 +78,7 @@ void gptneox_example(const INIReader reader)
 
     int tensor_para_size   = reader.GetInteger("ft_instance_hyperparameter", "tensor_para_size");
     int pipeline_para_size = reader.GetInteger("ft_instance_hyperparameter", "pipeline_para_size");
+    int int8_mode  = reader.GetInteger("ft_instance_hyperparameter", "int8_mode", 0);
 
     const size_t head_num             = reader.GetInteger(model_name, "head_num");
     const size_t size_per_head        = reader.GetInteger(model_name, "size_per_head");
@@ -275,6 +278,7 @@ void gptneox_example(const INIReader reader)
                                                     pipeline_para.world_size_,
                                                     pipeline_para.rank_,
                                                     use_gptj_residual,
+                                                    int8_mode,
                                                     prompt_learning_type,
                                                     prefix_prompt_table_pair);
 
@@ -321,7 +325,11 @@ void gptneox_example(const INIReader reader)
                                 &allocator,
                                 false,
                                 &prop,
-                                attention_type);
+                                attention_type,
+                                int8_mode,
+                                nullptr,
+                                0,
+                                1.0f);
 
     int* d_output_ids;
     int* d_sequence_lengths;

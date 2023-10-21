@@ -30,7 +30,8 @@ struct GptNeoXTritonModel: public AbstractTransformerModel {
     GptNeoXTritonModel(size_t      tensor_para_size,
                        size_t      pipeline_para_size,
                        int         enable_custom_all_reduce,
-                       std::string model_dir);
+                       std::string model_dir,
+                       int         int8_mode);
 
     ~GptNeoXTritonModel() = default;
 
@@ -67,6 +68,8 @@ private:
 
     // residual type
     bool use_gptj_residual_ = true;
+
+    int  int8_mode_ = 0;
 
     // number of tasks (for prefix-prompt, p/prompt-tuning)
     size_t                                     num_tasks_                  = 0;

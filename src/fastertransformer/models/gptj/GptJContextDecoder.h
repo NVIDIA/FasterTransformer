@@ -59,6 +59,7 @@ private:
     int                                 enable_custom_all_reduce_;
 
     AttentionType attention_type_;
+    int int8_mode_ = 0;
 
     bool is_qk_buf_float_;
 
@@ -66,7 +67,7 @@ private:
     FfnLayer<T>*           ffn_layer_;
 
     void allocateBuffer() override;
-    void allocateBuffer(size_t batch_size, size_t seq_len);
+    void allocateBuffer(size_t batch_size, size_t seq_len, bool use_shared_contexts);
     void freeBuffer() override;
 
     bool isValidLayerParallelId(uint l);
@@ -84,6 +85,12 @@ protected:
     size_t* h_pinned_token_num_ptr_ = nullptr;
     int*    padding_offset_         = nullptr;
     int*    cu_seqlens_             = nullptr;
+
+    T*   compact_decoder_features_ = nullptr;
+    T*   compact_attention_mask_   = nullptr;
+    int* compact_input_lengths_    = nullptr;
+    T*   k_cache_layer_            = nullptr;
+    T*   v_cache_layer_            = nullptr;
 
 public:
     GptJContextDecoder(size_t                              max_batch_size,
@@ -103,6 +110,7 @@ public:
                        bool                                is_free_buffer_after_forward,
                        bool                                is_qk_buf_float,
                        AttentionType                       attention_type            = AttentionType::UNFUSED_MHA,
+                       int                                 int8_mode                = 0,
                        std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm    = nullptr,
                        int                                 enable_custom_all_reduce_ = 0);
 

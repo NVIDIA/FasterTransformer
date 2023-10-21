@@ -29,6 +29,7 @@ GptNeoXWeight<T>::GptNeoXWeight(const int                                  hidde
                                 const int                                  layer_para_size,
                                 const int                                  layer_para_rank,
                                 const bool                                 use_gptj_residual,
+                                const int                                  int8_mode,
                                 PromptLearningType                         prompt_learning_type,
                                 std::map<std::string, std::pair<int, int>> prompt_learning_pair):
     hidden_units_(hidden_units),
@@ -41,6 +42,7 @@ GptNeoXWeight<T>::GptNeoXWeight(const int                                  hidde
     layer_para_size_(layer_para_size),
     layer_para_rank_(layer_para_rank),
     use_gptj_residual_(use_gptj_residual),
+    int8_mode_(int8_mode),
     prompt_learning_type_(prompt_learning_type),
     prompt_learning_pair_(prompt_learning_pair)
 {
@@ -62,7 +64,7 @@ GptNeoXWeight<T>::GptNeoXWeight(const int                                  hidde
     for (int l = 0; l < num_layer_; l++) {
         if (isValidLayerParallelId(l)) {
             decoder_layer_weights.push_back(new GptNeoXDecoderLayerWeight<T>(
-                hidden_units_, inter_size_, tensor_para_size_, tensor_para_rank_, use_gptj_residual_));
+                hidden_units_, inter_size_, tensor_para_size_, tensor_para_rank_, use_gptj_residual_, int8_mode_));
         }
         else {
             // Layer-parallelism: allocate empty layer because
@@ -103,6 +105,7 @@ GptNeoXWeight<T>::GptNeoXWeight(const GptNeoXWeight& other):
     layer_para_size_(other.layer_para_size_),
     layer_para_rank_(other.layer_para_rank_),
     use_gptj_residual_(other.use_gptj_residual_),
+    int8_mode_(other.int8_mode_),
     prompt_token_weight_size_(other.prompt_token_weight_size_),
     malloc_load_prompt_weights_(other.malloc_load_prompt_weights_),
     prompt_learning_type_(other.prompt_learning_type_),
@@ -149,6 +152,7 @@ GptNeoXWeight<T>& GptNeoXWeight<T>::operator=(const GptNeoXWeight& other)
     layer_para_size_            = other.layer_para_size_;
     layer_para_rank_            = other.layer_para_rank_;
     use_gptj_residual_          = other.use_gptj_residual_;
+    int8_mode_                  = other.int8_mode_;
     prompt_token_weight_size_   = other.prompt_token_weight_size_;
     malloc_load_prompt_weights_ = other.malloc_load_prompt_weights_;
     prompt_learning_type_       = other.prompt_learning_type_;
