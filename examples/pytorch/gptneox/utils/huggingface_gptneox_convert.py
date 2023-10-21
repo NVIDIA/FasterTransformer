@@ -82,7 +82,7 @@ def split_and_convert_process(saved_dir, factor, key, args, config, val):
             split_vals[j].tofile(saved_path)
 
 
-def split_and_convert(args):
+def split_and_convert(args, pool_fn):
     saved_dir = args.saved_dir + "/%d-gpu/" % args.infer_gpu_num
 
     if os.path.exists(saved_dir) == False:
@@ -137,14 +137,6 @@ def split_and_convert(args):
         "mlp.dense_4h_to_h.bias",
         "mlp.dense_4h_to_h.weight",
     ]
-
-    huggingface_model_file_list = [__fn for __fn in os.listdir(args.in_file) if __fn.endswith(".bin")]
-    if len(huggingface_model_file_list) > 1:
-        multiprocessing_context = multiprocessing.get_context()
-        pool_fn = multiprocessing_context.Pool
-    else:
-        torch.multiprocessing.set_start_method("spawn")
-        pool_fn = multiprocessing.Pool
 
     pool = pool_fn(args.processes)
 
@@ -248,4 +240,17 @@ if __name__ == "__main__":
     __dir = os.path.join(args.saved_dir, "%d-gpu" % args.infer_gpu_num)
     assert not os.path.exists(__dir), "target path has exist, please remove %s first." % __dir
 
-    split_and_convert(args)
+    if os.path.exists(args.in_file):
+        huggingface_model_file_list = [__fn for __fn in os.listdir(args.in_file) if __fn.endswith(".bin")]
+    else:
+        huggingface_model_file_list = []
+
+    huggingface_model_file_list = [__fn for __fn in os.listdir(args.in_file) if __fn.endswith(".bin")]
+    if len(huggingface_model_file_list) > 1:
+        multiprocessing_context = multiprocessing.get_context()
+        pool_fn = multiprocessing_context.Pool
+    else:
+        torch.multiprocessing.set_start_method("spawn")
+        pool_fn = multiprocessing.Pool
+
+    split_and_convert(args, pool_fn)
