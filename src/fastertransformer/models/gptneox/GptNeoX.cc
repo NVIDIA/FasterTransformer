@@ -1092,19 +1092,19 @@ void GptNeoX<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*      
 
     const size_t batch_size       = output_tensors->at("output_ids").shape[0];
     const size_t beam_width       = output_tensors->at("output_ids").shape[1];
-    uint*        sequence_lengths = output_tensors->at("sequence_length").getPtr<uint>();
+    int*         sequence_lengths = output_tensors->at("sequence_length").getPtr<int>();
     const size_t max_prefix_soft_prompt_length =
         has_prefix_soft_prompt_ ? input_tensors->at("request_prompt_embedding").shape[1] : 0;
 
+    cudaAutoCpy(sequence_lengths, sequence_lengths_, output_tensors->at("sequence_length").size(), stream_);
+
     if (input_tensors->at("input_ids").shape[1] == 0) {
-        invokeCudaD2DcpyConvert(
-            sequence_lengths, sequence_lengths_, output_tensors->at("sequence_length").size(), stream_);
         // TODO: D2D sequence_lenghts
         if (beam_width > 1) {
             // For beam search, do gather_tree
             // take output_parent_ids as inter buffer
             invokeGatherTree(transposed_output_ids_buf_,
-                             sequence_lengths_,
+                             sequence_lengths,
                              max_output_seq_len,
                              batch_size,
                              beam_width,
@@ -1136,7 +1136,7 @@ void GptNeoX<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*      
         // For sampling, it is equivalent to all parent ids are 0.
         gatherTreeParam param;
         param.beams                = transposed_output_ids_buf_;
-        param.max_sequence_lengths = sequence_lengths_;
+        param.max_sequence_lengths = sequence_lengths;
         // add sequence_length 1 here because the sequence_length of time step t is t - 1
         param.max_sequence_length_final_step = 1;
         param.max_time                       = max_output_seq_len;
@@ -1154,8 +1154,6 @@ void GptNeoX<T>::setOutputTensors(std::unordered_map<std::string, Tensor>*      
         param.stream                          = stream_;
         param.output_ids                      = output_tensors->at("output_ids").getPtr<int>();
         invokeGatherTree(param);
-        invokeCudaD2DcpyConvert(
-            sequence_lengths, sequence_lengths_, output_tensors->at("sequence_length").size(), stream_);
         sync_check_cuda_error();
     }
     if ((output_tensors->count("output_log_probs") > 0 && output_tensors->at("output_log_probs").data != nullptr)) {
