@@ -128,6 +128,11 @@ public:
                  const std::vector<Tensor>* input_tensors,
                  const DebertaWeight<T>*    deberta_weights);
     void forward(TensorMap* output_tensors, TensorMap* input_tensors, const DebertaWeight<T>* deberta_weights);
+
+    inline size_t getHiddenUnits()
+    {
+        return hidden_units_;
+    }
 };
 
 }  // namespace fastertransformer

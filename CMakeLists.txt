@@ -322,8 +322,13 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:BertLayerWeight>
   $<TARGET_OBJECTS:BertTritonBackend>
   $<TARGET_OBJECTS:BertWeight>
+  $<TARGET_OBJECTS:Deberta>
+  $<TARGET_OBJECTS:DebertaLayerWeight>
+  $<TARGET_OBJECTS:DebertaTritonBackend>
+  $<TARGET_OBJECTS:DebertaWeight>
   $<TARGET_OBJECTS:DecoderCrossAttentionLayer>
   $<TARGET_OBJECTS:DecoderSelfAttentionLayer>
+  $<TARGET_OBJECTS:DisentangledAttentionLayer>
   $<TARGET_OBJECTS:DynamicDecodeLayer>
   $<TARGET_OBJECTS:FfnLayer>
   $<TARGET_OBJECTS:FusedAttentionLayer>
@@ -356,6 +361,7 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:T5EncoderTritonBackend>
   $<TARGET_OBJECTS:TensorParallelDecoderCrossAttentionLayer>
   $<TARGET_OBJECTS:TensorParallelDecoderSelfAttentionLayer>
+  $<TARGET_OBJECTS:TensorParallelDisentangledAttentionLayer>
   $<TARGET_OBJECTS:TensorParallelGeluFfnLayer>
   $<TARGET_OBJECTS:TensorParallelSiluFfnLayer>
   $<TARGET_OBJECTS:TensorParallelGptContextAttentionLayer>
@@ -384,6 +390,7 @@ add_library(transformer-shared SHARED
   $<TARGET_OBJECTS:cutlass_preprocessors>
   $<TARGET_OBJECTS:decoder_masked_multihead_attention>
   $<TARGET_OBJECTS:decoding_kernels>
+  $<TARGET_OBJECTS:disentangled_attention_kernels>
   $<TARGET_OBJECTS:fpA_intB_gemm>
   $<TARGET_OBJECTS:gen_relative_pos_bias>
   $<TARGET_OBJECTS:gpt_kernels>
