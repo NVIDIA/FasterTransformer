@@ -31,6 +31,7 @@ target_link_libraries(WenetEncoder PUBLIC -lcudart "${CUDNN_LIBRARY_PATH}"
     layernorm_kernels
     add_residual_kernels
     )
+target_include_directories(WenetEncoder PUBLIC ${CUDNN_INCLUDE_PATH})
 
 add_executable(wenet_gemm wenet_gemm.cc)
 target_link_libraries(wenet_gemm PUBLIC -lcublas -lcublasLt -lcudart encoder_gemm_func memory_utils)

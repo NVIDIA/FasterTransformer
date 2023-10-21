@@ -21,6 +21,7 @@ target_link_libraries(ViT PUBLIC -lcudart -lcublasLt -lcublas cublasMMWrapper
                       UnfusedAttentionLayer FusedAttentionLayer FfnLayer layernorm_kernels
                       add_residual_kernels activation_kernels vit_kernels bert_preprocess_kernels
                       tensor cuda_utils logger)
+target_include_directories(ViT PUBLIC ${CUDNN_INCLUDE_PATH})
 
 add_executable(vit_gemm vit_gemm.cc)
 target_link_libraries(vit_gemm PUBLIC -lcublas -lcublasLt -lcudart encoder_gemm_func encoder_igemm_func
