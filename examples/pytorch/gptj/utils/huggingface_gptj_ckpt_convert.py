@@ -5,7 +5,7 @@ from pathlib import Path
 
 import torch
 import configparser
-from transformers import PretrainedConfig
+from transformers import PretrainedConfig, GPTJForCausalLM
 
 torch.set_printoptions(linewidth=130, sci_mode=False)
 np.set_printoptions(linewidth=130, suppress=True)
@@ -111,9 +111,9 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-    ckpt_file = args.ckpt_dir + "/pytorch_model.bin"
-    checkpoint = torch.load(ckpt_file)
-    print(f"loading from {ckpt_file}")
+    checkpoint = GPTJForCausalLM.from_pretrained(args.ckpt_dir)
+    checkpoint = checkpoint.state_dict()
+    print(f"loading from {args.ckpt_dir}")
 
     out_path = args.output_dir
     output_dir = out_path + f"/{args.n_inference_gpus}-gpu/"
