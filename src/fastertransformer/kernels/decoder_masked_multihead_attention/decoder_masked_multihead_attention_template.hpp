@@ -1219,6 +1219,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
     int qkv_base_offset = (params.stride == 0) ? bhi * Dh : bi * params.stride + hi * Dh;
 
     const size_t bi_seq_len_offset = bi * params.memory_max_len;
+    const size_t bi_session_len_offset = bi * params.session_len;
 
     // int tlength = (DO_CROSS_ATTENTION)? params.memory_length_per_sample[bi] - 1 : params.timestep;
     int       tlength      = (DO_CROSS_ATTENTION) ? params.memory_length_per_sample[bi] - 1 :
@@ -1515,7 +1516,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
 
     for (int ti = first_step + ko; ti < ti_end; ti += K_PER_ITER) {
         const int ti_circ = ti % params.memory_max_len;
-        bool      is_mask = (params.masked_tokens != nullptr) && params.masked_tokens[bi_seq_len_offset + ti];
+        bool      is_mask = (params.masked_tokens != nullptr) && params.masked_tokens[bi_session_len_offset + ti];
 
         // The keys loaded from the key cache.
         K_vec_k k[K_VECS_PER_THREAD];
@@ -1627,7 +1628,7 @@ __global__ void masked_multihead_attention_kernel(Multihead_attention_params<T, 
     float sum = 0.f;
     // for( int ti = tidx; ti <= params.timestep; ti += THREADS_PER_BLOCK ) {
     for (int ti = first_step + tidx; ti <= tlength; ti += THREADS_PER_BLOCK) {
-        bool is_mask = (params.masked_tokens != nullptr) && params.masked_tokens[bi_seq_len_offset + ti];
+        bool is_mask = (params.masked_tokens != nullptr) && params.masked_tokens[bi_session_len_offset + ti];
 #ifdef FP8_MHA
         float logit = 0.f;
         if (FP8_MHA_KERNEL) {

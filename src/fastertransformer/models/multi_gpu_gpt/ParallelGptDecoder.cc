@@ -269,7 +269,7 @@ void ParallelGptDecoder<T>::forward(std::unordered_map<std::string, Tensor>*    
     //      cache_indirection [local_batch_size / beam_width, beam_width, memory_len]
     //          Here, local_batch_size contains the beam_width, so local_batch_size / beam_width
     //          is real local_batch_size. (optional.)
-    //      masked_tokens [local_batch_size, memory_len]
+    //      masked_tokens [local_batch_size, session_len]
     //      linear_bias_slopes [head_num], optional
 
     // output tensors:

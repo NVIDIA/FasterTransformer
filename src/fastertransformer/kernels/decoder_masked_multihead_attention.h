@@ -80,8 +80,10 @@ struct Multihead_attention_params_base {
     int batch_size = 0;
     // The beam width
     int beam_width = 0;
-    // The sequence length.
+    // The cache length.
     int memory_max_len = 0;
+    // The whole sequence length, which includes context and output.
+    int session_len = 0;
     // The number of heads (H).
     int num_heads = 0;
     // The hidden dimension per head (Dh).
