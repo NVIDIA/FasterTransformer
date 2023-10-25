@@ -19,7 +19,7 @@ import torch
 import torch.distributed as dist
 
 from transformers import BertConfig
-from transformers.modeling_bert import BertEncoder
+from transformers.models.bert.modeling_bert import BertEncoder
 from .checkpoint_quantization import checkpoint_quantization
 
 class EncoderWeights(object):
@@ -342,5 +342,5 @@ class HuggingFaceEncoder(torch.nn.Module):
 
     def forward(self, hidden_states, attention_mask):
         extended_attention_mask = (1.0 - attention_mask) * -10000.0
-        output = self.encoder(hidden_states, extended_attention_mask, self.head_mask)
+        output = self.encoder(hidden_states, extended_attention_mask, self.head_mask, return_dict=False)
         return output

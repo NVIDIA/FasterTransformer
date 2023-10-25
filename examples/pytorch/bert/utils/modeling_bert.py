@@ -18,8 +18,9 @@
 import torch
 from torch import nn
 from torch.nn import CrossEntropyLoss, MSELoss
-
-from transformers.modeling_bert import BertPreTrainedModel, BertEmbeddings, BertEncoder, BertPooler
+from transformers.models.bert.modeling_bert import (BertEmbeddings,
+                                                    BertEncoder, BertPooler,
+                                                    BertPreTrainedModel)
 
 
 class BertModel(BertPreTrainedModel):
