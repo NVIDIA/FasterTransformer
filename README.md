@@ -107,7 +107,7 @@ Note that many folders contains many sub-folders to split different models. Quan
 
 FasterTransformer provides some convenient environment variables for debuging and testing.
 
-1. `FT_LOG_LEVEL`: This environment controls the log level of debug messae. More details are in `src/fastertransformer/utils/logger.h`. Note that the program will print lots of message when the level is lower than `DEBUG` and the program would become very slow.
+1. `FT_LOG_LEVEL`: This environment controls the log level of debug message. More details are in `src/fastertransformer/utils/logger.h`. Note that the program will print lots of message when the level is lower than `DEBUG` and the program would become very slow.
 2. `FT_NVTX`: If it is set to be `ON` like `FT_NVTX=ON ./bin/gpt_example`, the program will insert tha tag of nvtx to help profiling the program.
 3. `FT_DEBUG_LEVEL`: If it is set to be `DEBUG`, then the program will run `cudaDeviceSynchronize()` after every kernels. Otherwise, the kernel is executued asynchronously by default. It is helpful to locate the error point during debuging. But this flag affects the performance of program significantly. So, it should be used only for debuging.
 
