@@ -165,7 +165,7 @@ std::unique_ptr<AbstractTransformerModelInstance> LlamaTritonModel<T>::createMod
 
     ft::AttentionType attention_type = ft::AttentionType::FUSED_MHA;
     if (std::getenv("LLAMA_CONTEXT_ATTENTION_DISABLE_FUSED_MHA") != nullptr &&
-         std::string(std::getenv("LLAMA_CONTEXT_ATTENTION_DISABLE_FUSED_MHA")) != "ON") {
+         std::string(std::getenv("LLAMA_CONTEXT_ATTENTION_DISABLE_FUSED_MHA")) == "ON") {
         printf("FUSED_MHA for llama is disabled\n");
         attention_type = ft::AttentionType::UNFUSED_MHA;
     }
