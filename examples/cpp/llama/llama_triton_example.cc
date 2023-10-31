@@ -143,71 +143,71 @@ broadCastRequest(const std::vector<int>& v_start_ids,
                 {"end_id",
                  triton::Tensor{triton::MEMORY_CPU, triton::TYPE_INT32, {(size_t)request_batch_size}, end_ids_ptr}}}));
 
-        int* beam_width_ptr = new int(param.beam_width);
-        pointer_record->push_back(beam_width_ptr);
-        request_list[device_id]->insert(
-            {"beam_width",
-             triton::Tensor{triton::MEMORY_CPU, triton::TYPE_INT32, std::vector<size_t>{1}, beam_width_ptr}});
-        if (param.beam_width > 1) {
-            float* beam_search_diversity_rate_ptr = new float(param.beam_search_diversity_rate);
-            pointer_record->push_back(beam_search_diversity_rate_ptr);
-            request_list[device_id]->insert(
-                {"beam_search_diversity_rate",
-                 triton::Tensor{
-                     triton::MEMORY_CPU, triton::TYPE_FP32, std::vector<size_t>{1}, beam_search_diversity_rate_ptr}});
-        }
-        else {
-            if (param.runtime_top_p != 0.0f) {
-                float* runtime_top_p_ptr = new float(param.runtime_top_p);
-                pointer_record->push_back(runtime_top_p_ptr);
-                request_list[device_id]->insert(
-                    {"runtime_top_p",
-                     triton::Tensor{triton::MEMORY_CPU, triton::TYPE_FP32, std::vector<size_t>{1}, runtime_top_p_ptr}});
-            }
-            if (param.runtime_top_k != 0) {
-                uint* runtime_top_k_ptr = new uint(param.runtime_top_k);
-                pointer_record->push_back(runtime_top_k_ptr);
-                request_list[device_id]->insert(
-                    {"runtime_top_k",
-                     triton::Tensor{
-                         triton::MEMORY_CPU, triton::TYPE_UINT32, std::vector<size_t>{1}, runtime_top_k_ptr}});
-            }
-        }
-        float* temperature_ptr = new float(param.temperature);
-        pointer_record->push_back(temperature_ptr);
-        request_list[device_id]->insert(
-            {"temperature",
-             triton::Tensor{triton::MEMORY_CPU, triton::TYPE_FP32, std::vector<size_t>{1}, temperature_ptr}});
-        float* len_penalty_ptr = new float(param.len_penalty);
-        pointer_record->push_back(len_penalty_ptr);
-        request_list[device_id]->insert(
-            {"len_penalty",
-             triton::Tensor{triton::MEMORY_CPU, triton::TYPE_FP32, std::vector<size_t>{1}, len_penalty_ptr}});
-        if (param.repetition_penalty != 1.0f) {
-            float* repetition_penalty_ptr = new float(param.repetition_penalty);
-            pointer_record->push_back(repetition_penalty_ptr);
-            request_list[device_id]->insert(
-                {"repetition_penalty",
-                 triton::Tensor{
-                     triton::MEMORY_CPU, triton::TYPE_FP32, std::vector<size_t>{1}, repetition_penalty_ptr}});
-        }
-        if (param.presence_penalty != 0.0f) {
-            float* presence_penalty_ptr = new float(param.presence_penalty);
-            pointer_record->push_back(presence_penalty_ptr);
-            request_list[device_id]->insert(
-                {"presence_penalty",
-                 triton::Tensor{triton::MEMORY_CPU, triton::TYPE_FP32, std::vector<size_t>{1}, presence_penalty_ptr}});
-        }
-        int* min_length_ptr = new int(param.min_length);
-        pointer_record->push_back(min_length_ptr);
-        request_list[device_id]->insert(
-            {"min_length",
-             triton::Tensor{triton::MEMORY_CPU, triton::TYPE_INT32, std::vector<size_t>{1}, min_length_ptr}});
-        unsigned long long int* random_seed_ptr = new unsigned long long int(param.random_seed);
-        pointer_record->push_back(random_seed_ptr);
-        request_list[device_id]->insert(
-            {"random_seed",
-             triton::Tensor{triton::MEMORY_CPU, triton::TYPE_UINT64, std::vector<size_t>{1}, random_seed_ptr}});
+        // int* beam_width_ptr = new int(param.beam_width);
+        // pointer_record->push_back(beam_width_ptr);
+        // request_list[device_id]->insert(
+        //     {"beam_width",
+        //      triton::Tensor{triton::MEMORY_CPU, triton::TYPE_INT32, std::vector<size_t>{1}, beam_width_ptr}});
+        // if (param.beam_width > 1) {
+        //     float* beam_search_diversity_rate_ptr = new float(param.beam_search_diversity_rate);
+        //     pointer_record->push_back(beam_search_diversity_rate_ptr);
+        //     request_list[device_id]->insert(
+        //         {"beam_search_diversity_rate",
+        //          triton::Tensor{
+        //              triton::MEMORY_CPU, triton::TYPE_FP32, std::vector<size_t>{1}, beam_search_diversity_rate_ptr}});
+        // }
+        // else {
+        //     if (param.runtime_top_p != 0.0f) {
+        //         float* runtime_top_p_ptr = new float(param.runtime_top_p);
+        //         pointer_record->push_back(runtime_top_p_ptr);
+        //         request_list[device_id]->insert(
+        //             {"runtime_top_p",
+        //              triton::Tensor{triton::MEMORY_CPU, triton::TYPE_FP32, std::vector<size_t>{1}, runtime_top_p_ptr}});
+        //     }
+        //     if (param.runtime_top_k != 0) {
+        //         uint* runtime_top_k_ptr = new uint(param.runtime_top_k);
+        //         pointer_record->push_back(runtime_top_k_ptr);
+        //         request_list[device_id]->insert(
+        //             {"runtime_top_k",
+        //              triton::Tensor{
+        //                  triton::MEMORY_CPU, triton::TYPE_UINT32, std::vector<size_t>{1}, runtime_top_k_ptr}});
+        //     }
+        // }
+        // float* temperature_ptr = new float(param.temperature);
+        // pointer_record->push_back(temperature_ptr);
+        // request_list[device_id]->insert(
+        //     {"temperature",
+        //      triton::Tensor{triton::MEMORY_CPU, triton::TYPE_FP32, std::vector<size_t>{1}, temperature_ptr}});
+        // float* len_penalty_ptr = new float(param.len_penalty);
+        // pointer_record->push_back(len_penalty_ptr);
+        // request_list[device_id]->insert(
+        //     {"len_penalty",
+        //      triton::Tensor{triton::MEMORY_CPU, triton::TYPE_FP32, std::vector<size_t>{1}, len_penalty_ptr}});
+        // if (param.repetition_penalty != 1.0f) {
+        //     float* repetition_penalty_ptr = new float(param.repetition_penalty);
+        //     pointer_record->push_back(repetition_penalty_ptr);
+        //     request_list[device_id]->insert(
+        //         {"repetition_penalty",
+        //          triton::Tensor{
+        //              triton::MEMORY_CPU, triton::TYPE_FP32, std::vector<size_t>{1}, repetition_penalty_ptr}});
+        // }
+        // if (param.presence_penalty != 0.0f) {
+        //     float* presence_penalty_ptr = new float(param.presence_penalty);
+        //     pointer_record->push_back(presence_penalty_ptr);
+        //     request_list[device_id]->insert(
+        //         {"presence_penalty",
+        //          triton::Tensor{triton::MEMORY_CPU, triton::TYPE_FP32, std::vector<size_t>{1}, presence_penalty_ptr}});
+        // }
+        // int* min_length_ptr = new int(param.min_length);
+        // pointer_record->push_back(min_length_ptr);
+        // request_list[device_id]->insert(
+        //     {"min_length",
+        //      triton::Tensor{triton::MEMORY_CPU, triton::TYPE_INT32, std::vector<size_t>{1}, min_length_ptr}});
+        // unsigned long long int* random_seed_ptr = new unsigned long long int(param.random_seed);
+        // pointer_record->push_back(random_seed_ptr);
+        // request_list[device_id]->insert(
+        //     {"random_seed",
+        //      triton::Tensor{triton::MEMORY_CPU, triton::TYPE_UINT64, std::vector<size_t>{1}, random_seed_ptr}});
 
         pointer_record->push_back(d_input_ids);
         pointer_record->push_back(d_input_lengths);
@@ -219,7 +219,7 @@ broadCastRequest(const std::vector<int>& v_start_ids,
 }
 
 std::vector<std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>>
-prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std::vector<void*>* pointer_record)
+prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std::vector<void*>* pointer_record, std::string file_name, size_t request_batch_size)
 {
     INIReader reader = INIReader(ini_name);
     if (reader.ParseError() < 0) {
@@ -227,7 +227,7 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
         ft::FT_CHECK(false);
     }
 
-    const size_t request_batch_size = reader.GetInteger("request", "request_batch_size");
+    // const size_t request_batch_size = reader.GetInteger("request", "request_batch_size");
 
     const int start_id = reader.GetInteger("llama_7b", "start_id");
     const int end_id   = reader.GetInteger("llama_7b", "end_id");
@@ -242,10 +242,10 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
                        max_input_len,
                        end_id,
                        1,
-                       "../examples/cpp/llama/start_ids.csv");
+                       file_name);
 
     std::vector<int> v_bad_words;
-    ft::read_word_list("../examples/cpp/llama/bad_words.csv", v_bad_words);
+    ft::read_word_list("/notebooks/FasterTransformer/examples/cpp/llama/bad_words.csv", v_bad_words);
 
     RequestParam param;
     param.beam_width                 = reader.GetInteger("request", "beam_width");
@@ -349,16 +349,17 @@ int main(int argc, char* argv[])
         t.join();
     }
 
+{
     // step 4: prepare request
     std::vector<void*> pointer_record;  // Used to prevent the pointers are release after leaving functions
     std::vector<std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>> request_list =
-        prepareRequest(ini_name, node_id, gpu_count, &pointer_record);
-    printf("[INFO] request is created \n");
+        prepareRequest(ini_name, node_id, gpu_count, &pointer_record,  std::string("/notebooks/FasterTransformer/examples/cpp/llama/start_ids2.csv"), 2);
+    printf("[INFO] request is created : %d\n", request_list.size());
 
     // step 5: Forward
     std::vector<std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>> output_tensors_lists(
         (size_t)gpu_count);
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < 1; i++) {
         threads.clear();
         for (int device_id = 0; device_id < gpu_count; device_id++) {
             threads.push_back(std::thread(threadForward,
@@ -377,7 +378,7 @@ int main(int argc, char* argv[])
     const int  batch_size   = output_tensors_lists[0].get()->at("output_ids").shape[0];
     const int  beam_width   = output_tensors_lists[0].get()->at("output_ids").shape[1];
     const int  seq_len      = output_tensors_lists[0].get()->at("output_ids").shape[2];
-    const int* d_input_lengths = (const int*)output_tensors_lists[0].get()->at("input_lengths").data;
+    printf("%d %d %d\n", batch_size, beam_width, seq_len);
     // step 6: check results
     if (node_id == 0) {
 
@@ -391,25 +392,25 @@ int main(int argc, char* argv[])
             int*   hBuf     = new int[outCount];
             int*   iBuf     = new int[batch_size];
             ft::cudaD2Hcpy(hBuf, d_output_ids, outCount);
-            ft::cudaD2Hcpy(iBuf, d_input_lengths, batch_size);
             
 
             {
                 std::cout << "Writing " << outCount << " elements\n";
                 int zeroCount = 0;
-                for (int i=0; i<batch_size; i++) {
-                    printf("%d ", iBuf[i]);
-                }
+                // for (int i=0; i<batch_size; i++) {
+                //     printf("%d ", iBuf[i]);
+                // }
                 printf("\n");
                 for (size_t i = 0; i < outCount; i++) {
-                    if (hBuf[i] == int(0))
-                        zeroCount++;
-                    outFile << hBuf[i] << " ";
-                    if ((i + 1) % (seq_len) == 0)
-                        outFile << std::endl;
+                    // if (hBuf[i] == int(0))
+                    //     zeroCount++;
+                    // outFile << hBuf[i] << " ";
+
 
                     // if (i < 10)
-                        printf("%5d ", hBuf[i]);
+                        printf("%d,", hBuf[i]);
+                    if ((i + 1) % (seq_len) == 0)
+                        printf("\n\n");
                     // if ((i + 1) % (seq_len) == 0 && i < 10)
                     //     std::cout << std::endl;
                 }
@@ -418,15 +419,19 @@ int main(int argc, char* argv[])
             delete[] hBuf;
         }
     }
+}
 
-    // test time
-    struct timeval start, end;
-    ft::mpi::barrier();
-    cudaDeviceSynchronize();
-    gettimeofday(&start, NULL);
+{
+    // step 4: prepare request
+    std::vector<void*> pointer_record;  // Used to prevent the pointers are release after leaving functions
+    std::vector<std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>> request_list =
+        prepareRequest(ini_name, node_id, gpu_count, &pointer_record, std::string("/notebooks/FasterTransformer/examples/cpp/llama/start_ids.csv"), 10);
+    printf("[INFO] request is created : %d\n", request_list.size());
 
-    const int ite = 1;
-    for (int i = 0; i < ite; i++) {
+    // step 5: Forward
+    std::vector<std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>> output_tensors_lists(
+        (size_t)gpu_count);
+    for (int i = 0; i < 1; i++) {
         threads.clear();
         for (int device_id = 0; device_id < gpu_count; device_id++) {
             threads.push_back(std::thread(threadForward,
@@ -439,18 +444,88 @@ int main(int argc, char* argv[])
             t.join();
         }
     }
+    printf("[INFO] forward is completed. \n");
+
+    const int* d_output_ids = (const int*)output_tensors_lists[0].get()->at("output_ids").data;
+    const int  batch_size   = output_tensors_lists[0].get()->at("output_ids").shape[0];
+    const int  beam_width   = output_tensors_lists[0].get()->at("output_ids").shape[1];
+    const int  seq_len      = output_tensors_lists[0].get()->at("output_ids").shape[2];
+    printf("%d %d %d\n", batch_size, beam_width, seq_len);
+    // step 6: check results
+    if (node_id == 0) {
+
+        std::string fName   = "out";
+        auto        outFile = std::ofstream(fName, std::ios::out);
+        if (!outFile.is_open()) {
+            printf("[WARNING] Cannot write results into output file %s \n", fName.c_str());
+        }
+        else {
+            size_t outCount = batch_size * beam_width * seq_len;
+            int*   hBuf     = new int[outCount];
+            int*   iBuf     = new int[batch_size];
+            ft::cudaD2Hcpy(hBuf, d_output_ids, outCount);
+            
+
+            {
+                std::cout << "Writing " << outCount << " elements\n";
+                int zeroCount = 0;
+                // for (int i=0; i<batch_size; i++) {
+                //     printf("%d ", iBuf[i]);
+                // }
+                printf("\n");
+                for (size_t i = 0; i < outCount; i++) {
+                    // if (hBuf[i] == int(0))
+                    //     zeroCount++;
+                    // outFile << hBuf[i] << " ";
+
+
+                    // if (i < 10)
+                        printf("%d,", hBuf[i]);
+                    if ((i + 1) % (seq_len) == 0) {
+                        printf("\n\n");
+                    }
+                    // if ((i + 1) % (seq_len) == 0 && i < 10)
+                    //     std::cout << std::endl;
+                }
+                std::cout << std::endl << "zeroCount = " << zeroCount << std::endl;
+            }
+            delete[] hBuf;
+        }
+    }
+}
+
+    // // test time
+    // struct timeval start, end;
+    // ft::mpi::barrier();
+    // cudaDeviceSynchronize();
+    // gettimeofday(&start, NULL);
+
+    // const int ite = 1;
+    // for (int i = 0; i < ite; i++) {
+    //     threads.clear();
+    //     for (int device_id = 0; device_id < gpu_count; device_id++) {
+    //         threads.push_back(std::thread(threadForward,
+    //                                       &model_instances[device_id],
+    //                                       request_list[device_id],
+    //                                       &output_tensors_lists[device_id],
+    //                                       device_id));
+    //     }
+    //     for (auto& t : threads) {
+    //         t.join();
+    //     }
+    // }
 
     cudaDeviceSynchronize();
     ft::mpi::barrier();
 
-    gettimeofday(&end, NULL);
+    // gettimeofday(&end, NULL);
 
-    printf("[INFO] batch_size %d beam_width %d seq_len %d"
-           " FT-CPP-GPT-Triton-time %.2f ms\n",
-           batch_size,
-           beam_width,
-           seq_len,
-           ((end.tv_sec - start.tv_sec) * 1000 + (end.tv_usec - start.tv_usec) * 0.001) / ite);
+    // printf("[INFO] batch_size %d beam_width %d seq_len %d"
+    //        " FT-CPP-GPT-Triton-time %.2f ms\n",
+    //        batch_size,
+    //        beam_width,
+    //        seq_len,
+    //        ((end.tv_sec - start.tv_sec) * 1000 + (end.tv_usec - start.tv_usec) * 0.001) / ite);
 
     ft::mpi::finalize();
     return 0;
