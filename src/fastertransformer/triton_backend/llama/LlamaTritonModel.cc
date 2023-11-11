@@ -170,6 +170,13 @@ std::unique_ptr<AbstractTransformerModelInstance> LlamaTritonModel<T>::createMod
         attention_type = ft::AttentionType::UNFUSED_MHA;
     }
 
+    bool free_buffer_after_forward = false;
+    if (std::getenv("LLAMA_FREE_BUFFER_AFTER_FORWARD") != nullptr &&
+         std::string(std::getenv("LLAMA_FREE_BUFFER_AFTER_FORWARD")) == "ON") {
+        printf("LLAMA_FREE_BUFFER_AFTER_FORWARD is enabled\n");
+        free_buffer_after_forward = true;
+    }
+
     auto              gpt            = std::make_unique<ft::Llama<T>>(
         ft::Llama<T>(head_num_,
                      kv_head_num_,
@@ -197,7 +204,7 @@ std::unique_ptr<AbstractTransformerModelInstance> LlamaTritonModel<T>::createMod
                      stream,
                      cublas_wrapper.get(),
                      allocator.get(),
-                     false, // is_free_buffer_after_forward
+                     free_buffer_after_forward, // is_free_buffer_after_forward
                      cuda_device_prop_ptr.get(),
                      attention_type,
                      int8_mode_,
