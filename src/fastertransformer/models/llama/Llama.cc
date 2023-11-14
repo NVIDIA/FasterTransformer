@@ -1125,6 +1125,11 @@ void Llama<T>::forward(std::unordered_map<std::string, Tensor>*       output_ten
 
     setOutputTensors(output_tensors, input_tensors, max_input_length, max_output_seq_len);
     sendTensorsToFirstPipelineNode(output_tensors, input_tensors);
+
+    sync_check_cuda_error();
+    if (is_free_buffer_after_forward_ == true) {
+        freeBuffer();
+    }
 }
 
 template<typename T>
