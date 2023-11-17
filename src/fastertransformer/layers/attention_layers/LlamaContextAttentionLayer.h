@@ -41,6 +41,7 @@ private:
     const size_t local_hidden_units_;
     const size_t rotary_embedding_dim_;
     const float  rope_theta_;
+    const float  rope_scaling_factor_;
     const bool   neox_rotary_style_;
 
     // fmha runner
@@ -122,6 +123,7 @@ public:
                              size_t           rotary_embedding_dim,
                              bool             neox_rotary_style,
                              float            rope_theta,
+                             float            rope_scaling_factor,
                              cudaStream_t     stream,
                              cublasMMWrapper* cublas_wrapper,
                              IAllocator*      allocator,

@@ -49,6 +49,7 @@ std::vector<std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>>
 broadCastRequest(const std::vector<int>& v_start_ids,
                  const std::vector<int>& v_start_lengths,
                  const std::vector<int>& v_bad_words,
+                 const std::vector<int>& v_stop_words,
                  const int               node_id,
                  const int               gpu_count,
                  const RequestParam      param,
@@ -58,18 +59,31 @@ broadCastRequest(const std::vector<int>& v_start_ids,
     int size_1         = v_start_ids.size();
     int size_2         = v_start_lengths.size();
     int size_bad_words = v_bad_words.size();
+    int size_stop_words = v_stop_words.size() * size_2;
+    int stop_words_len = v_stop_words.size() / 2;
+    
+    // Tile with same dict for each element
+    std::vector<int> v_tiled_stop_words;
+    for (int i = 0; i < size_2; i++) {
+        v_tiled_stop_words.insert(v_tiled_stop_words.end(), v_stop_words.begin(), v_stop_words.end());
+    }
+
     ft::mpi::bcast(&size_1, 1, ft::mpi::MPI_TYPE_INT, 0, ft::mpi::COMM_WORLD);
     ft::mpi::bcast(&size_2, 1, ft::mpi::MPI_TYPE_INT, 0, ft::mpi::COMM_WORLD);
     ft::mpi::bcast(&size_bad_words, 1, ft::mpi::MPI_TYPE_INT, 0, ft::mpi::COMM_WORLD);
+    ft::mpi::bcast(&size_stop_words, 1, ft::mpi::MPI_TYPE_INT, 0, ft::mpi::COMM_WORLD);
+    ft::mpi::bcast(&stop_words_len, 1, ft::mpi::MPI_TYPE_INT, 0, ft::mpi::COMM_WORLD);
 
     std::vector<int> v_input_ids(size_1);
     std::vector<int> v_input_lengths(size_2);
     std::vector<int> v_input_bad_words(size_bad_words);
+    std::vector<int> v_input_stop_words(size_stop_words);
 
     if (node_id == 0) {
         memcpy(v_input_ids.data(), v_start_ids.data(), size_1 * sizeof(int));
         memcpy(v_input_lengths.data(), v_start_lengths.data(), size_2 * sizeof(int));
         memcpy(v_input_bad_words.data(), v_bad_words.data(), size_bad_words * sizeof(int));
+        memcpy(v_input_stop_words.data(), v_tiled_stop_words.data(), size_stop_words * sizeof(int));
     }
     ft::mpi::barrier();
 
@@ -79,6 +93,7 @@ broadCastRequest(const std::vector<int>& v_start_ids,
     ft::mpi::bcast(v_input_ids.data(), size_1, ft::mpi::MPI_TYPE_INT, 0, ft::mpi::COMM_WORLD);
     ft::mpi::bcast(v_input_lengths.data(), size_2, ft::mpi::MPI_TYPE_INT, 0, ft::mpi::COMM_WORLD);
     ft::mpi::bcast(v_input_bad_words.data(), size_bad_words, ft::mpi::MPI_TYPE_INT, 0, ft::mpi::COMM_WORLD);
+    ft::mpi::bcast(v_input_stop_words.data(), size_stop_words, ft::mpi::MPI_TYPE_INT, 0, ft::mpi::COMM_WORLD);
 
     std::vector<std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>> request_list;
     for (int device_id = 0; device_id < gpu_count; device_id++) {
@@ -87,6 +102,7 @@ broadCastRequest(const std::vector<int>& v_start_ids,
         int* d_input_ids;
         int* d_input_lengths;
         int* d_input_bad_words;
+        int* d_input_stop_words;
 
         if (max_input_len == 0) {
             // unconditional case, no input ids, so do nothing.
@@ -103,6 +119,9 @@ broadCastRequest(const std::vector<int>& v_start_ids,
         }
         ft::deviceMalloc(&d_input_bad_words, size_bad_words, false);
         ft::cudaH2Dcpy(d_input_bad_words, v_input_bad_words.data(), size_bad_words);
+        
+        ft::deviceMalloc(&d_input_stop_words, size_stop_words, false);
+        ft::cudaH2Dcpy(d_input_stop_words, v_input_stop_words.data(), v_input_stop_words.size());
 
         uint32_t* request_output_len_ptr = (uint32_t*)malloc(request_batch_size * sizeof(uint32_t));
         for (int i = 0; i < request_batch_size; i++) {
@@ -135,6 +154,9 @@ broadCastRequest(const std::vector<int>& v_start_ids,
                                 triton::TYPE_INT32,
                                 std::vector<size_t>{(size_t)request_batch_size},
                                 request_output_len_ptr}},
+                {"stop_words_list",
+                 triton::Tensor{
+                     triton::MEMORY_GPU, triton::TYPE_INT32, {request_batch_size, 2, stop_words_len}, d_input_stop_words}},
                 {"bad_words_list",
                  triton::Tensor{
                      triton::MEMORY_GPU, triton::TYPE_INT32, {2, v_input_bad_words.size() / 2}, d_input_bad_words}},
@@ -229,8 +251,8 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
 
     // const size_t request_batch_size = reader.GetInteger("request", "request_batch_size");
 
-    const int start_id = reader.GetInteger("llama_7b", "start_id");
-    const int end_id   = reader.GetInteger("llama_7b", "end_id");
+    const int start_id = reader.GetInteger("llama", "start_id");
+    const int end_id   = reader.GetInteger("llama", "end_id");
 
     std::vector<int> v_start_ids;
     std::vector<int> v_start_lengths;
@@ -246,6 +268,9 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
 
     std::vector<int> v_bad_words;
     ft::read_word_list("/notebooks/FasterTransformer/examples/cpp/llama/bad_words.csv", v_bad_words);
+
+    std::vector<int> v_stop_words;
+    ft::read_word_list("/notebooks/FasterTransformer/examples/cpp/llama/stop_words.csv", v_stop_words);
 
     RequestParam param;
     param.beam_width                 = reader.GetInteger("request", "beam_width");
@@ -263,7 +288,7 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
     param.end_id                     = end_id;
 
     auto request_list =
-        broadCastRequest(v_start_ids, v_start_lengths, v_bad_words, node_id, gpu_count, param, pointer_record);
+        broadCastRequest(v_start_ids, v_start_lengths, v_bad_words, v_stop_words, node_id, gpu_count, param, pointer_record);
     return request_list;
 }
 
@@ -353,79 +378,7 @@ int main(int argc, char* argv[])
     // step 4: prepare request
     std::vector<void*> pointer_record;  // Used to prevent the pointers are release after leaving functions
     std::vector<std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>> request_list =
-        prepareRequest(ini_name, node_id, gpu_count, &pointer_record,  std::string("/notebooks/FasterTransformer/examples/cpp/llama/start_ids2.csv"), 2);
-    printf("[INFO] request is created : %d\n", request_list.size());
-
-    // step 5: Forward
-    std::vector<std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>> output_tensors_lists(
-        (size_t)gpu_count);
-    for (int i = 0; i < 1; i++) {
-        threads.clear();
-        for (int device_id = 0; device_id < gpu_count; device_id++) {
-            threads.push_back(std::thread(threadForward,
-                                          &model_instances[device_id],
-                                          request_list[device_id],
-                                          &output_tensors_lists[device_id],
-                                          device_id));
-        }
-        for (auto& t : threads) {
-            t.join();
-        }
-    }
-    printf("[INFO] forward is completed. \n");
-
-    const int* d_output_ids = (const int*)output_tensors_lists[0].get()->at("output_ids").data;
-    const int  batch_size   = output_tensors_lists[0].get()->at("output_ids").shape[0];
-    const int  beam_width   = output_tensors_lists[0].get()->at("output_ids").shape[1];
-    const int  seq_len      = output_tensors_lists[0].get()->at("output_ids").shape[2];
-    printf("%d %d %d\n", batch_size, beam_width, seq_len);
-    // step 6: check results
-    if (node_id == 0) {
-
-        std::string fName   = "out";
-        auto        outFile = std::ofstream(fName, std::ios::out);
-        if (!outFile.is_open()) {
-            printf("[WARNING] Cannot write results into output file %s \n", fName.c_str());
-        }
-        else {
-            size_t outCount = batch_size * beam_width * seq_len;
-            int*   hBuf     = new int[outCount];
-            int*   iBuf     = new int[batch_size];
-            ft::cudaD2Hcpy(hBuf, d_output_ids, outCount);
-            
-
-            {
-                std::cout << "Writing " << outCount << " elements\n";
-                int zeroCount = 0;
-                // for (int i=0; i<batch_size; i++) {
-                //     printf("%d ", iBuf[i]);
-                // }
-                printf("\n");
-                for (size_t i = 0; i < outCount; i++) {
-                    // if (hBuf[i] == int(0))
-                    //     zeroCount++;
-                    // outFile << hBuf[i] << " ";
-
-
-                    // if (i < 10)
-                        printf("%d,", hBuf[i]);
-                    if ((i + 1) % (seq_len) == 0)
-                        printf("\n\n");
-                    // if ((i + 1) % (seq_len) == 0 && i < 10)
-                    //     std::cout << std::endl;
-                }
-                std::cout << std::endl << "zeroCount = " << zeroCount << std::endl;
-            }
-            delete[] hBuf;
-        }
-    }
-}
-
-{
-    // step 4: prepare request
-    std::vector<void*> pointer_record;  // Used to prevent the pointers are release after leaving functions
-    std::vector<std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>> request_list =
-        prepareRequest(ini_name, node_id, gpu_count, &pointer_record, std::string("/notebooks/FasterTransformer/examples/cpp/llama/start_ids.csv"), 10);
+        prepareRequest(ini_name, node_id, gpu_count, &pointer_record, std::string("/notebooks/FasterTransformer/examples/cpp/llama/start_ids.csv"), 1);
     printf("[INFO] request is created : %d\n", request_list.size());
 
     // step 5: Forward

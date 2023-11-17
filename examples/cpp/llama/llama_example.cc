@@ -90,6 +90,7 @@ void llama_example(const INIReader reader)
     const size_t decoder_layers       = reader.GetInteger(model_name, "num_layer");
     const size_t rotary_embedding_dim = reader.GetInteger(model_name, "rotary_embedding");
     const float  rope_theta           = reader.GetFloat(model_name, "rope_theta", 10000.f);
+    const float  rope_scaling_factor  = reader.GetFloat(model_name, "rope_scaling_factor", 1.0f);
     const float  layernorm_eps        = reader.GetFloat(model_name, "layernorm_eps");
     const int    start_id             = reader.GetInteger(model_name, "start_id");
     const int    end_id               = reader.GetInteger(model_name, "end_id");
@@ -331,6 +332,7 @@ void llama_example(const INIReader reader)
                             vocab_size,
                             rotary_embedding_dim,
                             rope_theta,
+                            rope_scaling_factor,
                             layernorm_eps,
                             start_id,
                             end_id,

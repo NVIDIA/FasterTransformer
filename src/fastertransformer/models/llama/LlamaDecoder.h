@@ -54,6 +54,7 @@ protected:
     size_t rotary_embedding_dim_;
     bool   neox_rotary_style_;
     float  rope_theta_;
+    float  rope_scaling_factor_;
     bool   use_gptj_residual_;
     size_t hidden_units_;
     float  layernorm_eps_;
@@ -83,6 +84,7 @@ public:
                  size_t                              rotary_embedding_dim,
                  bool                                neox_rotary_style,
                  float                               rope_theta,
+                 float                               rope_scaling_factor,
                  bool                                use_gptj_residual,
                  float                               layernorm_eps,
                  NcclParam                           tensor_para,

@@ -56,6 +56,7 @@ public:
                                            size_t                              rotary_embedding_dim,
                                            bool                                neox_rotary_style,
                                            float                               rope_theta,
+                                           float                               rope_scaling_factor,
                                            NcclParam                           tensor_para,
                                            cudaStream_t                        stream,
                                            cublasMMWrapper*                    cublas_wrapper,

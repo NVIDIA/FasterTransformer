@@ -52,6 +52,7 @@ void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
                                         const int    rotary_embedding_dim,
                                         const bool   neox_rotary_style,
                                         const float  rope_theta,
+                                        const float  rope_scaling_factor,
                                         const int    memory_max_len,
                                         const int*   prefix_prompt_lengths,
                                         const int    max_prefix_prompt_length,
@@ -119,6 +120,7 @@ void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
     params.rotary_embedding_dim = rotary_embedding_dim;
     params.neox_rotary_style    = neox_rotary_style;
     params.rope_theta           = rope_theta;
+    params.rope_scaling_factor  = rope_scaling_factor;
     // Note: keep norm factor (sqrt(K_dim)) when adopting megatron T5 structure (may adjust)
     params.inv_sqrt_dh = 1.F / (sqrtf((float)params.hidden_size_per_head) * q_scaling);
 
@@ -169,6 +171,7 @@ void fusedQKV_masked_attention_dispatch(const T*     qkv_buf,
                                                      const int    rotary_embedding_dim,                                \
                                                      const bool   neox_rotary_style,                                   \
                                                      const float  rope_theta,                                          \
+                                                     const float  rope_scaling_factor,                                 \
                                                      const int    memory_max_len,                                      \
                                                      const int*   prefix_prompt_lengths,                               \
                                                      const int    max_prefix_prompt_length,                            \
@@ -276,6 +279,7 @@ LlamaDecoderSelfAttentionLayer<T>::LlamaDecoderSelfAttentionLayer(size_t        
                                                         size_t           rotary_embedding_dim,
                                                         bool             neox_rotary_style,
                                                         float            rope_theta,
+                                                        float            rope_scaling_factor,
                                                         size_t           d_model,
                                                         const float      q_scaling,
                                                         cudaStream_t     stream,
@@ -296,6 +300,7 @@ LlamaDecoderSelfAttentionLayer<T>::LlamaDecoderSelfAttentionLayer(size_t        
     rotary_embedding_dim_(rotary_embedding_dim),
     neox_rotary_style_(neox_rotary_style),
     rope_theta_(rope_theta),
+    rope_scaling_factor_(rope_scaling_factor),
     d_model_(d_model),
     q_scaling_(q_scaling),
     int8_fc_runner_(int8_mode == 2 ? std::make_shared<CutlassInt8GemmRunner<T>>() : nullptr),
@@ -309,6 +314,46 @@ LlamaDecoderSelfAttentionLayer<T>::LlamaDecoderSelfAttentionLayer(size_t        
         weight_only_int8_fc_runner_ = std::make_shared<CutlassFpAIntBGemmRunner<T, uint8_t>>();
     }
 }
+
+template<typename T>
+LlamaDecoderSelfAttentionLayer<T>::LlamaDecoderSelfAttentionLayer(size_t           max_batch_size,
+                                                        size_t           head_num,
+                                                        size_t           kv_head_num,
+                                                        size_t           size_per_head,
+                                                        size_t           local_head_num,
+                                                        size_t           local_kv_head_num,
+                                                        size_t           rotary_embedding_dim,
+                                                        bool             neox_rotary_style,
+                                                        float            rope_theta,
+                                                        size_t           d_model,
+                                                        const float      q_scaling,
+                                                        cudaStream_t     stream,
+                                                        cublasMMWrapper* cublas_wrapper,
+                                                        IAllocator*      allocator,
+                                                        bool             is_free_buffer_after_forward,
+                                                        bool             sparse,
+                                                        int              int8_mode):
+    LlamaDecoderSelfAttentionLayer<T>(max_batch_size,
+                                 head_num,
+                                 kv_head_num,
+                                 size_per_head,
+                                 head_num,
+                                 kv_head_num,
+                                 rotary_embedding_dim,
+                                 neox_rotary_style,
+                                 rope_theta,
+                                 1.0f, // rope_scaling_factor
+                                 d_model,
+                                 q_scaling,
+                                 stream,
+                                 cublas_wrapper,
+                                 allocator,
+                                 is_free_buffer_after_forward,
+                                 sparse,
+                                 int8_mode)
+{
+}
+
 
 template<typename T>
 LlamaDecoderSelfAttentionLayer<T>::LlamaDecoderSelfAttentionLayer(size_t           max_batch_size,
@@ -478,6 +523,44 @@ LlamaDecoderSelfAttentionLayer<T>::LlamaDecoderSelfAttentionLayer(size_t        
 }
 
 template<typename T>
+LlamaDecoderSelfAttentionLayer<T>::LlamaDecoderSelfAttentionLayer(size_t           max_batch_size,
+                                                        size_t           head_num,
+                                                        size_t           kv_head_num,
+                                                        size_t           size_per_head,
+                                                        size_t           local_head_num,
+                                                        size_t           local_kv_head_num,
+                                                        size_t           rotary_embedding_dim,
+                                                        bool             neox_rotary_style,
+                                                        float            rope_theta,
+                                                        float            rope_scaling_factor,
+                                                        cudaStream_t     stream,
+                                                        cublasMMWrapper* cublas_wrapper,
+                                                        IAllocator*      allocator,
+                                                        bool             is_free_buffer_after_forward,
+                                                        bool             sparse,
+                                                        int              int8_mode):
+    LlamaDecoderSelfAttentionLayer<T>(max_batch_size,
+                                 head_num,
+                                 kv_head_num,
+                                 size_per_head,
+                                 local_head_num,
+                                 local_kv_head_num,
+                                 rotary_embedding_dim,
+                                 neox_rotary_style,
+                                 rope_theta,
+                                 rope_scaling_factor,
+                                 head_num * size_per_head,
+                                 1.0f,
+                                 stream,
+                                 cublas_wrapper,
+                                 allocator,
+                                 is_free_buffer_after_forward,
+                                 sparse,
+                                 int8_mode)
+{
+}
+
+template<typename T>
 LlamaDecoderSelfAttentionLayer<T>::LlamaDecoderSelfAttentionLayer(LlamaDecoderSelfAttentionLayer<T> const& attention_layer):
     LlamaDecoderSelfAttentionLayer<T>(attention_layer.max_batch_size_,
                                  attention_layer.head_num_,
@@ -488,6 +571,7 @@ LlamaDecoderSelfAttentionLayer<T>::LlamaDecoderSelfAttentionLayer(LlamaDecoderSe
                                  attention_layer.rotary_embedding_dim_,
                                  attention_layer.neox_rotary_style_,
                                  attention_layer.rope_theta_,
+                                 attention_layer.rope_scaling_factor_,
                                  attention_layer.d_model_,
                                  attention_layer.q_scaling_,
                                  attention_layer.stream_,
@@ -658,6 +742,7 @@ void LlamaDecoderSelfAttentionLayer<T>::forward(TensorMap*           output_tens
         rotary_embedding_dim_,
         neox_rotary_style_,
         rope_theta_,
+        rope_scaling_factor_,
         memory_max_len,
         d_prefix_prompt_lengths,
         max_prefix_prompt_length,

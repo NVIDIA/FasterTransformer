@@ -28,6 +28,7 @@ TensorParallelLlamaDecoderSelfAttentionLayer<T>::TensorParallelLlamaDecoderSelfA
     size_t                              rotary_embedding_dim,
     bool                                neox_rotary_style,
     float                               rope_theta,
+    float                               rope_scaling_factor,
     size_t                              d_model,
     float                               q_scaling,
     NcclParam                           tensor_para,
@@ -49,6 +50,7 @@ TensorParallelLlamaDecoderSelfAttentionLayer<T>::TensorParallelLlamaDecoderSelfA
                                  rotary_embedding_dim,
                                  neox_rotary_style,
                                  rope_theta,
+                                 rope_scaling_factor,
                                  d_model,
                                  q_scaling,  // NOTE
                                  stream,
@@ -63,6 +65,51 @@ TensorParallelLlamaDecoderSelfAttentionLayer<T>::TensorParallelLlamaDecoderSelfA
     enable_custom_all_reduce_(enable_custom_all_reduce)
 {
     FT_CHECK(head_num % tensor_para_.world_size_ == 0);
+}
+
+
+template<typename T>
+TensorParallelLlamaDecoderSelfAttentionLayer<T>::TensorParallelLlamaDecoderSelfAttentionLayer(
+    size_t                              max_batch_size,
+    size_t                              head_num,
+    size_t                              kv_head_num,
+    size_t                              size_per_head,
+    size_t                              rotary_embedding_dim,
+    bool                                neox_rotary_style,
+    float                               rope_theta,
+    size_t                              d_model,
+    float                               q_scaling,
+    NcclParam                           tensor_para,
+    cudaStream_t                        stream,
+    cublasMMWrapper*                    cublas_wrapper,
+    IAllocator*                         allocator,
+    bool                                do_all_reduce,
+    bool                                is_free_buffer_after_forward,
+    bool                                is_sparse,
+    int                                 int8_mode,
+    std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
+    int                                 enable_custom_all_reduce):
+    TensorParallelLlamaDecoderSelfAttentionLayer(max_batch_size,
+                                            head_num,
+                                            kv_head_num,
+                                            size_per_head,
+                                            rotary_embedding_dim,
+                                            neox_rotary_style,
+                                            rope_theta,
+                                            1.0f,
+                                            d_model,
+                                            q_scaling,
+                                            tensor_para,
+                                            stream,
+                                            cublas_wrapper,
+                                            allocator,
+                                            do_all_reduce,
+                                            is_free_buffer_after_forward,
+                                            is_sparse,
+                                            int8_mode,
+                                            custom_all_reduce_comm,
+                                            enable_custom_all_reduce)
+{
 }
 
 template<typename T>
@@ -170,6 +217,49 @@ TensorParallelLlamaDecoderSelfAttentionLayer<T>::TensorParallelLlamaDecoderSelfA
                                             rotary_embedding_dim,
                                             neox_rotary_style,
                                             rope_theta,
+                                            head_num * size_per_head,
+                                            1.0f,
+                                            tensor_para,
+                                            stream,
+                                            cublas_wrapper,
+                                            allocator,
+                                            do_all_reduce,
+                                            is_free_buffer_after_forward,
+                                            is_sparse,
+                                            int8_mode,
+                                            custom_all_reduce_comm,
+                                            enable_custom_all_reduce)
+{
+}
+
+template<typename T>
+TensorParallelLlamaDecoderSelfAttentionLayer<T>::TensorParallelLlamaDecoderSelfAttentionLayer(
+    size_t                              max_batch_size,
+    size_t                              head_num,
+    size_t                              kv_head_num,
+    size_t                              size_per_head,
+    size_t                              rotary_embedding_dim,
+    bool                                neox_rotary_style,
+    float                               rope_theta,
+    float                               rope_scaling_factor,
+    NcclParam                           tensor_para,
+    cudaStream_t                        stream,
+    cublasMMWrapper*                    cublas_wrapper,
+    IAllocator*                         allocator,
+    bool                                do_all_reduce,
+    bool                                is_free_buffer_after_forward,
+    bool                                is_sparse,
+    int                                 int8_mode,
+    std::shared_ptr<AbstractCustomComm> custom_all_reduce_comm,
+    int                                 enable_custom_all_reduce):
+    TensorParallelLlamaDecoderSelfAttentionLayer(max_batch_size,
+                                            head_num,
+                                            kv_head_num,
+                                            size_per_head,
+                                            rotary_embedding_dim,
+                                            neox_rotary_style,
+                                            rope_theta,
+                                            rope_scaling_factor,
                                             head_num * size_per_head,
                                             1.0f,
                                             tensor_para,

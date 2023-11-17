@@ -91,6 +91,7 @@ LlamaTritonModel<T>::LlamaTritonModel(size_t      tensor_para_size,
     vocab_size_           = reader.GetInteger("llama", "vocab_size");
     rotary_embedding_dim_ = reader.GetInteger("llama", "rotary_embedding");
     rope_theta_           = reader.GetFloat("llama", "rope_theta", 10000.f);
+    rope_scaling_factor_  = reader.GetFloat("llama","rope_scaling_factor", 1.0f);
     layernorm_eps_        = reader.GetFloat("llama", "layernorm_eps");
     start_id_             = reader.GetInteger("llama", "start_id");
     end_id_               = reader.GetInteger("llama", "end_id");
@@ -186,6 +187,7 @@ std::unique_ptr<AbstractTransformerModelInstance> LlamaTritonModel<T>::createMod
                      vocab_size_,
                      rotary_embedding_dim_,
                      rope_theta_,
+                     rope_scaling_factor_,
                      layernorm_eps_,
                      start_id_,
                      end_id_,
