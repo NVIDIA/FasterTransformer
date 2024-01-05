@@ -14,19 +14,12 @@
 
 cmake_minimum_required(VERSION 3.8)
 
-add_library(TransformerTritonBackend SHARED transformer_triton_backend.cpp)
-target_link_libraries(TransformerTritonBackend PRIVATE nccl_utils mpi_utils)
+set(m2m_triton_backend_files
+    M2MTritonModel.cc
+    M2MTritonModelInstance.cc
+)
 
-add_subdirectory(gptj)
-add_subdirectory(gptneox)
-add_subdirectory(bart)
-add_subdirectory(t5)
-add_subdirectory(t5-encoder)
-add_subdirectory(multi_gpu_gpt)
-if (ENABLE_FP8)
-    add_subdirectory(multi_gpu_gpt_fp8)
-endif()
-add_subdirectory(bert)
-add_subdirectory(deberta)
-add_subdirectory(llama)
-add_subdirectory(m2m)
+add_library(M2MTritonBackend STATIC ${m2m_triton_backend_files})
+set_property(TARGET M2MTritonBackend PROPERTY POSITION_INDEPENDENT_CODE  ON)
+target_link_libraries(M2MTritonBackend PRIVATE TransformerTritonBackend M2MEncoder M2MDecoding -lcublasLt)
+target_compile_features(M2MTritonBackend PRIVATE cxx_std_14)

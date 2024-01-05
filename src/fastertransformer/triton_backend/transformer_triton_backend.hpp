@@ -295,6 +295,7 @@ struct AbstractTransformerModel {
     static std::shared_ptr<AbstractTransformerModel> createT5EncoderModel(std::string model_dir);
     static std::shared_ptr<AbstractTransformerModel> createLlamaModel(std::string model_dir);
     static std::shared_ptr<AbstractTransformerModel> createBartModel(std::string model_dir);
+    static std::shared_ptr<AbstractTransformerModel> createM2MModel(std::string model_dir);
 
     std::pair<std::vector<ft::NcclParam>, std::vector<ft::NcclParam>>
     createNcclParams(const int node_id, const int device_id_start = 0, const bool multi_node = false);
