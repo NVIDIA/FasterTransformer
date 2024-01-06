@@ -38,3 +38,4 @@ add_subdirectory(vit_int8)
 
 add_subdirectory(wenet)
 add_subdirectory(llama)
+add_subdirectory(m2m)
