@@ -61,7 +61,7 @@ M2MTritonModel<T>::M2MTritonModel(INIReader reader, std::string model_dir): mode
     encoder_num_layer_     = reader.GetInteger("encoder", "num_layers");
     encoder_vocab_size_    = reader.GetInteger("encoder", "vocab_size");
     encoder_max_pos_seq_len_ = reader.GetInteger("encoder", "max_pos_seq_len");
-    mbart_para_              = reader.GetBoolean("encoder", "mbart", false);
+    mbart_para_              = reader.GetBoolean("encoder", "mbart", true);
     if (mbart_para_) {
         layernorm_type_ = ft::LayerNormType::pre_layernorm;
     } else {
