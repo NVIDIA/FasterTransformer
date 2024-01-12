@@ -316,10 +316,10 @@ int main(int argc, char* argv[])
     const int   gpu_count  = ft::getDeviceCount();
     std::cout << "gpu_count: " << gpu_count << std::endl;
     const int   world_size = node_num * gpu_count;
-    std::string ini_name   = argc >= 2 ? std::string(argv[1]) : "/notebooks/tmp/FasterTransformer/examples/cpp/m2m/";
+    std::string ini_name   = argc >= 2 ? std::string(argv[1]) : "/notebooks/FasterTransformer/examples/cpp/m2m/";
 
     // step 1: Create model
-    std::shared_ptr<AbstractTransformerModel> model            = AbstractTransformerModel::createM2MModel("/notebooks/m2m-ft/1-gpu");
+    std::shared_ptr<AbstractTransformerModel> model            = AbstractTransformerModel::createM2MModel("/notebooks/m2m-ft/1/1-gpu");
     int                                       tensor_para_size = model->getTensorParaSize();
     int                                       pipeline_para_size = model->getPipelineParaSize();
     FT_CHECK_WITH_INFO(world_size == (tensor_para_size * pipeline_para_size),
