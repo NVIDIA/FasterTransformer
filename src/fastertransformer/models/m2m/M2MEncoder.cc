@@ -502,7 +502,6 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
                                        local_batch_size,
                                        request_seq_len,
                                        stream_);
-                printf("post padding offset pre sync \n");
                 sync_check_cuda_error();
 
                 printf("post padding offset \n");
