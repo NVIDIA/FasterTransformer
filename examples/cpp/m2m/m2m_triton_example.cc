@@ -231,7 +231,7 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
     const size_t request_batch_size = 1; //reader.GetInteger("request", "request_batch_size");
 
     //const int start_id = reader.GetInteger("decoder", "start_id");
-    //const int end_id   = reader.GetInteger("decoder", "end_id");
+    const int end_id   = reader.GetInteger("decoder", "eos_token_id");
 
     std::vector<int> v_start_ids;
     std::vector<int> v_start_lengths;
@@ -263,7 +263,7 @@ prepareRequest(std::string ini_name, const int node_id, const int gpu_count, std
     param.min_length                 = reader.GetInteger("request", "min_length", 0);
     param.random_seed                = (unsigned long long int)0;
     param.start_id                   = -1;
-    param.end_id                     = -1;
+    param.end_id                     = end_id;
 
     auto request_list =
         broadCastRequest(v_start_ids, v_start_lengths, v_bad_words, node_id, gpu_count, param, pointer_record);
