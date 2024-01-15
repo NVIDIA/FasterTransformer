@@ -382,8 +382,6 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
         cudaMemsetAsync(output_tensors->at("output_attentions").getPtr<T>(), 0, sizeof(T) * attentions_size, stream_);
     }
 
-    printf("Post encoder tensors \n");
-
     // M2M Structure Difference
     const bool            m2m_with_bias          = m2m_encoder_weights->m2m_with_bias;
     const bool            mbart                   = m2m_encoder_weights->mbart;
