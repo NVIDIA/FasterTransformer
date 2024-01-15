@@ -406,12 +406,7 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
                    sizeof(T) * request_batch_size * request_seq_len * d_model_);
     }
     const size_t local_batch_size = getLocalBatchSize(request_batch_size, request_seq_len, pipeline_para_.world_size_);
-    std::cout << "Local batch size: " << local_batch_size;
-    std::cout << "\nrequest_batch_size: " << request_batch_size;
-    std::cout << "\npipeline_para_.world_size_: " << pipeline_para_.world_size_;
     const size_t iteration_num    = request_batch_size / local_batch_size;
-
-    printf("Pre encoder iteration \n");
 
     for (uint ite = 0; ite < iteration_num; ite++) {
         size_t id_offset      = ite * local_batch_size;
@@ -434,7 +429,6 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
                 local_batch_size,
                 d_model_,
                 stream_);
-            printf("Post invoke input ids embdeeding lookup \n");
         }
         else {
             if (!use_inputs_embeds) {
@@ -489,26 +483,10 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
         // preprocess (remove padding and build mask)
         switch (attention_type_) {
             case AttentionType::UNFUSED_MHA: {
-                printf("Unfused MHA attention \n");
                 invokeBuildEncoderAttentionMask(
                     attention_mask_, sequence_lengths, local_batch_size, request_seq_len, stream_);
 
                 sync_check_cuda_error();
-
-                printf("post attention mask \n");
-
-                int* host_sequence_lengths = new int[local_batch_size];
-                std::cout << "Local batch size: " << local_batch_size;
-                cudaMemcpy(host_sequence_lengths, sequence_lengths, local_batch_size * sizeof(int), cudaMemcpyDeviceToHost);
-
-                std::cout << "Sequence Lengths: ";
-                for (int i = 0; i < local_batch_size; i++) {
-                    std::cout << host_sequence_lengths[i] << " ";
-                }
-                std::cout << std::endl;
-
-                delete[] host_sequence_lengths; // Clean up
-
 
                 invokeGetPaddingOffset(h_pinned_token_num_ptr_,
                                        &h_token_num,
@@ -519,10 +497,7 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
                                        stream_);
                 sync_check_cuda_error();
 
-                printf("post padding offset \n");
-
                 if (pipeline_para_.rank_ == 0) {
-                    printf("pre remove padding \n");
                     invokeRemovePadding(m2m_encoder_in_buffer_,
                                         use_inputs_embeds_buffer ?
                                             input_tensors->at("inputs_embeds").getPtrWithOffset<T>(d_model_offset) :
@@ -532,7 +507,6 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
                                         d_model_,
                                         stream_);
                     sync_check_cuda_error();
-                    printf("post remove padding \n");
                 }
                 m2m_encoder_input_ptr  = m2m_encoder_in_buffer_;
                 m2m_encoder_output_ptr = m2m_encoder_out_buffer_;
@@ -603,8 +577,6 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
             }
         }
 
-        printf("Post encoder attention \n");
-
         DataType data_type = getTensorType<T>();
 
         // Before layers, BART/mBART has a layernorm on the embeddings. Different from T5
@@ -618,8 +590,6 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
                                  d_model_,
                                  stream_);
         sync_check_cuda_error();
-
-        printf("Post encoder layernorm \n");
 
         // Encoder layers
         for (uint i = 0; i < num_layer_; i++) {
@@ -820,7 +790,6 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
         freeBuffer();
     }
     sync_check_cuda_error();
-    printf("Post encoder layers \n");
 
     if (pipeline_para_.world_size_ > 1) {
         ftNcclGroupStart();
