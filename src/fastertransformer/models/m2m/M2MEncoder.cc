@@ -382,6 +382,8 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
         cudaMemsetAsync(output_tensors->at("output_attentions").getPtr<T>(), 0, sizeof(T) * attentions_size, stream_);
     }
 
+    printf("Post encoder tensors \n");
+
     // M2M Structure Difference
     const bool            m2m_with_bias          = m2m_encoder_weights->m2m_with_bias;
     const bool            mbart                   = m2m_encoder_weights->mbart;
@@ -408,6 +410,8 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
     const size_t local_batch_size = getLocalBatchSize(request_batch_size, request_seq_len, pipeline_para_.world_size_);
     const size_t iteration_num    = request_batch_size / local_batch_size;
 
+    printf("Pre encoder iteration \n");
+
     for (uint ite = 0; ite < iteration_num; ite++) {
         size_t id_offset      = ite * local_batch_size;
         size_t d_model_offset = id_offset * request_seq_len * d_model_;
@@ -429,6 +433,7 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
                 local_batch_size,
                 d_model_,
                 stream_);
+            printf("Post invoke input ids embdeeding lookup \n");
         }
         else {
             if (!use_inputs_embeds) {
