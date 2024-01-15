@@ -486,9 +486,9 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
         T*      m2m_encoder_output_ptr;
         Tensor* padding_offset_tensor_ptr;
         // preprocess (remove padding and build mask)
-        printf(attention_type_)
         switch (attention_type_) {
             case AttentionType::UNFUSED_MHA: {
+                printf("Unfused MHA attention \n");
                 invokeBuildEncoderAttentionMask(
                     attention_mask_, sequence_lengths, local_batch_size, request_seq_len, stream_);
 
@@ -521,6 +521,7 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
                 break;
             }
             case AttentionType::UNFUSED_PADDED_MHA: {
+                printf("Unfused padded MHA attention \n");
                 invokeBuildEncoderAttentionMask(
                     attention_mask_, sequence_lengths, local_batch_size, request_seq_len, stream_);
 
@@ -541,6 +542,7 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
                 break;
             }
             case AttentionType::FUSED_MHA: {
+                printf("fused MHA attention \n");
                 FT_CHECK(false);  // not support FUSED_MHA now
                 // invokeGetPaddingOffset(&h_token_num,
                 //                        token_num_,
@@ -567,6 +569,7 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
                 // break;
             }
             case AttentionType::FUSED_PADDED_MHA: {
+                printf("fused padded MHA attention \n");
                 FT_CHECK(false);  // not support FUSED_MHA now
                 // h_token_num = local_batch_size * request_seq_len;
                 // invokeGetTrtPaddingOffset(
