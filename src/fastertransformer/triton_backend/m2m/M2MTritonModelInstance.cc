@@ -169,6 +169,7 @@ M2MTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::strin
                                                    std::vector<size_t>{request_batch_size, beam_width},
                                                    d_cum_log_probs_}});
     }
+    printf("Post tensors \n");
 
     try {
         if (stream_cb_ != nullptr) {
@@ -176,7 +177,7 @@ M2MTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::strin
         }
 
         m2m_encoder_->forward(&encoder_output_tensors, &encoder_input_tensors, m2m_encoder_weight_.get());
-
+        printf("Post encoder forward \n");
 
 // {
 //         T* buf;
