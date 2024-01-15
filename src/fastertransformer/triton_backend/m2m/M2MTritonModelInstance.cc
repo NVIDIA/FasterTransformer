@@ -85,6 +85,7 @@ template<typename T>
 std::shared_ptr<std::unordered_map<std::string, triton::Tensor>>
 M2MTritonModelInstance<T>::forward(std::shared_ptr<std::unordered_map<std::string, triton::Tensor>> input_tensors)
 {
+    printf("Started forward \n");
     const size_t request_batch_size = input_tensors->at("input_ids").shape[0];
     const size_t mem_max_seq_len    = input_tensors->at("input_ids").shape[1];
     const size_t max_output_len     = *((uint*)input_tensors->at("max_output_len").data);
