@@ -57,7 +57,6 @@ broadCastRequest(const std::vector<int>& v_start_ids,
     // broadcast the request to all nodes, and copy "gpu_count" copies on different gpu
     int size_1         = v_start_ids.size();
     int size_2         = v_start_lengths.size();
-    std::cout << "Start lengths size: " << size_2;
     int size_bad_words = v_bad_words.size();
     ft::mpi::bcast(&size_1, 1, ft::mpi::MPI_TYPE_INT, 0, ft::mpi::COMM_WORLD);
     ft::mpi::bcast(&size_2, 1, ft::mpi::MPI_TYPE_INT, 0, ft::mpi::COMM_WORLD);
@@ -74,7 +73,7 @@ broadCastRequest(const std::vector<int>& v_start_ids,
     }
     ft::mpi::barrier();
 
-    int request_batch_size = 2;
+    int request_batch_size = 1;
     int max_input_len      = size_1 / size_2;
 
     ft::mpi::bcast(v_input_ids.data(), size_1, ft::mpi::MPI_TYPE_INT, 0, ft::mpi::COMM_WORLD);
