@@ -497,10 +497,11 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
                 printf("post attention mask \n");
 
                 int* host_sequence_lengths = new int[local_batch_size];
+                std::cout << "Local batch size: " << local_batch_size;
                 cudaMemcpy(host_sequence_lengths, sequence_lengths, local_batch_size * sizeof(int), cudaMemcpyDeviceToHost);
 
                 std::cout << "Sequence Lengths: ";
-                for (int i = 0; i < local_batch_size; ++i) {
+                for (int i = 0; i < local_batch_size; i++) {
                     std::cout << host_sequence_lengths[i] << " ";
                 }
                 std::cout << std::endl;
