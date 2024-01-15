@@ -493,7 +493,7 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
                     attention_mask_, sequence_lengths, local_batch_size, request_seq_len, stream_);
 
                 sync_check_cuda_error();
-                
+
                 printf("post attention mask \n");
                 invokeGetPaddingOffset(h_pinned_token_num_ptr_,
                                        &h_token_num,
@@ -502,6 +502,7 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
                                        local_batch_size,
                                        request_seq_len,
                                        stream_);
+                printf("post padding offset pre sync \n");
                 sync_check_cuda_error();
 
                 printf("post padding offset \n");
