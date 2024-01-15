@@ -486,6 +486,7 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
         T*      m2m_encoder_output_ptr;
         Tensor* padding_offset_tensor_ptr;
         // preprocess (remove padding and build mask)
+        printf(attention_type_)
         switch (attention_type_) {
             case AttentionType::UNFUSED_MHA: {
                 invokeBuildEncoderAttentionMask(
