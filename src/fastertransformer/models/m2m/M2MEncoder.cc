@@ -408,6 +408,9 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
                    sizeof(T) * request_batch_size * request_seq_len * d_model_);
     }
     const size_t local_batch_size = getLocalBatchSize(request_batch_size, request_seq_len, pipeline_para_.world_size_);
+    std::cout << "Local batch size: " << local_batch_size;
+    std::cout << "\nrequest_batch_size: " << request_batch_size;
+    std::cout << "\npipeline_para_.world_size_: " << pipeline_para_.world_size_;
     const size_t iteration_num    = request_batch_size / local_batch_size;
 
     printf("Pre encoder iteration \n");
