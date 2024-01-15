@@ -581,6 +581,8 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
             }
         }
 
+        printf("Post encoder attention \n");
+
         DataType data_type = getTensorType<T>();
 
         // Before layers, BART/mBART has a layernorm on the embeddings. Different from T5
@@ -594,6 +596,8 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
                                  d_model_,
                                  stream_);
         sync_check_cuda_error();
+
+        printf("Post encoder layernorm \n");
 
         // Encoder layers
         for (uint i = 0; i < num_layer_; i++) {
@@ -794,6 +798,7 @@ void M2MEncoder<T>::forward(TensorMap*                  output_tensors,
         freeBuffer();
     }
     sync_check_cuda_error();
+    printf("Post encoder layers \n");
 
     if (pipeline_para_.world_size_ > 1) {
         ftNcclGroupStart();
